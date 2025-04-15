@@ -76,6 +76,15 @@ def get_file_content(repo_dir, curr_commit, issue_file, issue_spec, def_null_val
         file_content = def_null_value
     return file_content
 
+def cat_file(filepath):
+    file_content_res = execute_shell_command(f'cat {filepath}')
+    #ret_file_code = file_content_res.return_code
+    file_content = file_content_res.output
+    print(filepath)
+    if file_content.strip() == "":
+        file_content = "Not available"
+    return file_content
+
 
 def load_issue_specification(filename="performance_issues_list.csv"):
     issues = {}
@@ -276,6 +285,36 @@ def get_git_diff():
     print("extensions", extensions)
     try:
         diff_output = get_code_diff(repo_dir, curr_commit, issue_file, extensions=extensions)
+        return jsonify({"status": "success", "content": diff_output})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/get_git_diff_remote', methods=['GET'])
+def get_git_diff_remote():
+    repo_dir = request.args.get('repo_dir')
+    curr_commit = request.args.get('curr_commit')
+    prev_commit = request.args.get('prev_commit')
+    issue_file = request.args.get('issue_file', '').replace("file:", "")
+    issue_name = request.args.get('issue_name')
+    key = f"{issue_name}_{prev_commit}_{curr_commit}_{issue_file.split("/")[-1]}.txt"
+    try:
+        diff_output = cat_file(os.path.join("git_diffs", key))
+        return jsonify({"status": "success", "content": diff_output})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/get_issue_file_remote', methods=['GET'])
+def get_issue_file_remote():
+    repo_dir = request.args.get('repo_dir')
+    curr_commit = request.args.get('curr_commit')
+    prev_commit = request.args.get('prev_commit')
+    issue_file = request.args.get('issue_file', '').replace("file:", "")
+    issue_name = request.args.get('issue_name')
+    key = f"{issue_name}_{prev_commit}_{curr_commit}_{issue_file.split("/")[-1]}.txt"
+    try:
+        diff_output = cat_file(os.path.join("files_content", key))
         return jsonify({"status": "success", "content": diff_output})
     except Exception as e:
         traceback.print_exc()
