@@ -1,0 +1,3649 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+index 0d0568690..a52decaa0 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+@@ -88,6 +88,7 @@ import android.widget.TextView;
+ import androidx.annotation.IntDef;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
++import androidx.appcompat.view.ActionMode;
+ import androidx.appcompat.view.ContextThemeWrapper;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+@@ -120,7 +121,6 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+   private RecyclerViewPreloader<IconDataParcelable> preloader;
+   private RecyclerPreloadSizeProvider sizeProvider;
+   private RecyclerPreloadModelProvider modelProvider;
+-  private ArrayList<ListItem> itemsDigested = new ArrayList<>();
+   @NonNull private final Context context;
+   private LayoutInflater mInflater;
+   private float minRowHeight;
+@@ -190,22 +190,23 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+    * @param imageView the check {@link CircleGradientDrawable} that is to be animated
+    */
+   public void toggleChecked(int position, ImageView imageView) {
+-    if (itemsDigested.size() <= position || position < 0) {
++    if (getItemsDigested().size() <= position || position < 0) {
+       AppConfig.toast(context, R.string.operation_not_supported);
+       return;
+     }
+ 
+-    if (itemsDigested.get(position).getChecked() == ListItem.UNCHECKABLE) {
++    if (getItemsDigested().get(position).getChecked() == ListItem.UNCHECKABLE) {
+       throw new IllegalArgumentException("You have checked a header");
+     }
+ 
+     if (!stoppedAnimation) mainFrag.stopAnimation();
+-    if (itemsDigested.get(position).getChecked() == ListItem.CHECKED) {
++
++    if (getItemsDigested().get(position).getChecked() == ListItem.CHECKED) {
+       // if the view at position is checked, un-check it
+       Log.d(
+           getClass().getSimpleName(),
+           String.format("the view at position %s is checked, un-check it", position));
+-      itemsDigested.get(position).setChecked(false);
++      getItemsDigested().get(position).setChecked(false);
+ 
+       Animation iconAnimation = AnimationUtils.loadAnimation(context, R.anim.check_out);
+       if (imageView != null) {
+@@ -219,7 +220,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+       Log.d(
+           getClass().getSimpleName(),
+           String.format("the view at position %s is unchecked, check it", position));
+-      itemsDigested.get(position).setChecked(true);
++      getItemsDigested().get(position).setChecked(true);
+ 
+       Animation iconAnimation = AnimationUtils.loadAnimation(context, R.anim.check_in);
+       if (imageView != null) {
+@@ -228,40 +229,48 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+       } else {
+         // TODO: we don't have the check icon object probably because of config change
+       }
+-      if (mainFrag.mActionMode == null
+-          || (mainFrag.getMainFragmentViewModel() != null
+-              && !mainFrag.getMainFragmentViewModel().getSelection())) {
+-        // start actionmode if not already started
+-        // null condition if there is config change
+-        if (mainFrag.getMainFragmentViewModel() != null) {
+-          mainFrag.getMainFragmentViewModel().setSelection(true);
+-        }
+-        mainFrag.mActionMode =
+-            mainFrag.getMainActivity().startSupportActionMode(mainFrag.mActionModeCallback);
+-      }
+     }
+ 
++    invalidateSelection();
+     notifyItemChanged(position);
+-    invalidateActionMode();
++  }
++
++  private void invalidateSelection() {
++    if (mainFrag.getMainFragmentViewModel() != null) {
++      mainFrag
++          .getMainActivity()
++          .setListItemSelected(mainFrag.getMainFragmentViewModel().getCheckedItems().size() != 0);
++    }
+   }
+ 
+   public void invalidateActionMode() {
+-    if (mainFrag.mActionMode != null
+-        && mainFrag.getMainFragmentViewModel() != null
+-        && mainFrag.getMainFragmentViewModel().getSelection()) {
++    if (mainFrag.getMainFragmentViewModel() != null) {
+       // we have the actionmode visible, invalidate it's views
+-      mainFrag.mActionMode.invalidate();
+-    }
+-    if (getCheckedItems().size() == 0) {
+-      mainFrag.disableActionMode();
++      if (mainFrag.getMainActivity().getListItemSelected()) {
++        if (mainFrag.getMainActivity().getActionModeHelper().getActionMode() == null) {
++          ActionMode.Callback mActionModeCallback =
++              mainFrag.getMainActivity().getActionModeHelper();
++          mainFrag
++              .getMainActivity()
++              .getActionModeHelper()
++              .setActionMode(
++                  mainFrag.getMainActivity().startSupportActionMode(mActionModeCallback));
++        } else {
++          mainFrag.getMainActivity().getActionModeHelper().getActionMode().invalidate();
++        }
++      } else {
++        if (mainFrag.getMainActivity().getActionModeHelper().getActionMode() != null) {
++          mainFrag.getMainActivity().getActionModeHelper().getActionMode().finish();
++          mainFrag.getMainActivity().getActionModeHelper().setActionMode(null);
++        }
++      }
+     }
+   }
+ 
+   public void toggleChecked(boolean selectAll, String path) {
+     int i = path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 0 : 1;
+-
+-    for (; i < itemsDigested.size(); i++) {
+-      ListItem item = itemsDigested.get(i);
++    for (; i < getItemsDigested().size(); i++) {
++      ListItem item = getItemsDigested().get(i);
+       if (selectAll && item.getChecked() != ListItem.CHECKED) {
+         item.setChecked(true);
+         notifyItemChanged(i);
+@@ -270,14 +279,15 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         notifyItemChanged(i);
+       }
+     }
++    invalidateSelection();
+     invalidateActionMode();
+   }
+ 
+   public void toggleInverse(String path) {
+     int i = path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 0 : 1;
+ 
+-    for (; i < itemsDigested.size(); i++) {
+-      ListItem item = itemsDigested.get(i);
++    for (; i < getItemsDigested().size(); i++) {
++      ListItem item = getItemsDigested().get(i);
+       if (item.getChecked() != ListItem.CHECKED) {
+         item.setChecked(true);
+         notifyItemChanged(i);
+@@ -286,16 +296,15 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         notifyItemChanged(i);
+       }
+     }
+-    invalidateActionMode();
+   }
+ 
+   public void toggleSameTypes() {
+     ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
+     for (int i = 0; i < checkedItemsIndexes.size(); i++) {
+       LayoutElementParcelable selectedElement =
+-          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
+-      for (int z = 0; z < itemsDigested.size(); z++) {
+-        ListItem currentItem = itemsDigested.get(z);
++          getItemsDigested().get(checkedItemsIndexes.get(i)).getElem();
++      for (int z = 0; z < getItemsDigested().size(); z++) {
++        ListItem currentItem = getItemsDigested().get(z);
+         if (currentItem.getElem() == null) {
+           // header type list item ('Files' / 'Folders')
+           continue;
+@@ -318,16 +327,15 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+       }
+     }
+-    invalidateActionMode();
+   }
+ 
+   public void toggleSameDates() {
+     ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
+     for (int i = 0; i < checkedItemsIndexes.size(); i++) {
+       LayoutElementParcelable selectedElement =
+-          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
+-      for (int z = 0; z < itemsDigested.size(); z++) {
+-        ListItem currentItem = itemsDigested.get(z);
++          getItemsDigested().get(checkedItemsIndexes.get(i)).getElem();
++      for (int z = 0; z < getItemsDigested().size(); z++) {
++        ListItem currentItem = getItemsDigested().get(z);
+         if (currentItem.getElem() == null) {
+           // header type list item ('Files' / 'Folders')
+           continue;
+@@ -341,18 +349,17 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+       }
+     }
+-    invalidateActionMode();
+   }
+ 
+   public void toggleSimilarNames() {
+     ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
+     for (int i = 0; i < checkedItemsIndexes.size(); i++) {
+       LayoutElementParcelable selectedElement =
+-          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
++          getItemsDigested().get(checkedItemsIndexes.get(i)).getElem();
+       int fuzzinessFactor = selectedElement.title.length() / SelectionPopupMenu.FUZZYNESS_FACTOR;
+       if (fuzzinessFactor >= 1) {
+-        for (int z = 0; z < itemsDigested.size(); z++) {
+-          ListItem currentItem = itemsDigested.get(z);
++        for (int z = 0; z < getItemsDigested().size(); z++) {
++          ListItem currentItem = getItemsDigested().get(z);
+           if (currentItem.getElem() == null) {
+             // header type list item ('Files' / 'Folders')
+             continue;
+@@ -379,7 +386,6 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+       }
+     }
+-    invalidateActionMode();
+   }
+ 
+   /**
+@@ -388,8 +394,8 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+    * @param b if to toggle true or false
+    */
+   public void toggleChecked(boolean b) {
+-    for (int i = 0; i < itemsDigested.size(); i++) {
+-      ListItem item = itemsDigested.get(i);
++    for (int i = 0; i < getItemsDigested().size(); i++) {
++      ListItem item = getItemsDigested().get(i);
+       if (b && item.getChecked() != ListItem.CHECKED) {
+         item.setChecked(true);
+         notifyItemChanged(i);
+@@ -398,30 +404,26 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         notifyItemChanged(i);
+       }
+     }
++    invalidateSelection();
+     invalidateActionMode();
+   }
+ 
+   public ArrayList<LayoutElementParcelable> getCheckedItems() {
+-    ArrayList<LayoutElementParcelable> selected = new ArrayList<>();
+-
+-    for (int i = 0; i < itemsDigested.size(); i++) {
+-      if (itemsDigested.get(i).getChecked() == ListItem.CHECKED) {
+-        selected.add(itemsDigested.get(i).elem);
+-      }
+-    }
+-
+-    return selected;
++    return mainFrag.getMainFragmentViewModel().getCheckedItems();
+   }
+ 
++  @Nullable
+   public ArrayList<ListItem> getItemsDigested() {
+-    return itemsDigested;
++    return mainFrag.getMainFragmentViewModel() != null
++        ? mainFrag.getMainFragmentViewModel().getAdapterListItems()
++        : null;
+   }
+ 
+   public boolean areAllChecked(String path) {
+     int i = (path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON)) ? 0 : 1;
+ 
+-    for (; i < itemsDigested.size(); i++) {
+-      if (itemsDigested.get(i).getChecked() == ListItem.NOT_CHECKED) {
++    for (; i < getItemsDigested().size(); i++) {
++      if (getItemsDigested().get(i).getChecked() == ListItem.NOT_CHECKED) {
+         return false;
+       }
+     }
+@@ -431,8 +433,8 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+   public ArrayList<Integer> getCheckedItemsIndex() {
+     ArrayList<Integer> checked = new ArrayList<>();
+ 
+-    for (int i = 0; i < itemsDigested.size(); i++) {
+-      if (itemsDigested.get(i).getChecked() == ListItem.CHECKED) {
++    for (int i = 0; i < getItemsDigested().size(); i++) {
++      if (getItemsDigested().get(i).getChecked() == ListItem.CHECKED) {
+         checked.add(i);
+       }
+     }
+@@ -486,14 +488,14 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+     // TODO: simplify if condition
+     if (mainFrag.getMainFragmentViewModel() != null
+         && mainFrag.getMainFragmentViewModel().isList()
+-        && itemsDigested.size() > 0) {
+-      itemsDigested.add(itemsDigested.size() - 1, new ListItem(e));
++        && getItemsDigested().size() > 0) {
++      getItemsDigested().add(getItemsDigested().size() - 1, new ListItem(e));
+     } else if (mainFrag.getMainFragmentViewModel() != null
+         && mainFrag.getMainFragmentViewModel().isList()) {
+-      itemsDigested.add(new ListItem(e));
+-      itemsDigested.add(new ListItem(EMPTY_LAST_ITEM));
++      getItemsDigested().add(new ListItem(e));
++      getItemsDigested().add(new ListItem(EMPTY_LAST_ITEM));
+     } else {
+-      itemsDigested.add(new ListItem(e));
++      getItemsDigested().add(new ListItem(e));
+     }
+ 
+     notifyItemInserted(getItemCount());
+@@ -512,36 +514,49 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+       preloader = null;
+     }
+ 
+-    itemsDigested.clear();
++    if (getItemsDigested() != null && invalidate) {
++      getItemsDigested().clear();
++      if (mainFrag.getMainFragmentViewModel().getIconList() != null) {
++        mainFrag.getMainFragmentViewModel().getIconList().clear();
++      }
++    }
++
+     offset = 0;
+     stoppedAnimation = false;
+ 
+-    ArrayList<IconDataParcelable> uris = new ArrayList<>(itemsDigested.size());
++    ArrayList<IconDataParcelable> uris = new ArrayList<>();
++    ArrayList<ListItem> listItems = new ArrayList<>();
+ 
+     for (LayoutElementParcelable e : elements) {
+-      itemsDigested.add(new ListItem(e.isBack, e));
+-      uris.add(e != null ? e.iconData : null);
++      if (getItemsDigested() == null || invalidate) {
++        listItems.add(new ListItem(e.isBack, e));
++        uris.add(e != null ? e.iconData : null);
++      }
+     }
+ 
+     if (mainFrag.getMainFragmentViewModel() != null
+         && mainFrag.getMainFragmentViewModel().isList()
+-        && itemsDigested.size() > 0) {
+-      itemsDigested.add(new ListItem(EMPTY_LAST_ITEM));
++        && listItems.size() > 0
++        && (getItemsDigested() == null || invalidate)) {
++      listItems.add(new ListItem(EMPTY_LAST_ITEM));
+       uris.add(null);
+     }
+ 
+-    for (int i = 0; i < itemsDigested.size(); i++) {
+-      itemsDigested.get(i).setAnimate(false);
+-    }
++    if (getItemsDigested() == null || invalidate) {
++      mainFrag.getMainFragmentViewModel().setAdapterListItems(listItems);
++      mainFrag.getMainFragmentViewModel().setIconList(uris);
+ 
+-    if (getBoolean(PREFERENCE_SHOW_HEADERS)) {
+-      createHeaders(invalidate, uris);
++      if (getBoolean(PREFERENCE_SHOW_HEADERS)) {
++        createHeaders(invalidate, mainFrag.getMainFragmentViewModel().getIconList());
++      }
+     }
+ 
+     boolean isItemCircular = !isGrid;
+ 
+     sizeProvider = new RecyclerPreloadSizeProvider(this);
+-    modelProvider = new RecyclerPreloadModelProvider(mainFrag, uris, isItemCircular);
++    modelProvider =
++        new RecyclerPreloadModelProvider(
++            mainFrag, mainFrag.getMainFragmentViewModel().getIconList(), isItemCircular);
+ 
+     preloader =
+         new RecyclerViewPreloader<>(
+@@ -553,14 +568,14 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+   public void createHeaders(boolean invalidate, List<IconDataParcelable> uris) {
+     boolean[] headers = new boolean[] {false, false};
+ 
+-    for (int i = 0; i < itemsDigested.size(); i++) {
++    for (int i = 0; i < getItemsDigested().size(); i++) {
+ 
+-      if (itemsDigested.get(i).elem != null) {
+-        LayoutElementParcelable nextItem = itemsDigested.get(i).elem;
++      if (getItemsDigested().get(i).elem != null) {
++        LayoutElementParcelable nextItem = getItemsDigested().get(i).elem;
+ 
+         if (!headers[0] && nextItem.isDirectory) {
+           headers[0] = true;
+-          itemsDigested.add(i, new ListItem(TYPE_HEADER_FOLDERS));
++          getItemsDigested().add(i, new ListItem(TYPE_HEADER_FOLDERS));
+           uris.add(i, null);
+           continue;
+         }
+@@ -570,7 +585,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+             && !nextItem.title.equals(".")
+             && !nextItem.title.equals("..")) {
+           headers[1] = true;
+-          itemsDigested.add(i, new ListItem(TYPE_HEADER_FILES));
++          getItemsDigested().add(i, new ListItem(TYPE_HEADER_FILES));
+           uris.add(i, null);
+           continue; // leave this continue for symmetry
+         }
+@@ -584,7 +599,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+ 
+   @Override
+   public int getItemCount() {
+-    return itemsDigested.size();
++    return getItemsDigested().size();
+   }
+ 
+   @Override
+@@ -594,8 +609,8 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+ 
+   @Override
+   public int getItemViewType(int position) {
+-    if (itemsDigested.get(position).specialType != -1) {
+-      return itemsDigested.get(position).specialType;
++    if (getItemsDigested().get(position).specialType != -1) {
++      return getItemsDigested().get(position).specialType;
+     } else {
+       return TYPE_ITEM;
+     }
+@@ -661,7 +676,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+           });
+       holder.txtTitle.setEllipsize(
+           enableMarquee ? TextUtils.TruncateAt.MARQUEE : TextUtils.TruncateAt.MIDDLE);
+-      final boolean isBackButton = itemsDigested.get(p).specialType == TYPE_BACK;
++      final boolean isBackButton = getItemsDigested().get(p).specialType == TYPE_BACK;
+       if (isBackButton) {
+         holder.about.setVisibility(View.GONE);
+       }
+@@ -669,7 +684,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+           && mainFrag.getMainFragmentViewModel().isList()) {
+         if (p == getItemCount() - 1) {
+           holder.rl.setMinimumHeight((int) minRowHeight);
+-          if (itemsDigested.size() == (getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 1 : 0))
++          if (getItemsDigested().size() == (getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 1 : 0))
+             holder.txtTitle.setText(R.string.no_files);
+           else {
+             holder.txtTitle.setText("");
+@@ -677,11 +692,11 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+           return;
+         }
+       }
+-      if (!this.stoppedAnimation && !itemsDigested.get(p).getAnimating()) {
++      if (!this.stoppedAnimation && !getItemsDigested().get(p).getAnimating()) {
+         animate(holder);
+-        itemsDigested.get(p).setAnimate(true);
++        getItemsDigested().get(p).setAnimate(true);
+       }
+-      final LayoutElementParcelable rowItem = itemsDigested.get(p).elem;
++      final LayoutElementParcelable rowItem = getItemsDigested().get(p).elem;
+       if (dragAndDropPreference != PreferencesConstants.PREFERENCE_DRAG_DEFAULT) {
+         holder.rl.setOnDragListener(
+             new RecyclerAdapterDragListener(this, holder, dragAndDropPreference, mainFrag));
+@@ -692,7 +707,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+             if (!isBackButton) {
+               if (dragAndDropPreference == PreferencesConstants.PREFERENCE_DRAG_DEFAULT
+                   || (dragAndDropPreference == PreferencesConstants.PREFERENCE_DRAG_TO_MOVE_COPY
+-                      && itemsDigested.get(vholder.getAdapterPosition()).getChecked()
++                      && getItemsDigested().get(vholder.getAdapterPosition()).getChecked()
+                           != ListItem.CHECKED)) {
+                 toggleChecked(
+                     vholder.getAdapterPosition(),
+@@ -704,6 +719,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+             }
+             return true;
+           });
++
+       if (mainFrag.getMainFragmentViewModel().isList()) {
+         // clear previously cached icon
+         GlideApp.with(mainFrag).clear(holder.genericIcon);
+@@ -840,7 +856,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+           holder.rl.setBackgroundResource(R.drawable.safr_ripple_black);
+         }
+         holder.rl.setSelected(false);
+-        if (itemsDigested.get(p).getChecked() == ListItem.CHECKED) {
++        if (getItemsDigested().get(p).getChecked() == ListItem.CHECKED) {
+ 
+           if (holder.checkImageView.getVisibility() == View.INVISIBLE)
+             holder.checkImageView.setVisibility(View.VISIBLE);
+@@ -987,7 +1003,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+           }
+         }
+ 
+-        if (itemsDigested.get(p).getChecked() == ListItem.CHECKED) {
++        if (getItemsDigested().get(p).getChecked() == ListItem.CHECKED) {
+           if (holder.genericIcon.getVisibility() == View.VISIBLE) {
+ 
+             if ((rowItem.filetype != Icons.IMAGE
+@@ -1032,6 +1048,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+         if (getBoolean(PREFERENCE_SHOW_PERMISSIONS)) holder.perm.setText(rowItem.permissions);
+       }
++      invalidateActionMode();
+     }
+   }
+ 
+@@ -1040,7 +1057,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+     if (mainFrag.getMainFragmentViewModel() != null
+         && mainFrag.getMainFragmentViewModel().isList()) {
+       if (getBoolean(PREFERENCE_SHOW_THUMB)) {
+-        int filetype = itemsDigested.get(adapterPosition).elem.filetype;
++        int filetype = getItemsDigested().get(adapterPosition).elem.filetype;
+ 
+         if (filetype == Icons.VIDEO || filetype == Icons.IMAGE) {
+           if (getBoolean(PREFERENCE_USE_CIRCULAR_IMAGES)) {
+@@ -1065,12 +1082,12 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+ 
+   private void initDragListener(int position, View view, ItemViewHolder itemViewHolder) {
+     if (dragAndDropPreference != PreferencesConstants.PREFERENCE_DRAG_DEFAULT
+-        && (itemsDigested.get(position).getChecked() == ListItem.CHECKED
++        && (getItemsDigested().get(position).getChecked() == ListItem.CHECKED
+             || dragAndDropPreference == PreferencesConstants.PREFERENCE_DRAG_TO_SELECT)) {
+       // toggle drag flag to true for list item due to the fact
+       // that we might have set it false in a previous drag event
+-      if (!itemsDigested.get(position).shouldToggleDragChecked) {
+-        itemsDigested.get(position).toggleShouldToggleDragChecked();
++      if (!getItemsDigested().get(position).shouldToggleDragChecked) {
++        getItemsDigested().get(position).toggleShouldToggleDragChecked();
+       }
+ 
+       View shadowView =
+@@ -1288,22 +1305,22 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+       }
+     } else {
+       popupMenu.getMenu().findItem(R.id.book).setVisible(false);
+-    }
+ 
+-    if (description.endsWith(fileExtensionZip)
+-        || description.endsWith(fileExtensionJar)
+-        || description.endsWith(fileExtensionApk)
+-        || description.endsWith(fileExtensionApks)
+-        || description.endsWith(fileExtensionRar)
+-        || description.endsWith(fileExtensionTar)
+-        || description.endsWith(fileExtensionGzipTarLong)
+-        || description.endsWith(fileExtensionGzipTarShort)
+-        || description.endsWith(fileExtensionBzip2TarLong)
+-        || description.endsWith(fileExtensionBzip2TarShort)
+-        || description.endsWith(fileExtensionXz)
+-        || description.endsWith(fileExtensionLzma)
+-        || description.endsWith(fileExtension7zip))
+-      popupMenu.getMenu().findItem(R.id.ex).setVisible(true);
++      if (description.endsWith(fileExtensionZip)
++          || description.endsWith(fileExtensionJar)
++          || description.endsWith(fileExtensionApk)
++          || description.endsWith(fileExtensionApks)
++          || description.endsWith(fileExtensionRar)
++          || description.endsWith(fileExtensionTar)
++          || description.endsWith(fileExtensionGzipTarLong)
++          || description.endsWith(fileExtensionGzipTarShort)
++          || description.endsWith(fileExtensionBzip2TarLong)
++          || description.endsWith(fileExtensionBzip2TarShort)
++          || description.endsWith(fileExtensionXz)
++          || description.endsWith(fileExtensionLzma)
++          || description.endsWith(fileExtension7zip))
++        popupMenu.getMenu().findItem(R.id.ex).setVisible(true);
++    }
+ 
+     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+       if (description.endsWith(CryptUtil.CRYPT_EXTENSION))
+diff --git a/app/src/main/java/com/amaze/filemanager/application/AppConfig.java b/app/src/main/java/com/amaze/filemanager/application/AppConfig.java
+index 9491204ba..6f7f63399 100644
+--- a/app/src/main/java/com/amaze/filemanager/application/AppConfig.java
++++ b/app/src/main/java/com/amaze/filemanager/application/AppConfig.java
+@@ -21,6 +21,7 @@
+ package com.amaze.filemanager.application;
+ 
+ import java.lang.ref.WeakReference;
++import java.util.concurrent.Callable;
+ 
+ import org.acra.ACRA;
+ import org.acra.annotation.AcraCore;
+@@ -65,7 +66,7 @@ import jcifs.Config;
+     reportSenderFactoryClasses = AcraReportSenderFactory.class)
+ public class AppConfig extends GlideApplication {
+ 
+-  public static final String TAG = AppConfig.class.getSimpleName();
++  private static final String TAG = AppConfig.class.getSimpleName();
+ 
+   private UtilitiesProvider utilsProvider;
+   private RequestQueue requestQueue;
+@@ -175,14 +176,24 @@ public class AppConfig extends GlideApplication {
+   }
+ 
+   /**
+-   * Run a runnable in the main application thread
++   * Run a {@link Runnable} in the main application thread
+    *
+-   * @param r Runnable to run
++   * @param r {@link Runnable} to run
+    */
+-  public void runInApplicationThread(Runnable r) {
++  public void runInApplicationThread(@NonNull Runnable r) {
+     Completable.fromRunnable(r).subscribeOn(AndroidSchedulers.mainThread()).subscribe();
+   }
+ 
++  /**
++   * Convenience method to run a {@link Callable} in the main application thread. Use when the
++   * callable's return value is not processed.
++   *
++   * @param c {@link Callable} to run
++   */
++  public void runInApplicationThread(@NonNull Callable<Void> c) {
++    Completable.fromCallable(c).subscribeOn(AndroidSchedulers.mainThread()).subscribe();
++  }
++
+   public static synchronized AppConfig getInstance() {
+     return instance;
+   }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+index 71d22aea9..d71083698 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+@@ -20,6 +20,9 @@
+ 
+ package com.amaze.filemanager.asynchronous.asynctasks;
+ 
++import static android.os.Build.VERSION.SDK_INT;
++import static android.os.Build.VERSION_CODES.Q;
++
+ import java.io.File;
+ import java.lang.ref.WeakReference;
+ import java.util.ArrayList;
+@@ -44,16 +47,19 @@ import com.amaze.filemanager.filesystem.files.FileListSorter;
+ import com.amaze.filemanager.filesystem.root.ListFilesCommand;
+ import com.amaze.filemanager.ui.fragments.CloudSheetFragment;
+ import com.amaze.filemanager.ui.fragments.MainFragment;
++import com.amaze.filemanager.ui.fragments.data.MainFragmentViewModel;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.OTGUtil;
+ import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+ import com.amaze.filemanager.utils.OnFileFound;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ 
++import android.content.ContentResolver;
+ import android.content.Context;
+ import android.database.Cursor;
+ import android.net.Uri;
+ import android.os.AsyncTask;
++import android.os.Bundle;
+ import android.provider.MediaStore;
+ import android.text.format.Formatter;
+ import android.util.Log;
+@@ -69,6 +75,8 @@ import jcifs.smb.SmbFile;
+ public class LoadFilesListTask
+     extends AsyncTask<Void, Void, Pair<OpenMode, ArrayList<LayoutElementParcelable>>> {
+ 
++  private static final String TAG = LoadFilesListTask.class.getSimpleName();
++
+   private String path;
+   private WeakReference<MainFragment> mainFragmentReference;
+   private WeakReference<Context> context;
+@@ -151,7 +159,7 @@ public class LoadFilesListTask
+       case SFTP:
+         HybridFile sftpHFile = new HybridFile(OpenMode.SFTP, path);
+ 
+-        list = new ArrayList<LayoutElementParcelable>();
++        list = new ArrayList();
+ 
+         sftpHFile.forEachChildrenFile(
+             context,
+@@ -270,9 +278,14 @@ public class LoadFilesListTask
+         asc = -1;
+         sortby = t - 4;
+       }
+-      Collections.sort(
+-          list,
+-          new FileListSorter(mainFragment.getMainFragmentViewModel().getDsort(), sortby, asc));
++
++      MainFragmentViewModel viewModel = mainFragment.getMainFragmentViewModel();
++
++      if (viewModel != null) {
++        Collections.sort(list, new FileListSorter(viewModel.getDsort(), sortby, asc));
++      } else {
++        Log.e(TAG, "MainFragmentViewModel is null, this is a bug");
++      }
+     }
+ 
+     return new Pair<>(openmode, list);
+@@ -509,19 +522,37 @@ public class LoadFilesListTask
+     }
+ 
+     ArrayList<LayoutElementParcelable> recentFiles = new ArrayList<>(20);
+-    final String[] projection = {MediaStore.Files.FileColumns.DATA};
++    final String[] projection = {
++      MediaStore.Files.FileColumns.DATA, MediaStore.Files.FileColumns.DATE_MODIFIED
++    };
+     Calendar c = Calendar.getInstance();
+     c.set(Calendar.DAY_OF_YEAR, c.get(Calendar.DAY_OF_YEAR) - 2);
+     Date d = c.getTime();
+-    Cursor cursor =
+-        context
+-            .getContentResolver()
+-            .query(
+-                MediaStore.Files.getContentUri("external"),
+-                projection,
+-                null,
+-                null,
+-                MediaStore.Files.FileColumns.DATE_MODIFIED + " DESC LIMIT 20");
++    Cursor cursor;
++    if (SDK_INT >= Q) {
++      Bundle queryArgs = new Bundle();
++      queryArgs.putInt(ContentResolver.QUERY_ARG_LIMIT, 20);
++      queryArgs.putStringArray(
++          ContentResolver.QUERY_ARG_SORT_COLUMNS,
++          new String[] {MediaStore.Files.FileColumns.DATE_MODIFIED});
++      queryArgs.putInt(
++          ContentResolver.QUERY_ARG_SORT_DIRECTION,
++          ContentResolver.QUERY_SORT_DIRECTION_DESCENDING);
++      cursor =
++          context
++              .getContentResolver()
++              .query(MediaStore.Files.getContentUri("external"), projection, queryArgs, null);
++    } else {
++      cursor =
++          context
++              .getContentResolver()
++              .query(
++                  MediaStore.Files.getContentUri("external"),
++                  projection,
++                  null,
++                  null,
++                  MediaStore.Files.FileColumns.DATE_MODIFIED + " DESC LIMIT 20");
++    }
+     if (cursor == null) return recentFiles;
+     if (cursor.getCount() > 0 && cursor.moveToFirst()) {
+       do {
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/SshAuthenticationTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/SshAuthenticationTask.kt
+index 16f5bbde9..4eeed4af7 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/SshAuthenticationTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/SshAuthenticationTask.kt
+@@ -79,7 +79,7 @@ class SshAuthenticationTask(
+         }
+         return runCatching {
+             sshClient.connect(hostname, port)
+-            if (password != null && "" != password) {
++            if (true == password?.isNotEmpty()) {
+                 sshClient.authPassword(username, password)
+                 AsyncTaskResult(sshClient)
+             } else {
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.kt
+index 853cab53e..a8f85ae0c 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.kt
+@@ -23,6 +23,7 @@ package com.amaze.filemanager.asynchronous.handlers
+ import android.os.Handler
+ import android.os.Looper
+ import android.os.Message
++import android.util.Log
+ import android.view.View
+ import androidx.recyclerview.widget.RecyclerView
+ import com.amaze.filemanager.adapters.RecyclerAdapter
+@@ -41,6 +42,10 @@ class FileHandler(
+ ) {
+     private val mainFragment: WeakReference<MainFragment> = WeakReference(mainFragment)
+ 
++    companion object {
++        private val TAG = FileHandler::class.java.simpleName
++    }
++
+     override fun handleMessage(msg: Message) {
+         super.handleMessage(msg)
+         val main = mainFragment.get() ?: return
+@@ -50,12 +55,16 @@ class FileHandler(
+             return
+         }
+ 
+-        val path = msg.obj as String
++        val path = msg.obj as? String
+         when (msg.what) {
+             CustomFileObserver.GOBACK -> {
+                 main.goBack()
+             }
+             CustomFileObserver.NEW_ITEM -> {
++                if (path == null) {
++                    Log.e(TAG, "Path is empty for file")
++                    return
++                }
+                 val fileCreated = HybridFile(
+                     mainFragmentViewModel.openMode, "${main.currentPath}/$path"
+                 )
+diff --git a/app/src/main/java/com/amaze/filemanager/database/UtilsHandler.java b/app/src/main/java/com/amaze/filemanager/database/UtilsHandler.java
+index 8ab31e840..45ea1ece8 100644
+--- a/app/src/main/java/com/amaze/filemanager/database/UtilsHandler.java
++++ b/app/src/main/java/com/amaze/filemanager/database/UtilsHandler.java
+@@ -38,7 +38,6 @@ import com.amaze.filemanager.database.models.utilities.Hidden;
+ import com.amaze.filemanager.database.models.utilities.History;
+ import com.amaze.filemanager.database.models.utilities.SftpEntry;
+ import com.amaze.filemanager.database.models.utilities.SmbEntry;
+-import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
+ import com.amaze.filemanager.utils.SmbUtil;
+ import com.googlecode.concurrenttrees.radix.ConcurrentRadixTree;
+ import com.googlecode.concurrenttrees.radix.node.concrete.DefaultCharArrayNodeFactory;
+@@ -302,7 +301,7 @@ public class UtilsHandler {
+     ArrayList<String[]> retval = new ArrayList<String[]>();
+     for (SftpEntry entry :
+         utilitiesDatabase.sftpEntryDao().list().subscribeOn(Schedulers.io()).blockingGet()) {
+-      String path = SshClientUtils.decryptSshPathAsNecessary(entry.path);
++      String path = entry.path;
+ 
+       if (path == null) {
+         Log.e("ERROR", "Error decrypting path: " + entry.path);
+@@ -318,22 +317,17 @@ public class UtilsHandler {
+   }
+ 
+   public String getSshHostKey(String uri) {
+-    uri = SshClientUtils.encryptSshPathAsNecessary(uri);
+-    if (uri != null) {
+-      try {
+-        return utilitiesDatabase
+-            .sftpEntryDao()
+-            .getSshHostKey(uri)
+-            .subscribeOn(Schedulers.io())
+-            .blockingGet();
+-      } catch (Exception e) {
+-        // catch error to handle Single#onError for blockingGet
+-        if (DEBUG) {
+-          Log.e(getClass().getSimpleName(), "Error getting public key for URI [" + uri + "]", e);
+-        }
+-        return null;
++    try {
++      return utilitiesDatabase
++          .sftpEntryDao()
++          .getSshHostKey(uri)
++          .subscribeOn(Schedulers.io())
++          .blockingGet();
++    } catch (Exception e) {
++      // catch error to handle Single#onError for blockingGet
++      if (DEBUG) {
++        Log.e(getClass().getSimpleName(), "Error getting public key for URI [" + uri + "]", e);
+       }
+-    } else {
+       return null;
+     }
+   }
+diff --git a/app/src/main/java/com/amaze/filemanager/database/daos/SftpEntryDao.java b/app/src/main/java/com/amaze/filemanager/database/daos/SftpEntryDao.java
+index eec4d6807..474e70d47 100644
+--- a/app/src/main/java/com/amaze/filemanager/database/daos/SftpEntryDao.java
++++ b/app/src/main/java/com/amaze/filemanager/database/daos/SftpEntryDao.java
+@@ -72,13 +72,22 @@ public interface SftpEntryDao {
+   @Query("SELECT * FROM " + TABLE_SFTP + " WHERE " + COLUMN_NAME + " = :name")
+   Single<SftpEntry> findByName(String name);
+ 
+-  @Query("SELECT " + COLUMN_HOST_PUBKEY + " FROM " + TABLE_SFTP + " WHERE PATH = :uri")
++  @Query(
++      "SELECT " + COLUMN_HOST_PUBKEY + " FROM " + TABLE_SFTP + " WHERE " + COLUMN_PATH + " = :uri")
+   Single<String> getSshHostKey(String uri);
+ 
+-  @Query("SELECT " + COLUMN_PRIVATE_KEY_NAME + " FROM " + TABLE_SFTP + " WHERE PATH = :uri")
++  @Query(
++      "SELECT "
++          + COLUMN_PRIVATE_KEY_NAME
++          + " FROM "
++          + TABLE_SFTP
++          + " WHERE "
++          + COLUMN_PATH
++          + " = :uri")
+   Single<String> getSshAuthPrivateKeyName(String uri);
+ 
+-  @Query("SELECT " + COLUMN_PRIVATE_KEY + " FROM " + TABLE_SFTP + " WHERE PATH = :uri")
++  @Query(
++      "SELECT " + COLUMN_PRIVATE_KEY + " FROM " + TABLE_SFTP + " WHERE " + COLUMN_PATH + " = :uri")
+   Single<String> getSshAuthPrivateKey(String uri);
+ 
+   @Query("DELETE FROM " + TABLE_SFTP + " WHERE " + COLUMN_NAME + " = :name")
+diff --git a/app/src/main/java/com/amaze/filemanager/exceptions/DocumentFileNotFoundException.kt b/app/src/main/java/com/amaze/filemanager/exceptions/DocumentFileNotFoundException.kt
+new file mode 100644
+index 000000000..ac0b5fccc
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/exceptions/DocumentFileNotFoundException.kt
+@@ -0,0 +1,26 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.exceptions
++
++import android.net.Uri
++
++class DocumentFileNotFoundException(rootUri: Uri, path: String) :
++    RuntimeException("Root uri: %s and path %s".format(rootUri.path, path))
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+index f50bec23f..0405e62cc 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+@@ -41,6 +41,7 @@ import com.amaze.filemanager.database.CloudHandler;
+ import com.amaze.filemanager.file_operations.exceptions.CloudPluginException;
+ import com.amaze.filemanager.file_operations.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode;
++import com.amaze.filemanager.file_operations.filesystem.root.NativeOperations;
+ import com.amaze.filemanager.filesystem.cloud.CloudUtil;
+ import com.amaze.filemanager.filesystem.files.FileUtils;
+ import com.amaze.filemanager.filesystem.root.DeleteFileCommand;
+@@ -48,6 +49,7 @@ import com.amaze.filemanager.filesystem.root.ListFilesCommand;
+ import com.amaze.filemanager.filesystem.ssh.SFtpClientTemplate;
+ import com.amaze.filemanager.filesystem.ssh.SshClientTemplate;
+ import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
++import com.amaze.filemanager.filesystem.ssh.SshConnectionPool;
+ import com.amaze.filemanager.filesystem.ssh.Statvfs;
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants;
+ import com.amaze.filemanager.utils.DataUtils;
+@@ -485,12 +487,7 @@ public class HybridFile {
+         isDirectory = getFile().isDirectory();
+         break;
+       case ROOT:
+-        try {
+-          isDirectory = RootHelper.isDirectory(path, 5);
+-        } catch (ShellNotRunningException e) {
+-          e.printStackTrace();
+-          isDirectory = false;
+-        }
++        isDirectory = NativeOperations.isDirectory(path);
+         break;
+       case DOCUMENT_FILE:
+         return getDocumentFile(false).isDirectory();
+@@ -552,12 +549,7 @@ public class HybridFile {
+         isDirectory = getFile().isDirectory();
+         break;
+       case ROOT:
+-        try {
+-          isDirectory = RootHelper.isDirectory(path, 5);
+-        } catch (ShellNotRunningException e) {
+-          e.printStackTrace();
+-          isDirectory = false;
+-        }
++        isDirectory = NativeOperations.isDirectory(path);
+         break;
+       case DOCUMENT_FILE:
+         isDirectory = getDocumentFile(false).isDirectory();
+@@ -989,8 +981,18 @@ public class HybridFile {
+   }
+ 
+   public static String parseAndFormatUriForDisplay(@NonNull String uriString) {
+-    Uri uri = Uri.parse(uriString);
+-    return String.format("%s://%s%s", uri.getScheme(), uri.getHost(), uri.getPath());
++    if (uriString.startsWith(SSH_URI_PREFIX)) {
++      SshConnectionPool.ConnectionInfo connInfo = new SshConnectionPool.ConnectionInfo(uriString);
++      return connInfo.toString();
++    } else {
++      Uri uri = Uri.parse(uriString);
++      return formatUriForDisplayInternal(uri.getScheme(), uri.getHost(), uri.getPath());
++    }
++  }
++
++  private static String formatUriForDisplayInternal(
++      @NonNull String scheme, @NonNull String host, @NonNull String path) {
++    return String.format("%s://%s%s", scheme, host, path);
+   }
+ 
+   /**
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/RootHelper.java b/app/src/main/java/com/amaze/filemanager/filesystem/RootHelper.java
+index 5e9255447..a7318eca6 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/RootHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/RootHelper.java
+@@ -24,11 +24,8 @@ import java.io.File;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import com.amaze.filemanager.file_operations.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode;
+-import com.amaze.filemanager.filesystem.files.FileUtils;
+ import com.amaze.filemanager.filesystem.root.ListFilesCommand;
+-import com.amaze.filemanager.utils.Utils;
+ 
+ import androidx.documentfile.provider.DocumentFile;
+ 
+@@ -115,43 +112,6 @@ public class RootHelper {
+     return false;
+   }
+ 
+-  /** Whether toTest file is directory or not */
+-  public static boolean isDirectory(String toTest, int count) throws ShellNotRunningException {
+-    File file = new File(toTest);
+-    String name = file.getName();
+-    String parentPath = file.getParent();
+-    if (!Utils.isNullOrEmpty(parentPath)) {
+-      List<String> resultLines =
+-          ListFilesCommand.INSTANCE
+-              .executeRootCommand(getCommandLineString(parentPath), true, false)
+-              .getFirst();
+-      for (String currentLine : resultLines) {
+-        if (contains(currentLine.split(" "), name)) {
+-          try {
+-            HybridFileParcelable parsedFile = FileUtils.parseName(currentLine, true);
+-            if (parsedFile.getPermission().trim().startsWith("d")) return true;
+-            else if (parsedFile.getPermission().trim().startsWith("l")) {
+-              if (count > 5) return file.isDirectory();
+-              else return isDirectory(parsedFile.getLink().trim(), count + 1);
+-            } else return file.isDirectory();
+-          } catch (Exception e) {
+-            e.printStackTrace();
+-          }
+-          break;
+-        }
+-      }
+-    }
+-    return file.isDirectory();
+-  }
+-
+-  static boolean contains(String[] a, String name) {
+-    for (String s : a) {
+-      // Log.e("checking",s);
+-      if (s.equals(name)) return true;
+-    }
+-    return false;
+-  }
+-
+   /**
+    * Get a list of files using shell, supposing the path is not a SMB/OTG/Custom (*.apk/images)
+    * TODO: Avoid parsing ls
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt b/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
+index 18f18983b..9e7ca4f3c 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
+@@ -27,6 +27,7 @@ import com.amaze.filemanager.application.AppConfig
+ import com.amaze.filemanager.exceptions.ShellCommandInvalidException
+ import com.amaze.filemanager.file_operations.exceptions.ShellNotRunningException
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.file_operations.filesystem.root.NativeOperations
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.filesystem.RootHelper
+ import com.amaze.filemanager.filesystem.files.FileUtils
+@@ -230,7 +231,7 @@ object ListFilesCommand : IRootCommand() {
+                         }
+                     }
+                 } else {
+-                    RootHelper.isDirectory(this.link, 0).let {
++                    NativeOperations.isDirectory(this.link).let {
+                         this.isDirectory = it
+                     }
+                 }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshClientUtils.java b/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshClientUtils.java
+index c9cde4a5f..e6098e9a3 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshClientUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshClientUtils.java
+@@ -29,7 +29,6 @@ import java.io.IOException;
+ import java.security.GeneralSecurityException;
+ import java.security.KeyPair;
+ import java.util.List;
+-import java.util.concurrent.Callable;
+ 
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.application.AppConfig;
+@@ -85,7 +84,7 @@ public abstract class SshClientUtils {
+       final SSHClient _client = client;
+       try {
+         retval =
+-            Single.fromCallable((Callable<T>) () -> template.execute(_client))
++            Single.fromCallable(() -> template.execute(_client))
+                 .subscribeOn(Schedulers.io())
+                 .blockingGet();
+       } catch (Exception e) {
+@@ -181,7 +180,7 @@ public abstract class SshClientUtils {
+         fullUri.substring(SSH_URI_PREFIX.length(), fullUri.lastIndexOf('@'));
+     try {
+       return (uriWithoutProtocol.lastIndexOf(':') > 0)
+-          ? SmbUtil.getSmbEncryptedPath(AppConfig.getInstance(), fullUri)
++          ? SmbUtil.getSmbEncryptedPath(AppConfig.getInstance(), fullUri).replace("\n", "")
+           : fullUri;
+     } catch (IOException | GeneralSecurityException e) {
+       Log.e(TAG, "Error encrypting path", e);
+@@ -220,9 +219,15 @@ public abstract class SshClientUtils {
+    */
+   public static String extractBaseUriFrom(@NonNull String fullUri) {
+     String uriWithoutProtocol = fullUri.substring(SSH_URI_PREFIX.length());
+-    return uriWithoutProtocol.indexOf('/') == -1
+-        ? fullUri
+-        : fullUri.substring(0, uriWithoutProtocol.indexOf('/') + SSH_URI_PREFIX.length());
++    String credentials = uriWithoutProtocol.substring(0, uriWithoutProtocol.lastIndexOf('@'));
++    String hostAndPath = uriWithoutProtocol.substring(uriWithoutProtocol.lastIndexOf('@') + 1);
++    if (hostAndPath.indexOf('/') == -1) {
++      return fullUri;
++    } else {
++      String host = hostAndPath.substring(0, hostAndPath.indexOf('/'));
++      return fullUri.substring(
++          0, SSH_URI_PREFIX.length() + credentials.length() + 1 + host.length());
++    }
+   }
+ 
+   /**
+@@ -235,10 +240,8 @@ public abstract class SshClientUtils {
+    * @return The remote path part of the full SSH URL
+    */
+   public static String extractRemotePathFrom(@NonNull String fullUri) {
+-    String uriWithoutProtocol = fullUri.substring(SSH_URI_PREFIX.length());
+-    return uriWithoutProtocol.indexOf('/') == -1
+-        ? "/"
+-        : uriWithoutProtocol.substring(uriWithoutProtocol.indexOf('/'));
++    String hostPath = fullUri.substring(fullUri.lastIndexOf('@'));
++    return hostPath.indexOf('/') == -1 ? "/" : hostPath.substring(hostPath.indexOf('/'));
+   }
+ 
+   /**
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPool.kt b/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPool.kt
+index 54985d022..124035e89 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPool.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPool.kt
+@@ -25,6 +25,7 @@ import android.util.Log
+ import com.amaze.filemanager.application.AppConfig
+ import com.amaze.filemanager.asynchronous.asynctasks.ssh.PemToKeyPairTask
+ import com.amaze.filemanager.asynchronous.asynctasks.ssh.SshAuthenticationTask
++import com.amaze.filemanager.filesystem.files.CryptUtil
+ import net.schmizz.sshj.Config
+ import net.schmizz.sshj.SSHClient
+ import java.security.KeyPair
+@@ -174,7 +175,7 @@ object SshConnectionPool {
+         val utilsHandler = AppConfig.getInstance().utilsHandler
+         val pem = utilsHandler.getSshAuthPrivateKey(url)
+         val keyPair = AtomicReference<KeyPair?>(null)
+-        if (pem != null && !pem.isEmpty()) {
++        if (true == pem?.isNotEmpty()) {
+             try {
+                 val latch = CountDownLatch(1)
+                 PemToKeyPairTask(
+@@ -245,12 +246,12 @@ object SshConnectionPool {
+      *
+      * A design decision to keep database schema slim, by the way... -TranceLove
+      */
+-    internal class ConnectionInfo(url: String) {
++    class ConnectionInfo(url: String) {
+         val host: String
+         val port: Int
+         val username: String
+         val password: String?
+-        protected var defaultPath: String? = null
++        var defaultPath: String? = null
+ 
+         // FIXME: Crude assumption
+         init {
+@@ -269,10 +270,27 @@ object SshConnectionPool {
+             val authString = url.substring(SSH_URI_PREFIX.length, url.lastIndexOf('@'))
+             val userInfo = authString.split(":").toTypedArray()
+             username = userInfo[0]
+-            password = if (userInfo.size > 1) userInfo[1] else null
++            password = if (userInfo.size > 1) {
++                runCatching {
++                    CryptUtil.decryptPassword(AppConfig.getInstance(), userInfo[1])
++                }.getOrElse {
++                    /* Hack. It should only happen after creating new SSH connection settings
++                     * and plain text password is sent in.
++                     *
++                     * Possible to encrypt password there as alternate solution.
++                     */
++                    userInfo[1]
++                }
++            } else {
++                null
++            }
+             if (port < 0) port = SSH_DEFAULT_PORT
+             this.port = port
+         }
++
++        override fun toString(): String {
++            return "${SSH_URI_PREFIX}$username@$host:$port${defaultPath ?: ""}"
++        }
+     }
+ 
+     class AsyncRemoveConnection internal constructor(
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+index 574d6b4c5..8240b97cd 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+@@ -121,6 +121,7 @@ import com.amaze.filemanager.ui.views.drawer.Drawer;
+ import com.amaze.filemanager.utils.AppConstants;
+ import com.amaze.filemanager.utils.BookSorter;
+ import com.amaze.filemanager.utils.DataUtils;
++import com.amaze.filemanager.utils.MainActivityActionMode;
+ import com.amaze.filemanager.utils.MainActivityHelper;
+ import com.amaze.filemanager.utils.OTGUtil;
+ import com.amaze.filemanager.utils.PreferenceUtils;
+@@ -197,7 +198,8 @@ public class MainActivity extends PermissionsActivity
+         SearchWorkerFragment.HelperCallbacks,
+         CloudConnectionCallbacks,
+         LoaderManager.LoaderCallbacks<Cursor>,
+-        FolderChooserDialog.FolderCallback {
++        FolderChooserDialog.FolderCallback,
++        PermissionsActivity.OnPermissionGranted {
+ 
+   private static final String TAG = TagsHelper.getTag(MainActivity.class);
+ 
+@@ -237,6 +239,7 @@ public class MainActivity extends PermissionsActivity
+   private static final String KEY_OPERATED_ON_PATH = "oppathe1";
+   private static final String KEY_OPERATIONS_PATH_LIST = "oparraylist";
+   private static final String KEY_OPERATION = "operation";
++  private static final String KEY_SELECTED_LIST_ITEM = "select_list_item";
+ 
+   private AppBar appbar;
+   private Drawer drawer;
+@@ -294,6 +297,7 @@ public class MainActivity extends PermissionsActivity
+ 
+   // the current visible tab, either 0 or 1
+   public static int currentTab;
++  private boolean listItemSelected = false;
+ 
+   public static Shell.Interactive shellInteractive;
+   public static Handler handler;
+@@ -304,6 +308,7 @@ public class MainActivity extends PermissionsActivity
+   public static final int REQUEST_CODE_CLOUD_LIST_KEY = 5472;
+ 
+   private PasteHelper pasteHelper;
++  private MainActivityActionMode mainActivityActionMode;
+ 
+   private static final String DEFAULT_FALLBACK_STORAGE_PATH = "/storage/sdcard0";
+   private static final String INTERNAL_SHARED_STORAGE = "Internal shared storage";
+@@ -323,6 +328,9 @@ public class MainActivity extends PermissionsActivity
+     intent = getIntent();
+ 
+     dataUtils = DataUtils.getInstance();
++    if (savedInstanceState != null) {
++      listItemSelected = savedInstanceState.getBoolean(KEY_SELECTED_LIST_ITEM, false);
++    }
+ 
+     initialisePreferences();
+     initializeInteractiveShell();
+@@ -337,6 +345,7 @@ public class MainActivity extends PermissionsActivity
+ 
+     initialiseFab(); // TODO: 7/12/2017 not init when actionIntent != null
+     mainActivityHelper = new MainActivityHelper(this);
++    mainActivityActionMode = new MainActivityActionMode(new WeakReference<>(MainActivity.this));
+ 
+     if (CloudSheetFragment.isCloudProviderAvailable(this)) {
+ 
+@@ -461,43 +470,46 @@ public class MainActivity extends PermissionsActivity
+     }
+   }
+ 
+-  private void checkForExternalPermission() {
++  @Override
++  public void onPermissionGranted() {
++    drawer.refreshDrawer();
++    TabFragment tabFragment = getTabFragment();
++    boolean b = getBoolean(PREFERENCE_NEED_TO_SET_HOME);
++    // reset home and current paths according to new storages
++    if (b) {
++      TabHandler tabHandler = TabHandler.getInstance();
++      tabHandler
++          .clear()
++          .subscribe(
++              () -> {
++                if (tabFragment != null) {
++                  tabFragment.refactorDrawerStorages(false);
++                  Fragment main = tabFragment.getFragmentAtIndex(0);
++                  if (main != null) ((MainFragment) main).updateTabWithDb(tabHandler.findTab(1));
++                  Fragment main1 = tabFragment.getFragmentAtIndex(1);
++                  if (main1 != null) ((MainFragment) main1).updateTabWithDb(tabHandler.findTab(2));
++                }
++                getPrefs().edit().putBoolean(PREFERENCE_NEED_TO_SET_HOME, false).commit();
++              });
++    } else {
++      // just refresh list
++      if (tabFragment != null) {
++        Fragment main = tabFragment.getFragmentAtIndex(0);
++        if (main != null) ((MainFragment) main).updateList();
++        Fragment main1 = tabFragment.getFragmentAtIndex(1);
++        if (main1 != null) ((MainFragment) main1).updateList();
++      }
++    }
++  }
+ 
+-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !checkStoragePermission()) {
+-      requestStoragePermission(
+-          () -> {
+-            drawer.refreshDrawer();
+-            TabFragment tabFragment = getTabFragment();
+-            boolean b = getBoolean(PREFERENCE_NEED_TO_SET_HOME);
+-            // reset home and current paths according to new storages
+-            if (b) {
+-              TabHandler tabHandler = TabHandler.getInstance();
+-              tabHandler
+-                  .clear()
+-                  .subscribe(
+-                      () -> {
+-                        if (tabFragment != null) {
+-                          tabFragment.refactorDrawerStorages(false);
+-                          Fragment main = tabFragment.getFragmentAtIndex(0);
+-                          if (main != null)
+-                            ((MainFragment) main).updateTabWithDb(tabHandler.findTab(1));
+-                          Fragment main1 = tabFragment.getFragmentAtIndex(1);
+-                          if (main1 != null)
+-                            ((MainFragment) main1).updateTabWithDb(tabHandler.findTab(2));
+-                        }
+-                        getPrefs().edit().putBoolean(PREFERENCE_NEED_TO_SET_HOME, false).commit();
+-                      });
+-            } else {
+-              // just refresh list
+-              if (tabFragment != null) {
+-                Fragment main = tabFragment.getFragmentAtIndex(0);
+-                if (main != null) ((MainFragment) main).updateList();
+-                Fragment main1 = tabFragment.getFragmentAtIndex(1);
+-                if (main1 != null) ((MainFragment) main1).updateList();
+-              }
+-            }
+-          },
+-          true);
++  private void checkForExternalPermission() {
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++      if (!checkStoragePermission()) {
++        requestStoragePermission(this, true);
++      }
++      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++        requestAllFilesAccess(this);
++      }
+     }
+   }
+ 
+@@ -1231,6 +1243,7 @@ public class MainActivity extends PermissionsActivity
+   protected void onSaveInstanceState(Bundle outState) {
+     super.onSaveInstanceState(outState);
+     outState.putInt(KEY_DRAWER_SELECTED, getDrawer().getDrawerSelectedItem());
++    outState.putBoolean(KEY_SELECTED_LIST_ITEM, listItemSelected);
+     if (pasteHelper != null) {
+       outState.putParcelable(PASTEHELPER_BUNDLE, pasteHelper);
+     }
+@@ -1812,6 +1825,10 @@ public class MainActivity extends PermissionsActivity
+     return pasteHelper;
+   }
+ 
++  public MainActivityActionMode getActionModeHelper() {
++    return this.mainActivityActionMode;
++  }
++
+   public void setPaste(PasteHelper p) {
+     pasteHelper = p;
+   }
+@@ -1897,25 +1914,23 @@ public class MainActivity extends PermissionsActivity
+       if (i != -1) name = dataUtils.getServers().get(i)[0];
+     }
+     SftpConnectDialog sftpConnectDialog = new SftpConnectDialog();
+-    Uri uri = Uri.parse(path);
+-    String userinfo = uri.getUserInfo();
++    SshConnectionPool.ConnectionInfo connInfo = new SshConnectionPool.ConnectionInfo(path);
++
+     Bundle bundle = new Bundle();
+     bundle.putString(ARG_NAME, name);
+-    bundle.putString(ARG_ADDRESS, uri.getHost());
+-    bundle.putInt(ARG_PORT, uri.getPort());
+-    if (!TextUtils.isEmpty(uri.getPath())) {
+-      bundle.putString(ARG_DEFAULT_PATH, uri.getPath());
++    bundle.putString(ARG_ADDRESS, connInfo.getHost());
++    bundle.putInt(ARG_PORT, connInfo.getPort());
++    if (!TextUtils.isEmpty(connInfo.getDefaultPath())) {
++      bundle.putString(ARG_DEFAULT_PATH, connInfo.getDefaultPath());
+     }
+-    bundle.putString(
+-        ARG_USERNAME,
+-        userinfo.indexOf(':') > 0 ? userinfo.substring(0, userinfo.indexOf(':')) : userinfo);
++    bundle.putString(ARG_USERNAME, connInfo.getUsername());
+ 
+-    if (userinfo.indexOf(':') < 0) {
++    if (connInfo.getPassword() == null) {
+       bundle.putBoolean(ARG_HAS_PASSWORD, false);
+       bundle.putString(ARG_KEYPAIR_NAME, utilsHandler.getSshAuthPrivateKeyName(path));
+     } else {
+       bundle.putBoolean(ARG_HAS_PASSWORD, true);
+-      bundle.putString(ARG_PASSWORD, userinfo.substring(userinfo.indexOf(':') + 1));
++      bundle.putString(ARG_PASSWORD, connInfo.getPassword());
+     }
+     bundle.putBoolean(ARG_EDIT, edit);
+     sftpConnectDialog.setArguments(bundle);
+@@ -2317,6 +2332,24 @@ public class MainActivity extends PermissionsActivity
+     }
+   }
+ 
++  /**
++   * Get whether list item is selected for action mode or not
++   *
++   * @return value
++   */
++  public boolean getListItemSelected() {
++    return this.listItemSelected;
++  }
++
++  /**
++   * Set list item selected value
++   *
++   * @param value value
++   */
++  public void setListItemSelected(boolean value) {
++    this.listItemSelected = value;
++  }
++
+   /**
+    * Do nothing other than dismissing the folder selection dialog.
+    *
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/superclasses/PermissionsActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/superclasses/PermissionsActivity.java
+index 81b63720e..91c4a99e9 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/superclasses/PermissionsActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/superclasses/PermissionsActivity.java
+@@ -23,6 +23,7 @@ package com.amaze.filemanager.ui.activities.superclasses;
+ import com.afollestad.materialdialogs.DialogAction;
+ import com.afollestad.materialdialogs.MaterialDialog;
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.application.AppConfig;
+ import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation;
+ import com.amaze.filemanager.utils.Utils;
+ import com.google.android.material.snackbar.BaseTransientBottomBar;
+@@ -33,6 +34,9 @@ import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.net.Uri;
+ import android.os.Build;
++import android.os.Environment;
++import android.provider.Settings;
++import android.util.Log;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
+@@ -42,14 +46,20 @@ import androidx.core.app.ActivityCompat;
+ public class PermissionsActivity extends ThemedActivity
+     implements ActivityCompat.OnRequestPermissionsResultCallback {
+ 
+-  public static final int PERMISSION_LENGTH = 2;
+-  public static final int STORAGE_PERMISSION = 0, INSTALL_APK_PERMISSION = 1;
++  private static final String TAG = PermissionsActivity.class.getSimpleName();
+ 
+-  private OnPermissionGranted[] permissionCallbacks = new OnPermissionGranted[PERMISSION_LENGTH];
++  public static final int PERMISSION_LENGTH = 3;
++  public static final int STORAGE_PERMISSION = 0,
++      INSTALL_APK_PERMISSION = 1,
++      ALL_FILES_PERMISSION = 2;
++
++  private final OnPermissionGranted[] permissionCallbacks =
++      new OnPermissionGranted[PERMISSION_LENGTH];
+ 
+   @Override
+   public void onRequestPermissionsResult(
+       int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
++    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+     if (requestCode == STORAGE_PERMISSION) {
+       if (isGranted(grantResults)) {
+         Utils.enableScreenRotation(this);
+@@ -129,7 +139,7 @@ public class PermissionsActivity extends ThemedActivity
+    * @param isInitialStart is the permission being requested for the first time in the application
+    *     lifecycle
+    */
+-  public void requestPermission(
++  private void requestPermission(
+       final String permission,
+       final int code,
+       @NonNull final MaterialDialog rationale,
+@@ -165,6 +175,41 @@ public class PermissionsActivity extends ThemedActivity
+     }
+   }
+ 
++  /**
++   * Request all files access on android 11+
++   *
++   * @param onPermissionGranted permission granted callback
++   */
++  public void requestAllFilesAccess(@NonNull final OnPermissionGranted onPermissionGranted) {
++    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
++      final MaterialDialog materialDialog =
++          GeneralDialogCreation.showBasicDialog(
++              this,
++              R.string.grant_all_files_permission,
++              R.string.grantper,
++              R.string.grant,
++              R.string.cancel);
++      materialDialog.getActionButton(DialogAction.NEGATIVE).setOnClickListener(v -> finish());
++      materialDialog
++          .getActionButton(DialogAction.POSITIVE)
++          .setOnClickListener(
++              v -> {
++                Utils.disableScreenRotation(this);
++                permissionCallbacks[ALL_FILES_PERMISSION] = onPermissionGranted;
++                try {
++                  Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
++                  startActivity(intent);
++                } catch (Exception e) {
++                  Log.e(TAG, "Failed to initial activity to grant all files access", e);
++                  AppConfig.toast(this, getString(R.string.grantfailed));
++                }
++                materialDialog.dismiss();
++              });
++      materialDialog.setCancelable(false);
++      materialDialog.show();
++    }
++  }
++
+   private boolean isGranted(int[] grantResults) {
+     return grantResults.length == 1 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+   }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+index 32a0f6b34..5a263efe7 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+@@ -1438,19 +1438,24 @@ public class GeneralDialogCreation {
+     View customView =
+         DialogSigninWithGoogleBinding.inflate(LayoutInflater.from(mainActivity)).getRoot();
+     int accentColor = mainActivity.getAccent();
++
++    MaterialDialog dialog =
++        new MaterialDialog.Builder(mainActivity)
++            .customView(customView, false)
++            .title(R.string.signin_with_google_title)
++            .negativeText(android.R.string.cancel)
++            .negativeColor(accentColor)
++            .onNegative((dlg, which) -> dlg.dismiss())
++            .build();
++
+     customView
+         .findViewById(R.id.signin_with_google)
+         .setOnClickListener(
+             v -> {
+               mainActivity.addConnection(OpenMode.GDRIVE);
++              dialog.dismiss();
+             });
+-    new MaterialDialog.Builder(mainActivity)
+-        .customView(customView, false)
+-        .title(R.string.signin_with_google_title)
+-        .negativeText(android.R.string.cancel)
+-        .negativeColor(accentColor)
+-        .onNegative((dialog, which) -> dialog.dismiss())
+-        .build()
+-        .show();
++
++    dialog.show();
+   }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SftpConnectDialog.kt b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SftpConnectDialog.kt
+index a4e278d22..bea9a02e3 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SftpConnectDialog.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SftpConnectDialog.kt
+@@ -183,13 +183,15 @@ class SftpConnectDialog : DialogFragment() {
+                 selectedParsedKeyPairName = requireArguments().getString(ARG_KEYPAIR_NAME)
+                 selectPemBTN.text = selectedParsedKeyPairName
+             }
+-            oldPath = SshClientUtils.deriveSftpPathFrom(
+-                requireArguments().getString(ARG_ADDRESS)!!,
+-                requireArguments().getInt(ARG_PORT),
+-                requireArguments().getString(ARG_DEFAULT_PATH, ""),
+-                requireArguments().getString(ARG_USERNAME)!!,
+-                requireArguments().getString(ARG_PASSWORD),
+-                selectedParsedKeyPair
++            oldPath = SshClientUtils.encryptSshPathAsNecessary(
++                SshClientUtils.deriveSftpPathFrom(
++                    requireArguments().getString(ARG_ADDRESS)!!,
++                    requireArguments().getInt(ARG_PORT),
++                    requireArguments().getString(ARG_DEFAULT_PATH, ""),
++                    requireArguments().getString(ARG_USERNAME)!!,
++                    requireArguments().getString(ARG_PASSWORD),
++                    selectedParsedKeyPair
++                )
+             )
+         }
+     }
+@@ -201,13 +203,15 @@ class SftpConnectDialog : DialogFragment() {
+             dialogBuilder
+                 .negativeText(R.string.delete)
+                 .onNegative { dialog: MaterialDialog, _: DialogAction? ->
+-                    val path = SshClientUtils.deriveSftpPathFrom(
+-                        hostname,
+-                        port,
+-                        defaultPath,
+-                        username,
+-                        requireArguments().getString(ARG_PASSWORD, null),
+-                        selectedParsedKeyPair
++                    val path = SshClientUtils.encryptSshPathAsNecessary(
++                        SshClientUtils.deriveSftpPathFrom(
++                            hostname,
++                            port,
++                            defaultPath,
++                            username,
++                            requireArguments().getString(ARG_PASSWORD, null),
++                            selectedParsedKeyPair
++                        )
+                     )
+                     val i = DataUtils.getInstance().containsServer(
+                         arrayOf(connectionName, path)
+@@ -441,7 +445,11 @@ class SftpConnectDialog : DialogFragment() {
+                 selectedParsedKeyPair
+             )
+         } else {
+-            updateSshConnection(connectionName, hostKeyFingerprint, path, encryptedPath)
++            updateSshConnection(
++                connectionName,
++                hostKeyFingerprint,
++                encryptedPath
++            )
+         }
+     }
+ 
+@@ -498,11 +506,10 @@ class SftpConnectDialog : DialogFragment() {
+     private fun updateSshConnection(
+         connectionName: String,
+         hostKeyFingerprint: String,
+-        path: String,
+         encryptedPath: String
+     ): Boolean {
+         DataUtils.getInstance().removeServer(DataUtils.getInstance().containsServer(oldPath))
+-        DataUtils.getInstance().addServer(arrayOf(connectionName, path))
++        DataUtils.getInstance().addServer(arrayOf(connectionName, encryptedPath))
+         Collections.sort(DataUtils.getInstance().servers, BookSorter())
+         (activity as MainActivity).drawer.refreshDrawer()
+         AppConfig.getInstance().runInBackground {
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/drag/RecyclerAdapterDragListener.kt b/app/src/main/java/com/amaze/filemanager/ui/drag/RecyclerAdapterDragListener.kt
+index 6716abc33..4cd8d27fb 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/drag/RecyclerAdapterDragListener.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/drag/RecyclerAdapterDragListener.kt
+@@ -33,6 +33,7 @@ import com.amaze.filemanager.ui.dialogs.DragAndDropDialog
+ import com.amaze.filemanager.ui.fragments.MainFragment
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
+ import com.amaze.filemanager.utils.DataUtils
++import com.amaze.filemanager.utils.safeLet
+ import kotlin.collections.ArrayList
+ 
+ class RecyclerAdapterDragListener(
+@@ -64,11 +65,12 @@ class RecyclerAdapterDragListener(
+                 true
+             }
+             DragEvent.ACTION_DRAG_ENTERED -> {
+-                holder?.run {
+-                    if (adapter.itemsDigested.size != 0 &&
+-                        holder.adapterPosition < adapter.itemsDigested.size
++                safeLet(holder, adapter.itemsDigested) {
++                    holder, itemsDigested ->
++                    if (itemsDigested.size != 0 &&
++                        holder.adapterPosition < itemsDigested.size
+                     ) {
+-                        val listItem = (adapter.itemsDigested[holder.adapterPosition])
++                        val listItem = (itemsDigested[holder.adapterPosition])
+                         if (dragAndDropPref == PreferencesConstants.PREFERENCE_DRAG_TO_SELECT) {
+                             if (listItem.specialType != RecyclerAdapter.TYPE_BACK &&
+                                 listItem.shouldToggleDragChecked
+@@ -96,11 +98,12 @@ class RecyclerAdapterDragListener(
+                 true
+             }
+             DragEvent.ACTION_DRAG_EXITED -> {
+-                holder?.run {
+-                    if (adapter.itemsDigested.size != 0 &&
+-                        holder.adapterPosition < adapter.itemsDigested.size
++                safeLet(holder, adapter.itemsDigested) {
++                    holder, itemsDigested ->
++                    if (itemsDigested.size != 0 &&
++                        holder.adapterPosition < itemsDigested.size
+                     ) {
+-                        val listItem = (adapter.itemsDigested[holder.adapterPosition])
++                        val listItem = (itemsDigested[holder.adapterPosition])
+                         if (dragAndDropPref != PreferencesConstants.PREFERENCE_DRAG_TO_SELECT) {
+                             val checkedItems:
+                                 ArrayList<LayoutElementParcelable> = adapter.checkedItems
+@@ -138,11 +141,11 @@ class RecyclerAdapterDragListener(
+             }
+             DragEvent.ACTION_DROP -> {
+                 if (dragAndDropPref != PreferencesConstants.PREFERENCE_DRAG_TO_SELECT) {
+-                    var checkedItems: ArrayList<LayoutElementParcelable> = adapter.checkedItems
++                    var checkedItems: ArrayList<LayoutElementParcelable>? = adapter.checkedItems
+                     var currentFileParcelable: HybridFileParcelable? = null
+                     var isCurrentElementDirectory: Boolean? = null
+                     var isEmptyArea: Boolean? = null
+-                    var pasteLocation: String? = if (adapter.itemsDigested.size == 0) {
++                    var pasteLocation: String? = if (adapter.itemsDigested?.size == 0) {
+                         mainFragment.currentPath
+                     } else {
+                         if (holder == null || holder.adapterPosition == RecyclerView.NO_POSITION) {
+@@ -150,28 +153,30 @@ class RecyclerAdapterDragListener(
+                             isEmptyArea = true
+                             mainFragment.currentPath
+                         } else {
+-                            if (adapter.itemsDigested[holder.adapterPosition].specialType
+-                                == RecyclerAdapter.TYPE_BACK
+-                            ) {
+-                                // dropping in goback button
+-                                // hack to get the parent path
+-                                val hybridFileParcelable = mainFragment
+-                                    .elementsList!!.get(1).generateBaseFile()
+-                                val hybridFile = HybridFile(
+-                                    hybridFileParcelable.mode,
+-                                    hybridFileParcelable.getParent(mainFragment.context)
+-                                )
+-                                hybridFile.getParent(mainFragment.context)
+-                            } else {
+-                                val currentElement = adapter
+-                                    .itemsDigested[holder.adapterPosition].elem
+-                                currentFileParcelable = currentElement.generateBaseFile()
+-                                isCurrentElementDirectory = currentElement.isDirectory
+-                                currentElement.desc
++                            adapter.itemsDigested?.let {
++                                itemsDigested ->
++                                if (itemsDigested[holder.adapterPosition].specialType
++                                    == RecyclerAdapter.TYPE_BACK
++                                ) {
++                                    // dropping in goback button
++                                    // hack to get the parent path
++                                    val hybridFileParcelable = mainFragment
++                                        .elementsList!![1].generateBaseFile()
++                                    val hybridFile = HybridFile(
++                                        hybridFileParcelable.mode,
++                                        hybridFileParcelable.getParent(mainFragment.context)
++                                    )
++                                    hybridFile.getParent(mainFragment.context)
++                                } else {
++                                    val currentElement = itemsDigested[holder.adapterPosition].elem
++                                    currentFileParcelable = currentElement.generateBaseFile()
++                                    isCurrentElementDirectory = currentElement.isDirectory
++                                    currentElement.desc
++                                }
+                             }
+                         }
+                     }
+-                    if (checkedItems.size == 0) {
++                    if (checkedItems?.size == 0) {
+                         // probably because we switched tabs and
+                         // this adapter doesn't have any checked items, get from data utils
+                         val dataUtils = DataUtils.getInstance()
+@@ -183,8 +188,8 @@ class RecyclerAdapterDragListener(
+                         )
+                         checkedItems = dataUtils.checkedItemsList
+                     }
+-                    val arrayList = ArrayList<HybridFileParcelable>(checkedItems.size)
+-                    checkedItems.forEach {
++                    val arrayList = ArrayList<HybridFileParcelable>()
++                    checkedItems?.forEach {
+                         val file = it.generateBaseFile()
+                         if (it.desc.equals(pasteLocation) ||
+                             (
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+index 3ce1ef58e..5295ecb15 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+@@ -54,7 +54,6 @@ import com.amaze.filemanager.filesystem.CustomFileObserver;
+ import com.amaze.filemanager.filesystem.FileProperties;
+ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+-import com.amaze.filemanager.filesystem.PasteHelper;
+ import com.amaze.filemanager.filesystem.SafRootHolder;
+ import com.amaze.filemanager.filesystem.cloud.CloudUtil;
+ import com.amaze.filemanager.filesystem.files.CryptUtil;
+@@ -69,7 +68,6 @@ import com.amaze.filemanager.ui.drag.TabFragmentBottomDragListener;
+ import com.amaze.filemanager.ui.fragments.data.MainFragmentViewModel;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+ import com.amaze.filemanager.ui.provider.UtilitiesProvider;
+-import com.amaze.filemanager.ui.selection.SelectionPopupMenu;
+ import com.amaze.filemanager.ui.theme.AppTheme;
+ import com.amaze.filemanager.ui.views.CustomScrollGridLayoutManager;
+ import com.amaze.filemanager.ui.views.CustomScrollLinearLayoutManager;
+@@ -95,11 +93,9 @@ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.res.Resources;
+ import android.graphics.Color;
+-import android.graphics.drawable.ColorDrawable;
+ import android.media.RingtoneManager;
+ import android.net.Uri;
+ import android.os.AsyncTask;
+-import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Environment;
+ import android.provider.DocumentsContract;
+@@ -108,9 +104,6 @@ import android.text.format.Formatter;
+ import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.LayoutInflater;
+-import android.view.Menu;
+-import android.view.MenuInflater;
+-import android.view.MenuItem;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.ViewTreeObserver;
+@@ -124,11 +117,9 @@ import androidx.activity.result.contract.ActivityResultContracts;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ import androidx.annotation.RequiresApi;
+-import androidx.appcompat.view.ActionMode;
+ import androidx.core.content.pm.ShortcutInfoCompat;
+ import androidx.core.content.pm.ShortcutManagerCompat;
+ import androidx.core.graphics.drawable.IconCompat;
+-import androidx.drawerlayout.widget.DrawerLayout;
+ import androidx.fragment.app.Fragment;
+ import androidx.fragment.app.FragmentActivity;
+ import androidx.fragment.app.FragmentManager;
+@@ -148,8 +139,6 @@ public class MainFragment extends Fragment
+         ViewTreeObserver.OnGlobalLayoutListener,
+         AdjustListViewForTv<ItemViewHolder> {
+ 
+-  public ActionMode mActionMode;
+-
+   public SwipeRefreshLayout mSwipeRefreshLayout;
+ 
+   public RecyclerAdapter adapter;
+@@ -167,7 +156,6 @@ public class MainFragment extends Fragment
+   private UtilitiesProvider utilsProvider;
+   private HashMap<String, Bundle> scrolls = new HashMap<>();
+   private View rootView;
+-  private View actionModeView;
+   private FastScroller fastScroller;
+   private CustomFileObserver customFileObserver;
+ 
+@@ -344,6 +332,8 @@ public class MainFragment extends Fragment
+     setGridLayoutSpanSizeLookup(mLayoutManagerGrid);
+     listView.setLayoutManager(mLayoutManagerGrid);
+     listView.clearOnScrollListeners();
++    mainFragmentViewModel.setAdapterListItems(null);
++    mainFragmentViewModel.setIconList(null);
+     adapter = null;
+   }
+ 
+@@ -358,6 +348,8 @@ public class MainFragment extends Fragment
+     if (mLayoutManager == null) mLayoutManager = new CustomScrollLinearLayoutManager(getActivity());
+     listView.setLayoutManager(mLayoutManager);
+     listView.clearOnScrollListeners();
++    mainFragmentViewModel.setAdapterListItems(null);
++    mainFragmentViewModel.setIconList(null);
+     adapter = null;
+   }
+ 
+@@ -379,363 +371,11 @@ public class MainFragment extends Fragment
+         reloadListElements(
+             true, mainFragmentViewModel.getResults(), !mainFragmentViewModel.isList());
+       }
+-      if (mainFragmentViewModel.getSelection()) {
+-        for (Integer index : adapter.getCheckedItemsIndex()) {
+-          adapter.toggleChecked(index, null);
+-        }
+-      }
+     } else {
+       loadlist(mainFragmentViewModel.getHome(), true, mainFragmentViewModel.getOpenMode());
+     }
+   }
+ 
+-  public ActionMode.Callback mActionModeCallback =
+-      new ActionMode.Callback() {
+-        private void hideOption(int id, Menu menu) {
+-          MenuItem item = menu.findItem(id);
+-          item.setVisible(false);
+-        }
+-
+-        private void showOption(int id, Menu menu) {
+-          MenuItem item = menu.findItem(id);
+-          item.setVisible(true);
+-        }
+-
+-        void initMenu(Menu menu) {
+-          /*
+-          menu.findItem(R.id.cpy).setIcon(icons.getCopyDrawable());
+-          menu.findItem(R.id.cut).setIcon(icons.getCutDrawable());
+-          menu.findItem(R.id.delete).setIcon(icons.getDeleteDrawable());
+-          menu.findItem(R.id.all).setIcon(icons.getAllDrawable());
+-          */
+-        }
+-
+-        // called when the action mode is created; startActionMode() was called
+-        public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+-          // Inflate a menu resource providing context menu items
+-          MenuInflater inflater = mode.getMenuInflater();
+-          actionModeView = getActivity().getLayoutInflater().inflate(R.layout.actionmode, null);
+-          mode.setCustomView(actionModeView);
+-
+-          getMainActivity().setPagingEnabled(false);
+-          getMainActivity().hideFab();
+-
+-          // translates the drawable content down
+-          // if (getMainActivity().isDrawerLocked) getMainActivity().translateDrawerList(true);
+-
+-          // assumes that you have "contexual.xml" menu resources
+-          inflater.inflate(R.menu.contextual, menu);
+-          initMenu(menu);
+-          hideOption(R.id.addshortcut, menu);
+-          hideOption(R.id.share, menu);
+-          hideOption(R.id.openwith, menu);
+-          if (getMainActivity().mReturnIntent) showOption(R.id.openmulti, menu);
+-          // hideOption(R.id.setringtone,menu);
+-          mode.setTitle(getResources().getString(R.string.select));
+-
+-          getMainActivity()
+-              .updateViews(new ColorDrawable(res.getColor(R.color.holo_dark_action_mode)));
+-
+-          // do not allow drawer to open when item gets selected
+-          if (!getMainActivity().getDrawer().isLocked()) {
+-            getMainActivity().getDrawer().lockIfNotOnTablet(DrawerLayout.LOCK_MODE_LOCKED_CLOSED);
+-          }
+-          return true;
+-        }
+-
+-        /**
+-         * the following method is called each time the action mode is shown. Always called after
+-         * onCreateActionMode, but may be called multiple times if the mode is invalidated.
+-         */
+-        public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+-          ArrayList<LayoutElementParcelable> checkedItems = adapter.getCheckedItems();
+-          actionModeView.setOnClickListener(
+-              v ->
+-                  SelectionPopupMenu.Companion.invokeSelectionDropdown(
+-                      adapter,
+-                      actionModeView,
+-                      mainFragmentViewModel.getCurrentPath(),
+-                      getMainActivity()));
+-          TextView textView = actionModeView.findViewById(R.id.item_count);
+-          textView.setText(String.valueOf(checkedItems.size()));
+-          hideOption(R.id.openmulti, menu);
+-          menu.findItem(R.id.all)
+-              .setTitle(
+-                  checkedItems.size()
+-                          == mainFragmentViewModel.getFolderCount()
+-                              + mainFragmentViewModel.getFileCount()
+-                      ? R.string.deselect_all
+-                      : R.string.select_all);
+-
+-          if (mainFragmentViewModel.getOpenMode() != OpenMode.FILE) {
+-            hideOption(R.id.addshortcut, menu);
+-            hideOption(R.id.compress, menu);
+-            return true;
+-          }
+-
+-          if (getMainActivity().mReturnIntent && SDK_INT >= JELLY_BEAN) {
+-            showOption(R.id.openmulti, menu);
+-          }
+-          // tv.setText(checkedItems.size());
+-          if (!mainFragmentViewModel.getResults()) {
+-            hideOption(R.id.openparent, menu);
+-            if (checkedItems.size() == 1) {
+-              showOption(R.id.addshortcut, menu);
+-              showOption(R.id.openwith, menu);
+-              showOption(R.id.share, menu);
+-
+-              if (adapter.getCheckedItems().get(0).isDirectory) {
+-                hideOption(R.id.openwith, menu);
+-                hideOption(R.id.share, menu);
+-                hideOption(R.id.openmulti, menu);
+-              }
+-
+-              if (getMainActivity().mReturnIntent)
+-                if (Build.VERSION.SDK_INT >= 16) showOption(R.id.openmulti, menu);
+-
+-            } else {
+-              try {
+-                showOption(R.id.share, menu);
+-                if (getMainActivity().mReturnIntent)
+-                  if (Build.VERSION.SDK_INT >= 16) showOption(R.id.openmulti, menu);
+-                for (LayoutElementParcelable e : adapter.getCheckedItems()) {
+-                  if (e.isDirectory) {
+-                    hideOption(R.id.share, menu);
+-                    hideOption(R.id.openmulti, menu);
+-                  }
+-                }
+-              } catch (Exception e) {
+-                e.printStackTrace();
+-              }
+-              hideOption(R.id.openwith, menu);
+-              hideOption(R.id.addshortcut, menu);
+-            }
+-          } else {
+-            if (checkedItems.size() == 1) {
+-              showOption(R.id.addshortcut, menu);
+-              showOption(R.id.openparent, menu);
+-              showOption(R.id.openwith, menu);
+-              showOption(R.id.share, menu);
+-
+-              if (adapter.getCheckedItems().get(0).isDirectory) {
+-                hideOption(R.id.openwith, menu);
+-                hideOption(R.id.share, menu);
+-                hideOption(R.id.openmulti, menu);
+-              }
+-              if (getMainActivity().mReturnIntent && SDK_INT >= JELLY_BEAN) {
+-                showOption(R.id.openmulti, menu);
+-              }
+-
+-            } else {
+-              hideOption(R.id.openparent, menu);
+-              hideOption(R.id.addshortcut, menu);
+-
+-              if (getMainActivity().mReturnIntent)
+-                if (Build.VERSION.SDK_INT >= 16) showOption(R.id.openmulti, menu);
+-              try {
+-                for (LayoutElementParcelable e : adapter.getCheckedItems()) {
+-                  if (e.isDirectory) {
+-                    hideOption(R.id.share, menu);
+-                    hideOption(R.id.openmulti, menu);
+-                  }
+-                }
+-              } catch (Exception e) {
+-                e.printStackTrace();
+-              }
+-
+-              hideOption(R.id.openwith, menu);
+-            }
+-          }
+-
+-          if (mainFragmentViewModel.getOpenMode() != OpenMode.FILE) {
+-            hideOption(R.id.addshortcut, menu);
+-            hideOption(R.id.compress, menu);
+-            hideOption(R.id.hide, menu);
+-            hideOption(R.id.addshortcut, menu);
+-          }
+-          return true; // Return false if nothing is done
+-        }
+-
+-        // called when the user selects a contextual menu item
+-        public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+-          computeScroll();
+-          ArrayList<LayoutElementParcelable> checkedItems = adapter.getCheckedItems();
+-          switch (item.getItemId()) {
+-            case R.id.openmulti:
+-              try {
+-
+-                Intent intent_result = new Intent(Intent.ACTION_SEND_MULTIPLE);
+-                ArrayList<Uri> resulturis = new ArrayList<>();
+-
+-                for (LayoutElementParcelable element : checkedItems) {
+-                  HybridFileParcelable baseFile = element.generateBaseFile();
+-                  Uri resultUri = Utils.getUriForBaseFile(requireContext(), baseFile);
+-
+-                  if (resultUri != null) {
+-                    resulturis.add(resultUri);
+-                  }
+-                }
+-
+-                intent_result.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+-                requireActivity().setResult(FragmentActivity.RESULT_OK, intent_result);
+-                intent_result.putParcelableArrayListExtra(Intent.EXTRA_STREAM, resulturis);
+-                requireActivity().finish();
+-                // mode.finish();
+-              } catch (Exception e) {
+-                e.printStackTrace();
+-              }
+-              return true;
+-            case R.id.about:
+-              LayoutElementParcelable x = checkedItems.get(0);
+-              GeneralDialogCreation.showPropertiesDialogWithPermissions(
+-                  x.generateBaseFile(),
+-                  x.permissions,
+-                  requireMainActivity(),
+-                  MainFragment.this,
+-                  requireMainActivity().isRootExplorer(),
+-                  utilsProvider.getAppTheme());
+-              mode.finish();
+-              return true;
+-            case R.id.delete:
+-              GeneralDialogCreation.deleteFilesDialog(
+-                  requireContext(),
+-                  requireMainActivity(),
+-                  checkedItems,
+-                  utilsProvider.getAppTheme());
+-              return true;
+-            case R.id.share:
+-              ArrayList<File> arrayList = new ArrayList<>();
+-              for (LayoutElementParcelable e : checkedItems) {
+-                arrayList.add(new File(e.desc));
+-              }
+-              if (arrayList.size() > 100)
+-                Toast.makeText(
+-                        getActivity(),
+-                        getResources().getString(R.string.share_limit),
+-                        Toast.LENGTH_SHORT)
+-                    .show();
+-              else {
+-
+-                switch (mainFragmentViewModel.getListElements().get(0).getMode()) {
+-                  case DROPBOX:
+-                  case BOX:
+-                  case GDRIVE:
+-                  case ONEDRIVE:
+-                    FileUtils.shareCloudFile(
+-                        mainFragmentViewModel.getListElements().get(0).desc,
+-                        mainFragmentViewModel.getListElements().get(0).getMode(),
+-                        getContext());
+-                    break;
+-                  default:
+-                    FileUtils.shareFiles(
+-                        arrayList,
+-                        getActivity(),
+-                        utilsProvider.getAppTheme(),
+-                        mainFragmentViewModel.getAccentColor());
+-                    break;
+-                }
+-              }
+-              return true;
+-            case R.id.openparent:
+-              loadlist(new File(checkedItems.get(0).desc).getParent(), false, OpenMode.FILE);
+-              return true;
+-            case R.id.all:
+-              if (adapter.areAllChecked(mainFragmentViewModel.getCurrentPath())) {
+-                adapter.toggleChecked(false, mainFragmentViewModel.getCurrentPath());
+-                item.setTitle(R.string.select_all);
+-              } else {
+-                adapter.toggleChecked(true, mainFragmentViewModel.getCurrentPath());
+-                item.setTitle(R.string.deselect_all);
+-              }
+-              mode.invalidate();
+-
+-              return true;
+-            case R.id.rename:
+-              final HybridFileParcelable f;
+-              f = checkedItems.get(0).generateBaseFile();
+-              rename(f);
+-              mode.finish();
+-              return true;
+-            case R.id.hide:
+-              for (int i1 = 0; i1 < checkedItems.size(); i1++) {
+-                hide(checkedItems.get(i1).desc);
+-              }
+-              updateList();
+-              mode.finish();
+-              return true;
+-            case R.id.ex:
+-              getMainActivity().mainActivityHelper.extractFile(new File(checkedItems.get(0).desc));
+-              mode.finish();
+-              return true;
+-            case R.id.cpy:
+-            case R.id.cut:
+-              {
+-                HybridFileParcelable[] copies = new HybridFileParcelable[checkedItems.size()];
+-                for (int i = 0; i < checkedItems.size(); i++) {
+-                  copies[i] = checkedItems.get(i).generateBaseFile();
+-                }
+-                int op =
+-                    item.getItemId() == R.id.cpy
+-                        ? PasteHelper.OPERATION_COPY
+-                        : PasteHelper.OPERATION_CUT;
+-                // Making sure we don't cause an IllegalArgumentException
+-                // when passing copies to PasteHelper
+-                if (copies.length > 0) {
+-                  PasteHelper pasteHelper = new PasteHelper(getMainActivity(), op, copies);
+-                  requireMainActivity().setPaste(pasteHelper);
+-                }
+-                mode.finish();
+-                return true;
+-              }
+-            case R.id.compress:
+-              ArrayList<HybridFileParcelable> copies1 = new ArrayList<>();
+-              for (int i4 = 0; i4 < checkedItems.size(); i4++) {
+-                copies1.add(checkedItems.get(i4).generateBaseFile());
+-              }
+-              GeneralDialogCreation.showCompressDialog(
+-                  requireMainActivity(), copies1, mainFragmentViewModel.getCurrentPath());
+-              mode.finish();
+-              return true;
+-            case R.id.openwith:
+-              FileUtils.openFile(
+-                  new File(checkedItems.get(0).desc), requireMainActivity(), sharedPref);
+-              return true;
+-            case R.id.addshortcut:
+-              addShortcut(checkedItems.get(0));
+-              mode.finish();
+-              return true;
+-            default:
+-              return false;
+-          }
+-        }
+-
+-        // called when the user exits the action mode
+-        public void onDestroyActionMode(ActionMode mode) {
+-          mActionMode = null;
+-          mainFragmentViewModel.setSelection(false);
+-
+-          // translates the drawer content up
+-          // if (getMainActivity().isDrawerLocked) getMainActivity().translateDrawerList(false);
+-
+-          getMainActivity().showFab();
+-          if (!mainFragmentViewModel.getResults())
+-            adapter.toggleChecked(false, mainFragmentViewModel.getCurrentPath());
+-          else adapter.toggleChecked(false);
+-          getMainActivity().setPagingEnabled(true);
+-
+-          getMainActivity()
+-              .updateViews(
+-                  new ColorDrawable(
+-                      MainActivity.currentTab == 1
+-                          ? mainFragmentViewModel.getPrimaryTwoColor()
+-                          : mainFragmentViewModel.getPrimaryColor()));
+-
+-          if (getMainActivity().getDrawer().isLocked()) {
+-            getMainActivity().getDrawer().unlockIfNotOnTablet();
+-          }
+-        }
+-      };
+-
+   private BroadcastReceiver receiver2 =
+       new BroadcastReceiver() {
+ 
+@@ -802,11 +442,13 @@ public class MainFragment extends Fragment
+       MainActivityHelper.SEARCH_TEXT = null;
+     }
+ 
+-    if (mainFragmentViewModel.getSelection()) {
++    if (getMainActivity().getListItemSelected()) {
+       if (isBackButton) {
+-        mainFragmentViewModel.setSelection(false);
+-        if (mActionMode != null) mActionMode.finish();
+-        mActionMode = null;
++        getMainActivity().setListItemSelected(false);
++        if (getMainActivity().getActionModeHelper().getActionMode() != null) {
++          getMainActivity().getActionModeHelper().getActionMode().finish();
++        }
++        getMainActivity().getActionModeHelper().setActionMode(null);
+       } else {
+         // the first {goback} item if back navigation is enabled
+         adapter.toggleChecked(position, imageView);
+@@ -960,7 +602,11 @@ public class MainFragment extends Fragment
+       return;
+     }
+ 
+-    if (mActionMode != null) mActionMode.finish();
++    if (getMainActivity() != null
++        && getMainActivity().getActionModeHelper() != null
++        && getMainActivity().getActionModeHelper().getActionMode() != null) {
++      getMainActivity().getActionModeHelper().getActionMode().finish();
++    }
+ 
+     mSwipeRefreshLayout.setRefreshing(true);
+ 
+@@ -1371,7 +1017,7 @@ public class MainFragment extends Fragment
+     if (!mainFragmentViewModel.getResults()) {
+       if (!mainFragmentViewModel.getRetainSearchTask()) {
+         // normal case
+-        if (mainFragmentViewModel.getSelection()) {
++        if (getMainActivity().getListItemSelected()) {
+           adapter.toggleChecked(false);
+         } else {
+           if (OpenMode.SMB.equals(mainFragmentViewModel.getOpenMode())) {
+@@ -1519,7 +1165,7 @@ public class MainFragment extends Fragment
+     HybridFile currentFile =
+         new HybridFile(mainFragmentViewModel.getOpenMode(), mainFragmentViewModel.getCurrentPath());
+     if (!mainFragmentViewModel.getResults()) {
+-      if (mainFragmentViewModel.getSelection()) {
++      if (getMainActivity().getListItemSelected()) {
+         adapter.toggleChecked(false);
+       } else {
+         if (mainFragmentViewModel.getOpenMode() == OpenMode.SMB) {
+@@ -1738,7 +1384,7 @@ public class MainFragment extends Fragment
+     }
+   }
+ 
+-  private void addShortcut(LayoutElementParcelable path) {
++  public void addShortcut(LayoutElementParcelable path) {
+     // Adding shortcut for MainActivity
+     // on Home screen
+     final Context ctx = getContext();
+@@ -1944,20 +1590,12 @@ public class MainFragment extends Fragment
+     }
+   }
+ 
+-  public void disableActionMode() {
+-    mainFragmentViewModel.setSelection(false);
+-    if (this.mActionMode != null) {
+-      this.mActionMode.finish();
+-    }
+-    this.mActionMode = null;
+-  }
+-
+   public void smoothScrollListView(boolean upDirection) {
+     if (listView != null) {
+       if (upDirection) {
+         listView.smoothScrollToPosition(0);
+       } else {
+-        listView.smoothScrollToPosition(adapter.getItemsDigested().size());
++        listView.smoothScrollToPosition(mainFragmentViewModel.getAdapterListItems().size());
+       }
+     }
+   }
+@@ -2009,9 +1647,11 @@ public class MainFragment extends Fragment
+         mLayoutManagerGrid.setSpanCount(mainFragmentViewModel.getColumns());
+       }
+     }
+-    if (!mainFragmentViewModel.isList()) {
++    // TODO: This trigger causes to lose selected items in case of grid view,
++    //  but is necessary to adjust columns for grid view when screen is rotated
++    /*if (!mainFragmentViewModel.isList()) {
+       loadViews();
+-    }
++    }*/
+     if (android.os.Build.VERSION.SDK_INT >= JELLY_BEAN) {
+       mToolbarContainer.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+     } else {
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
+index b588a5b9b..f41a8514f 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
+@@ -253,7 +253,7 @@ public class TabFragment extends Fragment implements ViewPager.OnPageChangeListe
+     final MainFragment mainFragment = mainActivity.getCurrentMainFragment();
+     if (mainFragment == null
+         || mainFragment.getMainFragmentViewModel() == null
+-        || mainFragment.getMainFragmentViewModel().getSelection()) {
++        || mainFragment.getMainActivity().getListItemSelected()) {
+       return; // we do not want to update toolbar colors when ActionMode is activated
+     }
+ 
+@@ -476,7 +476,7 @@ public class TabFragment extends Fragment implements ViewPager.OnPageChangeListe
+                 if (mViewPager.getCurrentItem() == 1) {
+                   if (mainFragment != null) {
+                     dataUtils.setCheckedItemsList(mainFragment.adapter.getCheckedItems());
+-                    mainFragment.disableActionMode();
++                    mainActivity.getActionModeHelper().disableActionMode();
+                   }
+                   mViewPager.setCurrentItem(0, true);
+                 }
+@@ -488,7 +488,7 @@ public class TabFragment extends Fragment implements ViewPager.OnPageChangeListe
+                 if (mViewPager.getCurrentItem() == 0) {
+                   if (mainFragment != null) {
+                     dataUtils.setCheckedItemsList(mainFragment.adapter.getCheckedItems());
+-                    mainFragment.disableActionMode();
++                    mainActivity.getActionModeHelper().disableActionMode();
+                   }
+                   mViewPager.setCurrentItem(1, true);
+                 }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/data/MainFragmentViewModel.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/data/MainFragmentViewModel.kt
+index 383b0fe4d..f95d8b6fa 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/data/MainFragmentViewModel.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/data/MainFragmentViewModel.kt
+@@ -23,6 +23,8 @@ package com.amaze.filemanager.ui.fragments.data
+ import android.content.SharedPreferences
+ import android.os.Bundle
+ import androidx.lifecycle.ViewModel
++import com.amaze.filemanager.adapters.RecyclerAdapter
++import com.amaze.filemanager.adapters.data.IconDataParcelable
+ import com.amaze.filemanager.adapters.data.LayoutElementParcelable
+ import com.amaze.filemanager.database.CloudHandler
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
+@@ -38,6 +40,9 @@ class MainFragmentViewModel : ViewModel() {
+     /** This is not an exact copy of the elements in the adapter  */
+     var listElements: ArrayList<LayoutElementParcelable>? = null
+ 
++    var adapterListItems: ArrayList<RecyclerAdapter.ListItem>? = null
++    var iconList: ArrayList<IconDataParcelable>? = null
++
+     var fileCount = 0
+     var folderCount: Int = 0
+     var columns: Int = 0
+@@ -49,7 +54,6 @@ class MainFragmentViewModel : ViewModel() {
+     var dsort = 0
+     var asc = 0
+     var home: String? = null
+-    var selection = false
+     var results: Boolean = false
+     lateinit var openMode: OpenMode
+ 
+@@ -191,4 +195,17 @@ class MainFragmentViewModel : ViewModel() {
+             CloudHandler.CLOUD_PREFIX_BOX + "/" == currentPath ||
+             CloudHandler.CLOUD_PREFIX_DROPBOX + "/" == currentPath
+     }
++
++    /**
++     * Get checked items in adapter
++     */
++    fun getCheckedItems(): ArrayList<LayoutElementParcelable> {
++        val selected = ArrayList<LayoutElementParcelable>()
++        adapterListItems?.forEach { item ->
++            if (item.checked == RecyclerAdapter.ListItem.CHECKED) {
++                selected.add(item.elem)
++            }
++        }
++        return selected
++    }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+index a0e41864b..4628a257b 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+@@ -197,7 +197,8 @@ public class Icons {
+ 
+   public static @DrawableRes int loadMimeIcon(String path, boolean isDirectory) {
+     if (path.equals("..")) return R.drawable.ic_arrow_left_white_24dp;
+-    if (CompressedHelper.isFileExtractable(path)) return R.drawable.ic_compressed_white_24dp;
++    if (CompressedHelper.isFileExtractable(path) && !isDirectory)
++      return R.drawable.ic_compressed_white_24dp;
+ 
+     int type = getTypeOfFile(path, isDirectory);
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt b/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt
+index 9f7771bac..8fc44d600 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt
+@@ -64,8 +64,11 @@ class SelectionPopupMenu(
+                     currentPath, currentContext
+                 )
+                 popupMenu.inflate(R.menu.selection_criteria)
+-                if (recyclerAdapter.itemsDigested.size > SIMILARITY_THRESHOLD) {
+-                    popupMenu.menu.findItem(R.id.select_similar).isVisible = false
++                recyclerAdapter.itemsDigested?.let {
++                    itemsDigested ->
++                    if (itemsDigested.size > SIMILARITY_THRESHOLD) {
++                        popupMenu.menu.findItem(R.id.select_similar).isVisible = false
++                    }
+                 }
+                 popupMenu.setOnMenuItemClickListener(popupMenu)
+                 popupMenu.show()
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java b/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
+index a4a79ce6e..42a0149b1 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
+@@ -71,6 +71,7 @@ public class DataUtils {
+ 
+   private ArrayList<CloudStorage> accounts = new ArrayList<>(4);
+ 
++  /** List of checked items to persist when drag and drop from one tab to another */
+   private ArrayList<LayoutElementParcelable> checkedItemsList;
+ 
+   private DataChangeListener dataChangeListener;
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/MainActivityActionMode.kt b/app/src/main/java/com/amaze/filemanager/utils/MainActivityActionMode.kt
+new file mode 100644
+index 000000000..8c55887bf
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/MainActivityActionMode.kt
+@@ -0,0 +1,459 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils
++
++import android.content.Intent
++import android.graphics.drawable.ColorDrawable
++import android.net.Uri
++import android.os.Build
++import android.view.Menu
++import android.view.MenuItem
++import android.view.View
++import android.widget.TextView
++import android.widget.Toast
++import androidx.appcompat.view.ActionMode
++import androidx.drawerlayout.widget.DrawerLayout
++import androidx.fragment.app.FragmentActivity
++import com.amaze.filemanager.R
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable
++import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.filesystem.PasteHelper
++import com.amaze.filemanager.filesystem.files.FileUtils
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation
++import com.amaze.filemanager.ui.selection.SelectionPopupMenu.Companion.invokeSelectionDropdown
++import java.io.File
++import java.lang.ref.WeakReference
++import java.util.ArrayList
++
++class MainActivityActionMode(private val mainActivityReference: WeakReference<MainActivity>) :
++    ActionMode.Callback {
++
++    var actionModeView: View? = null
++    var actionMode: ActionMode? = null
++
++    private fun hideOption(id: Int, menu: Menu) {
++        val item = menu.findItem(id)
++        item.isVisible = false
++    }
++
++    private fun showOption(id: Int, menu: Menu) {
++        val item = menu.findItem(id)
++        item.isVisible = true
++    }
++
++    // called when the action mode is created; startActionMode() was called
++    override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
++        // Inflate a menu resource providing context menu items
++        val inflater = mode.menuInflater
++        mainActivityReference.get()?.let {
++            mainActivity ->
++            actionModeView = mainActivity.layoutInflater.inflate(R.layout.actionmode, null)
++            mode.customView = actionModeView
++            mainActivity.setPagingEnabled(false)
++            mainActivity.hideFab()
++
++            // translates the drawable content down
++            // if (mainActivity.isDrawerLocked) mainActivity.translateDrawerList(true);
++
++            // assumes that you have "contexual.xml" menu resources
++            inflater.inflate(R.menu.contextual, menu)
++            hideOption(R.id.addshortcut, menu)
++            hideOption(R.id.share, menu)
++            hideOption(R.id.openwith, menu)
++            if (mainActivity.mReturnIntent) showOption(R.id.openmulti, menu)
++            // hideOption(R.id.setringtone,menu);
++            mode.title = mainActivity.resources.getString(R.string.select)
++            mainActivity
++                .updateViews(
++                    ColorDrawable(
++                        mainActivity.resources
++                            .getColor(R.color.holo_dark_action_mode)
++                    )
++                )
++
++            // do not allow drawer to open when item gets selected
++            if (!mainActivity.drawer.isLocked) {
++                mainActivity.drawer.lockIfNotOnTablet(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
++            }
++        }
++        return true
++    }
++
++    /**
++     * the following method is called each time the action mode is shown. Always called after
++     * onCreateActionMode, but may be called multiple times if the mode is invalidated.
++     */
++    override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
++        safeLet(
++            mainActivityReference.get(),
++            mainActivityReference.get()?.currentMainFragment?.mainFragmentViewModel,
++            mainActivityReference.get()?.currentMainFragment?.adapter
++        ) {
++            mainActivity, mainFragmentViewModel, adapter ->
++            val checkedItems: ArrayList<LayoutElementParcelable> =
++                mainFragmentViewModel.getCheckedItems()
++            actionModeView?.setOnClickListener {
++                invokeSelectionDropdown(
++                    adapter,
++                    actionModeView!!,
++                    mainFragmentViewModel.currentPath!!,
++                    mainActivity
++                )
++            }
++            val textView: TextView = actionModeView!!.findViewById(R.id.item_count)
++            textView.text = checkedItems.size.toString()
++            hideOption(R.id.openmulti, menu)
++            menu.findItem(R.id.all)
++                .setTitle(
++                    if (checkedItems.size
++                        == mainFragmentViewModel.folderCount +
++                        mainFragmentViewModel.fileCount
++                    ) R.string.deselect_all else R.string.select_all
++                )
++            if (mainFragmentViewModel.openMode != OpenMode.FILE) {
++                hideOption(R.id.addshortcut, menu)
++                hideOption(R.id.compress, menu)
++                return true
++            }
++            if (mainActivity.mReturnIntent &&
++                Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN
++            ) {
++                showOption(R.id.openmulti, menu)
++            }
++            // tv.setText(checkedItems.size());
++            if (!mainFragmentViewModel.results) {
++                hideOption(R.id.openparent, menu)
++                if (checkedItems.size == 1) {
++                    showOption(R.id.addshortcut, menu)
++                    showOption(R.id.openwith, menu)
++                    showOption(R.id.share, menu)
++                    if (mainFragmentViewModel.getCheckedItems().get(0).isDirectory) {
++                        hideOption(R.id.openwith, menu)
++                        hideOption(R.id.share, menu)
++                        hideOption(R.id.openmulti, menu)
++                    }
++                    if (mainActivity.mReturnIntent) {
++                        if (Build.VERSION.SDK_INT >= 16) showOption(
++                            R.id.openmulti,
++                            menu
++                        )
++                    }
++                } else {
++                    showOption(R.id.share, menu)
++                    if (mainActivity.mReturnIntent && Build.VERSION.SDK_INT >= 16) {
++                        showOption(
++                            R.id.openmulti,
++                            menu
++                        )
++                    }
++                    for (e in mainFragmentViewModel.getCheckedItems()) {
++                        if (e.isDirectory) {
++                            hideOption(R.id.share, menu)
++                            hideOption(R.id.openmulti, menu)
++                        }
++                    }
++                    hideOption(R.id.openwith, menu)
++                    hideOption(R.id.addshortcut, menu)
++                }
++            } else {
++                if (checkedItems.size == 1) {
++                    showOption(R.id.addshortcut, menu)
++                    showOption(R.id.openparent, menu)
++                    showOption(R.id.openwith, menu)
++                    showOption(R.id.share, menu)
++                    if (mainFragmentViewModel.getCheckedItems()[0].isDirectory) {
++                        hideOption(R.id.openwith, menu)
++                        hideOption(R.id.share, menu)
++                        hideOption(R.id.openmulti, menu)
++                    }
++                    if (mainActivity.mReturnIntent &&
++                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN
++                    ) {
++                        showOption(R.id.openmulti, menu)
++                    }
++                } else {
++                    hideOption(R.id.openparent, menu)
++                    hideOption(R.id.addshortcut, menu)
++                    if (mainActivity.mReturnIntent && Build.VERSION.SDK_INT >= 16) {
++                        showOption(
++                            R.id.openmulti,
++                            menu
++                        )
++                    }
++                    for (e in mainFragmentViewModel.getCheckedItems()) {
++                        if (e.isDirectory) {
++                            hideOption(R.id.share, menu)
++                            hideOption(R.id.openmulti, menu)
++                        }
++                    }
++                    hideOption(R.id.openwith, menu)
++                }
++            }
++            if (mainFragmentViewModel.openMode != OpenMode.FILE) {
++                hideOption(R.id.addshortcut, menu)
++                hideOption(R.id.compress, menu)
++                hideOption(R.id.hide, menu)
++                hideOption(R.id.addshortcut, menu)
++            }
++        }
++        return true // Return false if nothing is done
++    }
++
++    // called when the user selects a contextual menu item
++    override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
++        mainActivityReference.get()?.currentMainFragment?.computeScroll()
++        safeLet(
++            mainActivityReference.get(),
++            mainActivityReference
++                .get()?.currentMainFragment?.mainFragmentViewModel?.getCheckedItems()
++        ) {
++            mainActivity, checkedItems ->
++            return when (item.itemId) {
++                R.id.openmulti -> {
++                    val intent_result = Intent(Intent.ACTION_SEND_MULTIPLE)
++                    val resulturis = ArrayList<Uri>()
++                    for (element in checkedItems) {
++                        val baseFile = element.generateBaseFile()
++                        val resultUri = Utils.getUriForBaseFile(mainActivity, baseFile)
++                        if (resultUri != null) {
++                            resulturis.add(resultUri)
++                        }
++                    }
++                    intent_result.flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
++                    mainActivity.setResult(FragmentActivity.RESULT_OK, intent_result)
++                    intent_result.putParcelableArrayListExtra(
++                        Intent.EXTRA_STREAM,
++                        resulturis
++                    )
++                    mainActivity.finish()
++                    // mode.finish();
++                    true
++                }
++                R.id.about -> {
++                    val x = checkedItems[0]
++                    mainActivity.currentMainFragment?.also {
++                        GeneralDialogCreation.showPropertiesDialogWithPermissions(
++                            x.generateBaseFile(),
++                            x.permissions,
++                            mainActivity,
++                            it,
++                            mainActivity.isRootExplorer,
++                            mainActivity.utilsProvider.appTheme
++                        )
++                    }
++                    mode.finish()
++                    true
++                }
++                R.id.delete -> {
++                    GeneralDialogCreation.deleteFilesDialog(
++                        mainActivity,
++                        mainActivity,
++                        checkedItems,
++                        mainActivity.utilsProvider.appTheme
++                    )
++                    true
++                }
++                R.id.share -> {
++                    val arrayList = ArrayList<File>()
++                    for (e in checkedItems) {
++                        arrayList.add(File(e.desc))
++                    }
++                    if (arrayList.size > 100) Toast.makeText(
++                        mainActivity,
++                        mainActivity.resources.getString(R.string.share_limit),
++                        Toast.LENGTH_SHORT
++                    )
++                        .show() else {
++                        mainActivity.currentMainFragment?.mainFragmentViewModel?.also {
++                            mainFragmentViewModel ->
++                            when (mainFragmentViewModel.listElements?.get(0)?.mode) {
++                                OpenMode.DROPBOX, OpenMode.BOX, OpenMode.GDRIVE,
++                                OpenMode.ONEDRIVE ->
++                                    mainFragmentViewModel.listElements?.also {
++                                        FileUtils.shareCloudFile(
++                                            it[0].desc,
++                                            it[0].mode,
++                                            mainActivity
++                                        )
++                                    }
++                                else -> FileUtils.shareFiles(
++                                    arrayList,
++                                    mainActivity,
++                                    mainActivity.utilsProvider.appTheme,
++                                    mainFragmentViewModel.accentColor
++                                )
++                            }
++                        }
++                    }
++                    true
++                }
++                R.id.openparent -> {
++                    mainActivity.currentMainFragment?.loadlist(
++                        File(checkedItems[0].desc).parent,
++                        false, OpenMode.FILE
++                    )
++
++                    true
++                }
++                R.id.all -> {
++                    safeLet(
++                        mainActivity.currentMainFragment?.mainFragmentViewModel,
++                        mainActivity.currentMainFragment?.adapter
++                    ) {
++                        mainFragmentViewModel, adapter ->
++                        if (adapter.areAllChecked(mainFragmentViewModel.currentPath)) {
++                            adapter.toggleChecked(
++                                false,
++                                mainFragmentViewModel.currentPath
++                            )
++                            item.setTitle(R.string.select_all)
++                        } else {
++                            adapter.toggleChecked(
++                                true,
++                                mainFragmentViewModel.currentPath
++                            )
++                            item.setTitle(R.string.deselect_all)
++                        }
++                    }
++                    mode.invalidate()
++                    true
++                }
++                R.id.rename -> {
++                    val f: HybridFileParcelable = checkedItems[0].generateBaseFile()
++                    mainActivity.currentMainFragment?.rename(f)
++                    mode.finish()
++                    true
++                }
++                R.id.hide -> {
++                    var i1 = 0
++                    while (i1 < checkedItems.size) {
++                        mainActivity.currentMainFragment?.hide(checkedItems[i1].desc)
++                        i1++
++                    }
++                    mainActivity.currentMainFragment?.updateList()
++                    mode.finish()
++                    true
++                }
++                R.id.ex -> {
++                    mainActivity.mainActivityHelper.extractFile(File(checkedItems[0].desc))
++                    mode.finish()
++                    true
++                }
++                R.id.cpy, R.id.cut -> {
++                    val copies = arrayOfNulls<HybridFileParcelable>(checkedItems.size)
++                    var i = 0
++                    while (i < checkedItems.size) {
++                        copies[i] = checkedItems[i].generateBaseFile()
++                        i++
++                    }
++                    val op =
++                        if (item.itemId == R.id.cpy) PasteHelper.OPERATION_COPY
++                        else PasteHelper.OPERATION_CUT
++                    // Making sure we don't cause an IllegalArgumentException
++                    // when passing copies to PasteHelper
++                    if (copies.isNotEmpty()) {
++                        val pasteHelper = PasteHelper(mainActivity, op, copies)
++                        mainActivity.paste = pasteHelper
++                    }
++                    mode.finish()
++                    true
++                }
++                R.id.compress -> {
++                    val copies1 = ArrayList<HybridFileParcelable>()
++                    var i4 = 0
++                    while (i4 < checkedItems.size) {
++                        copies1.add(checkedItems[i4].generateBaseFile())
++                        i4++
++                    }
++                    GeneralDialogCreation.showCompressDialog(
++                        mainActivity, copies1,
++                        mainActivity.currentMainFragment?.mainFragmentViewModel?.currentPath
++                    )
++                    mode.finish()
++                    true
++                }
++                R.id.openwith -> {
++                    FileUtils.openFile(
++                        File(checkedItems[0].desc), mainActivity, mainActivity.prefs
++                    )
++                    true
++                }
++                R.id.addshortcut -> {
++                    Utils.addShortcut(
++                        mainActivity, mainActivity.componentName,
++                        checkedItems[0]
++                    )
++                    mode.finish()
++                    true
++                }
++                else -> false
++            }
++        }
++        return false
++    }
++
++    // called when the user exits the action mode
++    override fun onDestroyActionMode(mode: ActionMode) {
++        actionMode = null
++        mainActivityReference.get()?.let {
++            mainActivity ->
++            mainActivity.listItemSelected = false
++
++            // translates the drawer content up
++            // if (mainActivity.isDrawerLocked) mainActivity.translateDrawerList(false);
++            mainActivity.showFab()
++
++            mainActivity.setPagingEnabled(true)
++            safeLet(
++                mainActivity.currentMainFragment?.mainFragmentViewModel,
++                mainActivity.currentMainFragment?.adapter
++            ) {
++                mainFragmentViewModel, adapter ->
++                if (!mainFragmentViewModel.results)
++                    adapter.toggleChecked(false, mainFragmentViewModel.currentPath)
++                else adapter.toggleChecked(false)
++                mainActivity
++                    .updateViews(
++                        ColorDrawable(
++                            if (MainActivity.currentTab == 1)
++                                mainFragmentViewModel.primaryTwoColor
++                            else mainFragmentViewModel.primaryColor
++                        )
++                    )
++            }
++
++            if (mainActivity.drawer.isLocked) {
++                mainActivity.drawer.unlockIfNotOnTablet()
++            }
++        }
++    }
++
++    /**
++     * Finishes the action mode
++     */
++    fun disableActionMode() {
++        mainActivityReference.get()?.listItemSelected = false
++        actionMode?.finish()
++        actionMode = null
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/OTGUtil.kt b/app/src/main/java/com/amaze/filemanager/utils/OTGUtil.kt
+index 05b9b074d..5cab338b6 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/OTGUtil.kt
++++ b/app/src/main/java/com/amaze/filemanager/utils/OTGUtil.kt
+@@ -31,6 +31,7 @@ import android.provider.DocumentsContract
+ import android.util.Log
+ import androidx.annotation.RequiresApi
+ import androidx.documentfile.provider.DocumentFile
++import com.amaze.filemanager.exceptions.DocumentFileNotFoundException
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
+ import com.amaze.filemanager.file_operations.filesystem.usb.SingletonUsbOtg
+ import com.amaze.filemanager.file_operations.filesystem.usb.UsbOtgRepresentation
+@@ -98,6 +99,7 @@ object OTGUtil {
+         fileFound: OnFileFound
+     ) {
+         var rootUri = DocumentFile.fromTreeUri(context, rootUriString)
++
+         val parts: Array<String> = if (openMode == OpenMode.DOCUMENT_FILE) {
+             path.substringAfter(rootUriString.toString())
+                 .split("/", PATH_SEPARATOR_ENCODED).toTypedArray()
+@@ -110,11 +112,15 @@ object OTGUtil {
+             if (part == "otg:" || part == "" || part == "content:") continue
+ 
+             // iterating through the required path to find the end point
+-            rootUri = rootUri!!.findFile(part)
++            rootUri = rootUri?.findFile(part)
++        }
++
++        if (rootUri == null) {
++            throw DocumentFileNotFoundException(rootUriString, path)
+         }
+ 
+         // we have the end point DocumentFile, list the files inside it and return
+-        for (file in rootUri!!.listFiles()) {
++        for (file in rootUri.listFiles()) {
+             if (file.exists()) {
+                 var size: Long = 0
+                 if (!file.isDirectory) size = file.length()
+@@ -161,7 +167,8 @@ object OTGUtil {
+         createRecursive: Boolean
+     ): DocumentFile? {
+         // start with root of SD card and then parse through document tree.
+-        var retval = DocumentFile.fromTreeUri(context, rootUri)
++        var retval: DocumentFile? = DocumentFile.fromTreeUri(context, rootUri)
++            ?: throw DocumentFileNotFoundException(rootUri, path)
+         val parts: Array<String> = if (openMode == OpenMode.DOCUMENT_FILE) {
+             path.substringAfter(rootUri.toString())
+                 .split("/", PATH_SEPARATOR_ENCODED).toTypedArray()
+@@ -195,8 +202,8 @@ object OTGUtil {
+     fun getMassStorageDevicesConnected(
+         context: Context
+     ): List<UsbOtgRepresentation> {
+-        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+-        val devices = usbManager.deviceList
++        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
++        val devices = usbManager?.deviceList ?: mapOf()
+         return devices.mapNotNullTo(
+             ArrayList(),
+             { entry ->
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/Utils.java b/app/src/main/java/com/amaze/filemanager/utils/Utils.java
+index 88c7eab5f..1e033516b 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/Utils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/Utils.java
+@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit;
+ 
+ import com.amaze.filemanager.BuildConfig;
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.ui.activities.MainActivity;
+ import com.amaze.filemanager.ui.theme.AppTheme;
+@@ -34,6 +35,7 @@ import com.google.android.material.snackbar.Snackbar;
+ 
+ import android.annotation.TargetApi;
+ import android.app.Activity;
++import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.ActivityInfo;
+@@ -59,7 +61,10 @@ import androidx.annotation.StringRes;
+ import androidx.cardview.widget.CardView;
+ import androidx.core.content.ContextCompat;
+ import androidx.core.content.FileProvider;
++import androidx.core.content.pm.ShortcutInfoCompat;
++import androidx.core.content.pm.ShortcutManagerCompat;
+ import androidx.core.graphics.drawable.DrawableCompat;
++import androidx.core.graphics.drawable.IconCompat;
+ 
+ /**
+  * Contains useful functions and methods (NOTHING HERE DEALS WITH FILES)
+@@ -407,4 +412,36 @@ public class Utils {
+     view.setScaleX(scaleX);
+     view.setScaleY(scaleY);
+   }
++
++  public static void addShortcut(
++      Context context, ComponentName componentName, LayoutElementParcelable path) {
++    // Adding shortcut for MainActivity
++    // on Home screen
++
++    if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
++      Toast.makeText(
++              context,
++              context.getString(R.string.add_shortcut_not_supported_by_launcher),
++              Toast.LENGTH_SHORT)
++          .show();
++      return;
++    }
++
++    Intent shortcutIntent = new Intent(context, MainActivity.class);
++    shortcutIntent.putExtra("path", path.desc);
++    shortcutIntent.setAction(Intent.ACTION_MAIN);
++    shortcutIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
++
++    // Using file path as shortcut id.
++    ShortcutInfoCompat info =
++        new ShortcutInfoCompat.Builder(context, path.desc)
++            .setActivity(componentName)
++            .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
++            .setIntent(shortcutIntent)
++            .setLongLabel(path.desc)
++            .setShortLabel(new File(path.desc).getName())
++            .build();
++
++    ShortcutManagerCompat.requestPinShortcut(context, info, null);
++  }
+ }
+diff --git a/app/src/play/java/com/amaze/filemanager/utils/Billing.java b/app/src/play/java/com/amaze/filemanager/utils/Billing.java
+index b9e92f12c..3512a99a6 100644
+--- a/app/src/play/java/com/amaze/filemanager/utils/Billing.java
++++ b/app/src/play/java/com/amaze/filemanager/utils/Billing.java
+@@ -24,8 +24,11 @@ import java.util.ArrayList;
+ import java.util.List;
+ 
+ import com.afollestad.materialdialogs.MaterialDialog;
++import com.amaze.filemanager.BuildConfig;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.adapters.holders.DonationViewHolder;
++import com.amaze.filemanager.application.AppConfig;
++import com.amaze.filemanager.databinding.AdapterDonationBinding;
+ import com.amaze.filemanager.ui.activities.superclasses.BasicActivity;
+ import com.android.billingclient.api.BillingClient;
+ import com.android.billingclient.api.BillingClientStateListener;
+@@ -38,7 +41,6 @@ import com.android.billingclient.api.PurchasesUpdatedListener;
+ import com.android.billingclient.api.SkuDetails;
+ import com.android.billingclient.api.SkuDetailsParams;
+ 
+-import android.content.Context;
+ import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+@@ -52,9 +54,10 @@ import androidx.recyclerview.widget.RecyclerView;
+ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+     implements PurchasesUpdatedListener {
+ 
++  private static final String TAG = Billing.class.getSimpleName();
++
+   private BasicActivity activity;
+   private List<String> skuList;
+-  private LayoutInflater layoutInflater;
+   private List<SkuDetails> skuDetails;
+ 
+   // create new donations client
+@@ -62,7 +65,7 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+   /** True if billing service is connected now. */
+   private boolean isServiceConnected;
+ 
+-  public Billing(BasicActivity activity) {
++  public Billing(@NonNull BasicActivity activity) {
+     this.activity = activity;
+ 
+     skuList = new ArrayList<>();
+@@ -71,8 +74,6 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+     skuList.add("donations_3");
+     skuList.add("donations_4");
+ 
+-    layoutInflater = (LayoutInflater) activity.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+-
+     billingClient =
+         BillingClient.newBuilder(activity).setListener(this).enablePendingPurchases().build();
+     initiatePurchaseFlow();
+@@ -103,9 +104,18 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+           billingClient.querySkuDetailsAsync(
+               params.build(),
+               (responseCode, skuDetailsList) -> {
+-                // Successfully fetched product details
+-                skuDetails = skuDetailsList;
+-                popProductsList(responseCode, skuDetailsList);
++                if (skuDetailsList != null && skuDetailsList.size() > 0) {
++                  // Successfully fetched product details
++                  skuDetails = skuDetailsList;
++                  popProductsList(responseCode, skuDetailsList);
++                } else {
++                  AppConfig.toast(activity, R.string.error_fetching_google_play_product_list);
++                  if (BuildConfig.DEBUG) {
++                    Log.w(
++                        TAG,
++                        "Error fetching product list - looks like you are running a DEBUG build.");
++                  }
++                }
+               });
+         };
+ 
+@@ -128,13 +138,14 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+   @NonNull
+   @Override
+   public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+-    View rootView = layoutInflater.inflate(R.layout.adapter_donation, parent, false);
++    View rootView =
++        AdapterDonationBinding.inflate(LayoutInflater.from(this.activity), parent, false).getRoot();
+     return new DonationViewHolder(rootView);
+   }
+ 
+   @Override
+   public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
+-    if (holder instanceof DonationViewHolder) {
++    if (holder instanceof DonationViewHolder && skuDetails.size() > 0) {
+       String titleRaw = skuDetails.get(position).getTitle();
+       ((DonationViewHolder) holder)
+           .TITLE.setText(titleRaw.subSequence(0, titleRaw.lastIndexOf("(")));
+@@ -199,10 +210,7 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+         new BillingClientStateListener() {
+           @Override
+           public void onBillingSetupFinished(BillingResult billingResponse) {
+-            Log.d(
+-                Billing.this.getClass().getSimpleName(),
+-                "Setup finished. Response code: " + billingResponse);
+-
++            Log.d(TAG, "Setup finished. Response code: " + billingResponse.getResponseCode());
+             if (billingResponse.getResponseCode() == BillingClient.BillingResponseCode.OK) {
+               isServiceConnected = true;
+               if (executeOnSuccess != null) {
+@@ -226,11 +234,22 @@ public class Billing extends RecyclerView.Adapter<RecyclerView.ViewHolder>
+   }
+ 
+   private void showPaymentsDialog(final BasicActivity context) {
+-    final MaterialDialog.Builder builder = new MaterialDialog.Builder(context);
+-    builder.title(R.string.donate);
+-    builder.adapter(this, null);
+-    builder.theme(context.getAppTheme().getMaterialDialogTheme(context));
+-    builder.cancelListener(dialog -> purchaseProduct.purchaseCancel());
+-    builder.show();
++    /*
++     * As of Billing library 4.0, all callbacks are running on background thread.
++     * Need to use AppConfig.runInApplicationThread() for UI interactions
++     *
++     *
++     */
++    AppConfig.getInstance()
++        .runInApplicationThread(
++            () -> {
++              final MaterialDialog.Builder builder = new MaterialDialog.Builder(context);
++              builder.title(R.string.donate);
++              builder.adapter(this, null);
++              builder.theme(context.getAppTheme().getMaterialDialogTheme(context));
++              builder.cancelListener(dialog -> purchaseProduct.purchaseCancel());
++              builder.show();
++              return null;
++            });
+   }
+ }
+diff --git a/app/src/androidTest/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest.java b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest.java
+similarity index 100%
+rename from app/src/androidTest/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest.java
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest.java
+diff --git a/app/src/androidTest/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest2.java b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest2.java
+similarity index 100%
+rename from app/src/androidTest/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest2.java
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/ssh/PemToKeyPairTaskTest2.java
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt
+index cca30ca2f..6bce67c75 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt
+@@ -30,6 +30,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.ShadowNativeOperations
+ import com.amaze.filemanager.test.TestUtils
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
+ import org.junit.After
+@@ -47,7 +48,7 @@ import java.io.InputStreamReader
+ 
+ @RunWith(AndroidJUnit4::class)
+ @Config(
+-    shadows = [ShadowMultiDex::class],
++    shadows = [ShadowMultiDex::class, ShadowNativeOperations::class],
+     sdk = [JELLY_BEAN, KITKAT, P]
+ )
+ /**
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt
+index dac4aa83d..da02b61dd 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt
+@@ -31,6 +31,7 @@ import com.amaze.filemanager.exceptions.ShellCommandInvalidException
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.ShadowNativeOperations
+ import com.amaze.filemanager.test.TestUtils
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
+ import org.junit.After
+@@ -48,7 +49,7 @@ import java.io.InputStreamReader
+ 
+ @RunWith(AndroidJUnit4::class)
+ @Config(
+-    shadows = [ShadowMultiDex::class],
++    shadows = [ShadowMultiDex::class, ShadowNativeOperations::class],
+     sdk = [JELLY_BEAN, KITKAT, P]
+ )
+ /**
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPoolTest.java b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPoolTest.java
+index 6ea2b3d72..f3b6df862 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPoolTest.java
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshConnectionPoolTest.java
+@@ -186,10 +186,13 @@ public class SshConnectionPoolTest {
+     SSHClient mock = createSshServer("testuser", validPassword);
+     saveSshConnectionSettings(hostKeyPair, "testuser", validPassword, null);
+     assertNotNull(
+-        SshConnectionPool.INSTANCE.getConnection("ssh://testuser:testpassword@127.0.0.1:22222"));
++        SshConnectionPool.INSTANCE.getConnection(
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://testuser:testpassword@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -223,10 +226,13 @@ public class SshConnectionPoolTest {
+     SSHClient mock = createSshServer("testuser", validPassword);
+     saveSshConnectionSettings(hostKeyPair, "testuser", validPassword, null);
+     assertNotNull(
+-        SshConnectionPool.INSTANCE.getConnection("ssh://testuser:testP@ssw0rd@127.0.0.1:22222"));
++        SshConnectionPool.INSTANCE.getConnection(
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://testuser:testP@ssw0rd@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -244,10 +250,13 @@ public class SshConnectionPoolTest {
+     SSHClient mock = createSshServer("testuser", validPassword);
+     saveSshConnectionSettings(hostKeyPair, "testuser", validPassword, null);
+     assertNotNull(
+-        SshConnectionPool.INSTANCE.getConnection("ssh://testuser:testP@##word@127.0.0.1:22222"));
++        SshConnectionPool.INSTANCE.getConnection(
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://testuser:testP@##word@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -265,10 +274,13 @@ public class SshConnectionPoolTest {
+     SSHClient mock = createSshServer("testuser", validPassword);
+     saveSshConnectionSettings(hostKeyPair, "testuser", validPassword, null);
+     assertNotNull(
+-        SshConnectionPool.INSTANCE.getConnection("ssh://testuser:testP@##word@127.0.0.1:22222"));
++        SshConnectionPool.INSTANCE.getConnection(
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://testuser:testP@##word@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -286,10 +298,13 @@ public class SshConnectionPoolTest {
+     SSHClient mock = createSshServer("testuser", validPassword);
+     saveSshConnectionSettings(hostKeyPair, "testuser", validPassword, null);
+     assertNotNull(
+-        SshConnectionPool.INSTANCE.getConnection("ssh://testuser:testP@##word@127.0.0.1:22222"));
++        SshConnectionPool.INSTANCE.getConnection(
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://testuser:testP@##word@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -309,10 +324,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:testP@ssw0rd@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:testP@ssw0rd@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -332,10 +349,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:testP@ssw0##$@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:testP@ssw0##$@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -355,10 +374,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:abcd-efgh@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:abcd-efgh@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -378,10 +399,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:---------------@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:---------------@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -401,10 +424,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:--agdiuhdpost15@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:--agdiuhdpost15@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+@@ -424,10 +449,12 @@ public class SshConnectionPoolTest {
+     saveSshConnectionSettings(hostKeyPair, validUsername, validPassword, null);
+     assertNotNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://test@example.com:t-h-i-s-i-s-p-a-s-s-w-o-r-d-@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://test@example.com:t-h-i-s-i-s-p-a-s-s-w-o-r-d-@127.0.0.1:22222")));
+     assertNull(
+         SshConnectionPool.INSTANCE.getConnection(
+-            "ssh://invaliduser:invalidpassword@127.0.0.1:22222"));
++            SshClientUtils.encryptSshPathAsNecessary(
++                "ssh://invaliduser:invalidpassword@127.0.0.1:22222")));
+ 
+     verify(mock, atLeastOnce())
+         .addHostKeyVerifier(SecurityUtils.getFingerprint(hostKeyPair.getPublic()));
+diff --git a/app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.kt b/app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.kt
+new file mode 100644
+index 000000000..d9018b936
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.kt
+@@ -0,0 +1,95 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.ssh
++
++import com.amaze.filemanager.filesystem.ssh.SshClientUtils
++import org.junit.Assert
++import org.junit.Test
++
++@Suppress("StringLiteralDuplication")
++class SshClientUtilTest {
++    /**
++     * Test [SshClientUtils.extractRemotePathFrom].
++     */
++    @Test
++    fun testExtractRemotePathFromUri() {
++        Assert.assertEquals(
++            "/home/user/foo/bar",
++            SshClientUtils.extractRemotePathFrom(
++                "ssh://user:password@127.0.0.1:22/home/user/foo/bar"
++            )
++        )
++        Assert.assertEquals(
++            "/",
++            SshClientUtils.extractRemotePathFrom("ssh://user:password@127.0.0.1:22/")
++        )
++        Assert.assertEquals(
++            "/",
++            SshClientUtils.extractRemotePathFrom("ssh://user:password@127.0.0.1:22")
++        )
++        Assert.assertEquals(
++            "/", SshClientUtils.extractRemotePathFrom("ssh://root:a8/875dbc-==@127.0.0.1:9899")
++        )
++        Assert.assertEquals(
++            "/root/.config",
++            SshClientUtils.extractRemotePathFrom(
++                "ssh://root:a8/875dbc-==@127.0.0.1:9899/root/.config"
++            )
++        )
++    }
++
++    /**
++     * Test [SshClientUtils.extractRemotePathFrom].
++     */
++    @Test
++    fun testExtractBaseUriFromUri() {
++        Assert.assertEquals(
++            "ssh://root@127.0.0.1",
++            SshClientUtils.extractBaseUriFrom("ssh://root@127.0.0.1")
++        )
++        Assert.assertEquals(
++            "ssh://root@127.0.0.1:2233",
++            SshClientUtils.extractBaseUriFrom("ssh://root@127.0.0.1:2233")
++        )
++        Assert.assertEquals(
++            "ssh://root@127.0.0.1",
++            SshClientUtils.extractBaseUriFrom("ssh://root@127.0.0.1/root/.config")
++        )
++        Assert.assertEquals(
++            "ssh://root:password@127.0.0.1",
++            SshClientUtils.extractBaseUriFrom("ssh://root:password@127.0.0.1")
++        )
++        Assert.assertEquals(
++            "ssh://root:password@127.0.0.1:3456",
++            SshClientUtils.extractBaseUriFrom("ssh://root:password@127.0.0.1:3456/root/.config")
++        )
++        Assert.assertEquals(
++            "ssh://root:a8/875dbc-==@127.0.0.1:9899",
++            SshClientUtils.extractBaseUriFrom("ssh://root:a8/875dbc-==@127.0.0.1:9899")
++        )
++        Assert.assertEquals(
++            "ssh://root:a8/875dbc-==@127.0.0.1:9899",
++            SshClientUtils.extractBaseUriFrom(
++                "ssh://root:a8/875dbc-==@127.0.0.1:9899/root/.config"
++            )
++        )
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/test/ShadowCryptUtilTest.java b/app/src/test/java/com/amaze/filemanager/test/ShadowCryptUtilTest.java
+index 9b8bdb76c..710b82c9e 100644
+--- a/app/src/test/java/com/amaze/filemanager/test/ShadowCryptUtilTest.java
++++ b/app/src/test/java/com/amaze/filemanager/test/ShadowCryptUtilTest.java
+@@ -102,7 +102,9 @@ public class ShadowCryptUtilTest {
+         .atMost(10, TimeUnit.SECONDS)
+         .until(
+             () -> {
+-              assertEquals(fingerprint, utilsHandler.getSshHostKey(url));
++              assertEquals(
++                  fingerprint,
++                  utilsHandler.getSshHostKey(SshClientUtils.encryptSshPathAsNecessary(url)));
+               utilitiesDatabase.close();
+               return true;
+             });
+diff --git a/app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.java b/app/src/test/java/com/amaze/filemanager/test/ShadowNativeOperations.java
+similarity index 56%
+rename from app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.java
+rename to app/src/test/java/com/amaze/filemanager/test/ShadowNativeOperations.java
+index 3c455db9a..ebec6c41d 100644
+--- a/app/src/test/java/com/amaze/filemanager/ssh/SshClientUtilTest.java
++++ b/app/src/test/java/com/amaze/filemanager/test/ShadowNativeOperations.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,21 +18,20 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.ssh;
++package com.amaze.filemanager.test;
+ 
+-import static org.junit.Assert.assertEquals;
++import org.robolectric.annotation.Implementation;
++import org.robolectric.annotation.Implements;
+ 
+-import org.junit.Test;
++import com.amaze.filemanager.file_operations.filesystem.root.NativeOperations;
+ 
+-import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
++import androidx.annotation.Nullable;
+ 
+-public class SshClientUtilTest {
+-  @Test
+-  public void testExtractRemotePathFromUri() {
+-    assertEquals(
+-        "/home/user/foo/bar",
+-        SshClientUtils.extractRemotePathFrom("ssh://user:password@127.0.0.1:22/home/user/foo/bar"));
+-    assertEquals("/", SshClientUtils.extractRemotePathFrom("ssh://user:password@127.0.0.1:22/"));
+-    assertEquals("/", SshClientUtils.extractRemotePathFrom("ssh://user:password@127.0.0.1:22"));
++@Implements(NativeOperations.class)
++public class ShadowNativeOperations {
++
++  @Implementation
++  public static boolean isDirectory(@Nullable String path) {
++    return path != null && path.startsWith("d");
+   }
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/ui/activities/MainActivityTest.java b/app/src/test/java/com/amaze/filemanager/ui/activities/MainActivityTest.java
+index 833332780..bf77f4aad 100644
+--- a/app/src/test/java/com/amaze/filemanager/ui/activities/MainActivityTest.java
++++ b/app/src/test/java/com/amaze/filemanager/ui/activities/MainActivityTest.java
+@@ -28,6 +28,12 @@ import static androidx.test.core.app.ActivityScenario.launch;
+ import static org.awaitility.Awaitility.await;
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.fail;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.anyBoolean;
++import static org.mockito.Mockito.doCallRealMethod;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.mockConstruction;
++import static org.mockito.Mockito.when;
+ import static org.robolectric.Shadows.shadowOf;
+ 
+ import java.io.IOException;
+@@ -39,19 +45,26 @@ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
++import org.mockito.MockedConstruction;
+ import org.robolectric.annotation.Config;
+ import org.robolectric.annotation.LooperMode;
+ import org.robolectric.shadows.ShadowLooper;
++import org.robolectric.shadows.ShadowSQLiteConnection;
+ import org.robolectric.shadows.ShadowStorageManager;
++import org.robolectric.util.ReflectionHelpers;
+ 
+ import com.amaze.filemanager.application.AppConfig;
++import com.amaze.filemanager.database.UtilsHandler;
++import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
+ import com.amaze.filemanager.shadows.ShadowMultiDex;
+ import com.amaze.filemanager.shadows.jcifs.smb.ShadowSmbFile;
+ import com.amaze.filemanager.test.ShadowCryptUtil;
+ import com.amaze.filemanager.test.TestUtils;
++import com.amaze.filemanager.ui.dialogs.SftpConnectDialog;
+ import com.amaze.filemanager.utils.SmbUtil;
+ 
+ import android.os.Build;
++import android.os.Bundle;
+ import android.os.storage.StorageManager;
+ 
+ import androidx.lifecycle.Lifecycle;
+@@ -80,6 +93,12 @@ import io.reactivex.schedulers.Schedulers;
+ @LooperMode(LooperMode.Mode.PAUSED)
+ public class MainActivityTest {
+ 
++  private static final String[] BUNDLE_KEYS = {
++    "address", "port", "keypairName", "name", "username", "password", "edit"
++  };
++
++  private MockedConstruction<SftpConnectDialog> mc;
++
+   @Before
+   public void setUp() {
+     if (Build.VERSION.SDK_INT >= N) TestUtils.initializeInternalStorage();
+@@ -87,6 +106,15 @@ public class MainActivityTest {
+     RxJavaPlugins.setIoSchedulerHandler(scheduler -> Schedulers.trampoline());
+     RxAndroidPlugins.reset();
+     RxAndroidPlugins.setInitMainThreadSchedulerHandler(scheduler -> Schedulers.trampoline());
++    ShadowSQLiteConnection.reset();
++
++    mc =
++        mockConstruction(
++            SftpConnectDialog.class,
++            (mock, context) -> {
++              doCallRealMethod().when(mock).setArguments(any());
++              when(mock.getArguments()).thenCallRealMethod();
++            });
+   }
+ 
+   @After
+@@ -94,6 +122,56 @@ public class MainActivityTest {
+     if (Build.VERSION.SDK_INT >= N)
+       shadowOf(ApplicationProvider.getApplicationContext().getSystemService(StorageManager.class))
+           .resetStorageVolumeList();
++
++    mc.close();
++  }
++
++  @Test
++  public void testInvokeSftpConnectionDialog() {
++
++    Bundle verify = new Bundle();
++    verify.putString("address", "127.0.0.1");
++    verify.putInt("port", 22);
++    verify.putString("name", "SCP/SFTP Connection");
++    verify.putString("username", "root");
++    verify.putBoolean("hasPassword", false);
++    verify.putBoolean("edit", true);
++    verify.putString("keypairName", "abcdefgh");
++
++    testOpenSftpConnectDialog("ssh://root@127.0.0.1:22", verify);
++  }
++
++  @Test
++  public void testInvokeSftpConnectionDialogWithPassword()
++      throws GeneralSecurityException, IOException {
++    String uri = "ssh://root:12345678@127.0.0.1:22";
++
++    Bundle verify = new Bundle();
++    verify.putString("address", "127.0.0.1");
++    verify.putInt("port", 22);
++    verify.putString("name", "SCP/SFTP Connection");
++    verify.putString("username", "root");
++    verify.putBoolean("hasPassword", true);
++    verify.putBoolean("edit", true);
++    verify.putString("password", "12345678");
++
++    testOpenSftpConnectDialog(uri, verify);
++  }
++
++  private void testOpenSftpConnectDialog(String uri, Bundle verify) {
++    MainActivity activity = mock(MainActivity.class);
++    UtilsHandler utilsHandler = mock(UtilsHandler.class);
++    when(utilsHandler.getSshAuthPrivateKeyName("ssh://root@127.0.0.1:22")).thenReturn("abcdefgh");
++    ReflectionHelpers.setField(activity, "utilsHandler", utilsHandler);
++    doCallRealMethod().when(activity).showSftpDialog(any(), any(), anyBoolean());
++
++    activity.showSftpDialog(
++        "SCP/SFTP Connection", SshClientUtils.encryptSshPathAsNecessary(uri), true);
++    assertEquals(1, mc.constructed().size());
++    SftpConnectDialog mocked = mc.constructed().get(0);
++    for (String key : BUNDLE_KEYS) {
++      assertEquals(verify.get(key), mocked.getArguments().get(key));
++    }
+   }
+ 
+   @Test
+diff --git a/file_operations/src/main/java/com/amaze/filemanager/file_operations/filesystem/root/NativeOperations.kt b/file_operations/src/main/java/com/amaze/filemanager/file_operations/filesystem/root/NativeOperations.kt
+new file mode 100644
+index 000000000..775946304
+--- /dev/null
++++ b/file_operations/src/main/java/com/amaze/filemanager/file_operations/filesystem/root/NativeOperations.kt
+@@ -0,0 +1,11 @@
++package com.amaze.filemanager.file_operations.filesystem.root
++
++object NativeOperations {
++    init {
++        System.loadLibrary("rootoperations")
++    }
++
++    /** Whether path file is directory or not  */
++    @JvmStatic
++    external fun isDirectory(path: String?): Boolean
++}
+\ No newline at end of file

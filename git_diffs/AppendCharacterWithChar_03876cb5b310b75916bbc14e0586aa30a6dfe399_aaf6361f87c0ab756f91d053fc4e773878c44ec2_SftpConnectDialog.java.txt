@@ -1,0 +1,2890 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/AmazeFileManagerModule.java b/app/src/main/java/com/amaze/filemanager/AmazeFileManagerModule.java
+new file mode 100644
+index 000000000..862533baa
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/AmazeFileManagerModule.java
+@@ -0,0 +1,21 @@
++package com.amaze.filemanager;
++
++import android.content.Context;
++import android.graphics.drawable.Drawable;
++
++import com.amaze.filemanager.adapters.glide.apkimage.ApkImageModelLoaderFactory;
++import com.bumptech.glide.Glide;
++import com.bumptech.glide.Registry;
++import com.bumptech.glide.annotation.GlideModule;
++import com.bumptech.glide.module.AppGlideModule;
++
++/**
++ * Ensures that Glide's generated API is created for the Gallery sample.
++ */
++@GlideModule
++public class AmazeFileManagerModule extends AppGlideModule {
++    @Override
++    public void registerComponents(Context context, Glide glide, Registry registry) {
++        registry.prepend(String.class, Drawable.class, new ApkImageModelLoaderFactory(context.getPackageManager()));
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/AppsAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/AppsAdapter.java
+index 0312f9611..f7b29acd7 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/AppsAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/AppsAdapter.java
+@@ -32,22 +32,20 @@ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.ArrayAdapter;
+-import android.widget.ImageButton;
+-import android.widget.ImageView;
+ import android.widget.PopupMenu;
+-import android.widget.RelativeLayout;
+-import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import com.afollestad.materialdialogs.MaterialDialog;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.superclasses.ThemedActivity;
++import com.amaze.filemanager.adapters.data.AppDataParcelable;
++import com.amaze.filemanager.adapters.glide.AppsAdapterPreloadModel;
++import com.amaze.filemanager.adapters.holders.AppHolder;
+ import com.amaze.filemanager.asynchronous.asynctasks.DeleteTask;
+ import com.amaze.filemanager.asynchronous.services.CopyService;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.RootHelper;
+ import com.amaze.filemanager.fragments.AppsListFragment;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
+ import com.amaze.filemanager.utils.OpenMode;
+ import com.amaze.filemanager.utils.ServiceWatcherUtil;
+ import com.amaze.filemanager.utils.Utils;
+@@ -55,25 +53,31 @@ import com.amaze.filemanager.utils.color.ColorUsage;
+ import com.amaze.filemanager.utils.files.FileUtils;
+ import com.amaze.filemanager.utils.provider.UtilitiesProviderInterface;
+ import com.amaze.filemanager.utils.theme.AppTheme;
++import com.bumptech.glide.util.ViewPreloadSizeProvider;
+ 
+ import java.io.File;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
++public class AppsAdapter extends ArrayAdapter<AppDataParcelable> {
+ 
+     private UtilitiesProviderInterface utilsProvider;
+     private Context context;
++    private AppsAdapterPreloadModel modelProvider;
++    private ViewPreloadSizeProvider<String> sizeProvider;
+     private SparseBooleanArray myChecked = new SparseBooleanArray();
+     private AppsListFragment app;
+ 
+     private ThemedActivity themedActivity;
+ 
+     public AppsAdapter(Context context, ThemedActivity ba, UtilitiesProviderInterface utilsProvider,
++                       AppsAdapterPreloadModel modelProvider, ViewPreloadSizeProvider<String> sizeProvider,
+                        int resourceId, AppsListFragment app) {
+         super(context, resourceId);
+         themedActivity = ba;
+         this.utilsProvider = utilsProvider;
++        this.modelProvider = modelProvider;
++        this.sizeProvider = sizeProvider;
+         this.context = context;
+         this.app = app;
+ 
+@@ -82,7 +86,7 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+         }*/
+     }
+ 
+-    public void setData(List<LayoutElementParcelable> data) {
++    public void setData(List<AppDataParcelable> data) {
+         clear();
+ 
+         if (data != null) {
+@@ -90,52 +94,39 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+         }
+     }
+ 
+-    private class ViewHolder {
+-        ImageView apkIcon;
+-        TextView txtTitle;
+-        RelativeLayout rl;
+-        TextView txtDesc;
+-        ImageButton about;
+-    }
+-
+     @Override
+     public View getView(final int position, View convertView, ViewGroup parent) {
+-        final LayoutElementParcelable rowItem = getItem(position);
++        final AppDataParcelable rowItem = getItem(position);
+ 
+         View view;
+         if (convertView == null) {
+             LayoutInflater mInflater = (LayoutInflater) context
+                     .getSystemService(Activity.LAYOUT_INFLATER_SERVICE);
+             view = mInflater.inflate(R.layout.rowlayout, null);
+-            final ViewHolder vholder = new ViewHolder();
+-            vholder.txtTitle = (TextView) view.findViewById(R.id.firstline);
+-            vholder.apkIcon = (ImageView) view.findViewById(R.id.apk_icon);
+-            vholder.rl = (RelativeLayout) view.findViewById(R.id.second);
+-            vholder.txtDesc= (TextView) view.findViewById(R.id.date);
+-            vholder.about=(ImageButton)view.findViewById(R.id.properties);
+-            vholder.apkIcon.setVisibility(View.VISIBLE);
++            final AppHolder vholder = new AppHolder(view);
+             view.findViewById(R.id.generic_icon).setVisibility(View.GONE);
+             view.findViewById(R.id.picture_icon).setVisibility(View.GONE);
+             view.setTag(vholder);
++            sizeProvider.setView(view.findViewById(R.id.apk_icon));
+         } else {
+             view = convertView;
+         }
+ 
+-        final ViewHolder holder = (ViewHolder) view.getTag();
+-        holder.apkIcon.setImageDrawable(rowItem.getImageId());
+-        app.ic.cancelLoad(holder.apkIcon);
+-        app.ic.loadDrawable(holder.apkIcon,(rowItem.getDesc()),null);
++        final AppHolder holder = (AppHolder) view.getTag();
++
++        modelProvider.loadApkImage(rowItem.path, holder.apkIcon);
++
+         if (holder.about != null) {
+             if(utilsProvider.getAppTheme().equals(AppTheme.LIGHT))
+                 holder.about.setColorFilter(Color.parseColor("#ff666666"));
+-            showPopup(holder.about,rowItem);
++            showPopup(holder.about, rowItem);
+         }
+-        holder.txtTitle.setText(rowItem.getTitle());
++        holder.txtTitle.setText(rowItem.label);
+         //	File f = new File(rowItem.getDesc());
+-        holder.txtDesc.setText(rowItem.getSize());
++        holder.txtDesc.setText(rowItem.fileSize);
+         holder.rl.setClickable(true);
+         holder.rl.setOnClickListener(p1 -> {
+-            Intent i1 = app.getActivity().getPackageManager().getLaunchIntentForPackage(rowItem.getPermissions());
++            Intent i1 = app.getActivity().getPackageManager().getLaunchIntentForPackage(rowItem.packageName);
+             if (i1 != null)
+                 app.startActivity(i1);
+             else
+@@ -155,7 +146,7 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+         }
+         return view;
+     }
+-    private void showPopup(View v, final LayoutElementParcelable rowItem){
++    private void showPopup(View v, final AppDataParcelable rowItem){
+         v.setOnClickListener(view -> {
+             PopupMenu popupMenu = new PopupMenu(app.getActivity(), view);
+             popupMenu.setOnMenuItemClickListener(item -> {
+@@ -163,7 +154,7 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+ 
+                 switch (item.getItemId()) {
+                     case R.id.open:
+-                        Intent i1 = app.getActivity().getPackageManager().getLaunchIntentForPackage(rowItem.getPermissions());
++                        Intent i1 = app.getActivity().getPackageManager().getLaunchIntentForPackage(rowItem.packageName);
+                         if (i1!= null)
+                             app.startActivity(i1);
+                         else
+@@ -171,16 +162,16 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+                         return true;
+                     case R.id.share:
+                         ArrayList<File> arrayList2=new ArrayList<File>();
+-                        arrayList2.add(new File(rowItem.getDesc()));
++                        arrayList2.add(new File(rowItem.path));
+                         themedActivity.getColorPreference();
+                         FileUtils.shareFiles(arrayList2, app.getActivity(), utilsProvider.getAppTheme(), colorAccent);
+                         return true;
+                     case R.id.unins:
+-                        final HybridFileParcelable f1 = new HybridFileParcelable(rowItem.getDesc());
++                        final HybridFileParcelable f1 = new HybridFileParcelable(rowItem.path);
+                         f1.setMode(OpenMode.ROOT);
+ 
+-                        if ((Integer.valueOf(rowItem.getSymlink().substring(0,
+-                                rowItem.getSymlink().indexOf("_"))) & ApplicationInfo.FLAG_SYSTEM) != 0) {
++                        if ((Integer.valueOf(rowItem.data.substring(0,
++                                rowItem.data.indexOf("_"))) & ApplicationInfo.FLAG_SYSTEM) != 0) {
+                             // system package
+                             if(app.Sp.getBoolean("rootmode",false)) {
+                                 MaterialDialog.Builder builder1 = new MaterialDialog.Builder(app.getActivity());
+@@ -220,30 +211,30 @@ public class AppsAdapter extends ArrayAdapter<LayoutElementParcelable> {
+                                 Toast.makeText(app.getActivity(),app.getResources().getString(R.string.enablerootmde),Toast.LENGTH_SHORT).show();
+                             }
+                         } else {
+-                            app.unin(rowItem.getPermissions());
++                            app.unin(rowItem.packageName);
+                         }
+                         return true;
+                     case R.id.play:
+                         Intent intent1 = new Intent(Intent.ACTION_VIEW);
+-                        intent1.setData(Uri.parse("market://details?id=" + rowItem.getPermissions()));
++                        intent1.setData(Uri.parse("market://details?id=" + rowItem.packageName));
+                         app.startActivity(intent1);
+                         return true;
+                     case R.id.properties:
+ 
+                         app.startActivity(new Intent(
+                                 android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+-                                Uri.parse("package:" + rowItem.getPermissions())));
++                                Uri.parse("package:" + rowItem.packageName)));
+                         return true;
+                     case R.id.backup:
+                         Toast.makeText(app.getActivity(), app.getResources().getString( R.string.copyingapk) + Environment.getExternalStorageDirectory().getPath() + "/app_backup", Toast.LENGTH_LONG).show();
+-                        File f = new File(rowItem.getDesc());
++                        File f = new File(rowItem.path);
+                         ArrayList<HybridFileParcelable> ab = new ArrayList<>();
+                         File dst = new File(Environment.getExternalStorageDirectory().getPath() + "/app_backup");
+                         if(!dst.exists() || !dst.isDirectory())dst.mkdirs();
+                         Intent intent = new Intent(app.getActivity(), CopyService.class);
+                         HybridFileParcelable baseFile=RootHelper.generateBaseFile(f,true);
+-                        baseFile.setName(rowItem.getTitle() + "_" +
+-                                rowItem.getSymlink().substring(rowItem.getSymlink().indexOf("_")+1) + ".apk");
++                        baseFile.setName(rowItem.label + "_" +
++                                rowItem.packageName.substring(rowItem.packageName.indexOf("_")+1) + ".apk");
+                         ab.add(baseFile);
+ 
+                         intent.putParcelableArrayListExtra(CopyService.TAG_COPY_SOURCES, ab);
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
+index 467d0c725..12003804d 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
+@@ -17,6 +17,7 @@ import android.widget.ImageButton;
+ import android.widget.ImageView;
+ import android.widget.Toast;
+ 
++import com.amaze.filemanager.GlideApp;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.adapters.holders.CompressedItemViewHolder;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+@@ -36,7 +37,7 @@ import java.util.ArrayList;
+ /**
+  * Created by Arpit on 25-01-2015 edited by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+  */
+-public class CompressedExplorerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
++public class CompressedExplorerAdapter extends RecyclerView.Adapter<CompressedItemViewHolder> {
+ 
+     private static final int TYPE_HEADER = 0, TYPE_ITEM = 1;
+ 
+@@ -162,7 +163,7 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<RecyclerView
+     }
+ 
+     @Override
+-    public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
++    public CompressedItemViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+         if (viewType == TYPE_HEADER) {
+             View v = mInflater.inflate(R.layout.rowlayout, parent, false);
+             v.findViewById(R.id.picture_icon).setVisibility(View.INVISIBLE);
+@@ -179,11 +180,9 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<RecyclerView
+     }
+ 
+     @Override
+-    public void onBindViewHolder(final RecyclerView.ViewHolder vholder, int position) {
+-        CompressedItemViewHolder holder = (CompressedItemViewHolder) vholder;
+-
++    public void onBindViewHolder(final CompressedItemViewHolder holder, int position) {
+         if (!stoppedAnimation) {
+-            animate((CompressedItemViewHolder) vholder);
++            animate(holder);
+         }
+ 
+         final CompressedObjectParcelable rowItem = items.get(position);
+@@ -197,13 +196,17 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<RecyclerView
+                     utilsProvider.getAppTheme(), compressedExplorerFragment.getResources().getDisplayMetrics()));
+ 
+         if (rowItem.getType() == CompressedObjectParcelable.TYPE_GOBACK) {
+-            holder.genericIcon.setImageDrawable(compressedExplorerFragment.getResources().getDrawable(R.drawable.ic_arrow_left_white_24dp));
++            GlideApp.with(compressedExplorerFragment).load(R.drawable.ic_arrow_left_white_24dp).into(holder.genericIcon);
++
+             gradientDrawable.setColor(Utils.getColor(context, R.color.goback_item));
+             holder.txtTitle.setText("..");
+             holder.txtDesc.setText("");
+             holder.date.setText(R.string.goback);
+         } else {
+-            holder.genericIcon.setImageDrawable(Icons.loadMimeIcon(rowItem.getName(), false, context.getResources()));
++            GlideApp.with(compressedExplorerFragment)
++                    .load(Icons.loadMimeIcon(rowItem.getName(), false))
++                    .into(holder.genericIcon);
++
+             final StringBuilder stringBuilder = new StringBuilder(rowItem.getName());
+             if (compressedExplorerFragment.showLastModified)
+                 holder.date.setText(Utils.getDate(rowItem.getTime(), compressedExplorerFragment.year));
+@@ -297,14 +300,14 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<RecyclerView
+     }
+ 
+     @Override
+-    public void onViewDetachedFromWindow(RecyclerView.ViewHolder holder) {
++    public void onViewDetachedFromWindow(CompressedItemViewHolder holder) {
+         super.onViewAttachedToWindow(holder);
+-        ((CompressedItemViewHolder) holder).rl.clearAnimation();
++        holder.rl.clearAnimation();
+     }
+ 
+     @Override
+-    public boolean onFailedToRecycleView(RecyclerView.ViewHolder holder) {
+-        ((CompressedItemViewHolder) holder).rl.clearAnimation();
++    public boolean onFailedToRecycleView(CompressedItemViewHolder holder) {
++        holder.rl.clearAnimation();
+         return super.onFailedToRecycleView(holder);
+     }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+index 63243f6e4..00c2c383e 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+@@ -3,10 +3,7 @@ package com.amaze.filemanager.adapters;
+ import android.app.Activity;
+ import android.content.Context;
+ import android.content.SharedPreferences;
+-import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+ import android.graphics.Color;
+-import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.GradientDrawable;
+ import android.os.Build;
+ import android.support.v7.widget.RecyclerView;
+@@ -18,24 +15,31 @@ import android.view.animation.AnimationUtils;
+ import android.widget.ImageView;
+ import android.widget.PopupMenu;
+ 
++import com.amaze.filemanager.GlideApp;
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.adapters.data.IconDataParcelable;
++import com.amaze.filemanager.adapters.glide.RecyclerPreloadModelProvider;
++import com.amaze.filemanager.adapters.glide.RecyclerPreloadSizeProvider;
+ import com.amaze.filemanager.adapters.holders.EmptyViewHolder;
+ import com.amaze.filemanager.adapters.holders.ItemViewHolder;
+ import com.amaze.filemanager.adapters.holders.SpecialViewHolder;
+ import com.amaze.filemanager.fragments.MainFragment;
+ import com.amaze.filemanager.ui.ItemPopupMenu;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+ import com.amaze.filemanager.ui.views.CircleGradientDrawable;
++import com.amaze.filemanager.utils.GlideConstants;
+ import com.amaze.filemanager.utils.Utils;
+ import com.amaze.filemanager.utils.color.ColorUsage;
+ import com.amaze.filemanager.utils.color.ColorUtils;
+ import com.amaze.filemanager.utils.files.CryptUtil;
+ import com.amaze.filemanager.utils.provider.UtilitiesProviderInterface;
+ import com.amaze.filemanager.utils.theme.AppTheme;
++import com.bumptech.glide.integration.recyclerview.RecyclerViewPreloader;
+ 
+ import java.util.ArrayList;
++import java.util.List;
+ 
+ /**
+  * This class is the information that serves to load the files into a "list" (a RecyclerView).
+@@ -47,21 +51,21 @@ import java.util.ArrayList;
+  * Created by Arpit on 11-04-2015 edited by Emmanuel Messulam <emmanuelbendavid@gmail.com>
+  *                                edited by Jens Klingenberg <mail@jensklingenberg.de>
+  */
+-public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+-
+-    private static final int PICTURE_FILETYPE = 0, APK_FILETYPE = 1, VIDEO_FILETYPE = 2,
+-            GENERIC_FILETYPE = 3, ENCRYPTED_FILETYPE = 4;
++public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder>
++        implements RecyclerPreloadSizeProvider.RecyclerPreloadSizeProviderCallback {
+ 
+     public static final int TYPE_ITEM = 0, TYPE_HEADER_FOLDERS = 1, TYPE_HEADER_FILES = 2, EMPTY_LAST_ITEM = 3;
+ 
+-    private static final int VIDEO = 0, AUDIO = 1, PDF = 2, CODE = 3, TEXT = 4, ARCHIVE = 5,
+-            GENERIC = 6, APK = 7, PICTURE = 8, ENCRYPTED = 9;
++    private static final int VIEW_GENERIC = 0, VIEW_PICTURE = 1, VIEW_APK = 2, VIEW_THUMB = 3;
+ 
+     public boolean stoppedAnimation = false;
+ 
+     private UtilitiesProviderInterface utilsProvider;
+     private MainFragment mainFrag;
+     private SharedPreferences sharedPrefs;
++    private RecyclerViewPreloader<IconDataParcelable> preloader;
++    private RecyclerPreloadSizeProvider sizeProvider;
++    private RecyclerPreloadModelProvider modelProvider;
+     private boolean showHeaders;
+     private ArrayList<ListItem> itemsDigested = new ArrayList<>();
+     private Context context;
+@@ -72,7 +76,8 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+     private int offset = 0;
+ 
+     public RecyclerAdapter(MainFragment m, UtilitiesProviderInterface utilsProvider, SharedPreferences sharedPrefs,
+-                           ArrayList<LayoutElementParcelable> itemsRaw, Context context, boolean showHeaders) {
++                           RecyclerView recyclerView,  ArrayList<LayoutElementParcelable> itemsRaw,
++                           Context context, boolean showHeaders) {
+         setHasStableIds(true);
+ 
+         this.mainFrag = m;
+@@ -95,7 +100,8 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         minRowHeight = context.getResources().getDimension(R.dimen.minimal_row_height);
+         grey_color = Utils.getColor(context, R.color.grey);
+ 
+-        setItems(itemsRaw, false);
++        setItems(recyclerView, itemsRaw, false);
++
+     }
+ 
+     /**
+@@ -272,21 +278,30 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         notifyItemInserted(getItemCount());
+     }
+ 
+-    public void setItems(ArrayList<LayoutElementParcelable> arrayList) {
+-        setItems(arrayList, true);
++    public void setItems(RecyclerView recyclerView, ArrayList<LayoutElementParcelable> arrayList) {
++        setItems(recyclerView, arrayList, true);
+     }
+ 
+-    private void setItems(ArrayList<LayoutElementParcelable> arrayList, boolean invalidate) {
++    private void setItems(RecyclerView recyclerView, ArrayList<LayoutElementParcelable> arrayList, boolean invalidate) {
++        if(preloader != null)  {
++            recyclerView.removeOnScrollListener(preloader);
++            preloader = null;
++        }
++
+         itemsDigested.clear();
+         offset = 0;
+         stoppedAnimation = false;
+ 
++        ArrayList<IconDataParcelable> uris = new ArrayList<>(itemsDigested.size());
++
+         for (LayoutElementParcelable e : arrayList) {
+             itemsDigested.add(new ListItem(e));
++            uris.add(e != null? e.getIconData():null);
+         }
+ 
+         if (mainFrag.IS_LIST && itemsDigested.size() > 0) {
+             itemsDigested.add(new ListItem(EMPTY_LAST_ITEM));
++            uris.add(null);
+         }
+ 
+         for (int i = 0; i < itemsDigested.size(); i++) {
+@@ -294,11 +309,18 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+ 
+         if (showHeaders) {
+-            createHeaders(invalidate);
++            createHeaders(invalidate, uris);
+         }
++
++        sizeProvider = new RecyclerPreloadSizeProvider(this);
++        modelProvider = new RecyclerPreloadModelProvider(mainFrag, uris, mainFrag.SHOW_THUMBS);
++
++        preloader = new RecyclerViewPreloader<>(GlideApp.with(mainFrag), modelProvider, sizeProvider, GlideConstants.MAX_PRELOAD_FILES);
++
++        recyclerView.addOnScrollListener(preloader);
+     }
+ 
+-    public void createHeaders(boolean invalidate)  {
++    public void createHeaders(boolean invalidate, List<IconDataParcelable> uris)  {
+         boolean[] headers = new boolean[]{false, false};
+ 
+         for (int i = 0; i < itemsDigested.size(); i++) {
+@@ -309,6 +331,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                     if (!headers[0] && nextItem.isDirectory()) {
+                         headers[0] = true;
+                         itemsDigested.add(i, new ListItem(TYPE_HEADER_FOLDERS));
++                        uris.add(i, null);
+                         continue;
+                     }
+ 
+@@ -316,6 +339,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                             && !nextItem.getTitle().equals(".") && !nextItem.getTitle().equals("..")) {
+                         headers[1] = true;
+                         itemsDigested.add(i, new ListItem(TYPE_HEADER_FILES));
++                        uris.add(i, null);
+                         continue;//leave this continue for symmetry
+                     }
+                 }
+@@ -366,8 +390,18 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+ 
+                 return new SpecialViewHolder(context, view, utilsProvider, type);
+             case TYPE_ITEM:
+-                if (mainFrag.IS_LIST) view = mInflater.inflate(R.layout.rowlayout, parent, false);
+-                else view = mInflater.inflate(R.layout.griditem, parent, false);
++                if (mainFrag.IS_LIST) {
++                    view = mInflater.inflate(R.layout.rowlayout, parent, false);
++                    sizeProvider.addView(VIEW_GENERIC, view.findViewById(R.id.generic_icon));
++                    sizeProvider.addView(VIEW_PICTURE, view.findViewById(R.id.picture_icon));
++                    sizeProvider.addView(VIEW_APK, view.findViewById(R.id.apk_icon));
++                } else {
++                    view = mInflater.inflate(R.layout.griditem, parent, false);
++                    sizeProvider.addView(VIEW_GENERIC, view.findViewById(R.id.generic_icon));
++                    sizeProvider.addView(VIEW_THUMB, view.findViewById(R.id.icon_thumb));
++                }
++
++                sizeProvider.closeOffAddition();
+ 
+                 return new ItemViewHolder(view);
+             case EMPTY_LAST_ITEM:
+@@ -424,28 +458,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                     return true;
+                 });
+ 
+-                int filetype = -1;
+-
+-                switch (Icons.getTypeOfFile(rowItem.getDesc())) {
+-                    case PICTURE:
+-                        filetype = PICTURE_FILETYPE;
+-                        break;
+-                    case APK:
+-                        filetype = APK_FILETYPE;
+-                        break;
+-                    case VIDEO:
+-                        filetype = VIDEO_FILETYPE;
+-                        break;
+-                    case ENCRYPTED:
+-                        if (!rowItem.isDirectory()) filetype = ENCRYPTED_FILETYPE;
+-                        break;
+-                    case GENERIC:
+-                        filetype = GENERIC_FILETYPE;
+-                        break;
+-                }
+-
+                 holder.txtTitle.setText(rowItem.getTitle());
+-                holder.genericIcon.setImageDrawable(rowItem.getImageId());
+                 holder.genericText.setText("");
+ 
+                 if (holder.about != null) {
+@@ -476,60 +489,35 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                 });
+ 
+                 // resetting icons visibility
+-                holder.genericIcon.setVisibility(View.VISIBLE);
+-                holder.pictureIcon.setVisibility(View.INVISIBLE);
+-                holder.apkIcon.setVisibility(View.INVISIBLE);
++                holder.genericIcon.setVisibility(View.GONE);
++                holder.pictureIcon.setVisibility(View.GONE);
++                holder.apkIcon.setVisibility(View.GONE);
+                 holder.checkImageView.setVisibility(View.INVISIBLE);
+ 
+                 // setting icons for various cases
+                 // apkIcon holder refers to square/non-circular drawable
+                 // pictureIcon is circular drawable
+-                switch (filetype) {
+-                    case PICTURE_FILETYPE:
++                switch (rowItem.getFiletype()) {
++                    case Icons.PICTURE:
++                    case Icons.VIDEO:
+                         if (mainFrag.SHOW_THUMBS) {
+-                            holder.genericIcon.setVisibility(View.GONE);
+-
+                             if (mainFrag.CIRCULAR_IMAGES) {
+-                                holder.apkIcon.setVisibility(View.GONE);
+                                 holder.pictureIcon.setVisibility(View.VISIBLE);
+-                                holder.pictureIcon.setImageDrawable(mainFrag.DARK_IMAGE);
+-                                mainFrag.iconHolder.cancelLoad(holder.pictureIcon);
+-                                mainFrag.iconHolder.loadDrawable(holder.pictureIcon, (rowItem.getDesc()), null);
++                                modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.pictureIcon);
+                             } else {
+                                 holder.apkIcon.setVisibility(View.VISIBLE);
+-                                holder.apkIcon.setImageDrawable(mainFrag.DARK_IMAGE);
+-                                mainFrag.iconHolder.cancelLoad(holder.apkIcon);
+-                                mainFrag.iconHolder.loadDrawable(holder.apkIcon, (rowItem.getDesc()), null);
++                                modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.apkIcon);
+                             }
+                         }
+                         break;
+-                    case APK_FILETYPE:
++                    case Icons.APK:
+                         if (mainFrag.SHOW_THUMBS) {
+-                            holder.genericIcon.setVisibility(View.GONE);
+-                            holder.pictureIcon.setVisibility(View.GONE);
+                             holder.apkIcon.setVisibility(View.VISIBLE);
+-                            holder.apkIcon.setImageDrawable(mainFrag.apk);
+-                            mainFrag.iconHolder.cancelLoad(holder.apkIcon);
+-                            mainFrag.iconHolder.loadDrawable(holder.apkIcon, (rowItem.getDesc()), null);
++                            modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.apkIcon);
+                         }
+                         break;
+-                    case VIDEO_FILETYPE:
+-                        if (mainFrag.SHOW_THUMBS) {
+-                            holder.genericIcon.setVisibility(View.GONE);
+-                            if (mainFrag.CIRCULAR_IMAGES) {
+-                                holder.pictureIcon.setVisibility(View.VISIBLE);
+-                                holder.pictureIcon.setImageDrawable(mainFrag.DARK_VIDEO);
+-                                mainFrag.iconHolder.cancelLoad(holder.pictureIcon);
+-                                mainFrag.iconHolder.loadDrawable(holder.pictureIcon, (rowItem.getDesc()), null);
+-                            } else {
+-                                holder.apkIcon.setVisibility(View.VISIBLE);
+-                                holder.apkIcon.setImageDrawable(mainFrag.DARK_VIDEO);
+-                                mainFrag.iconHolder.cancelLoad(holder.apkIcon);
+-                                mainFrag.iconHolder.loadDrawable(holder.apkIcon, (rowItem.getDesc()), null);
+-                            }
+-                        }
+-                        break;
+-                    case GENERIC_FILETYPE:
++                    case Icons.GENERIC:
++                        holder.genericIcon.setVisibility(View.VISIBLE);
+                         // if the file type is any unknown variable
+                         String ext = !rowItem.isDirectory() ? MimeTypes.getExtension(rowItem.getTitle()) : null;
+                         if (ext != null && ext.trim().length() != 0) {
+@@ -537,32 +525,19 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                             holder.genericIcon.setImageDrawable(null);
+                             //holder.genericIcon.setVisibility(View.INVISIBLE);
+                         } else {
+-
+-                            // we could not find the extension, set a generic file type icon
+-                            // probably a directory
+-                            holder.genericIcon.setVisibility(View.VISIBLE);
++                            // we could not find the extension, set a generic file type icon probably a directory
++                            modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.genericIcon);
+                         }
+-                        holder.pictureIcon.setVisibility(View.GONE);
+-                        holder.apkIcon.setVisibility(View.GONE);
+                         break;
+-                    case ENCRYPTED_FILETYPE:
+-                        Bitmap lockBitmap = BitmapFactory.decodeResource(mainFrag.getResources(),
+-                                R.drawable.ic_file_lock_white_36dp);
+-                        BitmapDrawable lockBitmapDrawable = new BitmapDrawable(mainFrag.getResources(), lockBitmap);
+-
++                    case Icons.ENCRYPTED:
+                         if (mainFrag.SHOW_THUMBS) {
+                             holder.genericIcon.setVisibility(View.VISIBLE);
+-                            holder.pictureIcon.setVisibility(View.GONE);
+-                            holder.apkIcon.setVisibility(View.GONE);
+-                            holder.genericIcon.setImageDrawable(lockBitmapDrawable);
+-                            //main.ic.cancelLoad(holder.apkIcon);
+-                            //main.ic.loadDrawable(holder.apkIcon, (rowItem.getDesc()), null);
++                            modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.genericIcon);
+                         }
+                         break;
+                     default:
+-                        holder.pictureIcon.setVisibility(View.GONE);
+-                        holder.apkIcon.setVisibility(View.GONE);
+                         holder.genericIcon.setVisibility(View.VISIBLE);
++                        modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.genericIcon);
+                         break;
+                 }
+ 
+@@ -577,8 +552,7 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                     // making sure the generic icon background color filter doesn't get changed
+                     // to grey on picture/video/apk/generic text icons when checked
+                     // so that user can still look at the thumbs even after selection
+-                    if ((filetype != PICTURE_FILETYPE && filetype != APK_FILETYPE
+-                            && filetype != VIDEO_FILETYPE)) {
++                    if ((rowItem.getFiletype() != Icons.PICTURE && rowItem.getFiletype() != Icons.APK && rowItem.getFiletype() != Icons.VIDEO)) {
+                         holder.apkIcon.setVisibility(View.GONE);
+                         holder.pictureIcon.setVisibility(View.GONE);
+                         holder.genericIcon.setVisibility(View.VISIBLE);
+@@ -631,52 +605,52 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+                     return true;
+                 });
+                 holder.txtTitle.setText(rowItem.getTitle());
++
+                 holder.imageView1.setVisibility(View.INVISIBLE);
+                 holder.genericIcon.setVisibility(View.VISIBLE);
+                 holder.checkImageViewGrid.setVisibility(View.INVISIBLE);
+-                holder.genericIcon.setImageDrawable(rowItem.getImageId());
+ 
+-                if (Icons.isPicture((rowItem.getDesc().toLowerCase())) || Icons.isVideo(rowItem.getDesc().toLowerCase())) {
++                GlideApp.with(mainFrag).load(rowItem.getIconData().image).into(holder.genericIcon);
++
++                if (rowItem.getFiletype() == Icons.PICTURE || rowItem.getFiletype() == Icons.VIDEO) {
+                     holder.genericIcon.setColorFilter(null);
+                     holder.imageView1.setVisibility(View.VISIBLE);
+                     holder.imageView1.setImageDrawable(null);
+                     if (utilsProvider.getAppTheme().equals(AppTheme.DARK))
+                         holder.imageView1.setBackgroundColor(Color.BLACK);
+-                    mainFrag.iconHolder.cancelLoad(holder.imageView1);
+-                    mainFrag.iconHolder.loadDrawable(holder.imageView1, (rowItem.getDesc()), null);
+-                } else if (Icons.isApk((rowItem.getDesc()))) {
++                    modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.imageView1);
++                } else if (rowItem.getFiletype() == Icons.APK) {
+                     holder.genericIcon.setColorFilter(null);
+-                    mainFrag.iconHolder.cancelLoad(holder.genericIcon);
+-                    mainFrag.iconHolder.loadDrawable(holder.genericIcon, (rowItem.getDesc()), null);
++                    modelProvider.getPreloadRequestBuilder(rowItem.getIconData()).into(holder.genericIcon);
+                 }
+ 
+                 if (rowItem.isDirectory()) {
+                     holder.genericIcon.setColorFilter(iconSkinColor);
+                 } else {
+-                    switch (Icons.getTypeOfFile(rowItem.getDesc())) {
+-                        case VIDEO:
++                    switch (rowItem.getFiletype()) {
++                        case Icons.VIDEO:
+                             holder.genericIcon.setColorFilter(videoColor);
+                             break;
+-                        case AUDIO:
++                        case Icons.AUDIO:
+                             holder.genericIcon.setColorFilter(audioColor);
+                             break;
+-                        case PDF:
++                        case Icons.PDF:
+                             holder.genericIcon.setColorFilter(pdfColor);
+                             break;
+-                        case CODE:
++                        case Icons.CODE:
+                             holder.genericIcon.setColorFilter(codeColor);
+                             break;
+-                        case TEXT:
++                        case Icons.TEXT:
+                             holder.genericIcon.setColorFilter(textColor);
+                             break;
+-                        case ARCHIVE:
++                        case Icons.ARCHIVE:
+                             holder.genericIcon.setColorFilter(archiveColor);
+                             break;
+-                        case GENERIC:
++                        case Icons.GENERIC:
+                             holder.genericIcon.setColorFilter(genericColor);
+                             break;
+-                        case APK:
+-                        case PICTURE:
++                        case Icons.APK:
++                        case Icons.PICTURE:
+                             holder.genericIcon.setColorFilter(null);
+                             break;
+                         default:
+@@ -723,6 +697,33 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+         }
+     }
+ 
++    @Override
++    public int getCorrectView(IconDataParcelable item, int adapterPosition) {
++        if (mainFrag.IS_LIST) {
++            if(mainFrag.SHOW_THUMBS) {
++                int filetype = itemsDigested.get(adapterPosition).elem.getFiletype();
++
++                if (filetype == Icons.VIDEO || filetype == Icons.PICTURE) {
++                    if (mainFrag.CIRCULAR_IMAGES) {
++                        return VIEW_PICTURE;
++                    } else {
++                        return VIEW_APK;
++                    }
++                } else if (filetype == Icons.APK) {
++                    return VIEW_APK;
++                }
++            }
++
++            return VIEW_GENERIC;
++        } else {
++            if (item.type == IconDataParcelable.IMAGE_FROMFILE) {
++                return VIEW_THUMB;
++            } else {
++                return VIEW_GENERIC;
++            }
++        }
++    }
++
+     private void showPopup(View v, final LayoutElementParcelable rowItem, final int position) {
+         v.setOnClickListener(view -> {
+             PopupMenu popupMenu = new ItemPopupMenu(context, mainFrag.getMainActivity(),
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataParcelable.java b/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataParcelable.java
+new file mode 100644
+index 000000000..2fbb4ce31
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataParcelable.java
+@@ -0,0 +1,98 @@
++package com.amaze.filemanager.adapters.data;
++
++import android.os.Parcel;
++import android.os.Parcelable;
++
++import java.util.Comparator;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 7/12/2017, at 17:24.
++ */
++
++public final class AppDataParcelable implements Parcelable {
++
++    public final String label, path, packageName, data, fileSize;
++    public final long size, lastModification;
++
++    public AppDataParcelable(String label, String path, String packageName, String data,
++                             String fileSize, long size, long lastModification) {
++        this.label = label;
++        this.path = path;
++        this.packageName = packageName;
++        this.data = data;
++        this.fileSize = fileSize;
++        this.size = size;
++        this.lastModification = lastModification;
++    }
++
++    @Override
++    public int describeContents() {
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel parcel, int i) {
++        parcel.writeString(label);
++        parcel.writeString(path);
++        parcel.writeString(packageName);
++        parcel.writeString(data);
++        parcel.writeString(fileSize);
++        parcel.writeLong(size);
++        parcel.writeLong(lastModification);
++    }
++
++    private AppDataParcelable(Parcel in) {
++        this.label = in.readString();
++        this.path = in.readString();
++        this.packageName = in.readString();
++        this.data = in.readString();
++        this.fileSize = in.readString();
++        this.size = in.readLong();
++        this.lastModification = in.readLong();
++    }
++
++    public static final Creator<AppDataParcelable> CREATOR = new Creator<AppDataParcelable>() {
++        @Override
++        public AppDataParcelable createFromParcel(Parcel in) {
++            return new AppDataParcelable(in);
++        }
++
++        @Override
++        public AppDataParcelable[] newArray(int size) {
++            return new AppDataParcelable[size];
++        }
++    };
++
++    public static final class AppDataSorter implements Comparator<AppDataParcelable> {
++        public static final int SORT_NAME = 0, SORT_MODIF = 1, SORT_SIZE = 2;
++
++        private int asc = 1;
++        private int sort = 0;
++
++        public AppDataSorter(int sort, int asc) {
++            this.asc = asc;
++            this.sort = sort;
++        }
++
++        /**
++         * Compares two elements and return negative, zero and positive integer if first argument is
++         * less than, equal to or greater than second
++         */
++        @Override
++        public int compare(AppDataParcelable file1, AppDataParcelable file2) {
++            if (sort == SORT_NAME) {
++                // sort by name
++                return asc * file1.label.compareToIgnoreCase(file2.label);
++            } else if (sort == SORT_MODIF) {
++                // sort by last modified
++                return asc * Long.valueOf(file1.lastModification).compareTo(file2.lastModification);
++            } else if (sort == SORT_SIZE) {
++                // sort by size
++                return asc * Long.valueOf(file1.size).compareTo(file2.size);
++            }
++            return 0;
++        }
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/data/IconDataParcelable.java b/app/src/main/java/com/amaze/filemanager/adapters/data/IconDataParcelable.java
+new file mode 100644
+index 000000000..5f0c1abb8
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/data/IconDataParcelable.java
+@@ -0,0 +1,64 @@
++package com.amaze.filemanager.adapters.data;
++
++import android.os.Parcel;
++import android.os.Parcelable;
++import android.support.annotation.DrawableRes;
++
++/**
++ * Saves data on what should be loaded as an icon for LayoutElementParcelable
++ *
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 6/12/2017, at 17:52.
++ */
++public class IconDataParcelable implements Parcelable {
++
++    public static final int IMAGE_RES = 0, IMAGE_FROMFILE = 1;
++
++    public final int type;
++    public final String path;
++    public final @DrawableRes int image;
++
++    public IconDataParcelable(int type, @DrawableRes int img) {
++        if(type == IMAGE_FROMFILE) throw new IllegalArgumentException();
++        this.type = type;
++        this.image = img;
++        this.path = null;
++    }
++
++    public IconDataParcelable(int type, String path, @DrawableRes int img) {
++        if(type == IMAGE_RES) throw new IllegalArgumentException();
++        this.type = type;
++        this.path = path;
++        this.image = img;
++    }
++
++    @Override
++    public int describeContents() {
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel parcel, int i) {
++        parcel.writeInt(type);
++        parcel.writeString(path);
++        parcel.writeInt(image);
++    }
++
++    public IconDataParcelable(Parcel im) {
++        type = im.readInt();
++        path = im.readString();
++        image = im.readInt();
++    }
++
++    public static final Parcelable.Creator<IconDataParcelable> CREATOR =
++            new Parcelable.Creator<IconDataParcelable>() {
++                public IconDataParcelable createFromParcel(Parcel in) {
++                    return new IconDataParcelable(in);
++                }
++
++                public IconDataParcelable[] newArray(int size) {
++                    return new IconDataParcelable[size];
++                }
++            };
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/LayoutElementParcelable.java b/app/src/main/java/com/amaze/filemanager/adapters/data/LayoutElementParcelable.java
+similarity index 70%
+rename from app/src/main/java/com/amaze/filemanager/ui/LayoutElementParcelable.java
+rename to app/src/main/java/com/amaze/filemanager/adapters/data/LayoutElementParcelable.java
+index 46d3330af..1b504a766 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/LayoutElementParcelable.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/data/LayoutElementParcelable.java
+@@ -1,5 +1,6 @@
+ /*
+  * Copyright (C) 2014 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>
++ *                      Emmanuel Messulam <emmanuelbendavid@gmail.com>
+  *
+  * This file is part of Amaze File Manager.
+  *
+@@ -17,13 +18,14 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.ui;
++package com.amaze.filemanager.adapters.data;
+ 
+-import android.graphics.drawable.Drawable;
+ import android.os.Parcel;
+ import android.os.Parcelable;
++import android.support.annotation.DrawableRes;
+ 
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
++import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.utils.OpenMode;
+ import com.amaze.filemanager.utils.Utils;
+ 
+@@ -34,64 +36,40 @@ public class LayoutElementParcelable implements Parcelable {
+ 
+     private static final String CURRENT_YEAR = String.valueOf(Calendar.getInstance().get(Calendar.YEAR));
+ 
+-    public LayoutElementParcelable(Parcel im) {
+-        title = im.readString();
+-        desc = im.readString();
+-        permissions = im.readString();
+-        symlink = im.readString();
+-        int j = im.readInt();
+-        date = im.readLong();
+-        int i = im.readInt();
+-        header = i != 0;
+-        isDirectory = j != 0;
+-        // don't save bitmaps in parcel, it might exceed the allowed transaction threshold
+-        //Bitmap bitmap = (Bitmap) im.readParcelable(getClass().getClassLoader());
+-        // Convert Bitmap to Drawable:
+-        //imageId = new BitmapDrawable(bitmap);
+-        date1 = im.readString();
+-        size = im.readString();
+-        longSize=im.readLong();
+-    }
+-
+-
+-    public int describeContents() {
+-        // TODO: Implement this method
+-        return 0;
+-    }
+-
+-    public void writeToParcel(Parcel p1, int p2) {
+-        p1.writeString(title);
+-        p1.writeString(desc);
+-        p1.writeString(permissions);
+-        p1.writeString(symlink);
+-        p1.writeInt(isDirectory?1:0);
+-        p1.writeLong(date);
+-        p1.writeInt(header ? 1 : 0);
+-        //p1.writeParcelable(imageId.getBitmap(), p2);
+-        p1.writeString(date1);
+-        p1.writeString(size);
+-        p1.writeLong(longSize);
+-        // TODO: Implement this method
+-    }
+-
+-    private Drawable imageId;
++    private int filetype;
++    private IconDataParcelable iconData;
+     private String title;
+     private String desc;
+     private String permissions;
+     private String symlink;
+     private String size;
+     private boolean isDirectory;
+-    private long date = 0,longSize=0;
+-    private String date1 = "";
++    private long date;
++    private long longSize;
++    private String date1;
+     private boolean header;
++
+     //same as hfile.modes but different than openmode in Main.java
+     private OpenMode mode = OpenMode.FILE;
+ 
+-    public LayoutElementParcelable(Drawable imageId, String title, String desc, String permissions,
+-                                   String symlink, String size, long longSize, boolean header, String date, boolean isDirectory) {
+-        this.imageId = imageId;
++    public LayoutElementParcelable(String title, String path, String permissions,
++                                   String symlink, String size, long longSize, boolean header,
++                                   String date, boolean isDirectory, boolean isGrid, boolean useThumbs) {
++        filetype = Icons.getTypeOfFile(path);
++        @DrawableRes int fallbackIcon = Icons.loadMimeIcon(path, isGrid);
++
++        if(useThumbs) {
++            if (filetype == Icons.PICTURE || filetype == Icons.VIDEO || filetype == Icons.APK) {
++                this.iconData = new IconDataParcelable(IconDataParcelable.IMAGE_FROMFILE, path, fallbackIcon);
++            } else {
++                this.iconData = new IconDataParcelable(IconDataParcelable.IMAGE_RES, fallbackIcon);
++            }
++        } else {
++            this.iconData = new IconDataParcelable(IconDataParcelable.IMAGE_RES, fallbackIcon);
++        }
++
+         this.title = title;
+-        this.desc = desc;
++        this.desc = path;
+         this.permissions = permissions.trim();
+         this.symlink = symlink.trim();
+         this.size = size;
+@@ -101,36 +79,38 @@ public class LayoutElementParcelable implements Parcelable {
+         if (!date.trim().equals("")) {
+             this.date = Long.parseLong(date);
+             this.date1 = Utils.getDate(this.date, CURRENT_YEAR);
++        } else {
++            this.date = 0;
++            this.date1 = "";
+         }
+     }
+ 
+-    public LayoutElementParcelable(Drawable drawable, String path, String permissions, String symlink,
++    public LayoutElementParcelable(String path, String permissions, String symlink,
+                                    String size, long longSize, boolean isDirectory, boolean header,
+-                                   String date) {
+-        this(drawable, new File(path).getName(), path, permissions, symlink, size, longSize, header, date, isDirectory);
++                                   String date, boolean isGrid, boolean useThumbs) {
++        this(new File(path).getName(), path, permissions, symlink, size, longSize, header, date, isDirectory, isGrid, useThumbs);
++
+     }
+ 
+-    public static final Parcelable.Creator<LayoutElementParcelable> CREATOR =
+-            new Parcelable.Creator<LayoutElementParcelable>() {
+-                public LayoutElementParcelable createFromParcel(Parcel in) {
+-                    return new LayoutElementParcelable(in);
+-                }
++    public HybridFileParcelable generateBaseFile() {
++        HybridFileParcelable baseFile=new HybridFileParcelable(getDesc(), getPermissions(), getDate1(), getlongSize(), isDirectory());
++        baseFile.setMode(mode);
++        baseFile.setName(title);
++        return baseFile;
++    }
+ 
+-                public LayoutElementParcelable[] newArray(int size) {
+-                    return new LayoutElementParcelable[size];
+-                }
+-            };
++    public int getFiletype() {
++        return filetype;
++    }
+ 
+-    public Drawable getImageId() {
+-        return imageId;
++    public IconDataParcelable getIconData() {
++        return iconData;
+     }
+ 
+-    public void setImageId(Drawable imageId){this.imageId=imageId;}
+     public String getDesc() {
+         return desc;
+     }
+ 
+-
+     public String getTitle() {
+         return title;
+     }
+@@ -147,13 +127,6 @@ public class LayoutElementParcelable implements Parcelable {
+         return isDirectory;
+     }
+ 
+-    public HybridFileParcelable generateBaseFile() {
+-        HybridFileParcelable baseFile=new HybridFileParcelable(getDesc(), getPermissions(), getDate1(), getlongSize(), isDirectory());
+-        baseFile.setMode(mode);
+-        baseFile.setName(title);
+-        return baseFile;
+-    }
+-
+     public String getSize() {
+         return size;
+     }
+@@ -186,4 +159,55 @@ public class LayoutElementParcelable implements Parcelable {
+     public String toString() {
+         return title + "\n" + desc;
+     }
++
++    public LayoutElementParcelable(Parcel im) {
++        filetype = im.readInt();
++        iconData = im.readParcelable(IconDataParcelable.class.getClassLoader());
++        title = im.readString();
++        desc = im.readString();
++        permissions = im.readString();
++        symlink = im.readString();
++        int j = im.readInt();
++        date = im.readLong();
++        int i = im.readInt();
++        header = i != 0;
++        isDirectory = j != 0;
++        date1 = im.readString();
++        size = im.readString();
++        longSize=im.readLong();
++    }
++
++    @Override
++    public int describeContents() {
++        // TODO: Implement this method
++        return 0;
++    }
++
++    @Override
++    public void writeToParcel(Parcel p1, int p2) {
++        p1.writeInt(filetype);
++        p1.writeParcelable(iconData, 0);
++        p1.writeString(title);
++        p1.writeString(desc);
++        p1.writeString(permissions);
++        p1.writeString(symlink);
++        p1.writeInt(isDirectory?1:0);
++        p1.writeLong(date);
++        p1.writeInt(header ? 1 : 0);
++        p1.writeString(date1);
++        p1.writeString(size);
++        p1.writeLong(longSize);
++    }
++
++    public static final Parcelable.Creator<LayoutElementParcelable> CREATOR =
++            new Parcelable.Creator<LayoutElementParcelable>() {
++                public LayoutElementParcelable createFromParcel(Parcel in) {
++                    return new LayoutElementParcelable(in);
++                }
++
++                public LayoutElementParcelable[] newArray(int size) {
++                    return new LayoutElementParcelable[size];
++                }
++            };
++
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java
+new file mode 100644
+index 000000000..e355c2c53
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java
+@@ -0,0 +1,51 @@
++package com.amaze.filemanager.adapters.glide;
++
++import android.graphics.drawable.Drawable;
++import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
++import android.support.v4.app.Fragment;
++import android.widget.ImageView;
++
++import com.amaze.filemanager.GlideApp;
++import com.amaze.filemanager.GlideRequest;
++import com.bumptech.glide.ListPreloader;
++import com.bumptech.glide.RequestBuilder;
++
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 15:38.
++ */
++
++public class AppsAdapterPreloadModel implements ListPreloader.PreloadModelProvider<String> {
++
++    private GlideRequest<Drawable> request;
++    private List<String> items;
++
++    public AppsAdapterPreloadModel(Fragment f) {
++        request = GlideApp.with(f).asDrawable().fitCenter();
++    }
++
++    public void setItemList(List<String> items) {
++        this.items = items;
++    }
++
++    @NonNull
++    @Override
++    public List<String> getPreloadItems(int position) {
++        if(items == null) return Collections.emptyList();
++        else return Collections.singletonList(items.get(position));
++    }
++
++    @Nullable
++    @Override
++    public RequestBuilder getPreloadRequestBuilder(String item) {
++        return request.clone().load(item);
++    }
++
++    public void loadApkImage(String item, ImageView v) {
++        request.load(item).into(v);
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadModelProvider.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadModelProvider.java
+new file mode 100644
+index 000000000..8eb2f34e7
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadModelProvider.java
+@@ -0,0 +1,60 @@
++package com.amaze.filemanager.adapters.glide;
++
++import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
++import android.support.v4.app.Fragment;
++
++import com.amaze.filemanager.GlideApp;
++import com.amaze.filemanager.GlideRequest;
++import com.amaze.filemanager.adapters.data.IconDataParcelable;
++import com.bumptech.glide.ListPreloader;
++import com.bumptech.glide.RequestBuilder;
++
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 6/12/2017, at 15:15.
++ */
++
++public class RecyclerPreloadModelProvider implements ListPreloader.PreloadModelProvider<IconDataParcelable> {
++
++    private Fragment fragment;
++    private List<IconDataParcelable> urisToLoad;
++    private boolean showThumbs;
++
++    public RecyclerPreloadModelProvider(@NonNull Fragment fragment, @NonNull List<IconDataParcelable> uris,
++                                        boolean showThumbs) {
++        this.fragment = fragment;
++        urisToLoad = uris;
++        this.showThumbs = showThumbs;
++    }
++
++    @Override
++    @NonNull
++    public List<IconDataParcelable> getPreloadItems(int position) {
++        IconDataParcelable iconData = urisToLoad.get(position);
++        if (iconData == null) return Collections.emptyList();
++        return Collections.singletonList(iconData);
++    }
++
++    @Override
++    @Nullable
++    public RequestBuilder getPreloadRequestBuilder(IconDataParcelable iconData) {
++        GlideRequest request;
++
++        if(!showThumbs) {
++            request = GlideApp.with(fragment).asDrawable().fitCenter().load(iconData.image);
++        } else {
++            if (iconData.type == IconDataParcelable.IMAGE_FROMFILE) {
++                request = GlideApp.with(fragment).asDrawable().centerCrop().load(iconData.path).fallback(iconData.image);
++            } else {
++                request = GlideApp.with(fragment).asDrawable().centerCrop().load(iconData.image);
++            }
++        }
++
++        return request;
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadSizeProvider.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadSizeProvider.java
+new file mode 100644
+index 000000000..18ce04801
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/RecyclerPreloadSizeProvider.java
+@@ -0,0 +1,79 @@
++package com.amaze.filemanager.adapters.glide;
++
++import android.support.annotation.Nullable;
++import android.util.SparseArray;
++import android.view.View;
++
++import com.amaze.filemanager.adapters.data.IconDataParcelable;
++import com.bumptech.glide.ListPreloader;
++import com.bumptech.glide.request.target.SizeReadyCallback;
++import com.bumptech.glide.request.target.ViewTarget;
++import com.bumptech.glide.request.transition.Transition;
++
++/**
++ * This uses a callback to know for each position what View is the
++ * one in which you're going to insert the image.
++ *
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 12:27.
++ */
++
++public class RecyclerPreloadSizeProvider implements ListPreloader.PreloadSizeProvider<IconDataParcelable> {
++
++    private RecyclerPreloadSizeProviderCallback callback;
++    private SparseArray<int[]> viewSizes = new SparseArray<>();
++    private boolean isAdditionClosed = false;
++
++    public RecyclerPreloadSizeProvider(RecyclerPreloadSizeProviderCallback c) {
++        callback = c;
++    }
++
++    /**
++     * Adds one of the views that can be used to put an image inside.
++     * If the id is already inserted the call will be ignored,
++     * but for performance you should call {@link #closeOffAddition()} once you are done.
++     *
++     * @param id a unique number for each view loaded to this object
++     * @param v the ciew to load
++     */
++    public void addView(int id, View v) {
++        if(!isAdditionClosed && viewSizes.get(id, null) != null) return;
++
++        final int viewNumber = id;
++        new SizeViewTarget(v, (width, height) -> viewSizes.append(viewNumber, new int[] {width, height}));
++    }
++
++    /**
++     * Calls to {@link #addView(int, View)} will be ignored
++     */
++    public void closeOffAddition() {
++        isAdditionClosed = true;
++    }
++
++    @Nullable
++    @Override
++    public int[] getPreloadSize(IconDataParcelable item, int adapterPosition, int perItemPosition) {
++        return viewSizes.get(callback.getCorrectView(item, adapterPosition), null);
++    }
++
++    public interface RecyclerPreloadSizeProviderCallback {
++
++        /**
++         * Get the id for the view in which the image will be loaded.
++         * @return the view's id
++         */
++        int getCorrectView(IconDataParcelable item, int adapterPosition);
++    }
++
++    private static final class SizeViewTarget extends ViewTarget<View, Object> {
++        public SizeViewTarget(View view, SizeReadyCallback callback) {
++            super(view);
++            getSize(callback);
++        }
++
++        @Override
++        public void onResourceReady(Object resource, Transition<? super Object> transition) {
++            // Do nothing
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageDataFetcher.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageDataFetcher.java
+new file mode 100644
+index 000000000..6d32ac86c
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageDataFetcher.java
+@@ -0,0 +1,56 @@
++package com.amaze.filemanager.adapters.glide.apkimage;
++
++import android.content.pm.PackageInfo;
++import android.content.pm.PackageManager;
++import android.graphics.drawable.Drawable;
++import android.support.annotation.NonNull;
++
++import com.bumptech.glide.Priority;
++import com.bumptech.glide.load.DataSource;
++import com.bumptech.glide.load.data.DataFetcher;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 16:12.
++ */
++
++public class ApkImageDataFetcher implements DataFetcher<Drawable> {
++
++    private PackageManager packageManager;
++    private String model;
++
++    public ApkImageDataFetcher(PackageManager packageManager, String model) {
++        this.packageManager = packageManager;
++        this.model = model;
++    }
++
++    @Override
++    public void loadData(Priority priority, DataCallback<? super Drawable> callback) {
++        PackageInfo pi = packageManager.getPackageArchiveInfo(model, 0);
++        pi.applicationInfo.sourceDir = model;
++        pi.applicationInfo.publicSourceDir = model;
++        callback.onDataReady(pi.applicationInfo.loadIcon(packageManager));
++    }
++
++    @Override
++    public void cleanup() {
++        // Intentionally empty only because we're not opening an InputStream or another I/O resource!
++    }
++
++    @Override
++    public void cancel() {
++        //No cancelation procedure
++    }
++
++    @NonNull
++    @Override
++    public Class<Drawable> getDataClass() {
++        return Drawable.class;
++    }
++
++    @NonNull
++    @Override
++    public DataSource getDataSource() {
++        return DataSource.LOCAL;
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoader.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoader.java
+new file mode 100644
+index 000000000..74c875017
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoader.java
+@@ -0,0 +1,35 @@
++package com.amaze.filemanager.adapters.glide.apkimage;
++
++import android.content.pm.PackageManager;
++import android.graphics.drawable.Drawable;
++import android.support.annotation.Nullable;
++
++import com.bumptech.glide.load.Options;
++import com.bumptech.glide.load.model.ModelLoader;
++import com.bumptech.glide.signature.ObjectKey;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 16:06.
++ */
++
++public class ApkImageModelLoader implements ModelLoader<String, Drawable> {
++
++    private PackageManager packageManager;
++
++    public ApkImageModelLoader(PackageManager packageManager) {
++        this.packageManager = packageManager;
++    }
++
++    @Nullable
++    @Override
++    public LoadData<Drawable> buildLoadData(String s, int width, int height, Options options) {
++        return new LoadData<>(new ObjectKey(s), new ApkImageDataFetcher(packageManager, s));
++    }
++
++    @Override
++    public boolean handles(String s) {
++        return s.substring(s.length()-4, s.length()).toLowerCase().equals(".apk");
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoaderFactory.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoaderFactory.java
+new file mode 100644
+index 000000000..db24b59f9
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/apkimage/ApkImageModelLoaderFactory.java
+@@ -0,0 +1,32 @@
++package com.amaze.filemanager.adapters.glide.apkimage;
++
++import android.content.pm.PackageManager;
++import android.graphics.drawable.Drawable;
++
++import com.bumptech.glide.load.model.ModelLoader;
++import com.bumptech.glide.load.model.ModelLoaderFactory;
++import com.bumptech.glide.load.model.MultiModelLoaderFactory;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 16:21.
++ */
++
++public class ApkImageModelLoaderFactory implements ModelLoaderFactory<String, Drawable> {
++
++    private PackageManager packageManager;
++
++    public ApkImageModelLoaderFactory(PackageManager packageManager) {
++        this.packageManager = packageManager;
++    }
++
++    @Override
++    public ModelLoader<String, Drawable> build(MultiModelLoaderFactory multiFactory) {
++        return new ApkImageModelLoader(packageManager);
++    }
++
++    @Override
++    public void teardown() {
++
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/holders/AppHolder.java b/app/src/main/java/com/amaze/filemanager/adapters/holders/AppHolder.java
+new file mode 100644
+index 000000000..285695cc7
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/holders/AppHolder.java
+@@ -0,0 +1,36 @@
++package com.amaze.filemanager.adapters.holders;
++
++import android.support.v7.widget.RecyclerView;
++import android.view.View;
++import android.widget.ImageButton;
++import android.widget.ImageView;
++import android.widget.RelativeLayout;
++import android.widget.TextView;
++
++import com.amaze.filemanager.R;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 10/12/2017, at 14:45.
++ */
++
++public class AppHolder extends RecyclerView.ViewHolder {
++
++    public final ImageView apkIcon;
++    public final TextView txtTitle;
++    public final RelativeLayout rl;
++    public final TextView txtDesc;
++    public final ImageButton about;
++
++    public AppHolder(View view) {
++        super(view);
++
++        txtTitle = view.findViewById(R.id.firstline);
++        apkIcon = view.findViewById(R.id.apk_icon);
++        rl = view.findViewById(R.id.second);
++        txtDesc = view.findViewById(R.id.date);
++        about = view.findViewById(R.id.properties);
++
++        apkIcon.setVisibility(View.VISIBLE);
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+index f06de3ee9..1646feabb 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+@@ -30,6 +30,7 @@ import android.text.format.Formatter;
+ 
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.superclasses.ThemedActivity;
++import com.amaze.filemanager.adapters.data.IconDataParcelable;
+ import com.amaze.filemanager.database.UtilsHandler;
+ import com.amaze.filemanager.exceptions.CloudPluginException;
+ import com.amaze.filemanager.filesystem.HybridFile;
+@@ -37,9 +38,10 @@ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.RootHelper;
+ import com.amaze.filemanager.fragments.CloudSheetFragment;
+ import com.amaze.filemanager.fragments.MainFragment;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.utils.DataUtils;
++import com.amaze.filemanager.utils.GlideConstants;
+ import com.amaze.filemanager.utils.OTGUtil;
+ import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+ import com.amaze.filemanager.utils.OnFileFound;
+@@ -48,6 +50,7 @@ import com.amaze.filemanager.utils.application.AppConfig;
+ import com.amaze.filemanager.utils.cloud.CloudUtil;
+ import com.amaze.filemanager.utils.files.CryptUtil;
+ import com.amaze.filemanager.utils.files.FileListSorter;
++import com.bumptech.glide.Glide;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ 
+ import java.io.File;
+@@ -218,15 +221,9 @@ public class LoadFilesListTask extends AsyncTask<Void, Void, Pair<OpenMode, Arra
+     private LayoutElementParcelable createListParcelables(HybridFileParcelable baseFile) {
+         if (!dataUtils.isFileHidden(baseFile.getPath())) {
+             String size = "";
+-            Drawable drawable;
+             long longSize= 0;
+ 
+             if (baseFile.isDirectory()) {
+-                if(lockBitmapDrawable == null) {
+-                    lockBitmapDrawable = ma.getResources().getDrawable(R.drawable.ic_folder_lock_white_36dp);
+-                }
+-
+-                drawable = baseFile.getName().endsWith(CryptUtil.CRYPT_EXTENSION)? lockBitmapDrawable:ma.folder;
+                 ma.folder_count++;
+             } else {
+                 if (baseFile.getSize() != -1) {
+@@ -237,13 +234,13 @@ public class LoadFilesListTask extends AsyncTask<Void, Void, Pair<OpenMode, Arra
+                         e.printStackTrace();
+                     }
+                 }
+-                drawable = Icons.loadMimeIcon(baseFile.getPath(), !ma.IS_LIST, ma.getResources());
++                
+                 ma.file_count++;
+             }
+ 
+-            LayoutElementParcelable layoutElement = new LayoutElementParcelable(drawable,
++            LayoutElementParcelable layoutElement = new LayoutElementParcelable(
+                     baseFile.getPath(), baseFile.getPermission(), baseFile.getLink(), size,
+-                    longSize, baseFile.isDirectory(), false, baseFile.getDate() + "");
++                    longSize, baseFile.isDirectory(), false, baseFile.getDate() + "", !ma.IS_LIST, ma.SHOW_THUMBS);
+             layoutElement.setMode(baseFile.getMode());
+             return layoutElement;
+         }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.java b/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.java
+index 4d9aa585a..8acc7d57b 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/handlers/FileHandler.java
+@@ -70,7 +70,7 @@ public class FileHandler extends Handler {
+                 main.reloadListElements(true, main.results, !main.IS_LIST);
+             } else {
+                 // we already have some elements in list view, invalidate the adapter
+-                ((RecyclerAdapter) listView.getAdapter()).setItems(main.getElementsList());
++                ((RecyclerAdapter) listView.getAdapter()).setItems(listView, main.getElementsList());
+             }
+         } else {
+             // there was no list view, means the directory was empty
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java b/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
+index 11ee086f0..63748d7f6 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
+@@ -4,14 +4,11 @@ import android.content.Context;
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageInfo;
+ import android.content.pm.PackageManager;
+-import android.graphics.BitmapFactory;
+-import android.graphics.drawable.BitmapDrawable;
+ import android.support.v4.content.AsyncTaskLoader;
++import android.support.v4.util.Pair;
+ import android.text.format.Formatter;
+ 
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
+-import com.amaze.filemanager.utils.files.FileListSorter;
++import com.amaze.filemanager.adapters.data.AppDataParcelable;
+ import com.amaze.filemanager.utils.InterestingConfigChange;
+ import com.amaze.filemanager.utils.broadcast_receiver.PackageReceiver;
+ 
+@@ -26,18 +23,16 @@ import java.util.List;
+  * Class loads all the packages installed
+  */
+ 
+-public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>> {
++public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+ 
+     private PackageManager packageManager;
+     private PackageReceiver packageReceiver;
+-    private Context context;
+-    private List<LayoutElementParcelable> mApps;
++    private AppsDataPair mApps;
+     private int sortBy, asc;
+ 
+     public AppListLoader(Context context, int sortBy, int asc) {
+         super(context);
+ 
+-        this.context = context;
+         this.sortBy = sortBy;
+         this.asc = asc;
+ 
+@@ -49,16 +44,15 @@ public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>
+     }
+ 
+     @Override
+-    public List<LayoutElementParcelable> loadInBackground() {
++    public AppsDataPair loadInBackground() {
+         List<ApplicationInfo> apps = packageManager.getInstalledApplications(
+                 PackageManager.MATCH_UNINSTALLED_PACKAGES |
+                         PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS);
+ 
+         if (apps == null)
+-            apps = new ArrayList<>();
+-
+-        mApps = new ArrayList<>(apps.size());
++            return new AppsDataPair(Collections.emptyList(), Collections.emptyList());
+ 
++        mApps = new AppsDataPair(new ArrayList<>(apps.size()), new ArrayList<>(apps.size()));
+ 
+         for (ApplicationInfo object : apps) {
+             File sourceDir = new File(object.sourceDir);
+@@ -73,20 +67,27 @@ public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>
+                 info = null;
+             }
+ 
+-            mApps.add(new LayoutElementParcelable(new BitmapDrawable(context.getResources(),
+-                    BitmapFactory.decodeResource(context.getResources(), R.drawable.ic_doc_apk_grid)),
+-                    label == null ? object.packageName : label, object.sourceDir,
+-                    object.packageName, object.flags + "_" + (info!=null ? info.versionName:""),
++            AppDataParcelable elem = new AppDataParcelable(
++                    label == null ? object.packageName : label,
++                    object.sourceDir, object.packageName,
++                    object.flags + "_" + (info!=null ? info.versionName:""),
+                     Formatter.formatFileSize(getContext(), sourceDir.length()),
+-                    sourceDir.length(), false, sourceDir.lastModified()+"", false));
++                    sourceDir.length(), sourceDir.lastModified());
++
++            mApps.first.add(elem);
++
++            Collections.sort(mApps.first, new AppDataParcelable.AppDataSorter(sortBy, asc));
+ 
+-            Collections.sort(mApps, new FileListSorter(0, sortBy, asc));
++            for (AppDataParcelable p : mApps.first) {
++                mApps.second.add(p.path);
++            }
+         }
++
+         return mApps;
+     }
+ 
+     @Override
+-    public void deliverResult(List<LayoutElementParcelable> data) {
++    public void deliverResult(AppsDataPair data) {
+         if (isReset()) {
+ 
+             if (data != null)
+@@ -94,7 +95,7 @@ public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>
+         }
+ 
+         // preserving old data for it to be closed
+-        List<LayoutElementParcelable> oldData = mApps;
++        AppsDataPair oldData = mApps;
+         mApps = data;
+         if (isStarted()) {
+             // loader has been started, if we have data, return immediately
+@@ -132,7 +133,7 @@ public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>
+     }
+ 
+     @Override
+-    public void onCanceled(List<LayoutElementParcelable> data) {
++    public void onCanceled(AppsDataPair data) {
+         super.onCanceled(data);
+ 
+         onReleaseResources(data);//TODO onReleaseResources() is empty
+@@ -166,7 +167,23 @@ public class AppListLoader extends AsyncTaskLoader<List<LayoutElementParcelable>
+      * @param layoutElementList
+      */
+     //TODO do something
+-    private void onReleaseResources(List<LayoutElementParcelable> layoutElementList) {
++    private void onReleaseResources(AppsDataPair layoutElementList) {
++
++    }
++
++    /**
++     * typedef Pair<List<AppDataParcelable>, List<String>> AppsDataPair
++     */
++    public static class AppsDataPair extends Pair<List<AppDataParcelable>, List<String>> {
+ 
++        /**
++         * Constructor for a Pair.
++         *
++         * @param first  the first object in the Pair
++         * @param second the second object in the pair
++         */
++        public AppsDataPair(List<AppDataParcelable> first, List<String> second) {
++            super(first, second);
++        }
+     }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+index 9e80e17fe..18c63c924 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+@@ -11,8 +11,7 @@ import com.amaze.filemanager.database.CloudHandler;
+ import com.amaze.filemanager.exceptions.CloudPluginException;
+ import com.amaze.filemanager.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.fragments.MainFragment;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
+-import com.amaze.filemanager.ui.icons.Icons;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.OTGUtil;
+ import com.amaze.filemanager.utils.OnFileFound;
+@@ -1024,15 +1023,14 @@ public class HybridFile {
+                 LayoutElementParcelable layoutElement;
+                 if (isDirectory()) {
+ 
+-                    layoutElement = new LayoutElementParcelable(mainFragment.folder,
+-                                    path, RootHelper.parseFilePermission(file),
+-                                    "", folderSize() + "", 0, true, false,
+-                                    file.lastModified() + "");
++                    layoutElement = new LayoutElementParcelable(path, RootHelper.parseFilePermission(file),
++                            "", folderSize() + "", 0, true,
++                            false, file.lastModified() + "", !mainFragment.IS_LIST, mainFragment.SHOW_THUMBS);
+                 } else {
+-                    layoutElement = new LayoutElementParcelable(Icons.loadMimeIcon(
+-                            file.getPath(), !mainFragment.IS_LIST, mainFragment.getResources()),
++                    layoutElement = new LayoutElementParcelable(
+                             file.getPath(), RootHelper.parseFilePermission(file),
+-                            file.getPath(), file.length() + "", file.length(), false, false, file.lastModified() + "");
++                            file.getPath(), file.length() + "", file.length(), false,
++                            false, file.lastModified() + "", !mainFragment.IS_LIST, mainFragment.SHOW_THUMBS);
+                 }
+                 layoutElement.setMode(mode);
+                 return layoutElement;
+diff --git a/app/src/main/java/com/amaze/filemanager/fragments/AppsListFragment.java b/app/src/main/java/com/amaze/filemanager/fragments/AppsListFragment.java
+index 9912ab703..f14294eb4 100644
+--- a/app/src/main/java/com/amaze/filemanager/fragments/AppsListFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/fragments/AppsListFragment.java
+@@ -31,20 +31,21 @@ import android.view.View;
+ import android.widget.ListView;
+ import android.widget.Toast;
+ 
++import com.amaze.filemanager.GlideApp;
+ import com.amaze.filemanager.R;
+-import com.amaze.filemanager.activities.superclasses.ThemedActivity;
+ import com.amaze.filemanager.activities.MainActivity;
++import com.amaze.filemanager.activities.superclasses.ThemedActivity;
+ import com.amaze.filemanager.adapters.AppsAdapter;
++import com.amaze.filemanager.adapters.glide.AppsAdapterPreloadModel;
+ import com.amaze.filemanager.asynchronous.loaders.AppListLoader;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
+-import com.amaze.filemanager.ui.icons.IconHolder;
++import com.amaze.filemanager.utils.GlideConstants;
+ import com.amaze.filemanager.utils.Utils;
+ import com.amaze.filemanager.utils.provider.UtilitiesProviderInterface;
+ import com.amaze.filemanager.utils.theme.AppTheme;
++import com.bumptech.glide.ListPreloader;
++import com.bumptech.glide.util.ViewPreloadSizeProvider;
+ 
+-import java.util.List;
+-
+-public class AppsListFragment extends ListFragment implements LoaderManager.LoaderCallbacks<List<LayoutElementParcelable>> {
++public class AppsListFragment extends ListFragment implements LoaderManager.LoaderCallbacks<AppListLoader.AppsDataPair> {
+ 
+     UtilitiesProviderInterface utilsProvider;
+     AppsListFragment app = this;
+@@ -52,21 +53,20 @@ public class AppsListFragment extends ListFragment implements LoaderManager.Load
+ 
+     public SharedPreferences Sp;
+     ListView vl;
+-    public IconHolder ic;
+     int asc, sortby;
+ 
+     int index = 0, top = 0;
+ 
+     public static final int ID_LOADER_APP_LIST = 0;
+ 
++    private AppsAdapterPreloadModel modelProvider;
++
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         utilsProvider = (UtilitiesProviderInterface) getActivity();
+ 
+         setHasOptionsMenu(false);
+-        ic = new IconHolder(getActivity(), true, true);
+-
+     }
+ 
+     @Override
+@@ -86,8 +86,15 @@ public class AppsListFragment extends ListFragment implements LoaderManager.Load
+         if (utilsProvider.getAppTheme().equals(AppTheme.DARK))
+             getActivity().getWindow().getDecorView().setBackgroundColor(Utils.getColor(getContext(), R.color.holo_dark_background));
+ 
+-        adapter = new AppsAdapter(getContext(), (ThemedActivity) getActivity(), utilsProvider,
++        modelProvider = new AppsAdapterPreloadModel(app);
++        ViewPreloadSizeProvider<String> sizeProvider = new ViewPreloadSizeProvider<>();
++        ListPreloader<String> preloader = new ListPreloader<>(GlideApp.with(app), modelProvider,
++                sizeProvider, GlideConstants.MAX_PRELOAD_APPSADAPTER);
++
++        adapter = new AppsAdapter(getContext(), (ThemedActivity) getActivity(), utilsProvider, modelProvider, sizeProvider,
+                 R.layout.rowlayout, app);
++
++        getListView().setOnScrollListener(preloader);
+         setListAdapter(adapter);
+         setListShown(false);
+         setEmptyText(getResources().getString(R.string.no_applications));
+@@ -146,14 +153,15 @@ public class AppsListFragment extends ListFragment implements LoaderManager.Load
+     }
+ 
+     @Override
+-    public Loader<List<LayoutElementParcelable>> onCreateLoader(int id, Bundle args) {
++    public Loader<AppListLoader.AppsDataPair> onCreateLoader(int id, Bundle args) {
+         return new AppListLoader(getContext(), sortby, asc);
+     }
+ 
+     @Override
+-    public void onLoadFinished(Loader<List<LayoutElementParcelable>> loader, List<LayoutElementParcelable> data) {
++    public void onLoadFinished(Loader<AppListLoader.AppsDataPair> loader, AppListLoader.AppsDataPair data) {
+         // set new data to adapter
+-        adapter.setData(data);
++        adapter.setData(data.first);
++        modelProvider.setItemList(data.second);
+ 
+         if (isResumed()) {
+             setListShown(true);
+@@ -166,7 +174,8 @@ public class AppsListFragment extends ListFragment implements LoaderManager.Load
+     }
+ 
+     @Override
+-    public void onLoaderReset(Loader<List<LayoutElementParcelable>> loader) {
++    public void onLoaderReset(Loader<AppListLoader.AppsDataPair> loader) {
+         adapter.setData(null);
+     }
++
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/fragments/MainFragment.java b/app/src/main/java/com/amaze/filemanager/fragments/MainFragment.java
+index 183449ea5..1c7407d7c 100644
+--- a/app/src/main/java/com/amaze/filemanager/fragments/MainFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/fragments/MainFragment.java
+@@ -31,11 +31,8 @@ import android.content.SharedPreferences;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.res.Resources;
+-import android.graphics.Bitmap;
+ import android.graphics.Color;
+-import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.ColorDrawable;
+-import android.graphics.drawable.Drawable;
+ import android.media.MediaScannerConnection;
+ import android.media.RingtoneManager;
+ import android.net.Uri;
+@@ -83,10 +80,8 @@ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.MediaStoreHack;
+ import com.amaze.filemanager.filesystem.PasteHelper;
+ import com.amaze.filemanager.fragments.preference_fragments.PrefFrag;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation;
+-import com.amaze.filemanager.ui.icons.IconHolder;
+-import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+ import com.amaze.filemanager.ui.views.DividerItemDecoration;
+ import com.amaze.filemanager.ui.views.FastScroller;
+@@ -120,7 +115,6 @@ import jcifs.smb.SmbFile;
+ public class MainFragment extends android.support.v4.app.Fragment implements BottomBarButtonPath {
+ 
+     public ActionMode mActionMode;
+-    public Drawable folder, apk, DARK_IMAGE, DARK_VIDEO;
+     public int sortby, dsort, asc;
+     public String home;
+     public boolean selection, results = false, SHOW_HIDDEN, CIRCULAR_IMAGES, SHOW_PERMISSIONS,
+@@ -133,7 +127,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+      * {@link MainFragment#IS_LIST} boolean to identify if the view is a list or grid
+      */
+     public boolean IS_LIST = true;
+-    public IconHolder iconHolder;
+     public SwipeRefreshLayout mSwipeRefreshLayout;
+     public int file_count, folder_count, columns;
+     public String smbPath;
+@@ -166,7 +159,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+     private View rootView;
+     private View actionModeView;
+     private FastScroller fastScroller;
+-    private Bitmap mFolderBitmap;
+     private CustomFileObserver customFileObserver;
+     private DataUtils dataUtils = DataUtils.getInstance();
+     private boolean isEncryptOpen = false;       // do we have to open a file when service is begin destroyed
+@@ -190,7 +182,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+     /**
+      * For caching the back button
+      */
+-    private Drawable backIcon = null;
+     private LayoutElementParcelable back = null;
+ 
+     @Override
+@@ -261,7 +252,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+ 
+         SHOW_THUMBS = sharedPref.getBoolean("showThumbs", true);
+         //String itemsstring = res.getString(R.string.items);// TODO: 23/5/2017 use or delete
+-        apk = res.getDrawable(R.drawable.ic_doc_apk_grid);
+         mToolbarContainer.setBackgroundColor(MainActivity.currentTab == 1 ? primaryTwoColor : primaryColor);
+ 
+         //   listView.setPadding(listView.getPaddingLeft(), paddingTop, listView.getPaddingRight(), listView.getPaddingBottom());
+@@ -277,15 +267,11 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+         initNoFileLayout();
+         SHOW_HIDDEN = sharedPref.getBoolean("showHidden", false);
+         COLORISE_ICONS = sharedPref.getBoolean("coloriseIcons", true);
+-        folder = res.getDrawable(R.drawable.ic_grid_folder_new);
+         getSortModes();
+-        DARK_IMAGE = res.getDrawable(R.drawable.ic_doc_image_dark);
+-        DARK_VIDEO = res.getDrawable(R.drawable.ic_doc_video_dark);
+         this.setRetainInstance(false);
+         HybridFile f = new HybridFile(OpenMode.UNKNOWN, CURRENT_PATH);
+         f.generateMode(getActivity());
+         getMainActivity().getAppbar().getBottomBar().setClickListener();
+-        iconHolder = new IconHolder(getActivity(), SHOW_THUMBS, !IS_LIST);
+ 
+         if (utilsProvider.getAppTheme().equals(AppTheme.LIGHT) && !IS_LIST) {
+             listView.setBackgroundColor(Utils.getColor(getContext(), R.color.grid_background_light));
+@@ -362,10 +348,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+     void switchToGrid() {
+         IS_LIST = false;
+ 
+-        iconHolder = new IconHolder(getActivity(), SHOW_THUMBS, !IS_LIST);
+-        folder = new BitmapDrawable(res, mFolderBitmap);
+-        fixIcons(true);
+-
+         if (utilsProvider.getAppTheme().equals(AppTheme.LIGHT)) {
+ 
+             // will always be grid, set alternate white background
+@@ -379,6 +361,7 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+                 mLayoutManagerGrid = new GridLayoutManager(getActivity(), columns);
+         setGridLayoutSpanSizeLookup(mLayoutManagerGrid);
+         listView.setLayoutManager(mLayoutManagerGrid);
++        listView.clearOnScrollListeners();
+         adapter = null;
+     }
+ 
+@@ -390,12 +373,10 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+             listView.setBackgroundDrawable(null);
+         }
+ 
+-        iconHolder = new IconHolder(getActivity(), SHOW_THUMBS, !IS_LIST);
+-        folder = new BitmapDrawable(res, mFolderBitmap);
+-        fixIcons(true);
+         if (mLayoutManager == null)
+             mLayoutManager = new LinearLayoutManager(getActivity());
+         listView.setLayoutManager(mLayoutManager);
++        listView.clearOnScrollListeners();
+         adapter = null;
+     }
+ 
+@@ -1145,9 +1126,9 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+             else if (!grid && !IS_LIST) switchToList();
+ 
+             if (adapter == null) {
+-                adapter = new RecyclerAdapter(ma, utilsProvider, sharedPref, LIST_ELEMENTS, ma.getActivity(), SHOW_HEADERS);
++                adapter = new RecyclerAdapter(ma, utilsProvider, sharedPref, listView, LIST_ELEMENTS, ma.getActivity(), SHOW_HEADERS);
+             } else {
+-                adapter.setItems(new ArrayList<>(LIST_ELEMENTS));
++                adapter.setItems(listView, new ArrayList<>(LIST_ELEMENTS));
+             }
+ 
+             stopAnims = true;
+@@ -1205,10 +1186,10 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+     }
+ 
+     private LayoutElementParcelable getBackElement() {
+-        if (backIcon == null || back == null) {
+-            backIcon = res.getDrawable(R.drawable.ic_arrow_left_white_24dp);
+-            back = new LayoutElementParcelable(backIcon, "..", "", "",
+-                    getString(R.string.goback), 0, false, true, "");
++        if (back == null) {
++            back = new LayoutElementParcelable("..", "", "",
++                    getString(R.string.goback), 0, false, true,
++                    "", !IS_LIST, SHOW_THUMBS);
+         }
+ 
+         return back;
+@@ -1420,7 +1401,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+ 
+     public void updateList() {
+         computeScroll();
+-        iconHolder.cleanup();
+         loadlist((CURRENT_PATH), true, openMode);
+     }
+ 
+@@ -1454,7 +1434,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+             (getActivity()).registerReceiver(decryptReceiver, new IntentFilter(EncryptDecryptUtils.DECRYPT_BROADCAST));
+         }
+         startFileObserver();
+-        fixIcons(false);
+     }
+ 
+     @Override
+@@ -1486,18 +1465,6 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+         }
+     }
+ 
+-    void fixIcons(boolean forceReload) {
+-        if (LIST_ELEMENTS == null) return;
+-        Drawable iconDrawable;
+-        for (LayoutElementParcelable layoutElement : LIST_ELEMENTS) {
+-            if (forceReload || layoutElement.getImageId() == null) {
+-                iconDrawable = layoutElement.isDirectory()?
+-                        folder:Icons.loadMimeIcon(layoutElement.getDesc(), !IS_LIST, res);
+-                layoutElement.setImageId(iconDrawable);
+-            }
+-        }
+-    }
+-
+     public ArrayList<LayoutElementParcelable> addToSmb(SmbFile[] mFile, String path) throws SmbException {
+         ArrayList<LayoutElementParcelable> a = new ArrayList<>();
+         if (searchHelper.size() > 500) searchHelper.clear();
+@@ -1511,19 +1478,21 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+             }
+             if (aMFile.isDirectory()) {
+                 folder_count++;
+-                LayoutElementParcelable layoutElement = new LayoutElementParcelable(folder, name, aMFile.getPath(),
+-                        "", "", "", 0, false, aMFile.lastModified() + "", true);
++
++                LayoutElementParcelable layoutElement = new LayoutElementParcelable(name, aMFile.getPath(),
++                        "", "", "", 0, false,
++                        aMFile.lastModified() + "", true, !IS_LIST, SHOW_THUMBS);
++
+                 layoutElement.setMode(OpenMode.SMB);
+                 searchHelper.add(layoutElement.generateBaseFile());
+                 a.add(layoutElement);
+             } else {
+                 file_count++;
+                 try {
+-                    LayoutElementParcelable layoutElement = new LayoutElementParcelable(
+-                            Icons.loadMimeIcon(aMFile.getPath(), !IS_LIST, res), name,
++                    LayoutElementParcelable layoutElement = new LayoutElementParcelable(name,
+                             aMFile.getPath(), "", "", Formatter.formatFileSize(getContext(),
+-                            aMFile.length()), aMFile.length(), false,
+-                            aMFile.lastModified() + "", false);
++                            aMFile.length()), aMFile.length(), false, aMFile.lastModified() + "",
++                            false, !IS_LIST, SHOW_THUMBS);
+                     layoutElement.setMode(OpenMode.SMB);
+                     searchHelper.add(layoutElement.generateBaseFile());
+                     a.add(layoutElement);
+@@ -1542,8 +1511,9 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+         if (!dataUtils.isFileHidden(mFile.getPath())) {
+             if (mFile.isDirectory()) {
+                 size = "";
+-                LayoutElementParcelable layoutElement = new LayoutElementParcelable(folder, f.getPath(), mFile.getPermission(),
+-                        mFile.getLink(), size, 0, true, false, mFile.getDate() + "");
++                LayoutElementParcelable layoutElement = new LayoutElementParcelable(f.getPath(), mFile.getPermission(),
++                        mFile.getLink(), size, 0, true, false,
++                        mFile.getDate() + "", !IS_LIST, SHOW_THUMBS);
+ 
+                 layoutElement.setMode(mFile.getMode());
+                 LIST_ELEMENTS.add(layoutElement);
+@@ -1563,8 +1533,9 @@ public class MainFragment extends android.support.v4.app.Fragment implements Bot
+                     //e.printStackTrace();
+                 }
+                 try {
+-                    LayoutElementParcelable layoutElement = new LayoutElementParcelable(Icons.loadMimeIcon(f.getPath(), !IS_LIST, res),
+-                            f.getPath(), mFile.getPermission(), mFile.getLink(), size, longSize, false, false, mFile.getDate() + "");
++                    LayoutElementParcelable layoutElement = new LayoutElementParcelable(f.getPath(),
++                            mFile.getPermission(), mFile.getLink(), size, longSize, false,
++                            false, mFile.getDate() + "", !IS_LIST, SHOW_THUMBS);
+                     layoutElement.setMode(mFile.getMode());
+                     LIST_ELEMENTS.add(layoutElement);
+                     file_count++;
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/ItemPopupMenu.java b/app/src/main/java/com/amaze/filemanager/ui/ItemPopupMenu.java
+index d2801c390..2c40fb672 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/ItemPopupMenu.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/ItemPopupMenu.java
+@@ -12,6 +12,7 @@ import android.widget.Toast;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.activities.superclasses.ThemedActivity;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.asynchronous.services.EncryptService;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.PasteHelper;
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+index 412fd3d34..23f8311ee 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+@@ -42,7 +42,7 @@ import com.amaze.filemanager.filesystem.RootHelper;
+ import com.amaze.filemanager.fragments.AppsListFragment;
+ import com.amaze.filemanager.fragments.MainFragment;
+ import com.amaze.filemanager.fragments.preference_fragments.PrefFrag;
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.FingerprintHandler;
+ import com.amaze.filemanager.utils.OpenMode;
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/icons/IconHolder.java b/app/src/main/java/com/amaze/filemanager/ui/icons/IconHolder.java
+deleted file mode 100644
+index be9db792c..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/icons/IconHolder.java
++++ /dev/null
+@@ -1,361 +0,0 @@
+-/*
+- * Copyright (C) 2014 Arpit Khurana <arpitkh96@gmail.com>
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.ui.icons;
+-
+-
+-import android.content.Context;
+-import android.content.pm.PackageInfo;
+-import android.content.pm.PackageManager;
+-import android.content.res.Resources;
+-import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+-import android.graphics.drawable.BitmapDrawable;
+-import android.graphics.drawable.Drawable;
+-import android.media.ThumbnailUtils;
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-import android.os.Looper;
+-import android.os.Message;
+-import android.provider.MediaStore;
+-import android.support.v4.content.ContextCompat;
+-import android.widget.ImageView;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.database.CloudHandler;
+-import com.amaze.filemanager.utils.DataUtils;
+-import com.amaze.filemanager.utils.OTGUtil;
+-import com.amaze.filemanager.utils.OpenMode;
+-import com.amaze.filemanager.utils.Utils;
+-import com.amaze.filemanager.utils.cloud.CloudUtil;
+-import com.cloudrail.si.interfaces.CloudStorage;
+-
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.LinkedHashMap;
+-import java.util.Map;
+-
+-import jcifs.smb.SmbFileInputStream;
+-
+-/**
+- * A class that holds icons for a more efficient access.
+- */
+-public class IconHolder {
+-
+-    private static final int MAX_CACHE = 500;
+-
+-    private static final int MSG_LOAD = 1;
+-    private static final int MSG_LOADED = 2;
+-    private static final int MSG_DESTROY = 3;
+-
+-    private final Map<String, Bitmap> mIcons;     // Themes based
+-    private final Map<String, Bitmap> mAppIcons;  // App based
+-    private DataUtils dataUtils = DataUtils.getInstance();
+-
+-    private final Map<ImageView, String> mRequests;
+-
+-    private final Context mContext;
+-    private final boolean mUseThumbs;
+-    private HandlerThread mWorkerThread;
+-    private Handler mWorkerHandler;
+-
+-    private static class LoadResult {
+-        String fso;
+-        Bitmap result;
+-    }
+-
+-    private Handler mHandler = new Handler() {
+-        @Override
+-        public void handleMessage(Message msg) {
+-            switch (msg.what) {
+-                case MSG_LOADED:
+-                    processResult((LoadResult) msg.obj);
+-                    sendEmptyMessageDelayed(MSG_DESTROY, 3000);
+-                    break;
+-                case MSG_DESTROY:
+-                    shutdownWorker();
+-                    break;
+-            }
+-        }
+-
+-        private synchronized void processResult(LoadResult result) {
+-            // Cache the new drawable
+-            final String filePath =(result.fso);
+-
+-            synchronized (mAppIcons) {
+-
+-                mAppIcons.put(filePath, result.result);
+-            }
+-
+-            // find the request for it
+-            synchronized (mRequests) {
+-                for (Map.Entry<ImageView, String> entry : mRequests.entrySet()) {
+-                    final ImageView imageView = entry.getKey();
+-                    final String fso = entry.getValue();
+-
+-                    if (fso != null && fso.equals(result.fso)) {
+-                        imageView.setImageBitmap(result.result);
+-                        mRequests.remove(imageView);
+-                        break;
+-                    }
+-                }
+-            }
+-        }
+-    };
+-
+-    /**
+-     * Constructor of <code>IconHolder</code>.
+-     *
+-     * @param useThumbs If thumbs of images, videos, apps, ... should be returned
+-     * instead of the default icon.
+-     */
+-    int px;
+-    public IconHolder(Context context, boolean useThumbs,boolean grid) {
+-        super();
+-        this.mContext = context;
+-        this.mUseThumbs = useThumbs;
+-        this.mRequests = Collections.synchronizedMap(new HashMap<>());
+-        this.mIcons = new HashMap<>();
+-        this.mAppIcons = new LinkedHashMap<String, Bitmap>(MAX_CACHE, .75F, true) {
+-            private static final long serialVersionUID = 1L;
+-            @Override
+-            protected boolean removeEldestEntry(Map.Entry<String, Bitmap> eldest) {
+-                return size() > MAX_CACHE;
+-            }
+-        };
+-        Resources res=mContext.getResources();
+-        int dp=50;
+-        if(grid){dp=150;}
+-        px = (int)(dp * (res.getDisplayMetrics().densityDpi / 160));
+-
+-    }
+-
+-    /**
+-     * Method that returns a drawable reference of a icon.
+-     *
+-     * @param resid The resource identifier
+-     * @return Drawable The drawable icon reference
+-     */
+-
+-    /**
+-     * Method that returns a drawable reference of a FileSystemObject.
+-     *
+-     * @param iconView View to load the drawable into
+-     * @param fso The FileSystemObject reference
+-     * @param defaultIcon Drawable to be used in case no specific one could be found
+-     * @return Drawable The drawable reference
+-     */
+-    public void loadDrawable(final ImageView iconView, final String fso, Drawable defaultIcon) {
+-        if (!mUseThumbs) {
+-            return;
+-        }
+-
+-        // Is cached?
+-        final String filePath = fso;
+-        if (this.mAppIcons.containsKey(filePath)) {
+-            iconView.setImageBitmap(this.mAppIcons.get(filePath));
+-            return;
+-        }
+-        new Thread(() -> {
+-            mHandler.removeMessages(MSG_DESTROY);
+-            if (mWorkerThread == null || mWorkerHandler==null) {
+-                mWorkerThread = new HandlerThread("IconHolderLoader");
+-                mWorkerThread.start();
+-                mWorkerHandler = new WorkerHandler(mWorkerThread.getLooper());
+-            }
+-
+-            mRequests.put(iconView, fso);
+-            Message msg = mWorkerHandler.obtainMessage(MSG_LOAD, fso);
+-            msg.sendToTarget();
+-
+-        }).start();
+-    }
+-
+-    /**
+-     * Cancel loading of a drawable for a certain ImageView.
+-     */
+-    public void cancelLoad(ImageView view) {
+-        synchronized (mRequests) {
+-            String fso = mRequests.get(view);
+-            if (fso != null && mWorkerHandler != null) {
+-                mWorkerHandler.removeMessages(MSG_LOAD, fso);
+-            }
+-            mRequests.remove(view);
+-        }
+-    }
+-
+-    private class WorkerHandler extends Handler {
+-        WorkerHandler(Looper looper) {
+-            super(looper);
+-        }
+-
+-        @Override
+-        public void handleMessage(Message msg) {
+-            switch (msg.what) {
+-                case MSG_LOAD:
+-                    String fso = (String) msg.obj;
+-                    Bitmap d = loadDrawable(fso);
+-                    if (d != null) {
+-                        LoadResult result = new LoadResult();
+-                        result.fso = fso;
+-                        result.result = d;
+-                        mHandler.obtainMessage(MSG_LOADED, result).sendToTarget();
+-                    }
+-                    break;
+-            }
+-        }
+-    }
+-    private Bitmap loadDrawable(String fso) {
+-        final String filePath = (fso);
+-
+-        try {
+-            if (Icons.isApk(filePath)) {
+-                return getAppDrawable(fso);
+-            }else if(Icons.isPicture(filePath)){
+-                return	loadImage(fso);
+-            }else if(Icons.isVideo(filePath))
+-                return getVideoDrawable(fso);
+-        } catch (OutOfMemoryError outOfMemoryError) {
+-            cleanup();
+-            shutdownWorker();
+-        }
+-
+-        return null;
+-    }
+-    private Bitmap getVideoDrawable(String path) throws OutOfMemoryError {
+-
+-        try {
+-            Bitmap thumb = ThumbnailUtils.createVideoThumbnail(path,
+-                    MediaStore.Images.Thumbnails.MINI_KIND);
+-            return thumb;
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-            return null;
+-        }
+-    }
+-
+-    private Bitmap getAppDrawable(String path) throws OutOfMemoryError {
+-        Bitmap bitsat;
+-        try {
+-            PackageManager pm = mContext.getPackageManager();
+-            PackageInfo pi = pm.getPackageArchiveInfo(path, 0);
+-            // // the secret are these two lines....
+-            pi.applicationInfo.sourceDir = path;
+-            pi.applicationInfo.publicSourceDir = path;
+-            // //
+-            Drawable d = pi.applicationInfo.loadIcon(pm);
+-
+-            Bitmap d1 = null;
+-            d1 = ((BitmapDrawable) d).getBitmap();
+-            bitsat = d1;
+-        } catch (Exception e) {
+-            Drawable apk = ContextCompat.getDrawable(mContext, R.drawable.ic_doc_apk_grid);
+-            Bitmap apk1 = ((BitmapDrawable) apk).getBitmap();
+-            bitsat = apk1;
+-        }
+-        return bitsat;
+-    }
+-
+-    private Bitmap loadImage(String path) throws OutOfMemoryError {
+-
+-        Bitmap bitsat;
+-
+-        try {
+-            BitmapFactory.Options options = new BitmapFactory.Options();
+-            options.inPreferredConfig= Bitmap.Config.ARGB_8888;
+-            options.inJustDecodeBounds = true;
+-            Bitmap b = BitmapFactory.decodeFile(path, options);
+-
+-            options.inSampleSize = Utils.calculateInSampleSize(options, px, px);
+-
+-            // Decode bitmap with inSampleSize set
+-            options.inJustDecodeBounds = false;
+-
+-            Bitmap bit;
+-            if(path.startsWith("smb:/")) {
+-                bit = BitmapFactory.decodeStream(new SmbFileInputStream(path));
+-            } else if (path.startsWith(CloudHandler.CLOUD_PREFIX_DROPBOX)) {
+-
+-                CloudStorage cloudStorageDropbox = dataUtils.getAccount(OpenMode.DROPBOX);
+-
+-                bit = BitmapFactory.decodeStream(cloudStorageDropbox.getThumbnail(CloudUtil
+-                        .stripPath(OpenMode.DROPBOX, path)));
+-            } else if (path.startsWith(CloudHandler.CLOUD_PREFIX_BOX)) {
+-
+-                CloudStorage cloudStorageBox = dataUtils.getAccount(OpenMode.BOX);
+-
+-                bit = BitmapFactory.decodeStream(cloudStorageBox.getThumbnail(CloudUtil
+-                        .stripPath(OpenMode.BOX, path)));
+-            } else if (path.startsWith(CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE)) {
+-
+-                CloudStorage cloudStorageGDrive = dataUtils.getAccount(OpenMode.GDRIVE);
+-
+-                bit = BitmapFactory.decodeStream(cloudStorageGDrive.getThumbnail(CloudUtil
+-                        .stripPath(OpenMode.GDRIVE, path)));
+-            } else if (path.startsWith(CloudHandler.CLOUD_PREFIX_ONE_DRIVE)) {
+-
+-                CloudStorage cloudStorageOneDrive = dataUtils.getAccount(OpenMode.ONEDRIVE);
+-
+-                bit = BitmapFactory.decodeStream(cloudStorageOneDrive.getThumbnail(CloudUtil
+-                        .stripPath(OpenMode.ONEDRIVE, path)));
+-            } else if (path.startsWith(OTGUtil.PREFIX_OTG)) {
+-                bit = BitmapFactory.decodeStream(OTGUtil.getDocumentFilesList(path, mContext).get(0).getInputStream(mContext));
+-            }
+-            else bit= BitmapFactory.decodeFile(path, options);
+-
+-            bitsat = bit;// decodeFile(path);//.createScaledBitmap(bits,imageViewReference.get().getHeight(),imageViewReference.get().getWidth(),true);
+-        } catch (Exception e) {
+-            Drawable img = ContextCompat.getDrawable(mContext, R.drawable.ic_doc_image);
+-            Bitmap img1 = ((BitmapDrawable) img).getBitmap();
+-            bitsat = img1;
+-        }return bitsat;
+-    }
+-
+-    /**
+-     * Method that returns a thumbnail of the album folder
+-     *
+-     * @param albumId The album identifier
+-     * @return Drawable The drawable or null if cannot be extracted
+-     */
+-
+-
+-    /**
+-     * Shut down worker thread
+-     */
+-    private void shutdownWorker() {
+-        if (mWorkerThread != null) {
+-            mWorkerThread.getLooper().quit();
+-            mWorkerHandler = null;
+-            mWorkerThread = null;
+-        }
+-    }
+-
+-    /**
+-     * Free any resources used by this instance
+-     */
+-    public void cleanup() {
+-        this.mRequests.clear();
+-        this.mIcons.clear();
+-        this.mAppIcons.clear();
+-
+-        shutdownWorker();
+-    }
+-
+-}
+-
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+index 5eff39855..0ee151f72 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+@@ -19,11 +19,16 @@
+ 
+ package com.amaze.filemanager.ui.icons;
+ 
+-import android.content.res.Resources;
++import android.content.Context;
++import android.content.pm.PackageInfo;
++import android.content.pm.PackageManager;
+ import android.graphics.drawable.Drawable;
++import android.support.annotation.DrawableRes;
++import android.support.annotation.NonNull;
+ import android.util.SparseArray;
+ 
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.utils.files.CryptUtil;
+ 
+ import java.io.File;
+@@ -226,8 +231,8 @@ public class Icons {
+         );
+     }
+ 
+-    public static boolean isText(String name) {
+-        String mimeType = MimeTypes.getMimeType(new File(name));
++    public static boolean isText(File file) {
++        String mimeType = MimeTypes.getMimeType(file);
+ 
+         Integer res = sMimeIconIds.get(mimeType);
+         if (res != null && res == R.drawable.ic_doc_text_am) return true;
+@@ -240,8 +245,8 @@ public class Icons {
+         return false;
+     }
+ 
+-    public static boolean isVideo(String name) {
+-        String mimeType = MimeTypes.getMimeType(new File(name));
++    public static boolean isVideo(File file) {
++        String mimeType = MimeTypes.getMimeType(file);
+         Integer res = sMimeIconIds.get(mimeType);
+         if (res != null && res == R.drawable.ic_doc_video_am) return true;
+         if (mimeType != null && mimeType.contains("/")) {
+@@ -253,12 +258,12 @@ public class Icons {
+         return false;
+     }
+ 
+-    public static boolean isEncrypted(String name) {
+-        return name.endsWith(CryptUtil.CRYPT_EXTENSION);
++    public static boolean isEncrypted(File file) {
++        return file.getName().endsWith(CryptUtil.CRYPT_EXTENSION);
+     }
+ 
+-    public static boolean isAudio(String name) {
+-        String mimeType = MimeTypes.getMimeType(new File(name));
++    public static boolean isAudio(File file) {
++        String mimeType = MimeTypes.getMimeType(file);
+         Integer res = sMimeIconIds.get(mimeType);
+         if (res != null && res == R.drawable.ic_doc_audio_am) return true;
+         if (mimeType != null && mimeType.contains("/")) {
+@@ -270,33 +275,33 @@ public class Icons {
+         return false;
+     }
+ 
+-    public static boolean isCode(String name) {
+-        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(new File(name)));
++    public static boolean isCode(File file) {
++        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(file));
+         return res != null && res == R.drawable.ic_doc_codes;
+     }
+ 
+-    public static boolean isArchive(String name) {
+-        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(new File(name)));
++    public static boolean isArchive(File file) {
++        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(file));
+         return res != null && res == R.drawable.ic_zip_box_white_36dp;
+     }
+ 
+-    public static boolean isApk(String name) {
+-        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(new File(name)));
++    public static boolean isApk(File file) {
++        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(file));
+         return res != null && res == R.drawable.ic_doc_apk_white;
+     }
+ 
+-    public static boolean isPdf(String name) {
+-        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(new File(name)));
++    public static boolean isPdf(File file) {
++        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(file));
+         return res != null && res == R.drawable.ic_doc_pdf;
+     }
+ 
+-    public static boolean isPicture(String name) {
+-        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(new File(name)));
++    public static boolean isPicture(File file) {
++        Integer res = sMimeIconIds.get(MimeTypes.getMimeType(file));
+         return res != null && res == R.drawable.ic_doc_image;
+     }
+ 
+-    public static boolean isGeneric(String name) {
+-        String mimeType = MimeTypes.getMimeType(new File(name));
++    public static boolean isGeneric(File file) {
++        String mimeType = MimeTypes.getMimeType(file);
+         if (mimeType == null) {
+             return true;
+         }
+@@ -305,35 +310,45 @@ public class Icons {
+         return resId == null;
+     }
+ 
+-    public static int getTypeOfFile(String description) {
+-        if (Icons.isVideo(description))
++    public static int getTypeOfFile(String filePath) {
++        File file = new File(filePath);
++
++        if (Icons.isVideo(file))
+             return VIDEO;
+-        else if (Icons.isAudio(description))
++        else if (Icons.isAudio(file))
+             return AUDIO;
+-        else if (Icons.isPdf(description))
++        else if (Icons.isPdf(file))
+             return PDF;
+-        else if (Icons.isCode(description))
++        else if (Icons.isCode(file))
+             return CODE;
+-        else if (Icons.isText(description))
++        else if (Icons.isText(file))
+             return TEXT;
+-        else if (Icons.isArchive(description))
++        else if (Icons.isArchive(file))
+             return ARCHIVE;
+-        else if (Icons.isGeneric(description))
++        else if (Icons.isGeneric(file))
+             return GENERIC;
+-        else if (Icons.isApk(description))
++        else if (Icons.isApk(file))
+             return APK;
+-        else if (Icons.isPicture(description))
++        else if (Icons.isPicture(file))
+             return PICTURE;
+-        else if (Icons.isEncrypted(description))
++        else if (Icons.isEncrypted(file))
+             return ENCRYPTED;
+         else return -1;
+     }
+ 
+-    public static Drawable loadMimeIcon(String path, boolean grid, final Resources res) {
+-        String mimeType = MimeTypes.getMimeType(new File(path));
++    public static @DrawableRes int loadMimeIcon(String path, boolean grid) {
++        if(path.equals("..")) return R.drawable.ic_arrow_left_white_24dp;
++
++        File f = new File(path);
++        if(f.isDirectory()) {
++            if(path.endsWith(CryptUtil.CRYPT_EXTENSION)) return R.drawable.ic_folder_lock_white_36dp;
++            else return R.drawable.ic_grid_folder_new;
++        }
++
++        String mimeType = MimeTypes.getMimeType(f);
+         if (mimeType == null) {
+             /* if(grid) return loadBitmapDrawableById(res, R.drawable.ic_doc_generic_am_grid);*/
+-            return loadBitmapDrawableById(res, R.drawable.ic_doc_generic_am);
++            return R.drawable.ic_doc_generic_am;
+         }
+ 
+         // Look for exact match first
+@@ -366,7 +381,7 @@ public class Icons {
+             case R.drawable.ic_doc_text_am: if(grid)resId=R.drawable.ic_doc_text_am_grid;
+                 break;
+         }*/
+-            return loadBitmapDrawableById(res, resId);
++            return resId;
+         }
+ 
+         // Otherwise look for partial match
+@@ -391,15 +406,33 @@ public class Icons {
+             /*if (grid) resId = R.drawable.ic_doc_generic_am_grid; else*/
+             resId = R.drawable.ic_doc_generic_am;
+         }
+-        return loadBitmapDrawableById(res, resId);
++        return resId;
+     }
+ 
+-    private static Drawable loadBitmapDrawableById(Resources res, int resId) {
+-        Drawable drawable = sMimeIcons.get(resId);
+-        if (drawable == null) {
+-            drawable = res.getDrawable(resId);
+-            sMimeIcons.put(resId, drawable);
+-        }
+-        return drawable;
++    public static Drawable loadFailedThumbForFile(@NonNull final Context context, String filePath) {
++        return context.getResources().getDrawable(Icons.loadMimeIcon(filePath, false));
+     }
++
++    /**
++    * Cancel loading of a drawable for a certain ImageView or clearing the ImageView
++    * Should you load this file as an image of itself (e.g. image, video)
++    * or as an icon (e.g. folder, generic file).
++    */
++    public static boolean shouldLoadFromFile (LayoutElementParcelable file) {
++        int filetype = Icons.getTypeOfFile(file.getDesc());
++        return filetype == Icons.PICTURE || filetype == Icons.VIDEO || filetype == Icons.APK;
++    }
++
++    public static Drawable getAppDrawable(@NonNull final Context context, String path) throws OutOfMemoryError {
++       try {
++           PackageManager pm = context.getPackageManager();
++           PackageInfo pi = pm.getPackageArchiveInfo(path, 0);
++           pi.applicationInfo.sourceDir = path;
++           pi.applicationInfo.publicSourceDir = path;
++           return pi.applicationInfo.loadIcon(pm);
++       } catch (Exception e) {
++           return null;
++       }
++    }
++
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/GlideConstants.java b/app/src/main/java/com/amaze/filemanager/utils/GlideConstants.java
+new file mode 100644
+index 000000000..4354340b4
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/GlideConstants.java
+@@ -0,0 +1,14 @@
++package com.amaze.filemanager.utils;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 8/12/2017, at 16:33.
++ */
++
++public class GlideConstants {
++
++    public static final int HEIGHT = 40, WIDTH = 40;
++    public static final int MAX_PRELOAD_FILES = 50;
++    public static final int MAX_PRELOAD_APPSADAPTER = 100;
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/application/AppConfig.java b/app/src/main/java/com/amaze/filemanager/utils/application/AppConfig.java
+index 2c8eee6e6..4ee13062e 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/application/AppConfig.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/application/AppConfig.java
+@@ -22,7 +22,7 @@ import com.android.volley.toolbox.Volley;
+  * Created by vishal on 7/12/16 edited by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+  */
+ 
+-public class AppConfig extends LeakCanaryApplication {
++public class AppConfig extends GlideApplication {
+ 
+     public static final String TAG = AppConfig.class.getSimpleName();
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/application/GlideApplication.java b/app/src/main/java/com/amaze/filemanager/utils/application/GlideApplication.java
+new file mode 100644
+index 000000000..ec85c1b03
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/application/GlideApplication.java
+@@ -0,0 +1,17 @@
++package com.amaze.filemanager.utils.application;
++
++import com.bumptech.glide.Glide;
++import com.bumptech.glide.MemoryCategory;
++
++/**
++ * @author Emmanuel
++ *         on 22/11/2017, at 17:18.
++ */
++
++public class GlideApplication extends LeakCanaryApplication {
++    @Override
++    public void onCreate() {
++        super.onCreate();
++        Glide.get(this).setMemoryCategory(MemoryCategory.HIGH);
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/application/LeakCanaryApplication.java b/app/src/main/java/com/amaze/filemanager/utils/application/LeakCanaryApplication.java
+index 4eab1a1ee..8f29afb59 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/application/LeakCanaryApplication.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/application/LeakCanaryApplication.java
+@@ -2,8 +2,6 @@ package com.amaze.filemanager.utils.application;
+ 
+ import android.app.Application;
+ 
+-import com.squareup.leakcanary.LeakCanary;
+-
+ /**
+  * @author Emmanuel
+  *         on 28/8/2017, at 18:12.
+@@ -13,7 +11,8 @@ public class LeakCanaryApplication extends Application {
+ 
+     @Override
+     public void onCreate() {
+-        super.onCreate();/*
++        super.onCreate();
++        /*
+         if (LeakCanary.isInAnalyzerProcess(this)) {
+             // This process is dedicated to LeakCanary for heap analysis.
+             // You should not init your app in this process.
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/files/FileListSorter.java b/app/src/main/java/com/amaze/filemanager/utils/files/FileListSorter.java
+index 4f38db915..adc04a755 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/files/FileListSorter.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/files/FileListSorter.java
+@@ -19,7 +19,7 @@
+ 
+ package com.amaze.filemanager.utils.files;
+ 
+-import com.amaze.filemanager.ui.LayoutElementParcelable;
++import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ 
+ import java.util.Comparator;
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java b/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
+index f35efddd7..cfc155d1d 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
+@@ -446,11 +446,11 @@ public class FileUtils {
+         final String where = MediaStore.MediaColumns.DATA + " = ?";
+         Uri baseUri = MediaStore.Files.getContentUri(volume);
+         boolean isMimeTypeImage = false, isMimeTypeVideo = false, isMimeTypeAudio = false;
+-        isMimeTypeImage = Icons.isPicture( path);
++        isMimeTypeImage = Icons.isPicture(new File(path));
+         if (!isMimeTypeImage) {
+-            isMimeTypeVideo = Icons.isVideo(path);
++            isMimeTypeVideo = Icons.isVideo(new File(path));
+             if (!isMimeTypeVideo) {
+-                isMimeTypeAudio = Icons.isVideo(path);
++                isMimeTypeAudio = Icons.isVideo(new File(path));
+             }
+         }
+         if (isMimeTypeImage || isMimeTypeVideo || isMimeTypeAudio) {
+@@ -670,7 +670,7 @@ public class FileUtils {
+             Intent intent = new Intent(m, DatabaseViewerActivity.class);
+             intent.putExtra("path", f.getPath());
+             m.startActivity(intent);
+-        }  else if (Icons.isAudio(f.getPath())) {
++        }  else if (Icons.isAudio(new File(f.getPath()))) {
+             final int studio_count = sharedPreferences.getInt("studio", 0);
+             Uri uri = Uri.fromFile(f);
+             final Intent intent = new Intent();

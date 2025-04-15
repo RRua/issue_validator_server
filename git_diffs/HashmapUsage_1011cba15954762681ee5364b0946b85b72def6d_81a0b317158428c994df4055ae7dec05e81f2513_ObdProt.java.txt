@@ -1,0 +1,502 @@
+diff --git a/src/com/fr3ts0n/ecu/EcuConversions.java b/src/com/fr3ts0n/ecu/EcuConversions.java
+index 870e1f1..1259f27 100644
+--- a/src/com/fr3ts0n/ecu/EcuConversions.java
++++ b/src/com/fr3ts0n/ecu/EcuConversions.java
+@@ -51,8 +51,9 @@ public class EcuConversions extends HashMap<String, Conversion[]>
+ 	public static final String CNV_TYPE_HASH        = "HASH";
+ 	public static final String CNV_TYPE_BITMAP      = "BITMAP";
+ 	public static final String CNV_TYPE_CODELIST    = "CODELIST";
+-	public static final String CNV_TYPE_PCODELIST = "PCODELIST";
++	public static final String CNV_TYPE_PCODELIST   = "PCODELIST";
+ 	public static final String CNV_TYPE_VAG         = "VAG";
++	public static final String CNV_TYPE_ASCII       = "ASCII";
+ 
+ 	/** CSV field positions */
+ 	static final int FLD_NAME = 0;
+@@ -74,7 +75,7 @@ public class EcuConversions extends HashMap<String, Conversion[]>
+ 	public static int cnvSystem = SYSTEM_METRIC;
+ 
+ 	// DEFAULT type conversion
+-	static final LinearConversion dfltCnv = new LinearConversion(1, 1, 0, 0, "DFLT");
++	public static final LinearConversion dfltCnv = new LinearConversion(1, 1, 0, 0, "-");
+ 
+ 	/**
+ 	 * Create conversion list from default resource file (tab delimited csv)
+@@ -166,6 +167,10 @@ public class EcuConversions extends HashMap<String, Conversion[]>
+ 						Double.parseDouble(params[FLD_OFFSET]),
+ 						params[FLD_UNITS]);
+ 				}
++				else if (params[FLD_TYPE].equals(CNV_TYPE_ASCII))
++				{
++					newCnv = null;
++				}
+ 				else
+ 				{
+ 					newCnv = dfltCnv;
+diff --git a/src/com/fr3ts0n/ecu/EcuDataItem.java b/src/com/fr3ts0n/ecu/EcuDataItem.java
+index 75f2699..1f0a5a8 100644
+--- a/src/com/fr3ts0n/ecu/EcuDataItem.java
++++ b/src/com/fr3ts0n/ecu/EcuDataItem.java
+@@ -80,14 +80,17 @@ public class EcuDataItem
+ 		pv.put(EcuDataPv.FID_VALUE, Float.valueOf(0));
+ 		pv.put(EcuDataPv.FID_DECIMALS, decimals);
+ 		pv.put(EcuDataPv.FID_CNVID, cnv);
+-		pv.put(EcuDataPv.FID_MIN, cnv[EcuConversions.cnvSystem].memToPhys(0));
+-		pv.put(EcuDataPv.FID_MAX, cnv[EcuConversions.cnvSystem].memToPhys(0xFFFFFFFF));
++		if(cnv != null)
++		{
++			pv.put(EcuDataPv.FID_MIN, cnv[EcuConversions.cnvSystem].memToPhys(0));
++			pv.put(EcuDataPv.FID_MAX, cnv[EcuConversions.cnvSystem].memToPhys(0xFFFFFFFF));
++		}
+ 	}
+ 
+ 	@Override
+ 	public String toString()
+ 	{
+-		return (String.format("%02d.%d", pid, ofs));
++		return (String.format("%02d.%d.%s", pid, ofs, label));
+ 	}
+ 
+ 	/**
+@@ -102,9 +105,10 @@ public class EcuDataItem
+ 		if (cnv != null)
+ 		{
+ 			result = cnv[EcuConversions.cnvSystem].memToPhys(ProtoHeader.getParamInt(ofs, bytes, buffer).longValue());
+-		} else
++		}
++		else
+ 		{
+-			result = ProtoHeader.getParamString(ofs, bytes, buffer);
++			result = ProtoHeader.hexStrToAlphaStr(new String(buffer));
+ 		}
+ 		return (result);
+ 	}
+diff --git a/src/com/fr3ts0n/ecu/EcuDataItems.java b/src/com/fr3ts0n/ecu/EcuDataItems.java
+index 4b0dffa..0f3395f 100644
+--- a/src/com/fr3ts0n/ecu/EcuDataItems.java
++++ b/src/com/fr3ts0n/ecu/EcuDataItems.java
+@@ -196,7 +196,7 @@ public class EcuDataItems extends HashMap<Integer, HashMap<Integer, Vector<EcuDa
+ 	 * @param pid     pid of current data
+ 	 * @param buffer  data buffer to do conversions on
+ 	 */
+-	void updateDataItems(int service, int pid, char[] buffer)
++	public void updateDataItems(int service, int pid, char[] buffer)
+ 	{
+ 		EcuDataItem currItm;
+ 		Vector<EcuDataItem> currItms = getPidDataItems(service, pid);
+diff --git a/src/com/fr3ts0n/ecu/gui/androbd/MainActivity.java b/src/com/fr3ts0n/ecu/gui/androbd/MainActivity.java
+index 9e73145..f5fd788 100644
+--- a/src/com/fr3ts0n/ecu/gui/androbd/MainActivity.java
++++ b/src/com/fr3ts0n/ecu/gui/androbd/MainActivity.java
+@@ -236,7 +236,8 @@ public class MainActivity extends ListActivity
+ 		logCfg.setUseLogCatAppender(true);
+ 		logCfg.setUseFileAppender(true);
+ 		logCfg.setFileName(FileHelper.getPath(this).concat(File.separator).concat("log/AndrOBD.log"));
+-		logCfg.setLevel("com.fr3ts0n.prot", Level.DEBUG);
++		logCfg.setLevel("com.fr3ts0n.prot.*", Level.DEBUG);
++		logCfg.setLevel("com.fr3ts0n.ecu.*", Level.DEBUG);
+ 		logCfg.setRootLevel(Level.INFO);
+ 		logCfg.configure();
+ 
+diff --git a/src/com/fr3ts0n/ecu/gui/androbd/VidItemAdapter.java b/src/com/fr3ts0n/ecu/gui/androbd/VidItemAdapter.java
+index 49fff2c..dc33e0b 100644
+--- a/src/com/fr3ts0n/ecu/gui/androbd/VidItemAdapter.java
++++ b/src/com/fr3ts0n/ecu/gui/androbd/VidItemAdapter.java
+@@ -23,6 +23,8 @@ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.TextView;
+ 
++import com.fr3ts0n.ecu.EcuDataItem;
++import com.fr3ts0n.ecu.EcuDataPv;
+ import com.fr3ts0n.ecu.ObdVidItem;
+ import com.fr3ts0n.pvs.IndexedProcessVar;
+ import com.fr3ts0n.pvs.PvList;
+@@ -55,9 +57,9 @@ public class VidItemAdapter extends ObdItemAdapter
+ 		TextView tvDescr = (TextView) v.findViewById(R.id.obd_label);
+ 		TextView tvValue = (TextView) v.findViewById(R.id.obd_units);
+ 
+-		tvDescr.setText(String.valueOf(currPv.get(ObdVidItem.FID_DESCRIPT)));
++		tvDescr.setText(String.valueOf(currPv.get(EcuDataPv.FID_DESCRIPT)));
+ 
+-		String fmtText = String.valueOf(currPv.get(ObdVidItem.FID_VALUE));
++		String fmtText = String.valueOf(currPv.get(EcuDataPv.FID_VALUE));
+ 		tvValue.setText(fmtText);
+ 
+ 		return v;
+diff --git a/src/com/fr3ts0n/ecu/prot/ElmProt.java b/src/com/fr3ts0n/ecu/prot/ElmProt.java
+index 55ef19a..a732011 100755
+--- a/src/com/fr3ts0n/ecu/prot/ElmProt.java
++++ b/src/com/fr3ts0n/ecu/prot/ElmProt.java
+@@ -427,9 +427,7 @@ public class ElmProt
+ 								case OBD_SVC_VEH_INFO:
+ 								{
+ 									// otherwise the next PID will be requested
+-									Pid nextPid = getNextSupportedPid();
+-									writeTelegram(emptyBuffer, service,
+-										Integer.valueOf(nextPid != null ? nextPid.pid : 0));
++									writeTelegram(emptyBuffer, service, getNextSupportedPid());
+ 									// reduce OBD timeout towards minimum limit
+ 									if ((elmMsgTimeout - ELM_TIMEOUT_RES) >= ELM_TIMEOUT_LRN_LOW)
+ 									{
+@@ -503,8 +501,8 @@ public class ElmProt
+ 	public void run()
+ 	{
+ 		int value = 0;
+-		Pid pid = null;
+-		Pid oldPid;
++		Integer pid = null;
++		Integer oldPid;
+ 		runDemo = true;
+ 
+ 		log.info("ELM DEMO thread started");
+@@ -557,12 +555,12 @@ public class ElmProt
+ 							pid = getNextSupportedPid();
+ 							if (pid != null)
+ 							{
+-								if (pid.pid <= (oldPid != null ? oldPid.pid : 0xFF))
++								if (pid <= oldPid)
+ 									value++;
+ 								// format new data message and handle it as new reception
+ 								handleTelegram(String.format(
+ 									service == OBD_SVC_DATA ? "4%X%02X%02X" : "4%X%02X00%02X",
+-									service, pid.pid, value).toCharArray());
++									service, pid, value).toCharArray());
+ 							} else
+ 							{
+ 								// simulate "ALL PIDs supported"
+@@ -582,7 +580,7 @@ public class ElmProt
+ 							if (pid == null)
+ 							{
+ 								// simulate "ALL pids supported"
+-								handleTelegram("4900FFFFFFFE".toCharArray());
++								handleTelegram("490040000000".toCharArray());
+ 							}
+ 
+ 							// send VIN "1234567890ABCDEFG"
+diff --git a/src/com/fr3ts0n/ecu/prot/ObdProt.java b/src/com/fr3ts0n/ecu/prot/ObdProt.java
+index 4355b61..a8334ac 100755
+--- a/src/com/fr3ts0n/ecu/prot/ObdProt.java
++++ b/src/com/fr3ts0n/ecu/prot/ObdProt.java
+@@ -21,17 +21,16 @@ package com.fr3ts0n.ecu.prot;
+ 
+ import java.beans.PropertyChangeEvent;
+ import java.util.Arrays;
+-import java.util.HashMap;
+-import java.util.Iterator;
+ import java.util.Vector;
+ 
++import com.fr3ts0n.ecu.Conversion;
+ import com.fr3ts0n.ecu.Conversions;
++import com.fr3ts0n.ecu.EcuConversions;
++import com.fr3ts0n.ecu.EcuDataItem;
++import com.fr3ts0n.ecu.EcuDataItems;
+ import com.fr3ts0n.ecu.EcuDataPv;
+ import com.fr3ts0n.ecu.ObdCodeItem;
+ import com.fr3ts0n.ecu.ObdCodeList;
+-import com.fr3ts0n.ecu.ObdVidItem;
+-import com.fr3ts0n.ecu.Pid;
+-import com.fr3ts0n.ecu.Pids;
+ import com.fr3ts0n.prot.ProtoHeader;
+ import com.fr3ts0n.prot.TelegramListener;
+ import com.fr3ts0n.prot.TelegramWriter;
+@@ -75,7 +74,7 @@ public class ObdProt extends ProtoHeader
+   protected int service = OBD_SVC_NONE;
+ 
+   // List of PIDs supported by the vehicle
+-  static Vector<Pid> pidSupported = new Vector<Pid>();
++  static Vector<Integer> pidSupported = new Vector<Integer>();
+ 
+   public static final int ID_OBD_SVC          = 0;
+   public static final int ID_OBD_PID          = 1;
+@@ -129,6 +128,9 @@ public class ObdProt extends ProtoHeader
+     "OBD PID",
+   };
+ 
++  /** new style data items */
++  static final EcuDataItems dataItems = new EcuDataItems();
++
+   /** OBD data items */
+   public static PvList PidPvs  = new PvList();
+   /** OBD vehicle identification items */
+@@ -146,9 +148,9 @@ public class ObdProt extends ProtoHeader
+   {
+     paddingChr = '0';
+     // prepare PID PV list
+-    PidPvs.put(new Integer(0), new EcuDataPv());
+-    VidPvs.put(new Integer(0), new EcuDataPv());
+-    tCodes.put(new Integer(0), new ObdCodeItem(0,"No trouble codes set"));
++    PidPvs.put(0, new EcuDataPv());
++    VidPvs.put(0, new EcuDataPv());
++    tCodes.put(0, new ObdCodeItem(0,"No trouble codes set"));
+   }
+ 
+   /**
+@@ -256,35 +258,40 @@ public class ObdProt extends ProtoHeader
+   /**
+    * prepare process variables for each PID
+    * @param pvList list of process vars
+-   * @param checkIfSupported if true, only supported PIDs will be processed
+    */
+-  public void preparePidPvs(PvList pvList,boolean checkIfSupported)
++  public void preparePidPvs(PvList pvList)
+   {
+-    Pid currPid;
+-    HashMap<Integer,EcuDataPv> pidMap = new HashMap<Integer,EcuDataPv>();
+-    // prepare new PID PV list
+-    for(int i=0; i< Pids.PIDs.length; i++)
++    PvList newList = new PvList();
++    for(Integer currPid : pidSupported)
+     {
+-      currPid=Pids.PIDs[i];
+-      if( !checkIfSupported || pidSupported.contains(currPid))
++      Vector<EcuDataItem> items = dataItems.getPidDataItems(service,currPid);
++      // if no items defined, create dummy item
++	    if(items == null)
+       {
+-        EcuDataPv pidData = new EcuDataPv();
+-
+-        // initialize new PID with current data
+-        pidData.put(EcuDataPv.FID_PID,Integer.valueOf(currPid.pid));
+-        pidData.put(EcuDataPv.FID_DESCRIPT,currPid.label);
+-        pidData.put(EcuDataPv.FID_UNITS,Conversions.getUnits(currPid.cnv));
+-        pidData.put(EcuDataPv.FID_VALUE,Float.valueOf(0));
+-        pidData.put(EcuDataPv.FID_DECIMALS, currPid.decimals);
+-        pidData.put(EcuDataPv.FID_CNVID, currPid.cnv);
+-        pidData.put(EcuDataPv.FID_MIN, Pids.memToPhys(0, currPid.pid));
+-        pidData.put(EcuDataPv.FID_MAX, Pids.memToPhys(0xFFFFFFFF, currPid.pid));
+-
+-        // add PID item to list of known PIDs
+-        pidMap.put(currPid.pid, pidData);
++	      log.warn(String.format("unknown PID %02X",currPid));
++
++	      // create new dummy item / OneToOne conversion
++	      Conversion[] dummyCnvs = { EcuConversions.dfltCnv, EcuConversions.dfltCnv };
++	      EcuDataItem newItem =
++		      new EcuDataItem( currPid, 0, 2,
++			      dummyCnvs,
++			      0, String.format("PID %02X",currPid)
++		      );
++	      dataItems.appendItemToService(service, newItem);
++
++	      // re-load data items for this PID
++	      items = dataItems.getPidDataItems(service,currPid);
+       }
++	    // loop through all items found ...
++	    for(EcuDataItem pidPv : items)
++	    {
++		    if(pidPv !=null)
++		    {
++			    newList.put(pidPv.toString(), pidPv.pv);
++		    }
++	    }
+     }
+-    pvList.putAll(pidMap, PvChangeEvent.PV_ADDED, false);
++    pvList.putAll(newList, PvChangeEvent.PV_ADDED, false);
+   }
+ 
+   /**
+@@ -292,7 +299,7 @@ public class ObdProt extends ProtoHeader
+    * @param start Start PID (multiple of 0x20) to process bitmask for
+    * @param bitmask 32-Bit bitmask which indicates support for the next 32 PIDs
+    */
+-  protected void markSupportedPids(int start,long bitmask)
++  protected void markSupportedPids(int start, long bitmask, PvList pvList)
+   {
+     currSupportedPid = 0;
+     // loop through bits and mark corresponding PIDs as supported
+@@ -300,14 +307,7 @@ public class ObdProt extends ProtoHeader
+     {
+       if((bitmask & (0x80000000L >> i))!=0)
+       {
+-        if(Pids.getPid(i+start+1) != null)
+-        {
+-          pidSupported.add(Pids.getPid(i+start+1));
+-        }
+-        else
+-        {
+-          log.warn("Unknown PID requested: "+Long.toHexString(i+start+1));
+-        }
++        pidSupported.add(i+start+1);
+       }
+     }
+     log.debug(Long.toHexString(bitmask).toUpperCase()+"("+Long.toHexString(start)+"):"+pidSupported);
+@@ -317,14 +317,14 @@ public class ObdProt extends ProtoHeader
+       cmdQueue.add(String.format("%02X%02X", this.service,start+0x20));
+     else
+       // setup PID PVs
+-      preparePidPvs(PidPvs, true);
++      preparePidPvs(pvList);
+   }
+ 
+   /** Holds value of property numCodes. */
+   private int numCodes;
+ 
+   /** fixed PIDs to limit PID loop to single access */
+-  private static Vector<Pid> fixedPids = new Vector<Pid>();
++  private static Vector<Integer> fixedPids = new Vector<Integer>();
+ 
+ 	/**
+ 	 * Set fixed PID for faster data update
+@@ -332,15 +332,16 @@ public class ObdProt extends ProtoHeader
+ 	 */
+ 	public static synchronized void setFixedPid(int[] pidCodes)
+ 	{
+-		Pid curr;
++		int curr;
+ 		currSupportedPid = 0;
+-		Iterator<Pid> it = pidSupported.iterator();
+-		while(it.hasNext())
+-		{
+-			curr = it.next();
+-			if(Arrays.binarySearch(pidCodes, curr.pid) >= 0)
+-				fixedPids.add(curr);
+-		}
++    for (Integer aPidSupported : pidSupported)
++    {
++      curr = aPidSupported;
++      if (Arrays.binarySearch(pidCodes, curr) >= 0)
++      {
++        fixedPids.add(curr);
++      }
++    }
+ 	}
+ 
+ 	public static synchronized void resetFixedPid()
+@@ -352,10 +353,10 @@ public class ObdProt extends ProtoHeader
+    * get the next available supported PID
+    * @return next available supported PID
+    */
+-  protected synchronized Pid getNextSupportedPid()
++  protected synchronized Integer getNextSupportedPid()
+   {
+-    Vector<Pid> pidsToCheck = (fixedPids.size() > 0) ? fixedPids : pidSupported;
+-    Pid result = null;
++    Vector<Integer> pidsToCheck = (fixedPids.size() > 0) ? fixedPids : pidSupported;
++    Integer result = null;
+ 
+     if(pidsToCheck.size() > 0)
+     {
+@@ -384,10 +385,10 @@ public class ObdProt extends ProtoHeader
+     {
+       try
+       {
+-        msgSvc = ((Integer)getParamValue(ID_OBD_SVC,buffer)).intValue() & ~0x40;
++        msgSvc = (Integer) getParamValue(ID_OBD_SVC, buffer) & ~0x40;
+         // remember last set OBD service
+         oldObdSvc = service;
+-        // set OBD service to service of surren RX telegram
++        // set OBD service to service of RX telegram
+         service = msgSvc;
+         // check service of message
+         switch(msgSvc)
+@@ -395,8 +396,7 @@ public class ObdProt extends ProtoHeader
+           // OBD Data frame
+           case OBD_SVC_FREEZEFRAME:
+           case OBD_SVC_DATA:
+-            msgPid = ((Integer)getParamValue(ID_OBD_PID,buffer)).intValue();
+-            long msgPayload = Long.valueOf(new String(getPayLoad(buffer)),16).longValue();
++            msgPid = (Integer) getParamValue(ID_OBD_PID, buffer);
+             switch(msgPid)
+             {
+               case 0x00:
+@@ -407,7 +407,8 @@ public class ObdProt extends ProtoHeader
+               case 0xA0:
+               case 0xC0:
+               case 0xE0:
+-                markSupportedPids(msgPid,msgPayload);
++	              long msgPayload = Long.valueOf(new String(getPayLoad(buffer)), 16);
++                markSupportedPids(msgPid, msgPayload, PidPvs);
+                 break;
+ 
+               // OBD number of fault codes
+@@ -416,16 +417,35 @@ public class ObdProt extends ProtoHeader
+                 setNumCodes(new Long(msgPayload).intValue());
+                 // no break here ...
+               default:
+-                EcuDataPv pv = (EcuDataPv) PidPvs.get(Integer.valueOf(msgPid));
+-                if(pv != null)
+-                {
+-                  // set measurement
+-                  pv.put( EcuDataPv.FIELDS[EcuDataPv.FID_VALUE],
+-                    new Float(Pids.memToPhys(msgPayload,msgPid)));
+-                }
++                dataItems.updateDataItems(msgSvc,msgPid, getPayLoad(buffer));
++                break;
+             }
+             break;
+ 
++          // get vehicle information (mode 9)
++          case OBD_SVC_VEH_INFO:
++            msgPid = (Integer) getParamValue(ID_OBD_PID, buffer);
++            switch(msgPid)
++            {
++              case 0x00:
++              case 0x20:
++              case 0x40:
++              case 0x60:
++              case 0x80:
++              case 0xA0:
++              case 0xC0:
++              case 0xE0:
++	              long msgPayload = Long.valueOf(new String(getPayLoad(buffer)), 16);
++                markSupportedPids(msgPid, msgPayload, VidPvs);
++                break;
++
++              default:
++                dataItems.updateDataItems(msgSvc,msgPid, getPayLoad(buffer));
++                break;
++            }
++            break;
++
++
+             // fault code response
+           case OBD_SVC_READ_CODES:
+           case OBD_SVC_PENDINGCODES:
+@@ -458,7 +478,7 @@ public class ObdProt extends ProtoHeader
+             }
+             if(nCodes == 0)
+             {
+-              tCodes.put(Integer.valueOf(0),new ObdCodeItem(0,"No trouble codes set"));
++              tCodes.put(0,new ObdCodeItem(0,"No trouble codes set"));
+             }
+             break;
+ 
+@@ -466,37 +486,7 @@ public class ObdProt extends ProtoHeader
+           case OBD_SVC_CLEAR_CODES:
+             break;
+ 
+-            // get vehicle information (mode 9)
+-          case OBD_SVC_VEH_INFO:
+-            msgPid = ((Integer)getParamValue(ID_OBD_PID,buffer)).intValue();
+-            // check for "supported" PIDs
+-            if(msgPid % 0x20 == 0)
+-            {
+-              // this PID identifies supported PIDs by this service
+-              msgPayload = Long.valueOf(new String(getPayLoad(buffer)),16).longValue();
+-              markSupportedPids(msgPid,msgPayload);
+-            }
+-            else
+-            {
+-              // this PID is a data PID, so store it in the PID list
+-              String value = hexStrToAlphaStr(new String(getPayLoad(buffer)));
+-              log.debug(String.format("SVC:%02X VID:%02X : '%s'", msgSvc, msgPid, value));
+-
+-              ObdVidItem currItem = (ObdVidItem)VidPvs.get(msgPid);
+-              // if VID is not available yet, add it to the list
+-              if(currItem == null)
+-              {
+-                currItem = new ObdVidItem();
+-                // currItem.put(EcuDataPv.FID_PID, Integer.valueOf(msgPid));
+-                currItem.put(ObdVidItem.FID_DESCRIPT, ObdVidItem.getPidDescription(msgPid));
+-                VidPvs.put(msgPid, currItem);
+-              }
+-              // update VID value
+-              currItem.put(ObdVidItem.FID_VALUE, value);
+-            }
+-            break;
+-
+-            default:
++          default:
+             log.warn("Service not (yet) supported: "+msgSvc);
+         }
+       }

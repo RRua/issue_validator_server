@@ -1,0 +1,510 @@
+diff --git a/app/src/main/java/me/impy/aegis/crypto/CryptParameters.java b/app/src/main/java/me/impy/aegis/crypto/CryptParameters.java
+index 0faa4eb4..7641c720 100644
+--- a/app/src/main/java/me/impy/aegis/crypto/CryptParameters.java
++++ b/app/src/main/java/me/impy/aegis/crypto/CryptParameters.java
+@@ -9,15 +9,20 @@ import me.impy.aegis.encoding.Hex;
+ import me.impy.aegis.encoding.HexException;
+ 
+ public class CryptParameters implements Serializable {
+-    public byte[] Nonce;
+-    public byte[] Tag;
++    private byte[] _nonce;
++    private byte[] _tag;
++
++    public CryptParameters(byte[] nonce, byte[] tag) {
++        _nonce = nonce;
++        _tag = tag;
++    }
+ 
+     public JSONObject toJson() {
+         JSONObject obj = new JSONObject();
+ 
+         try {
+-            obj.put("nonce", Hex.encode(Nonce));
+-            obj.put("tag", Hex.encode(Tag));
++            obj.put("nonce", Hex.encode(_nonce));
++            obj.put("tag", Hex.encode(_tag));
+         } catch (JSONException e) {
+             throw new RuntimeException(e);
+         }
+@@ -26,11 +31,16 @@ public class CryptParameters implements Serializable {
+     }
+ 
+     public static CryptParameters parseJson(JSONObject obj) throws JSONException, HexException {
+-        byte[] tag = Hex.decode(obj.getString("tag"));
+         byte[] nonce = Hex.decode(obj.getString("nonce"));
+-        return new CryptParameters() {{
+-            Tag = tag;
+-            Nonce = nonce;
+-        }};
++        byte[] tag = Hex.decode(obj.getString("tag"));
++        return new CryptParameters(nonce, tag);
++    }
++
++    public byte[] getNonce() {
++        return _nonce;
++    }
++
++    public byte[] getTag() {
++        return _tag;
+     }
+ }
+diff --git a/app/src/main/java/me/impy/aegis/crypto/CryptResult.java b/app/src/main/java/me/impy/aegis/crypto/CryptResult.java
+index 661c2c3e..b285b7f1 100644
+--- a/app/src/main/java/me/impy/aegis/crypto/CryptResult.java
++++ b/app/src/main/java/me/impy/aegis/crypto/CryptResult.java
+@@ -1,6 +1,19 @@
+ package me.impy.aegis.crypto;
+ 
+ public class CryptResult {
+-    public CryptParameters Parameters;
+-    public byte[] Data;
++    private byte[] _data;
++    private CryptParameters _params;
++
++    public CryptResult(byte[] data, CryptParameters params) {
++        _data = data;
++        _params = params;
++    }
++
++    public byte[] getData() {
++        return _data;
++    }
++
++    public CryptParameters getParams() {
++        return _params;
++    }
+ }
+diff --git a/app/src/main/java/me/impy/aegis/crypto/CryptoUtils.java b/app/src/main/java/me/impy/aegis/crypto/CryptoUtils.java
+index 9133b9fa..cc752e79 100644
+--- a/app/src/main/java/me/impy/aegis/crypto/CryptoUtils.java
++++ b/app/src/main/java/me/impy/aegis/crypto/CryptoUtils.java
+@@ -74,13 +74,7 @@ public class CryptoUtils {
+         byte[] tag = Arrays.copyOfRange(result, result.length - CRYPTO_AEAD_TAG_SIZE, result.length);
+         byte[] encrypted = Arrays.copyOfRange(result, 0, result.length - CRYPTO_AEAD_TAG_SIZE);
+ 
+-        return new CryptResult() {{
+-            Parameters = new CryptParameters() {{
+-                Nonce = cipher.getIV();
+-                Tag = tag;
+-            }};
+-            Data = encrypted;
+-        }};
++        return new CryptResult(encrypted, new CryptParameters(cipher.getIV(), tag));
+     }
+ 
+     public static CryptResult decrypt(byte[] encrypted, Cipher cipher, CryptParameters params)
+@@ -88,15 +82,12 @@ public class CryptoUtils {
+         // append the tag to the ciphertext
+         ByteArrayOutputStream stream = new ByteArrayOutputStream();
+         stream.write(encrypted);
+-        stream.write(params.Tag);
++        stream.write(params.getTag());
+ 
+         encrypted = stream.toByteArray();
+         byte[] decrypted = cipher.doFinal(encrypted);
+ 
+-        return new CryptResult() {{
+-            Parameters = params;
+-            Data = decrypted;
+-        }};
++        return new CryptResult(decrypted, params);
+     }
+ 
+     public static SecretKey generateKey() {
+diff --git a/app/src/main/java/me/impy/aegis/crypto/MasterKey.java b/app/src/main/java/me/impy/aegis/crypto/MasterKey.java
+index 85ba2f73..50ef0479 100644
+--- a/app/src/main/java/me/impy/aegis/crypto/MasterKey.java
++++ b/app/src/main/java/me/impy/aegis/crypto/MasterKey.java
+@@ -42,7 +42,7 @@ public class MasterKey implements Serializable {
+ 
+     public CryptResult decrypt(byte[] bytes, CryptParameters params) throws MasterKeyException {
+         try {
+-            Cipher cipher = CryptoUtils.createDecryptCipher(_key, params.Nonce);
++            Cipher cipher = CryptoUtils.createDecryptCipher(_key, params.getNonce());
+             return CryptoUtils.decrypt(bytes, cipher, params);
+         } catch (NoSuchPaddingException
+                 | NoSuchAlgorithmException
+diff --git a/app/src/main/java/me/impy/aegis/db/DatabaseFile.java b/app/src/main/java/me/impy/aegis/db/DatabaseFile.java
+index ee1e26bc..d932ec7d 100644
+--- a/app/src/main/java/me/impy/aegis/db/DatabaseFile.java
++++ b/app/src/main/java/me/impy/aegis/db/DatabaseFile.java
+@@ -83,7 +83,7 @@ public class DatabaseFile {
+         try {
+             byte[] bytes = Base64.decode((String) _content);
+             CryptResult result = key.decrypt(bytes, _cryptParameters);
+-            return new JSONObject(new String(result.Data, "UTF-8"));
++            return new JSONObject(new String(result.getData(), "UTF-8"));
+         } catch (MasterKeyException | JSONException | UnsupportedEncodingException | Base64Exception e) {
+             throw new DatabaseFileException(e);
+         }
+@@ -101,8 +101,8 @@ public class DatabaseFile {
+             byte[] dbBytes = string.getBytes("UTF-8");
+ 
+             CryptResult result = key.encrypt(dbBytes);
+-            _content = Base64.encode(result.Data);
+-            _cryptParameters = result.Parameters;
++            _content = Base64.encode(result.getData());
++            _cryptParameters = result.getParams();
+         } catch (MasterKeyException | UnsupportedEncodingException | JSONException e) {
+             throw new DatabaseFileException(e);
+         }
+diff --git a/app/src/main/java/me/impy/aegis/db/slots/Slot.java b/app/src/main/java/me/impy/aegis/db/slots/Slot.java
+index 8bc0c33c..803f08f7 100644
+--- a/app/src/main/java/me/impy/aegis/db/slots/Slot.java
++++ b/app/src/main/java/me/impy/aegis/db/slots/Slot.java
+@@ -42,7 +42,7 @@ public abstract class Slot implements Serializable {
+     public MasterKey getKey(Cipher cipher) throws SlotException, SlotIntegrityException {
+         try {
+             CryptResult res = CryptoUtils.decrypt(_encryptedMasterKey, cipher, _encryptedMasterKeyParams);
+-            SecretKey key = new SecretKeySpec(res.Data, CryptoUtils.CRYPTO_AEAD);
++            SecretKey key = new SecretKeySpec(res.getData(), CryptoUtils.CRYPTO_AEAD);
+             return new MasterKey(key);
+         } catch (AEADBadTagException e) {
+             throw new SlotIntegrityException(e);
+@@ -56,8 +56,8 @@ public abstract class Slot implements Serializable {
+         try {
+             byte[] masterKeyBytes = masterKey.getBytes();
+             CryptResult res = CryptoUtils.encrypt(masterKeyBytes, cipher);
+-            _encryptedMasterKey = res.Data;
+-            _encryptedMasterKeyParams = res.Parameters;
++            _encryptedMasterKey = res.getData();
++            _encryptedMasterKeyParams = res.getParams();
+         } catch (BadPaddingException | IllegalBlockSizeException e) {
+             throw new SlotException(e);
+         }
+@@ -76,7 +76,7 @@ public abstract class Slot implements Serializable {
+ 
+     public Cipher createDecryptCipher(SecretKey key) throws SlotException {
+         try {
+-            return CryptoUtils.createDecryptCipher(key, _encryptedMasterKeyParams.Nonce);
++            return CryptoUtils.createDecryptCipher(key, _encryptedMasterKeyParams.getNonce());
+         } catch (InvalidAlgorithmParameterException
+                 | NoSuchAlgorithmException
+                 | InvalidKeyException
+diff --git a/app/src/main/java/me/impy/aegis/importers/FreeOtpImporter.java b/app/src/main/java/me/impy/aegis/importers/FreeOtpImporter.java
+index 2a57b92c..3904c3bd 100644
+--- a/app/src/main/java/me/impy/aegis/importers/FreeOtpImporter.java
++++ b/app/src/main/java/me/impy/aegis/importers/FreeOtpImporter.java
+@@ -123,7 +123,11 @@ public class FreeOtpImporter extends DatabaseImporter {
+         String name = parser.getAttributeValue(null, "name");
+         String value = parseText(parser);
+         parser.require(XmlPullParser.END_TAG, null, "string");
+-        return new XmlEntry() {{ Name = name; Value = value; }};
++
++        XmlEntry entry = new XmlEntry();
++        entry.Name = name;
++        entry.Value = value;
++        return entry;
+     }
+ 
+     private static String parseText(XmlPullParser parser) throws IOException, XmlPullParserException {
+diff --git a/app/src/main/java/me/impy/aegis/ui/AuthActivity.java b/app/src/main/java/me/impy/aegis/ui/AuthActivity.java
+index 00237f2d..75897ba2 100644
+--- a/app/src/main/java/me/impy/aegis/ui/AuthActivity.java
++++ b/app/src/main/java/me/impy/aegis/ui/AuthActivity.java
+@@ -31,9 +31,9 @@ import me.impy.aegis.db.slots.SlotException;
+ import me.impy.aegis.helpers.FingerprintHelper;
+ import me.impy.aegis.helpers.FingerprintUiHelper;
+ import me.impy.aegis.helpers.EditTextHelper;
+-import me.impy.aegis.ui.tasks.SlotCollectionTask;
++import me.impy.aegis.ui.tasks.SlotListTask;
+ 
+-public class AuthActivity extends AegisActivity implements FingerprintUiHelper.Callback, SlotCollectionTask.Callback {
++public class AuthActivity extends AegisActivity implements FingerprintUiHelper.Callback, SlotListTask.Callback {
+     private EditText _textPassword;
+ 
+     private SlotList _slots;
+@@ -112,10 +112,8 @@ public class AuthActivity extends AegisActivity implements FingerprintUiHelper.C
+     }
+ 
+     private <T extends Slot> void trySlots(Class<T> type, Object obj) {
+-        new SlotCollectionTask<>(type, this, this).execute(new SlotCollectionTask.Params(){{
+-            Slots = _slots;
+-            Obj = obj;
+-        }});
++        SlotListTask.Params params = new SlotListTask.Params(_slots, obj);
++        new SlotListTask<>(type, this, this).execute(params);
+     }
+ 
+     private void setKey(MasterKey key) {
+diff --git a/app/src/main/java/me/impy/aegis/ui/IntroActivity.java b/app/src/main/java/me/impy/aegis/ui/IntroActivity.java
+index 076b6960..16259e03 100644
+--- a/app/src/main/java/me/impy/aegis/ui/IntroActivity.java
++++ b/app/src/main/java/me/impy/aegis/ui/IntroActivity.java
+@@ -115,10 +115,8 @@ public class IntroActivity extends AppIntro implements DerivationTask.Callback {
+ 
+         if (newFragment == _endSlide && cryptType != CustomAuthenticationSlide.CRYPT_TYPE_NONE) {
+             _passwordSlot = new PasswordSlot();
+-            new DerivationTask(this, this).execute(new DerivationTask.Params() {{
+-                Slot = _passwordSlot;
+-                Password = _authenticatedSlide.getPassword();
+-            }});
++            DerivationTask.Params params = new DerivationTask.Params(_passwordSlot, _authenticatedSlide.getPassword());
++            new DerivationTask(this, this).execute(params);
+         } else if (oldFragment == _authenticationSlide && newFragment != _endSlide) {
+             // skip to the last slide if no encryption will be used
+             if (cryptType == CustomAuthenticationSlide.CRYPT_TYPE_NONE) {
+diff --git a/app/src/main/java/me/impy/aegis/ui/dialogs/PasswordDialogFragment.java b/app/src/main/java/me/impy/aegis/ui/dialogs/PasswordDialogFragment.java
+index a3dc9f7c..f0c5aa65 100644
+--- a/app/src/main/java/me/impy/aegis/ui/dialogs/PasswordDialogFragment.java
++++ b/app/src/main/java/me/impy/aegis/ui/dialogs/PasswordDialogFragment.java
+@@ -60,10 +60,7 @@ public class PasswordDialogFragment extends SlotDialogFragment {
+                     getListener().onSlotResult(slot, cipher);
+                     dialog.dismiss();
+                 });
+-                task.execute(new DerivationTask.Params() {{
+-                    Slot = slot;
+-                    Password = password;
+-                }});
++                task.execute(new DerivationTask.Params(slot, password));
+             });
+         });
+ 
+diff --git a/app/src/main/java/me/impy/aegis/ui/tasks/DerivationTask.java b/app/src/main/java/me/impy/aegis/ui/tasks/DerivationTask.java
+index 744296d7..73ed0065 100644
+--- a/app/src/main/java/me/impy/aegis/ui/tasks/DerivationTask.java
++++ b/app/src/main/java/me/impy/aegis/ui/tasks/DerivationTask.java
+@@ -21,7 +21,7 @@ public class DerivationTask extends ProgressDialogTask<DerivationTask.Params, Se
+ 
+         Params params = args[0];
+         byte[] salt = CryptoUtils.generateSalt();
+-        return params.Slot.deriveKey(params.Password, salt, CryptoUtils.CRYPTO_SCRYPT_N, CryptoUtils.CRYPTO_SCRYPT_r, CryptoUtils.CRYPTO_SCRYPT_p);
++        return params.getSlot().deriveKey(params.getPassword(), salt, CryptoUtils.CRYPTO_SCRYPT_N, CryptoUtils.CRYPTO_SCRYPT_r, CryptoUtils.CRYPTO_SCRYPT_p);
+     }
+ 
+     @Override
+@@ -31,8 +31,21 @@ public class DerivationTask extends ProgressDialogTask<DerivationTask.Params, Se
+     }
+ 
+     public static class Params {
+-        public PasswordSlot Slot;
+-        public char[] Password;
++        private PasswordSlot _slot;
++        private char[] _password;
++
++        public Params(PasswordSlot slot, char[] password) {
++            _slot = slot;
++            _password = password;
++        }
++
++        public PasswordSlot getSlot() {
++            return _slot;
++        }
++
++        public char[] getPassword() {
++            return _password;
++        }
+     }
+ 
+     public interface Callback {
+diff --git a/app/src/main/java/me/impy/aegis/ui/tasks/SlotCollectionTask.java b/app/src/main/java/me/impy/aegis/ui/tasks/SlotListTask.java
+similarity index 69%
+rename from app/src/main/java/me/impy/aegis/ui/tasks/SlotCollectionTask.java
+rename to app/src/main/java/me/impy/aegis/ui/tasks/SlotListTask.java
+index fa23c469..ea9563c9 100644
+--- a/app/src/main/java/me/impy/aegis/ui/tasks/SlotCollectionTask.java
++++ b/app/src/main/java/me/impy/aegis/ui/tasks/SlotListTask.java
+@@ -13,36 +13,37 @@ import me.impy.aegis.db.slots.SlotList;
+ import me.impy.aegis.db.slots.SlotException;
+ import me.impy.aegis.db.slots.SlotIntegrityException;
+ 
+-public class SlotCollectionTask<T extends Slot> extends ProgressDialogTask<SlotCollectionTask.Params, MasterKey> {
++public class SlotListTask<T extends Slot> extends ProgressDialogTask<SlotListTask.Params, MasterKey> {
+     private Callback _cb;
+     private Class<T> _type;
+ 
+-    public SlotCollectionTask(Class<T> type, Context context, Callback cb) {
++    public SlotListTask(Class<T> type, Context context, Callback cb) {
+         super(context, "Decrypting database");
+         _cb = cb;
+         _type = type;
+     }
+ 
+     @Override
+-    protected MasterKey doInBackground(SlotCollectionTask.Params... args) {
++    protected MasterKey doInBackground(SlotListTask.Params... args) {
+         setPriority();
+ 
+         Params params = args[0];
++        SlotList slots = params.getSlots();
+         try {
+-            if (!params.Slots.has(_type)) {
++            if (!slots.has(_type)) {
+                 throw new RuntimeException();
+             }
+ 
+             MasterKey masterKey = null;
+-            for (Slot slot : params.Slots.findAll(_type)) {
++            for (Slot slot : slots.findAll(_type)) {
+                 try {
+                     if (slot instanceof PasswordSlot) {
+-                        char[] password = (char[])params.Obj;
++                        char[] password = (char[])params.getObj();
+                         SecretKey key = ((PasswordSlot)slot).deriveKey(password);
+                         Cipher cipher = slot.createDecryptCipher(key);
+                         masterKey = slot.getKey(cipher);
+                     } else if (slot instanceof FingerprintSlot) {
+-                        masterKey = slot.getKey((Cipher)params.Obj);
++                        masterKey = slot.getKey((Cipher)params.getObj());
+                     } else {
+                         throw new RuntimeException();
+                     }
+@@ -71,8 +72,21 @@ public class SlotCollectionTask<T extends Slot> extends ProgressDialogTask<SlotC
+     }
+ 
+     public static class Params {
+-        public SlotList Slots;
+-        public Object Obj;
++        private SlotList _slots;
++        private Object _obj;
++
++        public Params(SlotList slots, Object obj) {
++            _slots = slots;
++            _obj = obj;
++        }
++
++        public SlotList getSlots() {
++            return _slots;
++        }
++
++        public Object getObj() {
++            return _obj;
++        }
+     }
+ 
+     public interface Callback {
+diff --git a/app/src/test/java/me/impy/aegis/HOTPTest.java b/app/src/test/java/me/impy/aegis/HOTPTest.java
+index e9c233ed..46b16e36 100644
+--- a/app/src/test/java/me/impy/aegis/HOTPTest.java
++++ b/app/src/test/java/me/impy/aegis/HOTPTest.java
+@@ -2,6 +2,9 @@ package me.impy.aegis;
+ 
+ import org.junit.Test;
+ 
++import java.security.InvalidKeyException;
++import java.security.NoSuchAlgorithmException;
++
+ import me.impy.aegis.crypto.otp.HOTP;
+ 
+ import static org.junit.Assert.*;
+@@ -22,7 +25,7 @@ public class HOTPTest {
+     };
+ 
+     @Test
+-    public void vectorsMatch() throws Exception {
++    public void vectorsMatch() throws InvalidKeyException, NoSuchAlgorithmException {
+         for (int i = 0; i < _vectors.length; i++) {
+             String otp = HOTP.generateOTP(_secret, i, 6, false, -1);
+             assertEquals(_vectors[i], otp);
+diff --git a/app/src/test/java/me/impy/aegis/TOTPTest.java b/app/src/test/java/me/impy/aegis/TOTPTest.java
+index cb2ee73a..73798035 100644
+--- a/app/src/test/java/me/impy/aegis/TOTPTest.java
++++ b/app/src/test/java/me/impy/aegis/TOTPTest.java
+@@ -7,59 +7,54 @@ import me.impy.aegis.crypto.otp.TOTP;
+ import static org.junit.Assert.*;
+ 
+ public class TOTPTest {
+-    private class testVector {
+-        public String Time;
+-        public String Mode;
+-        public String OTP;
+-    }
+-
+     // https://tools.ietf.org/html/rfc6238#appendix-B
+-    private final testVector[] _vectors = {
+-        new testVector(){{ Time = "0000000000000001"; OTP = "94287082"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "0000000000000001"; OTP = "46119246"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "0000000000000001"; OTP = "90693936"; Mode = "HmacSHA512"; }},
+-        new testVector(){{ Time = "00000000023523EC"; OTP = "07081804"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "00000000023523EC"; OTP = "68084774"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "00000000023523EC"; OTP = "25091201"; Mode = "HmacSHA512"; }},
+-        new testVector(){{ Time = "00000000023523ED"; OTP = "14050471"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "00000000023523ED"; OTP = "67062674"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "00000000023523ED"; OTP = "99943326"; Mode = "HmacSHA512"; }},
+-        new testVector(){{ Time = "000000000273EF07"; OTP = "89005924"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "000000000273EF07"; OTP = "91819424"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "000000000273EF07"; OTP = "93441116"; Mode = "HmacSHA512"; }},
+-        new testVector(){{ Time = "0000000003F940AA"; OTP = "69279037"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "0000000003F940AA"; OTP = "90698825"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "0000000003F940AA"; OTP = "38618901"; Mode = "HmacSHA512"; }},
+-        new testVector(){{ Time = "0000000027BC86AA"; OTP = "65353130"; Mode = "HmacSHA1"; }},
+-        new testVector(){{ Time = "0000000027BC86AA"; OTP = "77737706"; Mode = "HmacSHA256"; }},
+-        new testVector(){{ Time = "0000000027BC86AA"; OTP = "47863826"; Mode = "HmacSHA512"; }}
++    private final String[][] _vectors = {
++            // time, OPT, algorithm
++            {"0000000000000001", "94287082", "HmacSHA1"},
++            {"0000000000000001", "46119246", "HmacSHA256"},
++            {"0000000000000001", "90693936", "HmacSHA512"},
++            {"00000000023523EC", "07081804", "HmacSHA1"},
++            {"00000000023523EC", "68084774", "HmacSHA256"},
++            {"00000000023523EC", "25091201", "HmacSHA512"},
++            {"00000000023523ED", "14050471", "HmacSHA1"},
++            {"00000000023523ED", "67062674", "HmacSHA256"},
++            {"00000000023523ED", "99943326", "HmacSHA512"},
++            {"000000000273EF07", "89005924", "HmacSHA1"},
++            {"000000000273EF07", "91819424", "HmacSHA256"},
++            {"000000000273EF07", "93441116", "HmacSHA512"},
++            {"0000000003F940AA", "69279037", "HmacSHA1"},
++            {"0000000003F940AA", "90698825", "HmacSHA256"},
++            {"0000000003F940AA", "38618901", "HmacSHA512"},
++            {"0000000027BC86AA", "65353130", "HmacSHA1"},
++            {"0000000027BC86AA", "77737706", "HmacSHA256"},
++            {"0000000027BC86AA", "47863826", "HmacSHA512"}
+     };
+ 
+-    private final byte[] _seed = new byte[] {
+-        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
+-        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30
++    private final byte[] _seed = new byte[]{
++            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30,
++            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30
+     };
+ 
+-    private final byte[] _seed32 = new byte[] {
+-        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+-        0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+-        0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34,
+-        0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32
++    private final byte[] _seed32 = new byte[]{
++            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
++            0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
++            0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34,
++            0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32
+     };
+ 
+-    private final byte[] _seed64 = new byte[]  {
+-        0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+-        0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32,
+-        0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+-        0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34
++    private final byte[] _seed64 = new byte[]{
++            0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
++            0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32,
++            0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
++            0x39, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x31, 0x32, 0x33, 0x34
+     };
+ 
+     @Test
+-    public void vectorsMatch() throws Exception {
+-        for (testVector v : _vectors) {
++    public void vectorsMatch() {
++        for (String[] vector : _vectors) {
+             byte[] seed;
+ 
+-            switch (v.Mode) {
++            switch (vector[2]) {
+                 case "HmacSHA1":
+                     seed = _seed;
+                     break;
+@@ -74,8 +69,8 @@ public class TOTPTest {
+                     return;
+             }
+ 
+-            String otp = TOTP.generateTOTP(seed, v.Time, 8, v.Mode);
+-            assertEquals(v.OTP, otp);
++            String otp = TOTP.generateTOTP(seed, vector[0], 8, vector[2]);
++            assertEquals(vector[1], otp);
+         }
+     }
+ }

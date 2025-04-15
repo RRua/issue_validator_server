@@ -1,0 +1,324 @@
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/BookmarkedQueriesActivity.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/BookmarkedQueriesActivity.java
+index 3de0369..15b6e67 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/BookmarkedQueriesActivity.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/BookmarkedQueriesActivity.java
+@@ -4,7 +4,7 @@ import android.app.Activity;
+ import android.app.ListActivity;
+ import android.content.Intent;
+ import android.os.Bundle;
+-import android.support.annotation.Nullable;
++import androidx.annotation.Nullable;
+ import android.view.View;
+ import android.widget.ListView;
+ 
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
+index dedc87f..3852997 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
+@@ -7,8 +7,8 @@ import android.content.Intent;
+ import android.graphics.Rect;
+ import android.os.Bundle;
+ 
+-import android.support.v7.app.AppCompatActivity;
+-import android.support.v7.widget.Toolbar;
++import androidx.appcompat.app.AppCompatActivity;
++import androidx.appcompat.widget.Toolbar;
+ import android.util.Log;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -33,6 +33,7 @@ import org.xbill.DNS.Header;
+ import org.xbill.DNS.InvalidTypeException;
+ import org.xbill.DNS.Message;
+ import org.xbill.DNS.Name;
++import org.xbill.DNS.RRSIGRecord;
+ import org.xbill.DNS.RRset;
+ import org.xbill.DNS.Rcode;
+ import org.xbill.DNS.Record;
+@@ -331,7 +332,7 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+             }
+ 
+             if (session.flag_DO) {
+-                resolver.setEDNS(0, 0, Flags.DO, null);
++                resolver.setEDNS(0, 0, Flags.DO);
+             }
+ 
+             resolver.setTCP(session.TCP);
+@@ -523,7 +524,7 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+ 
+     public String hostToAddr(String hostname) {
+         if (hostname == null || hostname == "") {
+-            hostname = ResolverConfig.getCurrentConfig().server();
++            hostname = ResolverConfig.getCurrentConfig().server().toString();
+             if (hostname == null) {
+                 hostname = "0";
+             }
+@@ -551,30 +552,22 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+         state.flag_CD = header.getFlag(Flags.CD);
+     }
+ 
+-    public String rrSetsToString(RRset[] rrsets) {
++    public String rrSetsToString(List<RRset> rrsets) {
+         StringBuffer ansBuffer = new StringBuffer();
+         Iterator it;
+         int i;
+ 
+-        for (i = 0; i < rrsets.length; i++) {
+-            RRset rrset = rrsets[i];
+-            it = rrset.rrs();
+-
+-            while (it.hasNext()) {
+-                Record r = (Record) it.next();
+-                //Log.i(TAG, "rrsetstostring: type=" + r.getType());
++        for (RRset rrset : rrsets) {
++            for (Record r : rrset.rrs()) {
+                 ansBuffer.append(r.toString());
+                 ansBuffer.append("\n");
+             }
+ 
+             //RRSIGs
+-            final Iterator<Record> sigIter = rrset.sigs();
+-            while (sigIter.hasNext()) {
+-                final Record sigRec = sigIter.next();
+-
++            for (RRSIGRecord sigRec : rrset.sigs())
+                 ansBuffer.append(sigRec.toString());
+-                ansBuffer.append("\n");
+-            }
++            ansBuffer.append("\n");
++
+         }
+         //replace tabs
+         String ret = ansBuffer.toString().replace('\t', ' ');
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java
+index 056e992..01f0442 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java
+@@ -9,12 +9,11 @@ import org.xbill.DNS.Name;
+ import org.xbill.DNS.Record;
+ import org.xbill.DNS.Type;
+ 
+-import java.util.HashSet;
+ import java.util.Hashtable;
+-import java.util.Iterator;
++import java.util.List;
+ 
+ public class DNSSECVerifier {
+-    private Hashtable<String,DNSKEYRecord> knownDNSKeys = new Hashtable<String,DNSKEYRecord>();
++    private final Hashtable<String,DNSKEYRecord> knownDNSKeys = new Hashtable<>();
+     private static final String TAG="DNSSECVerifier";
+ 
+     public void verifySignature(RRset rrset, RRSIGRecord rrsig) throws DNSSEC.DNSSECException,DNSKEYUnavailableException {
+@@ -53,23 +52,19 @@ public class DNSSECVerifier {
+         Log.d(TAG,"learned DNSKEY  "+hskey(dnskey));
+     }
+ 
+-    public String verificationStatusString(RRset[] rrsets){
+-        StringBuffer buf = new StringBuffer();
++    public String verificationStatusString(List<RRset> rrsets){
++        StringBuilder buf = new StringBuilder();
+         for(RRset rrset:rrsets) {
+-            Iterator<RRSIGRecord> sigs = rrset.sigs();
+-
+-            while (sigs.hasNext()) {
+-                RRSIGRecord rrsig = sigs.next();
+-                int keyID = rrsig.getFootprint();
+-                buf.append(keyID);
++            for(RRSIGRecord sig:rrset.sigs()){
++                buf.append(sig.getFootprint());
+                 buf.append("/");
+-                buf.append(rrsig.getSigner().toString());
++                buf.append(sig.getSigner().toString());
+                 buf.append(":");
+                 buf.append(Type.string(rrset.getType()));
+ 
+                 buf.append("=");
+                 try {
+-                    this.verifySignature(rrset, rrsig);
++                    this.verifySignature(rrset, sig);
+                     buf.append("verified");
+                 } catch (DNSKEYUnavailableException dku) {
+                     buf.append("have to learn DNSKEY");
+@@ -92,20 +87,16 @@ public class DNSSECVerifier {
+         return validationStatus;
+     }
+ 
+-    public void learnDNSSECKeysFromRRSETs(RRset[] rrsets){
+-        Iterator it;
+-        int i;
++    public void learnDNSSECKeysFromRRSETs(List<RRset> rrsets){
++        DNSKEYRecord dnskey;
+ 
+-        for (i = 0; i < rrsets.length; i++) {
+-            RRset rrset = rrsets[i];
++        for (RRset rrset:rrsets) {
+             if (rrset.getType()!=Type.DNSKEY){
+                 continue;
+             }
+-            it = rrset.rrs();
+-
+-            while (it.hasNext()) {
+-                DNSKEYRecord r = (DNSKEYRecord) it.next();
+-                addDNSKEY(r);
++            for(Record r:rrset.rrs()){
++                dnskey = (DNSKEYRecord) r;
++                addDNSKEY(dnskey);
+             }
+ 
+ 
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/HelpActivity.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/HelpActivity.java
+index 4075dc2..9275267 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/HelpActivity.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/HelpActivity.java
+@@ -1,6 +1,6 @@
+ package androdns.android.leetdreams.ch.androdns;
+ 
+-import android.support.v7.app.AppCompatActivity;
++import androidx.appcompat.app.AppCompatActivity;
+ import android.os.Bundle;
+ 
+ public class HelpActivity extends AppCompatActivity {
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/HistoryActivity.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/HistoryActivity.java
+index 3106fe9..269619a 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/HistoryActivity.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/HistoryActivity.java
+@@ -4,11 +4,9 @@ import android.app.Activity;
+ import android.app.ListActivity;
+ import android.content.Intent;
+ import android.os.Bundle;
+-import android.support.annotation.Nullable;
++import androidx.annotation.Nullable;
+ import android.view.View;
+-import android.widget.AdapterView;
+ import android.widget.ListView;
+-import android.widget.Toast;
+ 
+ 
+ public class HistoryActivity extends ListActivity {
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoHResolver.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoHResolver.java
+index 57bf8a6..70357d3 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoHResolver.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoHResolver.java
+@@ -125,4 +125,6 @@ public class SimpleDoHResolver extends SimpleDoTResolver {
+         } catch (Exception e) {
+         }
+     }
++
++
+ }
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoTResolver.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoTResolver.java
+index ea061d3..f7b8220 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoTResolver.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/SimpleDoTResolver.java
+@@ -7,8 +7,10 @@ package androdns.android.leetdreams.ch.androdns;
+ 
+ 
+ 
++
+ import android.util.Log;
+ 
++import org.xbill.DNS.EDNSOption;
+ import org.xbill.DNS.Flags;
+ import org.xbill.DNS.Header;
+ import org.xbill.DNS.Message;
+@@ -30,6 +32,7 @@ import org.xbill.DNS.ZoneTransferIn;
+ 
+ import java.security.NoSuchAlgorithmException;
+ import java.security.cert.X509Certificate;
++import java.time.Duration;
+ import java.util.*;
+ import java.io.*;
+ import java.net.*;
+@@ -50,7 +53,7 @@ import javax.net.ssl.X509TrustManager;
+  */
+ 
+ 
+-public class SimpleDoTResolver implements Resolver {
++public class SimpleDoTResolver implements Resolver  {
+     protected int CONNECT_READ_TIMEOUT=5000;
+ 
+     /** The default port to send queries to */
+@@ -64,7 +67,7 @@ public class SimpleDoTResolver implements Resolver {
+     private boolean useTCP, ignoreTruncation;
+     private OPTRecord queryOPT;
+     private TSIG tsig;
+-    private long timeoutValue = 10 * 1000;
++    private Duration timeoutValue;
+ 
+     private static final short DEFAULT_UDPSIZE = 512;
+ 
+@@ -82,7 +85,7 @@ public class SimpleDoTResolver implements Resolver {
+ 
+     public SimpleDoTResolver(String hostname, int port)throws UnknownHostException{
+         if (hostname == null) {
+-            hostname = ResolverConfig.getCurrentConfig().server();
++            hostname = ResolverConfig.getCurrentConfig().server().toString();
+             if (hostname == null)
+                 hostname = defaultResolver;
+         }
+@@ -175,7 +178,7 @@ public class SimpleDoTResolver implements Resolver {
+     }
+ 
+     public void
+-    setEDNS(int level, int payloadSize, int flags, List options) {
++    setEDNS(int level, int payloadSize, int flags, List<EDNSOption> options) {
+         if (level != 0 && level != -1)
+             throw new IllegalArgumentException("invalid EDNS level - " +
+                     "must be 0 or -1");
+@@ -186,7 +189,7 @@ public class SimpleDoTResolver implements Resolver {
+ 
+     public void
+     setEDNS(int level) {
+-        setEDNS(level, 0, 0, null);
++        setEDNS(level, 0, 0, (List<EDNSOption>) null);
+     }
+ 
+     public void
+@@ -199,20 +202,6 @@ public class SimpleDoTResolver implements Resolver {
+         return tsig;
+     }
+ 
+-    public void
+-    setTimeout(int secs, int msecs) {
+-        timeoutValue = (long)secs * 1000 + msecs;
+-    }
+-
+-    public void
+-    setTimeout(int secs) {
+-        setTimeout(secs, 0);
+-    }
+-
+-    long
+-    getTimeout() {
+-        return timeoutValue;
+-    }
+ 
+     private Message
+     parseMessage(byte [] b) throws WireParseException {
+@@ -283,7 +272,7 @@ public class SimpleDoTResolver implements Resolver {
+ 
+ 
+ 
+-        long endTime = System.currentTimeMillis() + timeoutValue;
++        long endTime = System.currentTimeMillis() + timeoutValue.toMillis();
+         byte[] in = sendAndReceive(query);
+ 
+ 		/*
+@@ -387,7 +376,7 @@ public class SimpleDoTResolver implements Resolver {
+     sendAXFR(Message query) throws IOException {
+         Name qname = query.getQuestion().getName();
+         ZoneTransferIn xfrin = ZoneTransferIn.newAXFR(qname, address, tsig);
+-        xfrin.setTimeout((int)(getTimeout() / 1000));
++        xfrin.setTimeout(getTimeout());
+         xfrin.setLocalAddress(localAddress);
+         try {
+             xfrin.run();
+@@ -406,4 +395,8 @@ public class SimpleDoTResolver implements Resolver {
+         return response;
+     }
+ 
++    @Override
++    public void setTimeout(Duration timeout) {
++        timeoutValue = timeout;
++    }
+ }
+\ No newline at end of file

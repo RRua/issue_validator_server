@@ -1,0 +1,996 @@
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/ActivityHostDialog.java b/app/src/main/java/net/sourceforge/cmus/droid/ActivityHostDialog.java
+index 3330220..401ba55 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/ActivityHostDialog.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/ActivityHostDialog.java
+@@ -16,13 +16,9 @@ import java.util.ArrayList;
+  */
+ public class ActivityHostDialog extends Activity {
+ 
+-    public static final String PREF_FILE = "com.joshtwigg.cmus.hosts";
+     private static final String INTENT_EXTRA_HOST = "HOST_ADDRESS";
+-    public static final String CURRENT_HOST = "CURRENT_HOST";
+-    private static final String AVAILABLE_HOSTS = "AVAILABLE_HOSTS";
+ 
+     private String _hostAddress = "";
+-    private SharedPreferences _sharedPrefs;
+     private EditText _host;
+     private EditText _port;
+     private EditText _password;
+@@ -34,8 +30,6 @@ public class ActivityHostDialog extends Activity {
+         _host = (EditText) findViewById(R.id.host);
+         _port = (EditText) findViewById(R.id.port);
+         _password = (EditText) findViewById(R.id.password);
+-        // get shared prefs for loading and storing saved adapters
+-        _sharedPrefs = getSharedPreferences(PREF_FILE, MODE_PRIVATE);
+         // check if we have a host
+         _hostAddress = getIntent().getStringExtra(INTENT_EXTRA_HOST);
+         if (_hostAddress == null || _hostAddress.equals("")) {
+@@ -45,63 +39,24 @@ public class ActivityHostDialog extends Activity {
+         else {
+             // load saved or default values
+             _host.setText(_hostAddress);
+-            int port = _sharedPrefs.getInt(prefPort(), getResources().getInteger(R.integer.default_port));
+-            String password = _sharedPrefs.getString(prefPassword(), getResources().getString(R.string.default_password));
++            int port = Storage.getPort(this, _hostAddress);
++            String password = Storage.getPassword(this, _hostAddress);
+             _port.setText(String.valueOf(port));
+             _password.setText(password);
+             Log.d(getClass().getSimpleName(), String.format("host{%s}port{%s}passwordlen{%s}", _hostAddress, port, password.length()));
+         }
+     }
+ 
+-    private String prefPassword() {
+-        return _hostAddress + ":PASSWORD";
+-    }
+-
+-    private String prefPort() {
+-        return _hostAddress + ":PORT";
+-    }
+-
+     public void onClickOkay(View view) {
+-        //save values
+-        SharedPreferences.Editor editor = _sharedPrefs.edit();
+-        // get available hosts (except this host)
+-        String[] hosts = getSavedHosts(_sharedPrefs);
+-        ArrayList<String> newhosts = new ArrayList<String>();
+-        for (String s : hosts) {
+-            if (s.equals(_hostAddress)) continue;
+-            newhosts.add(s);
+-        }
+-        // delete old values in case host changed
+-        editor.remove(prefPort());
+-        editor.remove(prefPassword());
+-        // add new values
+-        _hostAddress = _host.getText().toString();
+-        editor.putString(CURRENT_HOST, _hostAddress); // does this matter?
+-        editor.putInt(prefPort(), Integer.parseInt(_port.getText().toString()));
+-        editor.putString(prefPassword(), _password.getText().toString());
++        String newHost = _host.getText().toString();
++        String password = _password.getText().toString();
++        int port = Integer.parseInt(_port.getText().toString());
+ 
+-        String newHostString = "";
+-        boolean found = false;
+-        for (String s : newhosts) {
+-            if (s.equals(_hostAddress)) found = true;
+-            newHostString += "=" + s;
+-        }
+-        if (!found) newHostString += "=" + _hostAddress;
+-        editor.putString(AVAILABLE_HOSTS, newHostString.substring(1));
+-        Log.d(getClass().getSimpleName(), "new host list {" + newHostString.substring(1) + "}");
+-
+-        // save and exit
+-        editor.commit();
++        Storage.save(this, _hostAddress, newHost, port, password);
+         setResult(RESULT_OK);
+         finish();
+     }
+ 
+-    public static String[] getSavedHosts(SharedPreferences prefs) {
+-        String[] hosts = prefs.getString(AVAILABLE_HOSTS, "").split("=");
+-        if (hosts.length == 1 && hosts[0].equals("")) return new String[]{};
+-        return hosts;
+-    }
+-
+     public void onClickCancel(View view) {
+         setResult(RESULT_CANCELED);
+         finish();
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/ActivityRemote.java b/app/src/main/java/net/sourceforge/cmus/droid/ActivityRemote.java
+index 98a6094..8de6ca1 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/ActivityRemote.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/ActivityRemote.java
+@@ -2,43 +2,150 @@ package net.sourceforge.cmus.droid;
+ 
+ import android.app.Activity;
+ import android.os.Bundle;
++import android.util.Log;
+ import android.view.View;
+ 
+ /**
+  * Created by josh on 31/01/14.
+  */
+-public class ActivityRemote extends Activity {
++public class ActivityRemote extends Activity implements ICallback {
++    private Host _host = null;
++    private boolean _bMuted = false;
++
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.activity_remote);
+     }
+ 
++    @Override
++    protected void onResume() {
++        super.onResume();
++        _host = Storage.getHost(this);
++        if (_host == null) {
++            setTitle("CMUS Remote Not Connected");
++            disconnect();
++        } else {
++            setTitle("CMUS Remote " + _host.host);
++            connect();
++        }
++    }
++
++    private void disconnect() {
++        _host = null;
++    }
++
++    private void connect() {
++
++    }
++
+     public void onClick(View view) {
++        if (_host == null) return;
+         switch(view.getId()) {
+             case R.id.btnsettings :
+                 ActivitySettings.Show(this);
+                 break;
+             case R.id.btnmute :
++                sendCommand(CmusCommand.VOLUME_MUTE);
+                 break;
+             case R.id.btnvoldown :
++                sendCommand(CmusCommand.VOLUME_DOWN);
+                 break;
+             case R.id.btnvolup :
++                sendCommand(CmusCommand.VOLUME_UP);
+                 break;
+             case R.id.btnshuffle :
++                sendCommand(CmusCommand.SHUFFLE);
+                 break;
+             case R.id.btnrepeat :
++                sendCommand(CmusCommand.REPEAT);
+                 break;
+-            case R.id.btnrepeatall :
+-                break;
++//            case R.id.btnrepeatall :
++//                sendCommand(CmusCommand.REPEAT_ALL);
++//                break;
+             case R.id.btnback :
++                sendCommand(CmusCommand.PREV);
+                 break;
+             case R.id.btnstop :
++                sendCommand(CmusCommand.STOP);
+                 break;
+             case R.id.btnplay :
++                if (isPlaying()) {
++                    sendCommand(CmusCommand.PAUSE);
++                } else {
++                    sendCommand(CmusCommand.PLAY);
++                }
+                 break;
+             case R.id.btnforward :
++                sendCommand(CmusCommand.NEXT);
+                 break;
++//            case R.id.btnstatus :
++//                sendCommand(CmusCommand.STATUS);
++//                break;
+         }
+     }
++
++    private boolean isPlaying() {
++        return false; //TODO: implement
++    }
++
++    private void sendCommand(final CmusCommand command) {
++        new CommandThread(_host, command, this).start();
++    }
++
++    @Override
++    public void onAnswer(CmusCommand command, String answer) {
++        if (!command.equals(CmusCommand.STATUS)) {
++            if (command.equals(CmusCommand.VOLUME_MUTE)) {
++                _bMuted = !_bMuted;
++            }
++            else if (command.equals(CmusCommand.VOLUME_UP)) {
++                _bMuted = false;
++            }
++
++        }
++        CmusStatus cmusStatus = new CmusStatus();
++
++        String[] strs = answer.split("\n");
++
++        for (String str : strs) {
++            if (str.startsWith("set") || str.startsWith("tag")) {
++                addTagOrSetting(cmusStatus, str);
++            } else {
++                int firstSpace = str.indexOf(' ');
++                String type = str.substring(0, firstSpace);
++                String value = str.substring(firstSpace + 1);
++                if (type.equals("status")) {
++                    cmusStatus.setStatus(value);
++                } else if (type.equals("file")) {
++                    cmusStatus.setFile(value);
++                } else if (type.equals("duration")) {
++                    cmusStatus.setDuration(value);
++                } else if (type.equals("position")) {
++                    cmusStatus.setPosition(value);
++                }
++            }
++        }
++    }
++
++
++    private void addTagOrSetting(CmusStatus cmusStatus, String line) {
++        int firstSpace = line.indexOf(' ');
++        int secondSpace = line.indexOf(' ', firstSpace + 1);
++        String type = line.substring(0, firstSpace);
++        String key = line.substring(firstSpace + 1, secondSpace);
++        String value = line.substring(secondSpace + 1);
++        if (type.equals("set")) {
++            cmusStatus.setSetting(key, value);
++        } else if (type.equals("tag")) {
++            cmusStatus.setTag(key, value);
++        } else {
++            Log.e(getClass().getSimpleName(), "Unknown type in status: " + line);
++        }
++    }
++
++    @Override
++    public void onError(Exception e) {
++
++    }
+ }
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/ActivitySettings.java b/app/src/main/java/net/sourceforge/cmus/droid/ActivitySettings.java
+index a0ed40f..3a6381e 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/ActivitySettings.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/ActivitySettings.java
+@@ -11,6 +11,8 @@ import android.widget.AdapterView;
+ import android.widget.ArrayAdapter;
+ import android.widget.ListView;
+ 
++import java.util.ArrayList;
++
+ /**
+  * Created by josh on 31/01/14.
+  */
+@@ -35,8 +37,8 @@ public class ActivitySettings extends Activity implements IReceiveHost {
+                 ActivitySettings.this.startActivityForResult(ActivityHostDialog.getStartIntent(ActivitySettings.this, address), REQUEST_CODE);
+             }
+         });
+-        String[] hosts = ActivityHostDialog.getSavedHosts(getSharedPreferences(ActivityHostDialog.PREF_FILE, MODE_PRIVATE));
+-        Log.d(getClass().getSimpleName(), "no of hosts received{" + hosts.length + "}.");
++        ArrayList<String> hosts = Storage.getSavedHosts(this);
++        Log.d(getClass().getSimpleName(), "no of hosts received{" + hosts.size() + "}.");
+         for (String s : hosts) _hostAdapter.add(s);
+         _hostAdapter.notifyDataSetChanged();
+         Util.runSearchHosts(this, this);
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/CmusCommand.java b/app/src/main/java/net/sourceforge/cmus/droid/CmusCommand.java
+new file mode 100644
+index 0000000..291014e
+--- /dev/null
++++ b/app/src/main/java/net/sourceforge/cmus/droid/CmusCommand.java
+@@ -0,0 +1,42 @@
++package net.sourceforge.cmus.droid;
++
++/**
++* Created by josh on 31/01/14.
++*/
++public enum CmusCommand {
++    REPEAT("Repeat", "toggle repeat"),
++    SHUFFLE("Shuffle", "toggle shuffle"),
++    STOP("Stop", "player-stop"),
++    NEXT("Next", "player-next"),
++    PREV("Previous", "player-prev"),
++    PLAY("Play", "player-play"),
++    PAUSE("Pause", "player-pause"),
++    // FILE("player-play %s");
++    // VOLUME("vol %s"),
++    VOLUME_MUTE("Mute", "vol -100%"),
++    VOLUME_UP("Volume +", "vol +10%"),
++    VOLUME_DOWN("Volume -", "vol -10%"),
++    // SEEK("seek %s"),
++    STATUS("Status", "status");
++
++    private final String label;
++    private final String command;
++
++    CmusCommand(String label, String command) {
++        this.label = label;
++        this.command = command;
++    }
++
++    public String getCommand() {
++        return command;
++    }
++
++    public String getLabel() {
++        return label;
++    }
++
++    @Override
++    public String toString() {
++        return getLabel();
++    }
++}
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/CmusDroidRemoteActivity.java b/app/src/main/java/net/sourceforge/cmus/droid/CmusDroidRemoteActivity.java
+index f0c45b4..2a64f59 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/CmusDroidRemoteActivity.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/CmusDroidRemoteActivity.java
+@@ -1,300 +1,120 @@
+-package net.sourceforge.cmus.droid;
+-
+-import java.io.BufferedReader;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-import java.io.PrintWriter;
+-import java.net.Inet4Address;
+-import java.net.InetAddress;
+-import java.net.NetworkInterface;
+-import java.net.Socket;
+-import java.util.ArrayList;
+-import java.util.Enumeration;
+-
+-import android.app.Activity;
+-import android.app.AlertDialog;
+-import android.net.ConnectivityManager;
+-import android.net.NetworkInfo;
+-import android.os.Build;
+-import android.os.Bundle;
+-import android.util.Log;
+-import android.view.View;
+-import android.widget.ArrayAdapter;
+-import android.widget.AutoCompleteTextView;
+-import android.widget.Button;
+-import android.widget.EditText;
+-import android.widget.Spinner;
+-
+-/**
+- * This code is so great, it hurts!!
+- * Please clean me!!
+- * 
+- * @author bboudreau
+- * 
+- */
+-public class CmusDroidRemoteActivity extends Activity {
+-	public enum CmusCommand {
+-		REPEAT("Repeat", "toggle repeat"),
+-		SHUFFLE("Shuffle", "toggle shuffle"),
+-		STOP("Stop", "player-stop"),
+-		NEXT("Next", "player-next"),
+-		PREV("Previous", "player-prev"),
+-		PLAY("Play", "player-play"),
+-		PAUSE("Pause", "player-pause"),
+-		// FILE("player-play %s");
+-		// VOLUME("vol %s"),
+-		VOLUME_MUTE("Mute", "vol -100%"),
+-		VOLUME_UP("Volume +", "vol +10%"),
+-		VOLUME_DOWN("Volume -", "vol -10%"),
+-		// SEEK("seek %s"),
+-		STATUS("Status", "status");
+-
+-		private final String label;
+-		private final String command;
+-
+-		private CmusCommand(String label, String command) {
+-			this.label = label;
+-			this.command = command;
+-		}
+-
+-		public String getCommand() {
+-			return command;
+-		}
+-
+-		public String getLabel() {
+-			return label;
+-		}
+-
+-		@Override
+-		public String toString() {
+-			return getLabel();
+-		}
+-	}
+-
+-    public static final String TAG = "CmusDroidRemoteActivity";
+-
+-	private AutoCompleteTextView mHostText;
+-	private EditText mPortText;
+-	private EditText mPasswordText;
+-	private Spinner mCommandSpinner;
+-	private Button mSendCommandButton;
+-	ArrayAdapter<String> hostAdapter;
+-
+-	/** Called when the activity is first created. */
+-	@Override
+-	public void onCreate(Bundle savedInstanceState) {
+-		super.onCreate(savedInstanceState);
+-		setContentView(R.layout.main);
+-
+-		// Obtain handles to UI objects
+-		mHostText = (AutoCompleteTextView) findViewById(R.id.hostText);
+-		mPortText = (EditText) findViewById(R.id.portText);
+-		mPasswordText = (EditText) findViewById(R.id.passwordText);
+-		mCommandSpinner = (Spinner) findViewById(R.id.commandSpinner);
+-		mSendCommandButton = (Button) findViewById(R.id.sendCommandButton);
+-
+-		mPortText.setText("3000");
+-
+-		hostAdapter = new ArrayAdapter<String>(this,
+-				android.R.layout.simple_dropdown_item_1line,
+-				new ArrayList<String>());
+-
+-		mHostText.setAdapter(hostAdapter);
+-
+-		//runSearchHosts();
+-
+-		mCommandSpinner.setAdapter(new ArrayAdapter<CmusCommand>(this,
+-				android.R.layout.simple_spinner_item, CmusCommand.values()));
+-
+-		mSendCommandButton.setOnClickListener(new View.OnClickListener() {
+-			public void onClick(View v) {
+-				onSendCommandClicked();
+-			}
+-		});
+-	}
+-
+-	private void onSendCommandClicked() {
+-		Log.v(TAG, "Save button clicked");
+-		if (validate()) {
+-			if (1==1){//isUsingWifi()) {
+-				sendCommand(mHostText.getText().toString(),
+-						Integer.parseInt(mPortText.getText().toString()),
+-						mPasswordText.getText().toString(),
+-						(CmusCommand) mCommandSpinner.getSelectedItem());
+-			} else {
+-				alert("Could not send command", "Not sending command: not on Wifi.");
+-			}
+-		}
+-		// finish();
+-	}
+-
+-	private void alert(String title, String message) {
+-		Log.v(TAG, message);
+-		new AlertDialog.Builder(this)
+-				.setMessage(message)
+-				.setTitle(title).show();
+-	}
+-
+-	private boolean validate() {
+-		boolean valid = true;
+-
+-		if (!Util.validateString(mHostText.getText().toString())) {
+-			valid = false;
+-			mHostText.setError("the hostname is not valid");
+-		} else {
+-			mHostText.setError(null);
+-		}
+-
+-		if (!Util.validateInteger(mPortText.getText().toString())) {
+-			valid = false;
+-			mPortText.setError("the port is not valid");
+-		} else {
+-			mPortText.setError(null);
+-		}
+-
+-		if (!Util.validateString(mPasswordText.getText().toString())) {
+-			valid = false;
+-			mPasswordText.setError("the password is not valid");
+-		} else {
+-			mPasswordText.setError(null);
+-		}
+-
+-		if (!valid) {
+-			alert("Could not send command", "Not sending command, some parameters are invalid.");
+-		}
+-
+-		return valid;
+-	}
+-
+-	private void addTagOrSetting(CmusStatus cmusStatus, String line) {
+-		int firstSpace = line.indexOf(' ');
+-		int secondSpace = line.indexOf(' ', firstSpace + 1);
+-		String type = line.substring(0, firstSpace);
+-		String key = line.substring(firstSpace + 1, secondSpace);
+-		String value = line.substring(secondSpace + 1);
+-		if (type.equals("set")) {
+-			cmusStatus.setSetting(key, value);
+-		} else if (type.equals("tag")) {
+-			cmusStatus.setTag(key, value);
+-		} else {
+-			Log.e(TAG, "Unknown type in status: " + line);
+-		}
+-	}
+-
+-	private void handleStatus(String status) {
+-
+-		CmusStatus cmusStatus = new CmusStatus();
+-
+-		String[] strs = status.split("\n");
+-
+-		for (String str : strs) {
+-			if (str.startsWith("set") || str.startsWith("tag")) {
+-				addTagOrSetting(cmusStatus, str);
+-			} else {
+-				int firstSpace = str.indexOf(' ');
+-				String type = str.substring(0, firstSpace);
+-				String value = str.substring(firstSpace + 1);
+-				if (type.equals("status")) {
+-					cmusStatus.setStatus(value);
+-				} else if (type.equals("file")) {
+-					cmusStatus.setFile(value);
+-				} else if (type.equals("duration")) {
+-					cmusStatus.setDuration(value);
+-				} else if (type.equals("position")) {
+-					cmusStatus.setPosition(value);
+-				}
+-			}
+-		}
+-
+-		alert("Received Status", cmusStatus.toSimpleString());
+-	}
+-
+-	private void sendCommand(final String host, final int port,
+-			final String password, final CmusCommand command) {
+-
+-		new Thread(new Runnable() {
+-			private String readAnswer(BufferedReader in) throws IOException {
+-				StringBuilder answerBuilder = new StringBuilder();
+-
+-				String line;
+-				while ((line = in.readLine()) != null && line.length() != 0) {
+-					answerBuilder.append(line).append("\n");
+-				}
+-
+-				return answerBuilder.toString();
+-			}
+-
+-			private void handleCmdAnswer(BufferedReader in, final CmusCommand command) throws Exception {
+-				final String cmdAnswer = readAnswer(in);
+-				if (cmdAnswer != null && cmdAnswer.trim().length() != 0) {
+-					Log.v(TAG, "Received answer to " + command.getLabel() + ": "
+-							+ cmdAnswer.replaceAll("\n", "\n\t").replaceFirst("\n\t", "\n"));
+-					CmusDroidRemoteActivity.this.runOnUiThread(new Runnable() {
+-						public void run() {
+-							if (command.equals(CmusCommand.STATUS)) {
+-								handleStatus(cmdAnswer);
+-							} else {
+-								alert("Message from Cmus", "Received message: " + cmdAnswer);
+-							}
+-						}
+-					});
+-				}
+-			}
+-
+-			private void validAuth(BufferedReader in) throws Exception {
+-				String passAnswer = readAnswer(in);
+-				if (passAnswer != null && passAnswer.trim().length() != 0) {
+-					throw new Exception("Could not login: " + passAnswer);
+-				}
+-			}
+-
+-			public void run() {
+-				Socket socket = null;
+-				BufferedReader in = null;
+-				PrintWriter out = null;
+-				try {
+-					socket = new Socket(host, port);
+-					Log.v(TAG, "Connected to " + host + ":" + port);
+-					in = new BufferedReader(new InputStreamReader(socket.getInputStream()), Character.SIZE);
+-					out = new PrintWriter(socket.getOutputStream(), true);
+-
+-					out.println("passwd " + password);
+-					validAuth(in);
+-					out.println(command.getCommand());
+-					handleCmdAnswer(in, command);
+-				} catch (final Exception e) {
+-					Log.e(TAG, "Could not send the command", e);
+-					CmusDroidRemoteActivity.this.runOnUiThread(new Runnable() {
+-						public void run() {
+-							alert("Could not send command", "Could not send the command: "
+-									+ e.getLocalizedMessage());
+-						}
+-					});
+-				} finally {
+-					if (in != null) {
+-						try {
+-							in.close();
+-						} catch (Exception e1) {
+-						}
+-						in = null;
+-					}
+-					if (out != null) {
+-						try {
+-							out.close();
+-						} catch (Exception e1) {
+-						}
+-						out = null;
+-					}
+-					if (socket != null) {
+-						try {
+-							socket.close();
+-						} catch (Exception e) {
+-						}
+-						socket = null;
+-					}
+-				}
+-			}
+-		}).start();
+-	}
+-
+-}
+\ No newline at end of file
++//package net.sourceforge.cmus.droid;
++//
++//import java.util.ArrayList;
++//
++//import android.app.Activity;
++//import android.app.AlertDialog;
++//import android.os.Bundle;
++//import android.util.Log;
++//import android.view.View;
++//import android.widget.ArrayAdapter;
++//import android.widget.AutoCompleteTextView;
++//import android.widget.Button;
++//import android.widget.EditText;
++//import android.widget.Spinner;
++//
++///**
++// * This code is so great, it hurts!!
++// * Please clean me!!
++// *
++// * @author bboudreau
++// *
++// */
++//public class CmusDroidRemoteActivity extends Activity {
++//
++//    public static final String TAG = "CmusDroidRemoteActivity";
++//
++//	private AutoCompleteTextView mHostText;
++//	private EditText mPortText;
++//	private EditText mPasswordText;
++//	private Spinner mCommandSpinner;
++//	private Button mSendCommandButton;
++//	ArrayAdapter<String> hostAdapter;
++//
++//	/** Called when the activity is first created. */
++//	@Override
++//	public void onCreate(Bundle savedInstanceState) {
++//		super.onCreate(savedInstanceState);
++//		setContentView(R.layout.main);
++//
++//		// Obtain handles to UI objects
++//		mHostText = (AutoCompleteTextView) findViewById(R.id.hostText);
++//		mPortText = (EditText) findViewById(R.id.portText);
++//		mPasswordText = (EditText) findViewById(R.id.passwordText);
++//		mCommandSpinner = (Spinner) findViewById(R.id.commandSpinner);
++//		mSendCommandButton = (Button) findViewById(R.id.sendCommandButton);
++//
++//		mPortText.setText("3000");
++//
++//		hostAdapter = new ArrayAdapter<String>(this,
++//				android.R.layout.simple_dropdown_item_1line,
++//				new ArrayList<String>());
++//
++//		mHostText.setAdapter(hostAdapter);
++//
++//		//runSearchHosts();
++//
++//		mCommandSpinner.setAdapter(new ArrayAdapter<CmusCommand>(this,
++//				android.R.layout.simple_spinner_item, CmusCommand.values()));
++//
++//		mSendCommandButton.setOnClickListener(new View.OnClickListener() {
++//			public void onClick(View v) {
++//				onSendCommandClicked();
++//			}
++//		});
++//	}
++//
++//	private void onSendCommandClicked() {
++//		Log.v(TAG, "Save button clicked");
++//		if (validate()) {
++//			if (1==1){//isUsingWifi()) {
++//				sendCommand(mHostText.getText().toString(),
++//						Integer.parseInt(mPortText.getText().toString()),
++//						mPasswordText.getText().toString(),
++//						(CmusCommand) mCommandSpinner.getSelectedItem());
++//			} else {
++//				alert("Could not send command", "Not sending command: not on Wifi.");
++//			}
++//		}
++//		// finish();
++//	}
++//
++//	private void alert(String title, String message) {
++//		Log.v(TAG, message);
++//		new AlertDialog.Builder(this)
++//				.setMessage(message)
++//				.setTitle(title).show();
++//	}
++//
++//	private boolean validate() {
++//		boolean valid = true;
++//
++//		if (!Util.validateString(mHostText.getText().toString())) {
++//			valid = false;
++//			mHostText.setError("the hostname is not valid");
++//		} else {
++//			mHostText.setError(null);
++//		}
++//
++//		if (!Util.validateInteger(mPortText.getText().toString())) {
++//			valid = false;
++//			mPortText.setError("the port is not valid");
++//		} else {
++//			mPortText.setError(null);
++//		}
++//
++//		if (!Util.validateString(mPasswordText.getText().toString())) {
++//			valid = false;
++//			mPasswordText.setError("the password is not valid");
++//		} else {
++//			mPasswordText.setError(null);
++//		}
++//
++//		if (!valid) {
++//			alert("Could not send command", "Not sending command, some parameters are invalid.");
++//		}
++//
++//		return valid;
++//	}
++//
++//}
+\ No newline at end of file
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/CmusStatus.java b/app/src/main/java/net/sourceforge/cmus/droid/CmusStatus.java
+index bf8ce92..53a8d3c 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/CmusStatus.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/CmusStatus.java
+@@ -90,7 +90,7 @@ public class CmusStatus {
+             Float durationF = Float.parseFloat(duration);
+             return twoDForm.format(positionF / durationF);
+         } catch (Exception e) {
+-            Log.w(CmusDroidRemoteActivity.TAG, e);
++            Log.w(getClass().getSimpleName(), e);
+             return "Unknown";
+         }
+     }
+@@ -138,7 +138,7 @@ public class CmusStatus {
+             DecimalFormat twoDForm = new DecimalFormat("#.##");
+             return twoDForm.format((volRightF + volLeftF) / 2.0f) + "%";
+         } catch (Exception e) {
+-            Log.w(CmusDroidRemoteActivity.TAG, e);
++            Log.w(getClass().getSimpleName(), e);
+             return "Unknown";
+         }
+     }
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/CommandThread.java b/app/src/main/java/net/sourceforge/cmus/droid/CommandThread.java
+new file mode 100644
+index 0000000..e57aac9
+--- /dev/null
++++ b/app/src/main/java/net/sourceforge/cmus/droid/CommandThread.java
+@@ -0,0 +1,95 @@
++package net.sourceforge.cmus.droid;
++
++import android.util.Log;
++
++import java.io.BufferedReader;
++import java.io.IOException;
++import java.io.InputStreamReader;
++import java.io.PrintWriter;
++import java.net.Socket;
++
++/**
++ * Created by josh on 31/01/14.
++ */
++public class CommandThread extends Thread {
++    private final Host _host;
++    private final CmusCommand _command;
++    private final ICallback _callback;
++
++    public CommandThread(final Host host, final CmusCommand command, ICallback callback) {
++        _host = host;
++        _command = command;
++        _callback = callback;
++    }
++
++    private String readAnswer(BufferedReader in) throws IOException {
++        StringBuilder answerBuilder = new StringBuilder();
++
++        String line;
++        while ((line = in.readLine()) != null && line.length() != 0) {
++            answerBuilder.append(line).append("\n");
++        }
++
++        return answerBuilder.toString();
++    }
++
++    private void handleCmdAnswer(BufferedReader in, final CmusCommand command) throws Exception {
++        final String cmdAnswer = readAnswer(in);
++        if (cmdAnswer != null && cmdAnswer.trim().length() != 0) {
++            _callback.onAnswer(command, cmdAnswer);
++        }
++        else
++        {
++            _callback.onError(new Exception("Empty response from cmus."));
++        }
++    }
++
++    private void validAuth(BufferedReader in) throws Exception {
++        String passAnswer = readAnswer(in);
++        if (passAnswer != null && passAnswer.trim().length() != 0) {
++            throw new Exception("Could not login: " + passAnswer);
++        }
++    }
++
++    public void run() {
++        Socket socket = null;
++        BufferedReader in = null;
++        PrintWriter out = null;
++        try {
++            socket = new Socket(_host.host, _host.port);
++            Log.v(getClass().getSimpleName(), "Connected to " + _host.host + ":" + _host.port + ".");
++            in = new BufferedReader(new InputStreamReader(socket.getInputStream()), Character.SIZE);
++            out = new PrintWriter(socket.getOutputStream(), true);
++
++            out.println("passwd " + _host.password);
++            validAuth(in);
++            out.println(_command.getCommand());
++            handleCmdAnswer(in, _command);
++        } catch (final Exception e) {
++            Log.e(getClass().getSimpleName(), "Could not send the command", e);
++            _callback.onError(e);
++        } finally {
++            if (in != null) {
++                try {
++                    in.close();
++                } catch (Exception e1) {
++                }
++                in = null;
++            }
++            if (out != null) {
++                try {
++                    out.close();
++                } catch (Exception e1) {
++                }
++                out = null;
++            }
++            if (socket != null) {
++                try {
++                    socket.close();
++                } catch (Exception e) {
++                }
++                socket = null;
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/Host.java b/app/src/main/java/net/sourceforge/cmus/droid/Host.java
+new file mode 100644
+index 0000000..bf5602b
+--- /dev/null
++++ b/app/src/main/java/net/sourceforge/cmus/droid/Host.java
+@@ -0,0 +1,16 @@
++package net.sourceforge.cmus.droid;
++
++/**
++ * Created by josh on 31/01/14.
++ */
++public class Host {
++    public final String host;
++    public final int port;
++    public final String password;
++
++    public Host(String phost, int pport, String ppassword) {
++        host = phost;
++        port = pport;
++        password = ppassword;
++    }
++}
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/ICallback.java b/app/src/main/java/net/sourceforge/cmus/droid/ICallback.java
+new file mode 100644
+index 0000000..bd53f97
+--- /dev/null
++++ b/app/src/main/java/net/sourceforge/cmus/droid/ICallback.java
+@@ -0,0 +1,9 @@
++package net.sourceforge.cmus.droid;
++
++/**
++ * Created by josh on 31/01/14.
++ */
++public interface ICallback {
++    void onAnswer(CmusCommand command, String answer);
++    void onError(Exception e);
++}
+diff --git a/app/src/main/java/net/sourceforge/cmus/droid/Storage.java b/app/src/main/java/net/sourceforge/cmus/droid/Storage.java
+index d9dc9c0..cad53bc 100644
+--- a/app/src/main/java/net/sourceforge/cmus/droid/Storage.java
++++ b/app/src/main/java/net/sourceforge/cmus/droid/Storage.java
+@@ -1,9 +1,77 @@
+ package net.sourceforge.cmus.droid;
+ 
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.util.Log;
++
++import java.util.ArrayList;
++
+ /**
+  * Created by josh on 31/01/14.
+  */
+ public class Storage {
+     public static final String PREF_FILE = "com.joshtwigg.cmus.hosts";
++    public static final String CURRENT_HOST = "CURRENT_HOST";
++    private static final String AVAILABLE_HOSTS = "AVAILABLE_HOSTS";
++
++    public static SharedPreferences getPrefs(Context context) {
++        return context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE);
++    }
++
++    private static String prefPassword(String hostAddress) {
++        return hostAddress + ":PASSWORD";
++    }
++
++    private static String prefPort(String hostAddress) {
++        return hostAddress + ":PORT";
++    }
++
++    public static void save(final Context context, final String oldHost, final String newHost, final int port, final String password) {
++
++        SharedPreferences sharedPrefs = getPrefs(context);
++        //save values
++        SharedPreferences.Editor editor = sharedPrefs.edit();
++        // get available hosts (except this host)
++        ArrayList<String> hosts = getSavedHosts(context);
++        hosts.remove(oldHost);
++        // delete old values in case host changed
++        editor.remove(prefPort(oldHost));
++        editor.remove(prefPassword(oldHost));
++        // add new values
++        editor.putString(CURRENT_HOST, newHost);
++        editor.putInt(prefPort(newHost), port);
++        editor.putString(prefPassword(newHost), password);
++        // build new string of available hosts
++        if (!hosts.contains(newHost)) hosts.add(newHost);
++        String newHostString = "";
++        for (String s : hosts) newHostString += "=" + s;
++        editor.putString(AVAILABLE_HOSTS, newHostString.substring(1));
++        Log.d(Storage.class.getSimpleName(), "new host list {" + newHostString.substring(1) + "}");
++        // save and exit
++        editor.commit();
++    }
++
++    public static ArrayList<String> getSavedHosts(Context context) {
++        String[] hostStrings = getPrefs(context).getString(AVAILABLE_HOSTS, "").split("=");
++        ArrayList<String> hosts = new ArrayList<String>();
++        if (hostStrings.length == 1 && hostStrings[0].equals("")) return hosts;
++        for (int i = 0; i < hostStrings.length; ++i) {
++            hosts.add(hostStrings[i]);
++        }
++        return hosts;
++    }
++
++    public static int getPort(Context context, String hostAddress) {
++        return getPrefs(context).getInt(prefPort(hostAddress), context.getResources().getInteger(R.integer.default_port));
++    }
++
++    public static String getPassword(Context context, String hostAddress) {
++        return getPrefs(context).getString(prefPassword(hostAddress), context.getResources().getString(R.string.default_password));
++    }
+ 
++    public static Host getHost(Context context) {
++        String host = getPrefs(context).getString(CURRENT_HOST, null);
++        if (host == null) return null;
++        return new Host(host, getPort(context, host), getPassword(context, host));
++    }
+ }

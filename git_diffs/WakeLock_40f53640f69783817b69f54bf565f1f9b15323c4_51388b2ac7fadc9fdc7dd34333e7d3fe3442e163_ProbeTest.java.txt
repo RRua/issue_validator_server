@@ -1,0 +1,224 @@
+diff --git a/Android/app/src/main/java/app/intra/net/doh/JavaProber.java b/Android/app/src/main/java/app/intra/net/doh/JavaProber.java
+index dd0a2f5..d805499 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/JavaProber.java
++++ b/Android/app/src/main/java/app/intra/net/doh/JavaProber.java
+@@ -26,8 +26,6 @@ import okhttp3.Response;
+  */
+ class JavaProber extends Prober {
+ 
+-  private static final DnsUdpQuery QUERY = DnsUdpQuery.fromUdpBody(QUERY_DATA);
+-
+   private final ServerConnectionFactory factory;
+   JavaProber(ServerConnectionFactory factory) {
+     this.factory = factory;
+@@ -59,7 +57,7 @@ class JavaProber extends Prober {
+         callback.onCompleted(false);
+         return;
+       }
+-      conn.performDnsRequest(QUERY, QUERY_DATA, new QueryCallback(callback));
++      conn.performDnsRequest(QUERY_DATA, new QueryCallback(callback));
+     }).start();
+   }
+ }
+diff --git a/Android/app/src/main/java/app/intra/net/doh/Resolver.java b/Android/app/src/main/java/app/intra/net/doh/Resolver.java
+index 6c326b0..1da7967 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/Resolver.java
++++ b/Android/app/src/main/java/app/intra/net/doh/Resolver.java
+@@ -42,7 +42,7 @@ public class Resolver {
+   public static void processQuery(ServerConnection serverConnection, DnsUdpQuery query,
+                            byte[] dnsPacketData, ResponseWriter responseWriter) {
+     try {
+-      serverConnection.performDnsRequest(query, dnsPacketData,
++      serverConnection.performDnsRequest(dnsPacketData,
+           new Resolver.DnsResponseCallback(serverConnection, query, responseWriter));
+     } catch (NullPointerException e) {
+       Transaction transaction = new Transaction(query);
+diff --git a/Android/app/src/main/java/app/intra/net/doh/ServerConnection.java b/Android/app/src/main/java/app/intra/net/doh/ServerConnection.java
+index a2aab45..d7ea9e2 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/ServerConnection.java
++++ b/Android/app/src/main/java/app/intra/net/doh/ServerConnection.java
+@@ -15,7 +15,6 @@ limitations under the License.
+ */
+ package app.intra.net.doh;
+ 
+-import app.intra.net.dns.DnsUdpQuery;
+ import okhttp3.Callback;
+ 
+ /**
+@@ -33,12 +32,10 @@ public interface ServerConnection {
+ 
+   /**
+    * Performs a binary, asynchronous DNS request over HTTPS.
+-   *
+-   * @param metadata Information about the request
+    * @param data The request body
+    * @param cb An OkHttp response callback to receive the result.
+    */
+-  void performDnsRequest(final DnsUdpQuery metadata, final byte[] data, Callback cb);
++  void performDnsRequest(final byte[] data, Callback cb);
+ 
+   /**
+    * @return The URL identifying this ServerConnection.
+diff --git a/Android/app/src/main/java/app/intra/net/doh/StandardServerConnection.java b/Android/app/src/main/java/app/intra/net/doh/StandardServerConnection.java
+index 7a157f1..f32ad61 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/StandardServerConnection.java
++++ b/Android/app/src/main/java/app/intra/net/doh/StandardServerConnection.java
+@@ -17,7 +17,7 @@ package app.intra.net.doh;
+ 
+ import android.util.Log;
+ import app.intra.BuildConfig;
+-import app.intra.net.dns.DnsUdpQuery;
++
+ import java.net.InetAddress;
+ import java.net.MalformedURLException;
+ import java.net.URL;
+@@ -95,7 +95,7 @@ public class StandardServerConnection implements ServerConnection {
+   }
+ 
+   @Override
+-  public void performDnsRequest(DnsUdpQuery metadata, byte[] data, Callback cb) {
++  public void performDnsRequest(byte[] data, Callback cb) {
+     // Zero out the ID
+     data[0] = 0;
+     data[1] = 0;
+diff --git a/Android/app/src/test/java/app/intra/net/doh/JavaProberTest.java b/Android/app/src/test/java/app/intra/net/doh/JavaProberTest.java
+index f051c74..73bb890 100644
+--- a/Android/app/src/test/java/app/intra/net/doh/JavaProberTest.java
++++ b/Android/app/src/test/java/app/intra/net/doh/JavaProberTest.java
+@@ -36,8 +36,6 @@ public class JavaProberTest {
+   private ServerConnectionFactory mockFactory;
+   private Semaphore done = new Semaphore(0);
+ 
+-  @Captor
+-  private ArgumentCaptor<DnsUdpQuery> queryCaptor;
+   @Captor
+   private ArgumentCaptor<byte[]> dataCaptor;
+   @Captor
+@@ -58,10 +56,6 @@ public class JavaProberTest {
+     mockFactory = null;
+   }
+ 
+-  private static void confirmEquals(ArgumentCaptor<byte[]> data, ArgumentCaptor<DnsUdpQuery> query) {
+-    assertEquals(DnsUdpQuery.fromUdpBody(data.getValue()).name, query.getValue().name);
+-  }
+-
+   @Test
+   public void Success() throws Exception {
+     ServerConnection mockConn = mock(ServerConnection.class);
+@@ -74,7 +68,6 @@ public class JavaProberTest {
+       done.release();
+       return null;
+     }).when(mockConn).performDnsRequest(
+-        queryCaptor.capture(),
+         dataCaptor.capture(),
+         callbackCaptor.capture());
+ 
+@@ -89,8 +82,6 @@ public class JavaProberTest {
+     done.acquire();
+     // Wait for call to ServerConnection.performDnsRequest()
+     done.acquire();
+-    // performDnsRequest was called.
+-    confirmEquals(dataCaptor, queryCaptor);
+     // Simulate query success.
+     callbackCaptor.getValue().onResponse(null, null);
+     // Wait for success callback.
+@@ -109,7 +100,6 @@ public class JavaProberTest {
+       done.release();
+       return null;
+     }).when(mockConn).performDnsRequest(
+-        queryCaptor.capture(),
+         dataCaptor.capture(),
+         callbackCaptor.capture());
+ 
+@@ -124,8 +114,6 @@ public class JavaProberTest {
+     done.acquire();
+     // Wait for call to ServerConnection.performDnsRequest()
+     done.acquire();
+-    // performDnsRequest was called.
+-    confirmEquals(dataCaptor, queryCaptor);
+     // Simulate query failure.
+     callbackCaptor.getValue().onFailure(null, null);
+     // Wait for failure callback.
+diff --git a/Android/app/src/test/java/app/intra/net/doh/StandardServerConnectionIntegrationTest.java b/Android/app/src/test/java/app/intra/net/doh/StandardServerConnectionIntegrationTest.java
+index e1c1149..b437f92 100644
+--- a/Android/app/src/test/java/app/intra/net/doh/StandardServerConnectionIntegrationTest.java
++++ b/Android/app/src/test/java/app/intra/net/doh/StandardServerConnectionIntegrationTest.java
+@@ -67,10 +67,7 @@ public class StandardServerConnectionIntegrationTest {
+         StandardServerConnection s = StandardServerConnection.get(CLOUDFLARE_URL, EMPTY_LIST);
+ 
+         TestDnsCallback cb = new TestDnsCallback();
+-        DnsUdpQuery metadata = new DnsUdpQuery();
+-        metadata.name = "youtube.com";
+-        metadata.type = 1;
+-        s.performDnsRequest(metadata, QUERY_DATA, cb);
++        s.performDnsRequest(QUERY_DATA, cb);
+         cb.semaphore.acquire();  // Wait for the response.
+         assertNotNull(cb.response);
+         assertEquals(200, cb.response.code());
+diff --git a/Android/app/src/test/java/app/intra/net/go/LocalhostResolverTest.java b/Android/app/src/test/java/app/intra/net/go/LocalhostResolverTest.java
+index c6ddc7b..f6be9fb 100644
+--- a/Android/app/src/test/java/app/intra/net/go/LocalhostResolverTest.java
++++ b/Android/app/src/test/java/app/intra/net/go/LocalhostResolverTest.java
+@@ -54,8 +54,6 @@ public class LocalhostResolverTest {
+   private IntraVpnService mockVpn;
+   private ServerConnection mockConnection;
+ 
+-  @Captor
+-  private ArgumentCaptor<DnsUdpQuery> queryCaptor;
+   @Captor
+   private ArgumentCaptor<byte[]> dataCaptor;
+   @Captor
+@@ -124,16 +122,7 @@ public class LocalhostResolverTest {
+ 
+     // Expect a call to performDnsRequest
+     verify(mockConnection, timeout(1000)).
+-        performDnsRequest(queryCaptor.capture(), dataCaptor.capture(), callbackCaptor.capture());
+-
+-    DnsUdpQuery query = queryCaptor.getValue();
+-    assertEquals(QUERY.name, query.name);
+-    assertEquals(QUERY.type, query.type);
+-    assertEquals(QUERY.requestId, query.requestId);
+-    assertEquals(clientSocket.getLocalAddress(), query.sourceAddress);
+-    assertEquals((short)clientSocket.getLocalPort(), query.sourcePort);
+-    assertEquals(resolver.getAddress().getAddress(), query.destAddress);
+-    assertEquals((short)resolver.getAddress().getPort(), query.destPort);
++        performDnsRequest(dataCaptor.capture(), callbackCaptor.capture());
+ 
+     assertArrayEquals(QUERY_DATA, dataCaptor.getValue());
+   }
+@@ -225,9 +214,8 @@ public class LocalhostResolverTest {
+     verify(mockVpn).recordTransaction(transactionCaptor.capture());
+ 
+     Transaction transaction = transactionCaptor.getValue();
+-    DnsUdpQuery query = DnsUdpQuery.fromUdpBody(QUERY_DATA);
+-    assertEquals(query.name, transaction.name);
+-    assertEquals(query.type, transaction.type);
++    assertEquals(QUERY.name, transaction.name);
++    assertEquals(QUERY.type, transaction.type);
+     assertNull(transaction.serverIp);
+     assertEquals(Transaction.Status.SEND_FAIL, transaction.status);
+     assertNull(transaction.response);
+@@ -246,9 +234,8 @@ public class LocalhostResolverTest {
+     verify(mockVpn).recordTransaction(transactionCaptor.capture());
+ 
+     Transaction transaction = transactionCaptor.getValue();
+-    DnsUdpQuery query = DnsUdpQuery.fromUdpBody(QUERY_DATA);
+-    assertEquals(query.name, transaction.name);
+-    assertEquals(query.type, transaction.type);
++    assertEquals(QUERY.name, transaction.name);
++    assertEquals(QUERY.type, transaction.type);
+     assertNull(transaction.serverIp);
+     assertEquals(Transaction.Status.CANCELED, transaction.status);
+     assertNull(transaction.response);
+@@ -269,9 +256,8 @@ public class LocalhostResolverTest {
+     verify(mockVpn, timeout(1000)).recordTransaction(transactionCaptor.capture());
+ 
+     Transaction transaction = transactionCaptor.getValue();
+-    DnsUdpQuery query = DnsUdpQuery.fromUdpBody(QUERY_DATA);
+-    assertEquals(query.name, transaction.name);
+-    assertEquals(query.type, transaction.type);
++    assertEquals(QUERY.name, transaction.name);
++    assertEquals(QUERY.type, transaction.type);
+     assertNull(transaction.serverIp);
+     assertEquals(Transaction.Status.SEND_FAIL, transaction.status);
+     assertNull(transaction.response);

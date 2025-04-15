@@ -1,0 +1,923 @@
+diff --git a/app/src/main/java/cn/rbc/termuc/Application.java b/app/src/main/java/cn/rbc/termuc/Application.java
+index 3dd888f..a6d5295 100644
+--- a/app/src/main/java/cn/rbc/termuc/Application.java
++++ b/app/src/main/java/cn/rbc/termuc/Application.java
+@@ -19,7 +19,7 @@ public class Application extends android.app.Application
+ 		KEY_DARKMODE = "darkmode",
+ 		KEY_WORDWRAP = "wordwrap",
+ 		KEY_WHITESPACE = "whitespace",
+-		KEY_TEXTSIZE = "textsize",
++		KEY_TEXTSIZE = "fontsize",
+ 		KEY_SHOW_HIDDEN = "showhidden",
+ 		KEY_CHECKAPP = "checkapp",
+ 		KEY_INITAPP = "initapp",
+diff --git a/app/src/main/java/cn/rbc/termuc/EditFragment.java b/app/src/main/java/cn/rbc/termuc/EditFragment.java
+index b05baba..5f454c9 100644
+--- a/app/src/main/java/cn/rbc/termuc/EditFragment.java
++++ b/app/src/main/java/cn/rbc/termuc/EditFragment.java
+@@ -14,6 +14,7 @@ import android.content.*;
+ import android.content.res.*;
+ import android.util.DisplayMetrics;
+ import android.util.TypedValue;
++import android.app.AlertDialog.Builder;
+ 
+ public class EditFragment extends Fragment
+ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+@@ -71,14 +72,17 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 				editor.setLanguage(LanguageNonProg.getInstance());
+ 			}
+ 			ma.setEditor(editor);
+-			if (tp != TYPE_OTHER)
++			if (tp != TYPE_OTHER && "s".equals(Application.completion))
+ 				MainActivity.lsp.didOpen(fl, tp==TYPE_CPP?"cpp":"c", s);
+ 		} catch(IOException fnf) {
+ 			fnf.printStackTrace();
+ 			HelperUtils.show(Toast.makeText(ma, R.string.open_failed, Toast.LENGTH_SHORT));
+ 		}
+-		if ((type&TYPE_MASK)!=TYPE_OTHER && "s".equals(Application.completion))
+-			editor.setFormatter(this);
++		if ((type&TYPE_MASK)!=TYPE_OTHER) {
++			if ("s".equals(Application.completion))
++				editor.setFormatter(this);
++			editor.setAutoComplete("l".equals(Application.completion));
++		}
+ 		lastModified = fl.lastModified();
+ 		return editor;
+ 	}
+@@ -89,7 +93,7 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 
+ 	@Override
+ 	public int createAutoIndent(CharSequence text) {
+-		return 0;
++		return 4;
+ 	}
+ 
+ 	@Override
+@@ -119,7 +123,6 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 	}
+ 
+ 	private int mVer;
+-	//private long mSendTime;
+ 
+ 	public void onChanged(CharSequence c, int start, int ver, boolean ins, boolean typ) {
+ 		TextEditor editor = ed;
+@@ -151,8 +154,6 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 		}
+ 		range.msg = (String)c;
+ 		changes.add(range);
+-		//HelperUtils.show(Toast.makeText(getContext()), text.isBatchEdit(), 
+-		//if (text.isBatchEdit())
+ 		Lsp lsp = MainActivity.lsp;
+ 		lsp.didChange(fl, ver, changes);
+ 		// when inserting text and typing, call for completion
+@@ -160,29 +161,20 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 			lsp.completionTry(fl, range.enl, range.enc+1, c.charAt(0));
+ 		changes.clear();
+ 		mVer = ver;
+-		//mSendTime = System.currentTimeMillis();
+-		//editor.postDelayed(this, 1000L);
+ 	}
+-/*
+-	public void run() {
+-		Lsp lsp = MainActivity.lsp;
+-		if (lsp.lastReceivedTime()<mSendTime) {
+-			lsp.didChange(fl, mVer, ed.getText().toString());
+-		}
+-	}
+-*/
++
+ 	@Override
+ 	public void onResume() {
+ 		super.onResume();
+ 		long mLast = fl.lastModified();
+ 		if (mLast>lastModified) {
+ 			lastModified = mLast;
+-			new AlertDialog.Builder(getContext())
+-			.setTitle(fl.getName())
+-			.setMessage(getString(R.string.file_modified, fl.getName()))
+-			.setPositiveButton(android.R.string.ok, this)
+-			.setNegativeButton(android.R.string.cancel, null)
+-			.create().show();
++			Builder bd = new Builder(getContext());
++			bd.setTitle(fl.getName());
++			bd.setMessage(getString(R.string.file_modified, fl.getName()));
++			bd.setPositiveButton(android.R.string.ok, this);
++			bd.setNegativeButton(android.R.string.cancel, null);
++			bd.create().show();
+ 		}
+ 	}
+ 
+@@ -243,7 +235,7 @@ implements OnTextChangeListener, DialogInterface.OnClickListener, Formatter
+ 		fr.close();
+ 		String s = sb.toString();
+ 		ed.setText(s);
+-		if ((type&TYPE_MASK)!=TYPE_OTHER)
++		if ((type&TYPE_MASK)!=TYPE_OTHER && "s".equals(Application.completion))
+ 			ed.getText().setOnTextChangeListener(this);
+ 		return s;
+ 	}
+diff --git a/app/src/main/java/cn/rbc/termuc/Lsp.java b/app/src/main/java/cn/rbc/termuc/Lsp.java
+index 96722fe..8e891ec 100644
+--- a/app/src/main/java/cn/rbc/termuc/Lsp.java
++++ b/app/src/main/java/cn/rbc/termuc/Lsp.java
+@@ -13,6 +13,7 @@ import cn.rbc.codeeditor.util.*;
+ import android.widget.*;
+ import android.util.JsonReader;
+ import java.util.concurrent.*;
++import java.util.concurrent.locks.*;
+ 
+ public class Lsp implements Runnable {
+ 	final static int INITIALIZE = 0, INITIALIZED = 1,
+@@ -28,7 +29,7 @@ public class Lsp implements Runnable {
+ 	private long mLastReceivedTime;
+ 	private Handler mRead;
+ 
+-	public void start(final Context mC, Handler read) {
++	public void start(Context mC, Handler read) {
+ 		Utils.run(mC, "/system/bin/toybox", new String[]{"nc", "-l", "-s", Application.lsp_host, "-p", Integer.toString(Application.lsp_port), "clangd", "--header-insertion-decorators=0"}, Utils.ROOT.getAbsolutePath(), true);
+ 		mExecutor = Executors.newSingleThreadExecutor();
+ 		sk = new Socket();
+@@ -36,6 +37,16 @@ public class Lsp implements Runnable {
+ 		new Thread(this).start();
+ 	}
+ 
++	public void end() {
++		try {
++			sk.close();
++		} catch(IOException ioe) {}
++	}
++
++	public boolean isEnded() {
++		return sk.isClosed();
++	}
++
+ 	public void run() {
+ 		try{
+ 			int i = 0;
+@@ -49,6 +60,7 @@ public class Lsp implements Runnable {
+ 			} while (i<=20 && !sk.isConnected());
+ 			if (i>20)
+ 				throw new IOException("Connection failed");
++			initialize();
+ 			InputStream is = sk.getInputStream();
+ 			byte[] b = new byte[16];
+ 			OUTER:	while (true) {
+@@ -59,6 +71,8 @@ public class Lsp implements Runnable {
+ 					b[i] = (byte)t;
+ 				}
+ 				if (Arrays.equals(b, CONTENTLEN)) {
++					Message msg = new Message();
++					msg.what = tp;
+ 					int len = 0;
+ 					while (Character.isDigit(i = is.read()))
+ 						len = len * 10 + i - 48;
+@@ -69,11 +83,8 @@ public class Lsp implements Runnable {
+ 						strb[i] = (byte)is.read();
+ 					InputStream r = new ByteArrayInputStream(strb);
+ 					JsonReader limitInput = new JsonReader(new InputStreamReader(r, StandardCharsets.UTF_8));
+-					Message msg = new Message();
+-					msg.what = tp;
+ 					msg.obj = limitInput;
+ 					mRead.sendMessage(msg);
+-					//tp = NOTI;
+ 				}
+ 			}
+ 			is.close();
+@@ -99,7 +110,7 @@ public class Lsp implements Runnable {
+ 		return s.toString();
+ 	}
+ 
+-	public void initialize() {
++	private void initialize() {
+ 		tp = INITIALIZE;
+ 		StringBuilder sb = new StringBuilder("{\"processId\":");
+ 		sb.append(android.os.Process.myPid());
+@@ -141,7 +152,7 @@ public class Lsp implements Runnable {
+ 		m.append("\",\"version\":0,\"text\":");
+ 		m.append(JSONObject.quote(ct));
+ 		m.append("}}");
+-		//tp = OPEN;
++		tp = OPEN;
+ 		mExecutor.execute(new Send("textDocument/didOpen", m.toString(), false));
+ 	}
+ 
+@@ -149,7 +160,7 @@ public class Lsp implements Runnable {
+ 		StringBuilder s = new StringBuilder("{\"textDocument\":{\"uri\":");
+ 		s.append(JSONObject.quote(Uri.fromFile(f).toString()));
+ 		s.append("}}");
+-		//tp = SAVE;
++		tp = SAVE;
+ 		mExecutor.execute(new Send("textDocument/didSave", s.toString(), false));
+ 	}
+ 
+@@ -161,6 +172,7 @@ public class Lsp implements Runnable {
+ 		sb.append("},\"contentChanges\":[{\"text\":");
+ 		sb.append(JSONObject.quote(text));
+ 		sb.append("}]}").toString();
++		tp = CHANGE;
+ 		mExecutor.execute(new Send("textDocument/didChange", sb.toString(), false));
+ 	}
+ 
+@@ -186,7 +198,7 @@ public class Lsp implements Runnable {
+ 		}
+ 		sb.setCharAt(sb.length()-1, ']');
+ 		sb.append('}');
+-		//tp = CHANGE;
++		tp = CHANGE;
+ 		mExecutor.execute(new Send("textDocument/didChange", sb.toString(), false));
+ 	}
+ 
+diff --git a/app/src/main/java/cn/rbc/termuc/MainActivity.java b/app/src/main/java/cn/rbc/termuc/MainActivity.java
+index f073808..5233d51 100644
+--- a/app/src/main/java/cn/rbc/termuc/MainActivity.java
++++ b/app/src/main/java/cn/rbc/termuc/MainActivity.java
+@@ -34,7 +34,7 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+     private ArrayAdapter<String> hda;
+ 	private FileAdapter adp;
+ 	private EditFragment lastFrag = null;
+-	private boolean byhand = true, inited = false, transZ;
++	private boolean byhand = true, transZ;
+     private View keys, showlist;
+     private File pwd;
+     private TextView pwdpth, msgEmpty, transTxV;
+@@ -120,7 +120,7 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+ 							   }, PackageManager.PERMISSION_GRANTED);
+ 		if (pref.getBoolean(TESTAPP, true))
+ 			Utils.testApp(this, false);
+-		if (pref.getBoolean(INITAPP, true))
++		else if (pref.getBoolean(INITAPP, true))
+ 			Utils.initBack(this, false);
+     }
+ 
+@@ -185,10 +185,6 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+ 					else
+ 						_i = -1;
+ 					if (_tp != -1) {
+-						if (!inited) {
+-							lsp.initialize();
+-							inited = true;
+-						}
+ 						EditFragment ef = new EditFragment(pwd.getPath(), _tp);
+ 						FragmentTransaction mts = getFragmentManager().beginTransaction()
+ 							.add(R.id.editFrag, ef, _it);
+@@ -348,15 +344,16 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+     protected void onRestoreInstanceState(Bundle bundle) {
+         super.onRestoreInstanceState(bundle);
+         pwd = new File(bundle.getString(PWD));
+-		int i = 0, j = 0;
++		int i = 0, j = 0, _tp = 0;
+ 		List<String> files = bundle.getStringArrayList(FILES);
+ 		if (files != null) {
+ 			FragmentManager fm = getFragmentManager();
+ 			for (String s:bundle.getStringArrayList(FILES)) {
+ 				hda.add(s);
+-				Fragment f = fm.findFragmentByTag(s);
++				EditFragment f = (EditFragment)fm.findFragmentByTag(s);
+ 				if (!f.isHidden()) {
+ 					j = i;
++					_tp = f.type;
+ 					codeEditor = (TextEditor)f.getView();
+ 				}
+ 				i++;
+@@ -370,6 +367,7 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+ 				byhand = false;
+ 				ab.setSelectedNavigationItem(j);
+ 				byhand = true;
++				setFileRunnable((_tp & EditFragment.TYPE_HEADER) == 0);
+ 			}
+ 		}
+ 		if (subc != null)
+@@ -422,14 +420,22 @@ DialogInterface.OnClickListener, MenuItem.OnMenuItemClickListener, Runnable {
+ 		switch (requestCode) {
+ 			case SETTING:
+ 			if (resultCode == RESULT_OK) {
++				boolean s = "s".equals(Application.completion);
+ 				FragmentManager fm = getFragmentManager();
+ 				for (int i=getActionBar().getNavigationItemCount() - 1;i >= 0;i--) {
+ 					Fragment f = fm.findFragmentByTag(hda.getItem(i));
+ 					TextEditor ed = (TextEditor)f.getView();
+-					ed.setFormatter("s".equals(Application.completion) ?(EditFragment)f: null);
++					ed.setFormatter(s?(EditFragment)f: null);
++					ed.setAutoComplete("l".equals(Application.completion));
+ 					ed.setWordWrap(Application.wordwrap);
+ 					ed.setShowNonPrinting(Application.whitespace);
+ 				}
++				if (s) {
++					if (lsp.isEnded())
++						lsp.start(this, hand);
++				} else if (!lsp.isEnded()) {
++					lsp.end();
++				}
+ 			} else if (resultCode == RESULT_FIRST_USER) {
+ 				recreate();
+ 			}
+diff --git a/app/src/main/java/cn/rbc/termuc/MainHandler.java b/app/src/main/java/cn/rbc/termuc/MainHandler.java
+index 0f58983..4cf1f42 100644
+--- a/app/src/main/java/cn/rbc/termuc/MainHandler.java
++++ b/app/src/main/java/cn/rbc/termuc/MainHandler.java
+@@ -106,6 +106,14 @@ public class MainHandler extends Handler implements Comparator<ErrSpan> {
+ 									sb.append(jr.nextString());
+ 								jr.close();
+ 								ma.lsp.setCompTrigs(sb.toString().toCharArray());
++								// what == Lsp.INITIALIZE
++								FragmentManager fm = ma.getFragmentManager();
++								for (int i=ma.getActionBar().getNavigationItemCount()-1;i>=0;i--) {
++									EditFragment ef = (EditFragment)fm.findFragmentByTag(ma.getTag(i));
++									int tp = ef.type;
++									if (tp != EditFragment.TYPE_OTHER)
++										ma.lsp.didOpen(ef.getFile(), tp==EditFragment.TYPE_CPP?"cpp":"c", ((TextEditor)ef.getView()).getText().toString());
++								}
+ 								return;
+ 							case RNG:
+ 								jr.beginObject();
+diff --git a/app/src/main/java/cn/rbc/termuc/SettingsActivity.java b/app/src/main/java/cn/rbc/termuc/SettingsActivity.java
+index 497ad0e..e10d01c 100644
+--- a/app/src/main/java/cn/rbc/termuc/SettingsActivity.java
++++ b/app/src/main/java/cn/rbc/termuc/SettingsActivity.java
+@@ -37,6 +37,7 @@ implements Preference.OnPreferenceChangeListener, Preference.OnPreferenceClickLi
+ 		mPort = (EditTextPreference)findPreference(Application.KEY_LSP_PORT);
+ 		findPreference(Application.KEY_CHECKAPP).setOnPreferenceClickListener(this);
+ 		findPreference(Application.KEY_INITAPP).setOnPreferenceClickListener(this);
++		onPreferenceChange(mEngine, mEngine.getValue());
+ 
+ 		mDark = Application.dark_mode;
+ 		mWrap = Application.wordwrap;
+@@ -69,8 +70,6 @@ implements Preference.OnPreferenceChangeListener, Preference.OnPreferenceClickLi
+ 			boolean enable = "s".equals(p2);
+ 			mHost.setEnabled(enable);
+ 			mPort.setEnabled(enable);
+-			if (!enable)
+-				HelperUtils.show(Toast.makeText(this, "敬请期待\nComing soon", Toast.LENGTH_SHORT));
+ 		}
+ 		return true;
+ 	}
+diff --git a/app/src/main/java/cn/rbc/termuc/Utils.java b/app/src/main/java/cn/rbc/termuc/Utils.java
+index 2b88a18..892072f 100644
+--- a/app/src/main/java/cn/rbc/termuc/Utils.java
++++ b/app/src/main/java/cn/rbc/termuc/Utils.java
+@@ -141,6 +141,8 @@ public class Utils {
+ 	}
+ 
+ 	public static void initBack(Activity ctx, boolean manually) {
++		try {
++			ctx.getPackageManager().getPackageInfo("com.termux", PackageManager.GET_GIDS);
+ 		Builder bd = new Builder(ctx);
+ 		bd.setTitle(R.string.init_termux);
+ 		bd.setMessage(R.string.init_inform);
+@@ -150,6 +152,10 @@ public class Utils {
+ 		if (!manually)
+ 			bd.setNeutralButton(R.string.initialized, it);
+ 		bd.create().show();
++		} catch (PackageManager.NameNotFoundException nne) {
++			if (manually)
++			HelperUtils.show(Toast.makeText(ctx, R.string.no_install, Toast.LENGTH_SHORT));
++		}
+ 	}
+ 
+ 	public static void copyJump(Context ctx) {
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/Language.java b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/Language.java
+index 9cb7847..bf94e85 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/Language.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/Language.java
+@@ -124,13 +124,13 @@ public abstract class Language
+ 		_name = new String[_namesMap.size()];
+ 		_namesMap.keySet().toArray(_name);
+ 	}
+-
++/*
+ 	public void addTypes(String[] types) {
+ 		for (String tp:types)
+ 			_namesMap.put(tp, Tokenizer.TYPE);
+ 		_name = new String[_namesMap.size()];
+ 		_namesMap.keySet().toArray(_name);
+-	}
++	}*/
+ 
+ 	public void addBasePackage(String name, String[] names)
+ 	{
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageC.java b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageC.java
+deleted file mode 100644
+index 869418c..0000000
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageC.java
++++ /dev/null
+@@ -1,73 +0,0 @@
+-/*
+- * Copyright (c) 2013 Tah Wei Hoon.
+- * All rights reserved. This program and the accompanying materials
+- * are made available under the terms of the Apache License Version 2.0,
+- * with full text available at http://www.apache.org/licenses/LICENSE-2.0.html
+- *
+- * This software is provided "as is". Use at your own risk.
+- */
+-package cn.rbc.codeeditor.lang;
+-
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-
+-/**
+- * Singleton class containing the symbols and operators of the C language
+- */
+-public class LanguageC extends Language{
+-	private static Language _theOne = null;
+-	
+-	private final static String[] keywords = {
+-		"auto", "const", "extern", "register", "static", "volatile",
+-		"sizeof", "typedef",
+-		"enum", "struct", "union",
+-		"break", "case", "continue", "default", "do", "else", "for",
+-		"goto", "if", "return", "switch", "while",
+-		};
+-	private final static String[] types = {
+-		"char", "double", "float", "int", "long", "short", "void",
+-		"signed", "unsigned", "_Bool", "_Complex", "_Imaginary"
+-	};
+-	private  final  static  String[] functions={
+-			"abort","abs","acos","asctime","asin","assert","atan","atan2","atexit","atof","atoi","atol"
+-			,"bsearch","calloc","ceil","clearerr","clock","cos","cosh","ctime","difftime","div"
+-			,"exit","exp","fabs","fclose","feof","ferror","fflush","fgetc","fgetpos","fgets","floor"
+-			,"fmod","fopen","fprintf","fputc","fputs","fread","free","freopen","frexp","fscanf","fseek","fsetpos","ftell","fwrite"
+-			,"getc","getchar","getenv","gets","gmtime","isalnum","isalpha","iscntrl","isdigit","isgraph","islower","isprint","ispunct","isspace","isupper","isxdigit","labs","ldexp","ldiv","localtime","log","log10","longjmp"
+-			,"main","malloc","memchr","memcmp","memcpy","memmove","memset","mktime","modf","perror","pow","printf"
+-			,"putc","putchar","puts","qsort","raise","rand","realloc","remove","rename","rewind"
+-			,"scanf","setbuf","setjmp","setvbuf","signal","sin","sinh","sprintf","sqrt","srand","sscanf","strcat","strchr","strcmp","strcoll","strcpy","strcspn","strerror","strftime","strlen","strncat","strncmp","strncpy","strpbrk","strrchr","strspn","strstr","strtod","strtok","strtol","strtoul","strxfrm","system"
+-			,"tan","tanh","time","tmpfile","tmpnam","tolower","toupper","ungetc","va_arg","vprintf","vfprintf"
+-			,"__LINE__","__FILE__","__DATE__","__TIME__","_cplusplus","__STDC__"
+-
+-	};
+-	private  final  static  String[] header={
+-			"math.h","stdio.h","stdlib.h","string.h","time.h","errno.h","ctype.h","local.h"
+-	};
+-	private final static String[] keynames = {
+-		"EOF", "NULL"
+-	};
+-	private final static String[] extraWord = {
+-		"define","include","ifdef","endif","ifndef","error","elif","line","pragma","undef","main"
+-	};
+-	private final static char[] BASIC_C_OPERATORS = {
+-			'(', ')', '{', '}', '.', ',', ';', '=', '+', '-',
+-			'/', '*', '&', '!', '|', ':', '[', ']', '<', '>',
+-			'?', '~', '%', '^'
+-	};
+-	public static Language getInstance(){
+-		if (_theOne == null)
+-			_theOne = new LanguageC();
+-		return _theOne;
+-	}
+-	
+-	private LanguageC(){
+-		setKeywords(keywords);
+-		addNames(header);
+-		addNames(functions);
+-		addNames(extraWord);
+-		addKeynames(keynames);
+-		addTypes(types);
+-		setOperators(BASIC_C_OPERATORS);
+-	}
+-}
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageCpp.java b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageCpp.java
+deleted file mode 100644
+index d042861..0000000
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/LanguageCpp.java
++++ /dev/null
+@@ -1,90 +0,0 @@
+-/*
+- * Copyright (c) 2011 Tah Wei Hoon.
+- * All rights reserved. This program and the accompanying materials
+- * are made available under the terms of the Apache License Version 2.0,
+- * with full text available at http://www.apache.org/licenses/LICENSE-2.0.html
+- *
+- * This software is provided "as is". Use at your own risk.
+- */
+-package cn.rbc.codeeditor.lang;
+-
+-public class LanguageCpp extends Language{
+-	private static Language _theOne = null;
+-	
+-	private final static String[] keywords = {
+-		"auto", "const", "extern", "mutable", "register", "static", "thread_local", "volatile",
+-		"new", "delete", "sizeof", "typedef", "typeid", "typename", "constexpr", "decltype",
+-		"const_cast", "dynamic_cast", "reinterpret_cast", "static_cast",
+-		"class", "enum", "explicit", "operator", "struct", "template", "union", "virtual",
+-		"private", "protected", "public", "friend", "this",
+-		"break", "case", "catch", "continue", "default", "do", "else", "for",
+-		"goto", "if", "return", "switch", "throw", "try", "while",
+-		"export", "namespace", "using", "asm", "inline","restrict"
+-		};
+-	private final static String[] types = {
+-		"bool", "char", "double", "float", "int", "long", "short", "void", "wchar_t",
+-		"signed", "unsigned", "char16_t", "char32_t"
+-	};
+-	private  final  static  String[] cFunctions={
+-		"abort()","abs(int num):int","acos(double arg):double","asctime(const struct tm *ptr):char *","asin(double arg):double","assert(int exp)","atan(double arg):double","atan2(double y,double x):double","atexit(void (*func)(void)):int","atof(const char *str):double","atoi(const char *str):int","atol(const char *str):long"
+-		,"bsearch(const void *key,const void *buf,size_t num,size_t size,int (*compare)(const void *,const void *))","calloc(size_t num, size_t size)","ceil(double num):double","clearerr(FILE *stream)","clock():clock_t","cos(double arg):double","cosh(double arg):double","ctime(const time_t *time):char *","difftime(time_t time2,time_t time1):double","div(int numerator,int denominator):div_t"
+-		,"exit(int exit_code)","exp(double arg):double","fabs(double arg):double","fclose(FILE *stream):int","feof(FILE *stream):int","ferror(FILE *stream):int","fflush(FILE *stream):int","fgetc(FILE *stream):int","fgetpos(FILE *stream,fpos_t *position):int","fgets(char *str, int num,FILE *stream):char *","floor(double arg):double"
+-		,"fmod(double x,double y):double","fopen(const char *fname, const char *mode):FILE *","fprintf(FILE *stream,const char *format,...):int","fputc(int ch,FILE *stream):int","fputs(const char *str,FILE *stream):int","fread(void *buffer, size_t size, size_t num, FILE *stream):int","free(void *ptr)","freopen(const char *fname,const char *mode,FILE *stream):FILE *","frexp(double num,int *exp):double","fscanf(FILE *stream,const char *format,...):double","fseek(FILE *stream,long offset,int origin):int","fsetpos(FILE *stream,const fpos_t *position):int","ftell(FILE *stream):long","fwrite(const void *buffer,size_t size,size_t count,FILE *stream):int"
+-		,"getc(FILE *stream):int","getchar():int","getenv(const char *name):char *","gets(char *str):char *","gmtime(const time_t *time):struct tm *","isalnum(int ch):int","isalpha(int ch):int","iscntrl(int ch):int","isdigit(int ch):int","isgraph(int ch):int","islower(int ch):int","isprint(int ch):int","ispunct(int ch):int","isspace(int ch):int","isupper(int ch):int","isxdigit(int ch):int","labs(long num):long","ldexp(double num,int exp):double","ldiv(long numerator,long denominator):ldiv_t","localtime(const time_t *time):struct tm *","log(double num):double","log10(double num):double","longjmp(jmp_buf envbuf,int status)"
+-		,"malloc(size_t size):void *","memchr(const void *buffer,int ch,size_t count):void *","memcmp(const void *buffer1,const void *buffer2,size_t count):int","memcpy(void *to,const void *from,size_t count):void *","memmove(void *to,const void *from,size_t count):void *","memset(void *buffer,int ch,size_t count):void *","mktime(struct tm *time):time_t","modf(double num,double *i):double","perror(const char *str)","pow(double base,double exp):double","printf(const char *format,...):int"
+-		,"putc(int ch,FILE *stream):int","putchar(int ch):int","puts(char *str):int","qsort(void *buf,size_t num,size_t size,int (*compare)(const void *,const void *))","raise(int signal):int","rand():int","realloc(void *ptr,size_t size):void *","remove(const char *fname):int","rename(const char *oldfname,const char *newfname):int","rewind(FILE *stream)"
+-		,"scanf(const char *format,...):int","setbuf(FILE *stream,char *buffer)","setjmp(jmp_buf envbuf):int","setvbuf(FILE *stream,char *buffer,int mode,size_t size):int","signal(int signal,void (*func)(int))","sin(double arg):double","sinh(double arg):double","sprintf(char *buffer,const char *format,...):int","sqrt(double num):double","srand(unsigned seed)","sscanf(const char *buffer,const char *format,...):int","strcat(char *str1,const char *str2):char *","strchr(const char *str, int ch):char *","strcmp(const char *str1,const char *str2):int","strcoll(const char *str1,const char *str2):int","strcpy(char *to,const char *from):char *","strcspn(const char *str1,const char *str2):size_t","strerror(int num):char *","strftime(char *str,size_t maxsize,const char *fmt,struct tm *time):size_t","strlen(char *str):size_t","strncat(char *str1,const char *str2,size_t count):char *","strncmp(const char *str1,const char *str2,size_t count):int","strncpy(char *to,const char *from,size_t count):char *","strpbrk(const char *str1,const char *str2):char *","strrchr(const char *str,int ch):char *","strspn(const char *str1, const char *str2):size_t","strstr(const char *str1, const char *str2):char *","strtod(const char *start,char **end):double","strtok(char *str1,const char *str2):char *","strtol(const char *start,char **end,int base):long","strtoul(const char *start,char **end,int base):unsigned long","strxfrm(char *str1,const char *str2,size_t num):size_t","system(const char *command):int"
+-		,"tan(double arg):double","tanh(double arg):double","time(time_t *time):time_t","tmpfile():FILE *","tmpnam(char *name):char *","tolower(int ch):int","toupper(int ch):int","ungetc(int ch, FILE *stream):int","va_arg(va_list arg_ptr,type):type","vprintf(char *format,va_list arg_ptr):int","vfprintf(FILE *stream,const char *format,va_list arg_ptr):int","vsprintf(char *buffer,char *format,va_list arg_ptr):int"
+-	};
+-
+-	private  final  static  String[]  preDefineField={
+-		"__LINE__","__FILE__","__DATE__","__TIME__","__cplusplus","__STDC__","__func__","__VA_ARGS__","__attribute__"
+-	};
+-	private  final  static  String[] cppNamespace ={
+-		"std"
+-	};
+-	private final static String[] cppNames = {
+-		"NULL", "EOF", "nullptr", "true", "false"
+-	};
+-	private  final  static  String[] cppClasses={
+-		//io
+-		"fstream","ifstream","ofstream","cout","cin","cerr","endl"
+-		//模板库
+-		,"bitset","string","list","deque","map","multimap","multiset","set","priority_queue","queue","stack","vector"
+-		//c++11 模板库
+-		,"array","forward_list","unordered_map","unordered_set"
+-	};
+-
+-	private  final  static  String[] cppFunctions={
+-			"any()","append()","assign()","at()","back()","bad()","begin()","c_str()","capacity()","clear()","compare()","copy()","count()","data()","empty()","end()","eof()","equal_range()","erase()","fail()","fill()","find()","find_first_not_of()","find_first_of()","find_last_not_of()","find_last_of()","flags()","flip()","flush()","front()","fstream"
+-			,"gcount()","get()","get_allocator()","getline()","good()","ignore()","insert()","iterator()","key_comp()","length()","lower_bound()","max_size()","merge()","none()","open()","peek()","pop()","pop_back()","pop_front()","precision()","push()","push_back()","push_front()","put()","putback"
+-			,"rbegin()","rdstate()","read()","remove()","remove_if()","rend()","replace()","reserve()","reset()","resize()","reverse()","rfind()","seekg()","seekp()","set()","setf()","size()","sort()","splice()","substr()","swap()","sync_with_stdio()","tellg()","tellp()","test()","to_string()","to_ulong()","top"
+-			,"unique()","unsetf()","upper_bound()","value_comp()","width()","write()"
+-	};
+-
+-	private  final  static  String[] extraWord={
+-			"define","include","ifdef","endif","ifndef","error","elif","line","pragma","undef","main"
+-	};
+-	private final static char[] BASIC_C_OPERATORS = {
+-			'(', ')', '{', '}', '.', ',', ';', '=', '+', '-',
+-			'/', '*', '&', '!', '|', ':', '[', ']', '<', '>',
+-			'?', '~', '%', '^'
+-	};
+-	public static Language getInstance(){
+-		if (_theOne == null)
+-			_theOne = new LanguageCpp();
+-		return _theOne;
+-	}
+-	private LanguageCpp(){
+-		setOperators(BASIC_C_OPERATORS);
+-		setKeywords(keywords);
+-		addKeynames(cppNames);
+-		addTypes(types);
+-		addNames(cFunctions);
+-		addNames(preDefineField);
+-		addNames(cppNamespace);
+-		addNames(cppClasses);
+-		addNames(cppFunctions);
+-		addNames(extraWord);
+-	}
+-}
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CLanguage.java b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CLanguage.java
+index 288bb88..49f90ed 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CLanguage.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CLanguage.java
+@@ -6,15 +6,43 @@ import cn.rbc.codeeditor.util.*;
+ public class CLanguage extends Language{
+ 	private static Language _theOne = null;
+ 
+-	/*private final static String[] types = {
+-		"char", "double", "float", "int", "long", "short", "void", "signed", "unsigned"
+-		/*"auto", "const", "extern", "register", "static", "volatile",
+-		"signed", "unsigned", "sizeof", "typedef",
++	private final static String[] keywords = {
++		"auto", "const", "extern", "register", "static", "volatile",
++		"sizeof", "typedef",
+ 		"enum", "struct", "union",
+ 		"break", "case", "continue", "default", "do", "else", "for",
+-		"goto", "if", "return", "switch", "while"
+-	};*/
+-
++		"goto", "if", "return", "switch", "while",
++	/*};
++	private final static String[] types = {*/
++		"char", "double", "float", "int", "long", "short", "void",
++		"signed", "unsigned", "_Bool", "_Complex", "_Imaginary"
++	};
++	private  final  static  String[] functions={
++		"abort","abs","acos","asctime","asin","assert","atan","atan2","atexit","atof","atoi","atol"
++		,"bsearch","calloc","ceil","clearerr","clock","cos","cosh","ctime","difftime","div"
++		,"exit","exp","fabs","fclose","feof","ferror","fflush","fgetc","fgetpos","fgets","floor"
++		,"fmod","fopen","fprintf","fputc","fputs","fread","free","freopen","frexp","fscanf","fseek","fsetpos","ftell","fwrite"
++		,"getc","getchar","getenv","gets","gmtime","isalnum","isalpha","iscntrl","isdigit","isgraph","islower","isprint","ispunct","isspace","isupper","isxdigit","labs","ldexp","ldiv","localtime","log","log10","longjmp"
++		,"main","malloc","memchr","memcmp","memcpy","memmove","memset","mktime","modf","perror","pow","printf"
++		,"putc","putchar","puts","qsort","raise","rand","realloc","remove","rename","rewind"
++		,"scanf","setbuf","setjmp","setvbuf","signal","sin","sinh","sprintf","sqrt","srand","sscanf","strcat","strchr","strcmp","strcoll","strcpy","strcspn","strerror","strftime","strlen","strncat","strncmp","strncpy","strpbrk","strrchr","strspn","strstr","strtod","strtok","strtol","strtoul","strxfrm","system"
++		,"tan","tanh","time","tmpfile","tmpnam","tolower","toupper","ungetc","va_arg","vprintf","vfprintf"
++		,"__LINE__","__FILE__","__DATE__","__TIME__","_cplusplus","__STDC__"
++	};
++	private  final  static  String[] header={
++		"math.h","stdio.h","stdlib.h","string.h","time.h","errno.h","ctype.h","local.h"
++	};
++	private final static String[] keynames = {
++		"EOF", "NULL"
++	};
++	private final static String[] extraWord = {
++		"define","include","ifdef","endif","ifndef","error","elif","line","pragma","undef","main"
++	};
++	private final static char[] BASIC_C_OPERATORS = {
++		'(', ')', '{', '}', '.', ',', ';', '=', '+', '-',
++		'/', '*', '&', '!', '|', ':', '[', ']', '<', '>',
++		'?', '~', '%', '^'
++	};
+ 	public static Language getInstance(){
+ 		if(_theOne == null){
+ 			_theOne = new CLanguage();
+@@ -22,6 +50,15 @@ public class CLanguage extends Language{
+ 		return _theOne;
+ 	}
+ 
++	private CLanguage() {
++		setKeywords(keywords);
++		addNames(header);
++		addNames(functions);
++		addNames(extraWord);
++		addKeynames(keynames);
++		setOperators(BASIC_C_OPERATORS);
++	}
++
+ 	@Override
+ 	public boolean isProgLang() {
+ 		return true;
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CppLanguage.java b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CppLanguage.java
+index 7930025..69de08e 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CppLanguage.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/lang/c/CppLanguage.java
+@@ -5,7 +5,65 @@ import cn.rbc.codeeditor.util.*;
+ 
+ public class CppLanguage extends Language{
+ 	private static Language _theOne = null;
++	private final static String[] keywords = {
++		"auto", "const", "extern", "mutable", "register", "static", "thread_local", "volatile",
++		"new", "delete", "sizeof", "typedef", "typeid", "typename", "constexpr", "decltype",
++		"const_cast", "dynamic_cast", "reinterpret_cast", "static_cast",
++		"class", "enum", "explicit", "operator", "struct", "template", "union", "virtual",
++		"private", "protected", "public", "friend", "this",
++		"break", "case", "catch", "continue", "default", "do", "else", "for",
++		"goto", "if", "return", "switch", "throw", "try", "while",
++		"export", "namespace", "using", "asm", "inline","restrict",
++	/*};
++	private final static String[] types = {*/
++		"bool", "char", "double", "float", "int", "long", "short", "void", "wchar_t",
++		"signed", "unsigned", "char16_t", "char32_t"
++	};
++	private  final  static  String[] cFunctions={
++		"abort()","abs(int num):int","acos(double arg):double","asctime(const struct tm *ptr):char *","asin(double arg):double","assert(int exp)","atan(double arg):double","atan2(double y,double x):double","atexit(void (*func)(void)):int","atof(const char *str):double","atoi(const char *str):int","atol(const char *str):long"
++		,"bsearch(const void *key,const void *buf,size_t num,size_t size,int (*compare)(const void *,const void *))","calloc(size_t num, size_t size)","ceil(double num):double","clearerr(FILE *stream)","clock():clock_t","cos(double arg):double","cosh(double arg):double","ctime(const time_t *time):char *","difftime(time_t time2,time_t time1):double","div(int numerator,int denominator):div_t"
++		,"exit(int exit_code)","exp(double arg):double","fabs(double arg):double","fclose(FILE *stream):int","feof(FILE *stream):int","ferror(FILE *stream):int","fflush(FILE *stream):int","fgetc(FILE *stream):int","fgetpos(FILE *stream,fpos_t *position):int","fgets(char *str, int num,FILE *stream):char *","floor(double arg):double"
++		,"fmod(double x,double y):double","fopen(const char *fname, const char *mode):FILE *","fprintf(FILE *stream,const char *format,...):int","fputc(int ch,FILE *stream):int","fputs(const char *str,FILE *stream):int","fread(void *buffer, size_t size, size_t num, FILE *stream):int","free(void *ptr)","freopen(const char *fname,const char *mode,FILE *stream):FILE *","frexp(double num,int *exp):double","fscanf(FILE *stream,const char *format,...):double","fseek(FILE *stream,long offset,int origin):int","fsetpos(FILE *stream,const fpos_t *position):int","ftell(FILE *stream):long","fwrite(const void *buffer,size_t size,size_t count,FILE *stream):int"
++		,"getc(FILE *stream):int","getchar():int","getenv(const char *name):char *","gets(char *str):char *","gmtime(const time_t *time):struct tm *","isalnum(int ch):int","isalpha(int ch):int","iscntrl(int ch):int","isdigit(int ch):int","isgraph(int ch):int","islower(int ch):int","isprint(int ch):int","ispunct(int ch):int","isspace(int ch):int","isupper(int ch):int","isxdigit(int ch):int","labs(long num):long","ldexp(double num,int exp):double","ldiv(long numerator,long denominator):ldiv_t","localtime(const time_t *time):struct tm *","log(double num):double","log10(double num):double","longjmp(jmp_buf envbuf,int status)"
++		,"malloc(size_t size):void *","memchr(const void *buffer,int ch,size_t count):void *","memcmp(const void *buffer1,const void *buffer2,size_t count):int","memcpy(void *to,const void *from,size_t count):void *","memmove(void *to,const void *from,size_t count):void *","memset(void *buffer,int ch,size_t count):void *","mktime(struct tm *time):time_t","modf(double num,double *i):double","perror(const char *str)","pow(double base,double exp):double","printf(const char *format,...):int"
++		,"putc(int ch,FILE *stream):int","putchar(int ch):int","puts(char *str):int","qsort(void *buf,size_t num,size_t size,int (*compare)(const void *,const void *))","raise(int signal):int","rand():int","realloc(void *ptr,size_t size):void *","remove(const char *fname):int","rename(const char *oldfname,const char *newfname):int","rewind(FILE *stream)"
++		,"scanf(const char *format,...):int","setbuf(FILE *stream,char *buffer)","setjmp(jmp_buf envbuf):int","setvbuf(FILE *stream,char *buffer,int mode,size_t size):int","signal(int signal,void (*func)(int))","sin(double arg):double","sinh(double arg):double","sprintf(char *buffer,const char *format,...):int","sqrt(double num):double","srand(unsigned seed)","sscanf(const char *buffer,const char *format,...):int","strcat(char *str1,const char *str2):char *","strchr(const char *str, int ch):char *","strcmp(const char *str1,const char *str2):int","strcoll(const char *str1,const char *str2):int","strcpy(char *to,const char *from):char *","strcspn(const char *str1,const char *str2):size_t","strerror(int num):char *","strftime(char *str,size_t maxsize,const char *fmt,struct tm *time):size_t","strlen(char *str):size_t","strncat(char *str1,const char *str2,size_t count):char *","strncmp(const char *str1,const char *str2,size_t count):int","strncpy(char *to,const char *from,size_t count):char *","strpbrk(const char *str1,const char *str2):char *","strrchr(const char *str,int ch):char *","strspn(const char *str1, const char *str2):size_t","strstr(const char *str1, const char *str2):char *","strtod(const char *start,char **end):double","strtok(char *str1,const char *str2):char *","strtol(const char *start,char **end,int base):long","strtoul(const char *start,char **end,int base):unsigned long","strxfrm(char *str1,const char *str2,size_t num):size_t","system(const char *command):int"
++		,"tan(double arg):double","tanh(double arg):double","time(time_t *time):time_t","tmpfile():FILE *","tmpnam(char *name):char *","tolower(int ch):int","toupper(int ch):int","ungetc(int ch, FILE *stream):int","va_arg(va_list arg_ptr,type):type","vprintf(char *format,va_list arg_ptr):int","vfprintf(FILE *stream,const char *format,va_list arg_ptr):int","vsprintf(char *buffer,char *format,va_list arg_ptr):int"
++	};
+ 
++	private  final  static  String[]  preDefineField={
++		"__LINE__","__FILE__","__DATE__","__TIME__","__cplusplus","__STDC__","__func__","__VA_ARGS__","__attribute__"
++	};
++	private  final  static  String[] cppNamespace ={
++		"std"
++	};
++	private final static String[] cppNames = {
++		"NULL", "EOF", "nullptr", "true", "false"
++	};
++	private  final  static  String[] cppClasses={
++		//io
++		"fstream","ifstream","ofstream","cout","cin","cerr","endl"
++		//模板库
++		,"bitset","string","list","deque","map","multimap","multiset","set","priority_queue","queue","stack","vector"
++		//c++11 模板库
++		,"array","forward_list","unordered_map","unordered_set"
++	};
++
++	private  final  static  String[] cppFunctions={
++		"any()","append()","assign()","at()","back()","bad()","begin()","c_str()","capacity()","clear()","compare()","copy()","count()","data()","empty()","end()","eof()","equal_range()","erase()","fail()","fill()","find()","find_first_not_of()","find_first_of()","find_last_not_of()","find_last_of()","flags()","flip()","flush()","front()","fstream"
++		,"gcount()","get()","get_allocator()","getline()","good()","ignore()","insert()","iterator()","key_comp()","length()","lower_bound()","max_size()","merge()","none()","open()","peek()","pop()","pop_back()","pop_front()","precision()","push()","push_back()","push_front()","put()","putback"
++		,"rbegin()","rdstate()","read()","remove()","remove_if()","rend()","replace()","reserve()","reset()","resize()","reverse()","rfind()","seekg()","seekp()","set()","setf()","size()","sort()","splice()","substr()","swap()","sync_with_stdio()","tellg()","tellp()","test()","to_string()","to_ulong()","top"
++		,"unique()","unsetf()","upper_bound()","value_comp()","width()","write()"
++	};
++
++	private  final  static  String[] extraWord={
++		"define","include","ifdef","endif","ifndef","error","elif","line","pragma","undef","main"
++	};
++	private final static char[] BASIC_C_OPERATORS = {
++		'(', ')', '{', '}', '.', ',', ';', '=', '+', '-',
++		'/', '*', '&', '!', '|', ':', '[', ']', '<', '>',
++		'?', '~', '%', '^'
++	};
+ 	public static Language getInstance(){
+ 		if(_theOne == null){
+ 			_theOne = new CppLanguage();
+@@ -13,6 +71,19 @@ public class CppLanguage extends Language{
+ 		return _theOne;
+ 	}
+ 
++	private CppLanguage() {
++		setOperators(BASIC_C_OPERATORS);
++		setKeywords(keywords);
++		addKeynames(cppNames);
++		//addTypes(types);
++		addNames(cFunctions);
++		addNames(preDefineField);
++		addNames(cppNamespace);
++		addNames(cppClasses);
++		addNames(cppFunctions);
++		addNames(extraWord);
++	}
++
+ 	@Override
+ 	public boolean isProgLang() {
+ 		return true;
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/view/FreeScrollingTextField.java b/codeeditor/src/main/java/cn/rbc/codeeditor/view/FreeScrollingTextField.java
+index 6372599..662610a 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/view/FreeScrollingTextField.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/view/FreeScrollingTextField.java
+@@ -519,17 +519,17 @@ public abstract class FreeScrollingTextField extends View
+ 				break;
+ 		}
+ 		mAutoCompletePanel._off = cursorPosition - curr;
+-		/*
+ 		char ch = text.charAt(0);
+-		if (isAutoCompeted && cursorPosition - curr > 0 && Character.isLetterOrDigit(ch))
++		if (isAutoCompeted)
++			if (cursorPosition - curr > 0 && Character.isLetterOrDigit(ch)) {
+ 			//是否开启代码提示
+ 			// log("subSequence:"+hDoc.subSequence(curr, caretPosition - curr));
+ 			// if (isAutoCompeted) {
+ 			// Log.i("AutoCompete", text+" "+cursorPosition+" "+curr);
+ 			mAutoCompletePanel.update(hDoc.subSequence(curr, cursorPosition - curr));
+ 			// }
+-		else
+-			mAutoCompletePanel.dismiss();*/
++			} else
++				mAutoCompletePanel.dismiss();
+ 	}
+ 
+     private void resetView() {
+@@ -638,8 +638,6 @@ public abstract class FreeScrollingTextField extends View
+             isLayout = right > 0;
+ 			if (!mCtrlr.lexing)
+ 				invalidate();
+-           // mAutoCompletePanel.setWidth(getWidth() / 2);
+-            //mAutoCompletePanel.setHeight(getHeight() / 2);
+         }
+         super.onLayout(changed, left, top, right, bottom);
+     }
+@@ -2042,6 +2040,9 @@ public abstract class FreeScrollingTextField extends View
+         isAutoCompeted = enable;
+     }
+ 
++	public boolean isAutoComplete() {
++		return isAutoCompeted;
++	}
+     /**
+      * Enable/disable long-pressing capitalization.
+      * When enabled, a long-press on a hardware key capitalizes that letter.
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoCompletePanel.java b/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoCompletePanel.java
+index 5ed4443..0b697a3 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoCompletePanel.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoCompletePanel.java
+@@ -27,7 +27,6 @@ import cn.rbc.codeeditor.util.*;
+ public class AutoCompletePanel implements OnItemClickListener {
+ 
+     public static Language _globalLanguage = LanguageNonProg.getInstance();
+-	// public CharSequence _constraint;
+     public int _off;
+     private FreeScrollingTextField _textField;
+     private Context _context;
+@@ -121,31 +120,39 @@ public class AutoCompletePanel implements OnItemClickListener {
+ 	}
+ 
+     public void select(int pos) {
+-		Deque<Edit> edits = _adapter.getItem(pos).edits;
+-		Document doc = _textField.getText();
+-		doc.beginBatchEdit();
+-		doc.setTyping(false);
+-		Edit it = edits.pollFirst();
+-		int mc = it.start + it.text.length();
+-		long tp = System.nanoTime();
+-		doc.deleteAt(it.start, it.len, tp);
+-		doc.insertBefore(it.text.toCharArray(), it.start, tp);
+-		while (!edits.isEmpty()) {
+-			it = edits.pop();
+-			int st = it.start, l = it.len;
+-			String tx = it.text;
+-			doc.deleteAt(st, l, tp);
+-			doc.insertBefore(tx.toCharArray(), st, tp);
+-			if (st + l <= mc)
+-				mc += tx.length() - l;
+-			else if (st < mc)
+-				mc = st + tx.length();
++		ListItem itm = _adapter.getItem(pos);
++		Deque<Edit> edits = itm.edits;
++		if (edits.isEmpty()) {
++			String text = itm.label;
++			int idx = text.indexOf('(');
++			if (idx >= 0)
++				text = text.substring(0, idx+1);
++			_textField.replaceText(_textField.getCaretPosition()-_off, _off, text);
++		} else {
++			Document doc = _textField.getText();
++			doc.beginBatchEdit();
++			doc.setTyping(false);
++			Edit it = edits.pollFirst();
++			int mc = it.start + it.text.length();
++			long tp = System.nanoTime();
++			doc.deleteAt(it.start, it.len, tp);
++			doc.insertBefore(it.text.toCharArray(), it.start, tp);
++			while (!edits.isEmpty()) {
++				it = edits.pop();
++				int st = it.start, l = it.len;
++				String tx = it.text;
++				doc.deleteAt(st, l, tp);
++				doc.insertBefore(tx.toCharArray(), st, tp);
++				if (st + l <= mc)
++					mc += tx.length() - l;
++				else if (st < mc)
++					mc = st + tx.length();
++			}
++			doc.endBatchEdit();
++			FreeScrollingTextField tf = _textField;
++			tf.moveCaret(mc);
++			tf.mCtrlr.determineSpans();
+ 		}
+-		doc.endBatchEdit();
+-		FreeScrollingTextField tf = _textField;
+-		tf.moveCaret(mc);
+-		tf.mCtrlr.determineSpans();
+-        //_textField.replaceText(_textField.getCaretPosition() - _off, _off, text);
+         _adapter.abort();
+         dismiss();
+     }
+@@ -211,7 +218,6 @@ public class AutoCompletePanel implements OnItemClickListener {
+ 											  Gravity.TOP);
+         }
+ 		_list.setSelection(0);
+-		//_autoCompletePanel.getListView().setFadingEdgeLength(0);
+ 		isShow = true;
+     }
+ 
+@@ -220,7 +226,6 @@ public class AutoCompletePanel implements OnItemClickListener {
+ 			_autoCompletePanel.dismiss();
+         }
+ 		isShow = false;
+-		//HelperUtils.show(Toast.makeText(_textField.getContext(), String.valueOf(isShow), 1));
+     }
+ 
+     public boolean isShow() {
+diff --git a/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoPanelAdapter.java b/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoPanelAdapter.java
+index e62d0bd..152e6ab 100644
+--- a/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoPanelAdapter.java
++++ b/codeeditor/src/main/java/cn/rbc/codeeditor/view/autocomplete/AutoPanelAdapter.java
+@@ -121,7 +121,6 @@ public class AutoPanelAdapter extends BaseAdapter  {
+             spannableString.setSpan(foregroundColorSpan, 0, text.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+         }
+         textView.setText(spannableString);
+-		//t = getItem(i).kind;
+ 		imageView.setImageBitmap(tp==2 || tp==3 ? bitmap : null);
+         return tempView;
+     }
+@@ -165,7 +164,7 @@ public class AutoPanelAdapter extends BaseAdapter  {
+                 }
+                 keywords = AutoCompletePanel._globalLanguage.getKeywords();
+                 for (String k : keywords) {
+-                    if (k.indexOf(input) == 0)
++                    if (k.indexOf(input) == 3)
+                         buf.add(k);
+                 }
+                 keywords = AutoCompletePanel._globalLanguage.getNames();
+@@ -173,7 +172,6 @@ public class AutoPanelAdapter extends BaseAdapter  {
+                     if (k.toLowerCase().startsWith(input))
+                         buf.add(k);
+                 }
+-               // mAutoComplete._off = input;
+                 FilterResults filterResults = new FilterResults();
+                 filterResults.values = buf;   // results是上面的过滤结果
+                 filterResults.count = buf.size();  // 结果数量
+@@ -192,15 +190,15 @@ public class AutoPanelAdapter extends BaseAdapter  {
+                     for (int i = 0; i < stringArrayList.size(); i++) {
+                         String itemText = stringArrayList.get(i);
+ 						ListItem it = new ListItem();
+-						it.label = itemText;
+-						//it.bitmap = itemText.contains("(") ? bitmap : null;
++						if (itemText.startsWith("[K]")) {
++							it.label = itemText.substring(3);
++							it.kind = 14;
++						} else {
++							it.label = itemText;
++							it.kind = itemText.contains("(") ? 2 : 0;
++						}
++						listItems.add(it);
+                     }
+-                    int y = mTextFiled.getCaretY() + mTextFiled.rowHeight() / 2 - mTextFiled.getScrollY();
+-                  //  mAutoComplete.setHeight(getItemHeight() * Math.min(3, results.count));
+-
+-                  //  mAutoComplete.setHorizontalOffset(PADDING);
+-                    mAutoComplete.setWidth(mTextFiled.getWidth() - PADDING * 2);
+-                   // mAutoComplete.setVerticalOffset(y - mTextFiled.getHeight());//_textField.getCaretY()-_textField.getScrollY()-_textField.getHeight());
+                     notifyDataSetChanged();
+                     mAutoComplete.show();
+                 } else {

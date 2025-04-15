@@ -1,0 +1,1156 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/DeleteTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/DeleteTask.java
+index a5276299f..404648d9e 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/DeleteTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/DeleteTask.java
+@@ -20,9 +20,13 @@
+ 
+ package com.amaze.filemanager.asynchronous.asynctasks;
+ 
++import static com.amaze.filemanager.ui.activities.MainActivity.TAG_INTENT_FILTER_FAILED_OPS;
++import static com.amaze.filemanager.ui.activities.MainActivity.TAG_INTENT_FILTER_GENERAL;
++
+ import java.util.ArrayList;
+ 
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.application.AppConfig;
+ import com.amaze.filemanager.database.CryptHandler;
+ import com.amaze.filemanager.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.filesystem.HybridFile;
+@@ -49,9 +53,13 @@ import android.preference.PreferenceManager;
+ import android.provider.MediaStore;
+ import android.widget.Toast;
+ 
++import androidx.annotation.NonNull;
+ import androidx.documentfile.provider.DocumentFile;
+ 
+-public class DeleteTask extends AsyncTask<ArrayList<HybridFileParcelable>, String, Boolean> {
++import jcifs.smb.SmbException;
++
++public class DeleteTask
++    extends AsyncTask<ArrayList<HybridFileParcelable>, String, AsyncTaskResult<Boolean>> {
+ 
+   private ArrayList<HybridFileParcelable> files;
+   private Context cd;
+@@ -59,14 +67,14 @@ public class DeleteTask extends AsyncTask<ArrayList<HybridFileParcelable>, Strin
+   private CompressedExplorerFragment compressedExplorerFragment;
+   private DataUtils dataUtils = DataUtils.getInstance();
+ 
+-  public DeleteTask(Context cd) {
++  public DeleteTask(@NonNull Context cd) {
+     this.cd = cd;
+     rootMode =
+         PreferenceManager.getDefaultSharedPreferences(cd)
+             .getBoolean(PreferencesConstants.PREFERENCE_ROOTMODE, false);
+   }
+ 
+-  public DeleteTask(Context cd, CompressedExplorerFragment compressedExplorerFragment) {
++  public DeleteTask(@NonNull Context cd, CompressedExplorerFragment compressedExplorerFragment) {
+     this.cd = cd;
+     rootMode =
+         PreferenceManager.getDefaultSharedPreferences(cd)
+@@ -80,10 +88,10 @@ public class DeleteTask extends AsyncTask<ArrayList<HybridFileParcelable>, Strin
+     Toast.makeText(cd, values[0], Toast.LENGTH_SHORT).show();
+   }
+ 
+-  protected Boolean doInBackground(ArrayList<HybridFileParcelable>... p1) {
++  protected AsyncTaskResult<Boolean> doInBackground(ArrayList<HybridFileParcelable>... p1) {
+     files = p1[0];
+     boolean wasDeleted = true;
+-    if (files.size() == 0) return true;
++    if (files.size() == 0) return new AsyncTaskResult<>(true);
+ 
+     if (files.get(0).isOtgFile()) {
+       for (HybridFileParcelable file : files) {
+@@ -143,10 +151,10 @@ public class DeleteTask extends AsyncTask<ArrayList<HybridFileParcelable>, Strin
+             wasDeleted = false;
+             break;
+           }
+-        } catch (ShellNotRunningException e) {
++        } catch (ShellNotRunningException | SmbException e) {
+           e.printStackTrace();
+           wasDeleted = false;
+-          break;
++          return new AsyncTaskResult<>(e);
+         }
+       }
+     }
+@@ -170,21 +178,25 @@ public class DeleteTask extends AsyncTask<ArrayList<HybridFileParcelable>, Strin
+       }
+     }
+ 
+-    return wasDeleted;
++    return new AsyncTaskResult<>(wasDeleted);
+   }
+ 
+   @Override
+-  public void onPostExecute(Boolean wasDeleted) {
++  public void onPostExecute(AsyncTaskResult<Boolean> result) {
+ 
+     Intent intent = new Intent(MainActivity.KEY_INTENT_LOAD_LIST);
+-    String path = files.get(0).getParent(cd);
+-    intent.putExtra(MainActivity.KEY_INTENT_LOAD_LIST_FILE, path);
+-    cd.sendBroadcast(intent);
++    if (files.size() > 0) {
++      String path = files.get(0).getParent(cd);
++      intent.putExtra(MainActivity.KEY_INTENT_LOAD_LIST_FILE, path);
++      cd.sendBroadcast(intent);
++    }
+ 
+-    if (!wasDeleted) {
+-      Toast.makeText(cd, cd.getResources().getString(R.string.error), Toast.LENGTH_SHORT).show();
++    if (result.result == null || !result.result) {
++      cd.sendBroadcast(
++          new Intent(TAG_INTENT_FILTER_GENERAL)
++              .putParcelableArrayListExtra(TAG_INTENT_FILTER_FAILED_OPS, files));
+     } else if (compressedExplorerFragment == null) {
+-      Toast.makeText(cd, cd.getResources().getString(R.string.done), Toast.LENGTH_SHORT).show();
++      AppConfig.toast(cd, R.string.done);
+     }
+ 
+     if (compressedExplorerFragment != null) {
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+index 23f4a4007..ed09bb4c7 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+@@ -33,6 +33,7 @@ import java.net.MalformedURLException;
+ import java.util.ArrayList;
+ import java.util.EnumSet;
+ 
++import com.amaze.filemanager.R;
+ import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.application.AppConfig;
+ import com.amaze.filemanager.database.CloudHandler;
+@@ -215,7 +216,7 @@ public class HybridFile {
+     return null;
+   }
+ 
+-  public long lastModified() throws SmbException {
++  public long lastModified() {
+     switch (mode) {
+       case SFTP:
+         return SshClientUtils.<Long>execute(
+@@ -227,7 +228,14 @@ public class HybridFile {
+             });
+       case SMB:
+         SmbFile smbFile = getSmbFile();
+-        if (smbFile != null) return smbFile.lastModified();
++        if (smbFile != null) {
++          try {
++            return smbFile.lastModified();
++          } catch (SmbException e) {
++            Log.e(TAG, "Error getting last modified time for SMB [" + path + "]", e);
++            return 0;
++          }
++        }
+         break;
+       case FILE:
+         return getFile().lastModified();
+@@ -710,7 +718,7 @@ public class HybridFile {
+     switch (mode) {
+       case SFTP:
+         try {
+-          SshClientUtils.execute(
++          SshClientUtils.<Boolean>execute(
+               new SFtpClientTemplate(path) {
+                 @Override
+                 public Boolean execute(SFTPClient client) {
+@@ -729,6 +737,12 @@ public class HybridFile {
+                     }
+                   } catch (IOException e) {
+                     Log.w("DEBUG.listFiles", "IOException", e);
++                    AppConfig.toast(
++                        context,
++                        context.getString(
++                            R.string.cannot_read_directory,
++                            parseAndFormatUriForDisplay(path),
++                            e.getMessage()));
+                   }
+                   return true;
+                 }
+@@ -1191,24 +1205,27 @@ public class HybridFile {
+     } else FileUtil.mkdir(getFile(), context);
+   }
+ 
+-  public boolean delete(Context context, boolean rootmode) throws ShellNotRunningException {
++  public boolean delete(Context context, boolean rootmode)
++      throws ShellNotRunningException, SmbException {
+     if (isSftp()) {
+-      SshClientUtils.execute(
+-          new SFtpClientTemplate(path) {
+-            @Override
+-            public Void execute(SFTPClient client) throws IOException {
+-              if (isDirectory(AppConfig.getInstance()))
+-                client.rmdir(SshClientUtils.extractRemotePathFrom(path));
+-              else client.rm(SshClientUtils.extractRemotePathFrom(path));
+-              return null;
+-            }
+-          });
+-      return true;
++      Boolean retval =
++          SshClientUtils.<Boolean>execute(
++              new SFtpClientTemplate(path) {
++                @Override
++                public Boolean execute(@NonNull SFTPClient client) throws IOException {
++                  String _path = SshClientUtils.extractRemotePathFrom(path);
++                  if (isDirectory(AppConfig.getInstance())) client.rmdir(_path);
++                  else client.rm(_path);
++                  return client.statExistence(_path) == null;
++                }
++              });
++      return retval != null && retval;
+     } else if (isSmb()) {
+       try {
+         getSmbFile().delete();
+       } catch (SmbException e) {
+-        e.printStackTrace();
++        Log.e(TAG, "Error delete SMB file", e);
++        throw e;
+       }
+     } else {
+       if (isRoot() && rootmode) {
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/Operations.java b/app/src/main/java/com/amaze/filemanager/filesystem/Operations.java
+index 609616c94..f9600289c 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/Operations.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/Operations.java
+@@ -20,13 +20,19 @@
+ 
+ package com.amaze.filemanager.filesystem;
+ 
++import static com.amaze.filemanager.ui.activities.MainActivity.TAG_INTENT_FILTER_FAILED_OPS;
++import static com.amaze.filemanager.ui.activities.MainActivity.TAG_INTENT_FILTER_GENERAL;
++
+ import java.io.ByteArrayInputStream;
+ import java.io.File;
+ import java.io.IOException;
+ import java.io.OutputStream;
+ import java.net.MalformedURLException;
+ import java.net.URL;
++import java.util.ArrayList;
++import java.util.concurrent.Executor;
+ 
++import com.amaze.filemanager.R;
+ import com.amaze.filemanager.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.filesystem.cloud.CloudUtil;
+ import com.amaze.filemanager.filesystem.files.FileUtils;
+@@ -41,9 +47,11 @@ import com.amaze.filemanager.utils.OpenMode;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ 
+ import android.content.Context;
++import android.content.Intent;
+ import android.os.AsyncTask;
+ import android.os.Build;
+ import android.text.TextUtils;
++import android.util.Log;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.documentfile.provider.DocumentFile;
+@@ -54,6 +62,10 @@ import net.schmizz.sshj.sftp.SFTPClient;
+ 
+ public class Operations {
+ 
++  private static Executor executor = AsyncTask.THREAD_POOL_EXECUTOR;
++
++  private static final String TAG = Operations.class.getSimpleName();
++
+   // reserved characters by OS, shall not be allowed in file names
+   private static final String FOREWARD_SLASH = "/";
+   private static final String BACKWARD_SLASH = "\\";
+@@ -208,7 +220,7 @@ public class Operations {
+         }
+         return null;
+       }
+-    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
++    }.executeOnExecutor(executor);
+   }
+ 
+   public static void mkfile(
+@@ -356,15 +368,15 @@ public class Operations {
+         }
+         return null;
+       }
+-    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
++    }.executeOnExecutor(executor);
+   }
+ 
+   public static void rename(
+-      final HybridFile oldFile,
+-      final HybridFile newFile,
++      @NonNull final HybridFile oldFile,
++      @NonNull final HybridFile newFile,
+       final boolean rootMode,
+-      final Context context,
+-      final ErrorCallBack errorCallBack) {
++      @NonNull final Context context,
++      @NonNull final ErrorCallBack errorCallBack) {
+ 
+     new AsyncTask<Void, Void, Void>() {
+ 
+@@ -388,15 +400,31 @@ public class Operations {
+         if (oldFile.isSmb()) {
+           try {
+             SmbFile smbFile = oldFile.getSmbFile();
++            // FIXME: smbFile1 should be created from SmbUtil too so it can be mocked
+             SmbFile smbFile1 = new SmbFile(new URL(newFile.getPath()), smbFile.getContext());
+-            if (smbFile1.exists()) {
++            if (newFile.exists()) {
+               errorCallBack.exists(newFile);
+               return null;
+             }
+             smbFile.renameTo(smbFile1);
+             if (!smbFile.exists() && smbFile1.exists()) errorCallBack.done(newFile, true);
+           } catch (SmbException | MalformedURLException e) {
+-            e.printStackTrace();
++            String errmsg =
++                context.getString(
++                    R.string.cannot_rename_file,
++                    HybridFile.parseAndFormatUriForDisplay(oldFile.path),
++                    e.getMessage());
++            try {
++              ArrayList<HybridFileParcelable> failedOps = new ArrayList<>();
++              failedOps.add(new HybridFileParcelable(oldFile.getSmbFile()));
++              context.sendBroadcast(
++                  new Intent(TAG_INTENT_FILTER_GENERAL)
++                      .putParcelableArrayListExtra(TAG_INTENT_FILTER_FAILED_OPS, failedOps));
++            } catch (SmbException exceptionThrownDuringBuildParcelable) {
++              Log.e(
++                  TAG, "Error creating HybridFileParcelable", exceptionThrownDuringBuildParcelable);
++            }
++            Log.e(TAG, errmsg, e);
+           }
+           return null;
+         } else if (oldFile.isSftp()) {
+@@ -410,7 +438,25 @@ public class Operations {
+                         SshClientUtils.extractRemotePathFrom(newFile.getPath()));
+                     errorCallBack.done(newFile, true);
+                   } catch (IOException e) {
+-                    e.printStackTrace();
++                    String errmsg =
++                        context.getString(
++                            R.string.cannot_rename_file,
++                            HybridFile.parseAndFormatUriForDisplay(oldFile.path),
++                            e.getMessage());
++                    Log.e(TAG, errmsg);
++                    ArrayList<HybridFileParcelable> failedOps = new ArrayList<>();
++                    // Nobody care the size or actual permission here. Put a simple "r" and zero
++                    // here
++                    failedOps.add(
++                        new HybridFileParcelable(
++                            oldFile.path,
++                            "r",
++                            oldFile.lastModified(),
++                            0,
++                            oldFile.isDirectory(context)));
++                    context.sendBroadcast(
++                        new Intent(TAG_INTENT_FILTER_GENERAL)
++                            .putParcelableArrayListExtra(TAG_INTENT_FILTER_FAILED_OPS, failedOps));
+                     errorCallBack.done(newFile, false);
+                   }
+                   return null;
+@@ -522,7 +568,7 @@ public class Operations {
+           FileUtils.scanFile(context, hybridFiles);
+         }
+       }
+-    }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
++    }.executeOnExecutor(executor);
+   }
+ 
+   private static int checkFolder(final File folder, Context context) {
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt
+new file mode 100644
+index 000000000..e9c55bca7
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt
+@@ -0,0 +1,114 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks
++
++import android.content.Context
++import android.os.Build
++import android.os.Looper
++import android.os.storage.StorageManager
++import androidx.lifecycle.Lifecycle
++import androidx.test.core.app.ActivityScenario
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.R
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.test.TestUtils
++import com.amaze.filemanager.ui.activities.MainActivity
++import io.reactivex.plugins.RxJavaPlugins
++import io.reactivex.schedulers.Schedulers
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.BeforeClass
++import org.junit.runner.RunWith
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.LooperMode
++import org.robolectric.shadows.ShadowToast
++
++@RunWith(AndroidJUnit4::class)
++@LooperMode(LooperMode.Mode.PAUSED)
++abstract class AbstractDeleteTaskTestBase {
++
++    private var ctx: Context? = null
++
++    companion object {
++        @BeforeClass
++        fun bootstrap() {
++            RxJavaPlugins.reset()
++            RxJavaPlugins.setIoSchedulerHandler { Schedulers.trampoline() }
++        }
++    }
++
++    @Before
++    fun setUp() {
++        ctx = ApplicationProvider.getApplicationContext()
++    }
++
++    protected fun doTestDeleteFileOk(file: HybridFileParcelable) {
++        val task = DeleteTask(ctx!!)
++        val result = task.doInBackground(ArrayList(listOf(file)))
++        assertTrue(result.result)
++        assertNull(result.exception)
++
++        task.onPostExecute(result)
++        shadowOf(Looper.getMainLooper()).idle()
++        assertNotNull(ShadowToast.getLatestToast())
++        assertEquals(ctx?.getString(R.string.done), ShadowToast.getTextOfLatestToast())
++    }
++
++    protected fun doTestDeleteFileAccessDenied(file: HybridFileParcelable) {
++
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) TestUtils.initializeInternalStorage()
++
++        ActivityScenario.launch(MainActivity::class.java).also {
++            shadowOf(Looper.getMainLooper()).idle()
++        }.moveToState(Lifecycle.State.STARTED).onActivity { activity ->
++
++            val task = DeleteTask(ctx!!)
++            val result = task.doInBackground(ArrayList(listOf(file)))
++            if (result.result != null) {
++                assertFalse(result.result)
++            } else {
++                assertNotNull(result.exception)
++            }
++            task.onPostExecute(result)
++            shadowOf(Looper.getMainLooper()).idle()
++
++            shadowOf(activity).broadcastIntents.run {
++                assertTrue(size > 0)
++                find {
++                    MainActivity.TAG_INTENT_FILTER_GENERAL.equals(it.action)
++                }!!.apply {
++                    assertEquals(MainActivity.TAG_INTENT_FILTER_GENERAL, action)
++                    getParcelableArrayListExtra<HybridFileParcelable>(
++                        MainActivity.TAG_INTENT_FILTER_FAILED_OPS)
++                        .run {
++                            assertTrue(size > 0)
++                            assertEquals(file.path, this[0].path)
++                        }
++                }
++            }
++        }.moveToState(Lifecycle.State.DESTROYED).close().run {
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
++                shadowOf(ctx?.getSystemService(StorageManager::class.java))
++                        .resetStorageVolumeList()
++        }
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt
+new file mode 100644
+index 000000000..7ece72afe
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt
+@@ -0,0 +1,44 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks
++
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.shadows.ShadowSmbUtil
++import com.amaze.filemanager.shadows.ShadowSmbUtil.Companion.PATH_CANNOT_DELETE_FILE
++import com.amaze.filemanager.utils.SmbUtil
++import org.junit.Test
++import org.robolectric.annotation.Config
++
++@Config(shadows = [ShadowMultiDex::class, ShadowSmbUtil::class])
++class SmbDeleteTaskTest : AbstractDeleteTaskTestBase() {
++
++    @Test
++    fun testDeleteSmbFileOk() {
++        doTestDeleteFileOk(
++                HybridFileParcelable(SmbUtil.create("smb://user:password@1.2.3.4/just/a/file.txt")))
++    }
++
++    @Test
++    fun testDeleteSmbFileAccessDenied() {
++        doTestDeleteFileAccessDenied(HybridFileParcelable(SmbUtil.create(PATH_CANNOT_DELETE_FILE)))
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SshDeleteTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SshDeleteTaskTest.kt
+new file mode 100644
+index 000000000..c950855d1
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SshDeleteTaskTest.kt
+@@ -0,0 +1,67 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks
++
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.filesystem.ssh.test.MockSshConnectionPools
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.ShadowCryptUtil
++import net.schmizz.sshj.sftp.FileAttributes
++import net.schmizz.sshj.sftp.RemoteResourceInfo
++import net.schmizz.sshj.xfer.FilePermission
++import org.junit.Test
++import org.mockito.Mockito.`when`
++import org.mockito.Mockito.mock
++import org.robolectric.annotation.Config
++
++@Config(shadows = [ShadowMultiDex::class, ShadowCryptUtil::class])
++class SshDeleteTaskTest : AbstractDeleteTaskTestBase() {
++
++    @Test
++    fun testDeleteSshFileOk() {
++        MockSshConnectionPools.prepareCanDeleteScenario()
++        doTestDeleteFileOk(createSshHybridFileParcelable())
++    }
++
++    @Test
++    fun testDeleteSshFileAccessDenied() {
++        MockSshConnectionPools.prepareCannotDeleteScenario()
++        doTestDeleteFileAccessDenied(createSshHybridFileParcelable())
++    }
++
++    private fun createSshHybridFileParcelable(): HybridFileParcelable {
++        val ri = mock(RemoteResourceInfo::class.java).apply {
++            val fa = mock(FileAttributes::class.java).apply {
++                `when`(mtime).thenReturn(System.currentTimeMillis() / 1000)
++                `when`(size).thenReturn(16384)
++                `when`(permissions).thenReturn(
++                    setOf(FilePermission.USR_RWX,
++                        FilePermission.GRP_RWX,
++                        FilePermission.OTH_RWX))
++            }
++            `when`(name).thenReturn("test.file")
++            `when`(attributes).thenReturn(fa)
++        }
++
++        return HybridFileParcelable("ssh://user:password@127.0.0.1:22222",
++                false, ri)
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/AbstractOperationsTestBase.kt b/app/src/test/java/com/amaze/filemanager/filesystem/AbstractOperationsTestBase.kt
+new file mode 100644
+index 000000000..855aec583
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/AbstractOperationsTestBase.kt
+@@ -0,0 +1,98 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem
++
++import android.content.Context
++import android.os.Build
++import android.os.Looper
++import android.os.storage.StorageManager
++import androidx.lifecycle.Lifecycle
++import androidx.test.core.app.ActivityScenario
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.test.TestUtils
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.utils.OpenMode
++import org.junit.Assert
++import org.junit.Before
++import org.junit.runner.RunWith
++import org.robolectric.Shadows
++import org.robolectric.android.util.concurrent.InlineExecutorService
++import org.robolectric.annotation.LooperMode
++import org.robolectric.shadows.ShadowPausedAsyncTask
++
++@RunWith(AndroidJUnit4::class)
++@LooperMode(LooperMode.Mode.PAUSED)
++abstract class AbstractOperationsTestBase {
++
++    protected var ctx: Context? = null
++
++    protected val blankCallback = object : Operations.ErrorCallBack {
++        override fun exists(file: HybridFile?) = Unit
++        override fun launchSAF(file: HybridFile?) = Unit
++        override fun launchSAF(file: HybridFile?, file1: HybridFile?) = Unit
++        override fun done(hFile: HybridFile?, b: Boolean) = Unit
++        override fun invalidName(file: HybridFile?) = Unit
++    }
++
++    @Before
++    fun setUp() {
++        ctx = ApplicationProvider.getApplicationContext()
++        ShadowPausedAsyncTask.overrideExecutor(InlineExecutorService())
++    }
++
++    protected fun testRenameFileAccessDenied(
++        fileMode: OpenMode,
++        oldFilePath: String,
++        newFilePath: String
++    ) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) TestUtils.initializeInternalStorage()
++
++        ActivityScenario.launch(MainActivity::class.java).also {
++            Shadows.shadowOf(Looper.getMainLooper()).idle()
++        }.moveToState(Lifecycle.State.STARTED).onActivity { activity ->
++
++            val oldFile = HybridFile(fileMode, oldFilePath)
++            val newFile = HybridFile(fileMode, newFilePath)
++            Operations.rename(oldFile, newFile, false, activity, blankCallback)
++            Shadows.shadowOf(Looper.getMainLooper()).idle()
++
++            Shadows.shadowOf(activity).broadcastIntents.run {
++                Assert.assertNotNull(this)
++                Assert.assertTrue(this.size > 0)
++                this[0].apply {
++                    Assert.assertEquals(MainActivity.TAG_INTENT_FILTER_GENERAL, this.action)
++                    this
++                    .getParcelableArrayListExtra<HybridFileParcelable>(
++                            MainActivity.TAG_INTENT_FILTER_FAILED_OPS)
++                    .run {
++                        Assert.assertTrue(this.size > 0)
++                        Assert.assertEquals(oldFilePath, this[0].path)
++                    }
++                }
++            }
++        }.moveToState(Lifecycle.State.DESTROYED).close().run {
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
++                Shadows.shadowOf(ctx?.getSystemService(StorageManager::class.java))
++                        .resetStorageVolumeList()
++        }
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/SmbOperationsTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/SmbOperationsTest.kt
+new file mode 100644
+index 000000000..b65fdb70d
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/SmbOperationsTest.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem
++
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.shadows.ShadowSmbUtil
++import com.amaze.filemanager.shadows.ShadowSmbUtil.Companion.PATH_CANNOT_RENAME_OLDFILE
++import com.amaze.filemanager.utils.OpenMode.SMB
++import org.junit.Test
++import org.robolectric.annotation.Config
++import org.robolectric.shadows.ShadowAsyncTask
++
++@Config(shadows = [ShadowSmbUtil::class, ShadowMultiDex::class, ShadowAsyncTask::class])
++class SmbOperationsTest : AbstractOperationsTestBase() {
++
++    @Test
++    fun testRenameFileAccessDenied() {
++        super.testRenameFileAccessDenied(SMB,
++                PATH_CANNOT_RENAME_OLDFILE,
++                "smb://user:password@1.2.3.4/cannot/rename.file.new")
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/SshOperationsTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/SshOperationsTest.kt
+new file mode 100644
+index 000000000..b6646f527
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/SshOperationsTest.kt
+@@ -0,0 +1,51 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem
++
++import com.amaze.filemanager.filesystem.ssh.test.MockSshConnectionPools
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.utils.OpenMode
++import io.reactivex.plugins.RxJavaPlugins
++import io.reactivex.schedulers.Schedulers
++import org.junit.BeforeClass
++import org.junit.Test
++import org.robolectric.annotation.Config
++import org.robolectric.shadows.ShadowAsyncTask
++
++@Config(shadows = [ShadowMultiDex::class, ShadowAsyncTask::class])
++class SshOperationsTest : AbstractOperationsTestBase() {
++
++    companion object {
++        @BeforeClass
++        fun bootstrap() {
++            RxJavaPlugins.reset()
++            RxJavaPlugins.setIoSchedulerHandler { Schedulers.trampoline() }
++        }
++    }
++
++    @Test
++    fun testRenameFileAccessDenied() {
++        MockSshConnectionPools.prepareCannotDeleteScenario()
++        super.testRenameFileAccessDenied(OpenMode.SFTP,
++        "ssh://user:password@127.0.0.1:22222/tmp/old.file",
++        "ssh://user:password@127.0.0.1:22222/tmp/new.file")
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/smb/SmbHybridFileTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/smb/SmbHybridFileTest.kt
+new file mode 100644
+index 000000000..8734ead7e
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/smb/SmbHybridFileTest.kt
+@@ -0,0 +1,65 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.smb
++
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.filesystem.HybridFile
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.shadows.ShadowSmbUtil
++import com.amaze.filemanager.shadows.ShadowSmbUtil.Companion.PATH_CANNOT_DELETE_FILE
++import com.amaze.filemanager.utils.OpenMode.SMB
++import jcifs.smb.SmbException
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.LooperMode
++
++@RunWith(AndroidJUnit4::class)
++@Config(shadows = [ShadowSmbUtil::class, ShadowMultiDex::class])
++@LooperMode(LooperMode.Mode.PAUSED)
++class SmbHybridFileTest {
++
++    private var ctx: Context? = null
++
++    @Before
++    fun setUp() {
++        ctx = ApplicationProvider.getApplicationContext()
++    }
++
++    @Test
++    fun testDeleteOk() {
++        val file = HybridFile(SMB, "smb://user:password@1.2.3.4/just/a/file.txt")
++        file.delete(ctx, false)
++        assertFalse(file.exists())
++    }
++
++    @Test(expected = SmbException::class)
++    fun testDeleteAccessDenied() {
++        val file = HybridFile(SMB, PATH_CANNOT_DELETE_FILE)
++        file.delete(ctx, false)
++        assertTrue(file.exists())
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshHybridFileTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshHybridFileTest.kt
+new file mode 100644
+index 000000000..85ce13142
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/SshHybridFileTest.kt
+@@ -0,0 +1,76 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.ssh
++
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import com.amaze.filemanager.filesystem.HybridFile
++import com.amaze.filemanager.filesystem.ssh.test.MockSshConnectionPools
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.ShadowCryptUtil
++import com.amaze.filemanager.utils.OpenMode
++import io.reactivex.plugins.RxJavaPlugins
++import io.reactivex.schedulers.Schedulers
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Before
++import org.junit.BeforeClass
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.LooperMode
++import org.robolectric.shadows.ShadowAsyncTask
++
++@RunWith(RobolectricTestRunner::class)
++@LooperMode(LooperMode.Mode.PAUSED)
++@Config(shadows = [ShadowMultiDex::class, ShadowAsyncTask::class, ShadowCryptUtil::class])
++class SshHybridFileTest {
++
++    private var ctx: Context? = null
++
++    private val path: String = "ssh://user:password@127.0.0.1:22222/test.file"
++
++    companion object {
++        @BeforeClass
++        fun bootstrap() {
++            RxJavaPlugins.reset()
++            RxJavaPlugins.setIoSchedulerHandler { Schedulers.trampoline() }
++        }
++    }
++
++    @Before
++    fun setUp() {
++        ctx = ApplicationProvider.getApplicationContext()
++    }
++
++    @Test
++    fun testCanDelete() {
++        MockSshConnectionPools.prepareCanDeleteScenario()
++        assertTrue(HybridFile(OpenMode.SFTP, path).delete(ctx!!, false))
++    }
++
++    @Test
++    fun testCannotDelete() {
++        MockSshConnectionPools.prepareCannotDeleteScenario()
++        assertFalse(HybridFile(OpenMode.SFTP, path).delete(ctx!!, false))
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/ssh/test/MockSshConnectionPools.kt b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/test/MockSshConnectionPools.kt
+new file mode 100644
+index 000000000..4da4ae30b
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/ssh/test/MockSshConnectionPools.kt
+@@ -0,0 +1,94 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.ssh.test
++
++import com.amaze.filemanager.filesystem.ssh.SshConnectionPool
++import net.schmizz.sshj.SSHClient
++import net.schmizz.sshj.sftp.FileAttributes
++import net.schmizz.sshj.sftp.FileMode
++import net.schmizz.sshj.sftp.SFTPClient
++import net.schmizz.sshj.sftp.SFTPException
++import org.mockito.Mockito.*
++
++object MockSshConnectionPools {
++
++    private val hostKeyPair = TestUtils.createKeyPair()
++
++    private val userKeyPair = TestUtils.createKeyPair()
++
++    fun prepareCanDeleteScenario() {
++        doPrepareSSHClientInternal(true)
++    }
++
++    fun prepareCannotDeleteScenario() {
++        doPrepareSSHClientInternal(false)
++    }
++
++    // Yes, idiot hardcoded paths. Shall expand as more test cases arrive.
++    private fun doPrepareSSHClientInternal(canDelete: Boolean) {
++        TestUtils.saveSshConnectionSettings(hostKeyPair, "user", "password", userKeyPair.private)
++
++        val fileAttributes = mock(FileAttributes::class.java).apply {
++            `when`(type).thenReturn(FileMode.Type.DIRECTORY)
++        }
++        val sftpClient = mock(SFTPClient::class.java).apply {
++            doThrow(SFTPException("Access is denied."))
++                .`when`(this).rename("/tmp/old.file", "/tmp/new.file")
++            `when`(stat("/tmp/old.file")).thenReturn(fileAttributes)
++            `when`(stat("/tmp/new.file")).thenReturn(null)
++            val fa = mock(FileAttributes::class.java).apply {
++                `when`(type).thenReturn(FileMode.Type.REGULAR)
++            }
++            `when`(stat("/test.file")).thenReturn(fa)
++
++            if (canDelete) {
++                doNothing().`when`(this).rm(anyString())
++                doNothing().`when`(this).rmdir(anyString())
++            } else {
++                `when`(rm(anyString())).thenThrow(SFTPException("Access is denied."))
++                `when`(rmdir(anyString())).thenThrow(SFTPException("Access is denied."))
++            }
++        }
++        val sshClient = mock(SSHClient::class.java).apply {
++            doNothing().`when`(this).addHostKeyVerifier(anyString())
++            doNothing().`when`(this).connect(anyString(), anyInt())
++            doNothing().`when`(this).authPassword(anyString(), anyString())
++            doNothing().`when`(this).disconnect()
++            `when`(isConnected).thenReturn(true)
++            `when`(isAuthenticated).thenReturn(true)
++            `when`(newSFTPClient()).thenReturn(sftpClient)
++        }
++
++        /*
++         * We don't need to go through authentication flow here, and in fact SshAuthenticationTask
++         * was not working in the case of Operations.rename() due to the threading model
++         * Robolectric imposed. So we are injecting the SSHClient here by force.
++         */
++        SshConnectionPool::class.java.getDeclaredField("connections").run {
++            this.isAccessible = true
++            this.set(SshConnectionPool.getInstance(),
++                mutableMapOf(
++                        Pair<String, SSHClient>("ssh://user:password@127.0.0.1:22222", sshClient)))
++        }
++
++        SshConnectionPool.setSSHClientFactory { sshClient }
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt b/app/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt
+new file mode 100644
+index 000000000..177673918
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt
+@@ -0,0 +1,90 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.shadows
++
++import com.amaze.filemanager.utils.SmbUtil
++import jcifs.context.SingletonContext
++import jcifs.smb.SmbException
++import jcifs.smb.SmbFile
++import org.mockito.Mockito.*
++import org.robolectric.annotation.Implementation
++import org.robolectric.annotation.Implements
++@Implements(SmbUtil::class)
++class ShadowSmbUtil {
++
++    companion object {
++
++        const val PATH_CANNOT_DELETE_FILE = "smb://user:password@1.2.3.4/access/denied.file"
++        const val PATH_CANNOT_MOVE_FILE = "smb://user:password@1.2.3.4/cannot/move.file"
++        const val PATH_CANNOT_RENAME_OLDFILE = "smb://user:password@1.2.3.4/cannot/rename.file.old"
++        const val PATH_CAN_RENAME_OLDFILE = "smb://user:password@1.2.3.4/rename/old.file"
++        const val PATH_CAN_RENAME_NEWFILE = "smb://user:password@1.2.3.4/rename/new.file"
++
++        var mockDeleteAccessDenied: SmbFile? = null
++        var mockDeleteDifferentNetwork: SmbFile? = null
++        var mockCannotRenameOld: SmbFile? = null
++        var mockCanRename: SmbFile? = null
++
++        init {
++            mockDeleteAccessDenied = createInternal(PATH_CANNOT_DELETE_FILE).also {
++                `when`(it.delete()).thenThrow(SmbException("Access is denied."))
++                `when`(it.exists()).thenReturn(true)
++            }
++
++            mockDeleteDifferentNetwork = createInternal(PATH_CANNOT_MOVE_FILE).also {
++                `when`(it.delete()).thenThrow(SmbException("Cannot rename between different trees"))
++                `when`(it.exists()).thenReturn(true)
++            }
++
++            mockCanRename = createInternal(PATH_CAN_RENAME_OLDFILE).also {
++                doNothing().`when`(it).renameTo(any())
++            }
++
++            mockCannotRenameOld = createInternal(PATH_CANNOT_RENAME_OLDFILE)
++            `when`(mockCannotRenameOld!!.renameTo(any()))
++                    .thenThrow(SmbException("Access is denied."))
++            `when`(mockCannotRenameOld!!.exists()).thenReturn(true)
++        }
++
++        @JvmStatic @Implementation
++        fun create(path: String): SmbFile {
++
++            return when (path) {
++                PATH_CANNOT_DELETE_FILE -> mockDeleteAccessDenied!!
++                PATH_CANNOT_MOVE_FILE -> mockDeleteDifferentNetwork!!
++                PATH_CANNOT_RENAME_OLDFILE -> mockCannotRenameOld!!
++                PATH_CAN_RENAME_OLDFILE -> mockCanRename!!
++                else -> createInternal(path).also {
++                    doNothing().`when`(it).delete()
++                    `when`(it.exists()).thenReturn(false)
++                }
++            }
++        }
++
++        private fun createInternal(path: String): SmbFile {
++            return mock(SmbFile::class.java).also {
++                `when`(it.name).thenReturn(path.substring(path.lastIndexOf('/') + 1))
++                `when`(it.path).thenReturn(path)
++                `when`(it.context).thenReturn(SingletonContext.getInstance())
++            }
++        }
++    }
++}

@@ -1,0 +1,340 @@
+diff --git a/app/core/src/main/java/com/fsck/k9/DI.kt b/app/core/src/main/java/com/fsck/k9/DI.kt
+index 4600ecf48..cef044fe1 100644
+--- a/app/core/src/main/java/com/fsck/k9/DI.kt
++++ b/app/core/src/main/java/com/fsck/k9/DI.kt
+@@ -11,6 +11,8 @@ import com.fsck.k9.mail.TransportProvider
+ import com.fsck.k9.mail.power.PowerManager
+ import com.fsck.k9.mailstore.StorageManager
+ import com.fsck.k9.mailstore.mailStoreModule
++import com.fsck.k9.message.extractors.extractorModule
++import com.fsck.k9.message.html.htmlModule
+ import com.fsck.k9.power.TracingPowerManager
+ import com.fsck.k9.ui.endtoend.endToEndUiModule
+ import com.fsck.k9.ui.folders.FolderNameFormatter
+@@ -44,7 +46,9 @@ object DI {
+             openPgpModule,
+             autocryptModule,
+             mailStoreModule,
+-            backendModule
++            backendModule,
++            extractorModule,
++            htmlModule
+     )
+ 
+     @JvmStatic fun start(application: Application) {
+diff --git a/app/core/src/main/java/com/fsck/k9/Globals.java b/app/core/src/main/java/com/fsck/k9/Globals.java
+deleted file mode 100644
+index 31e74e898..000000000
+--- a/app/core/src/main/java/com/fsck/k9/Globals.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package com.fsck.k9;
+-
+-
+-import android.content.Context;
+-
+-
+-public class Globals {
+-    private static Context context;
+-
+-    static void setContext(Context context) {
+-        Globals.context = context;
+-    }
+-
+-    public static Context getContext() {
+-        if (context == null) {
+-            throw new IllegalStateException("No context provided");
+-        }
+-
+-        return context;
+-    }
+-}
+diff --git a/app/core/src/main/java/com/fsck/k9/K9.java b/app/core/src/main/java/com/fsck/k9/K9.java
+index 34e697025..c377b4d6d 100644
+--- a/app/core/src/main/java/com/fsck/k9/K9.java
++++ b/app/core/src/main/java/com/fsck/k9/K9.java
+@@ -549,7 +549,6 @@ public class K9 extends Application {
+         super.onCreate();
+         app = this;
+         DI.start(this);
+-        Globals.setContext(this);
+ 
+         K9MailLib.setDebugStatus(new K9MailLib.DebugStatus() {
+             @Override public boolean enabled() {
+diff --git a/app/core/src/main/java/com/fsck/k9/mailstore/AttachmentResolver.java b/app/core/src/main/java/com/fsck/k9/mailstore/AttachmentResolver.java
+index 9166eb0cf..ead83acb5 100644
+--- a/app/core/src/main/java/com/fsck/k9/mailstore/AttachmentResolver.java
++++ b/app/core/src/main/java/com/fsck/k9/mailstore/AttachmentResolver.java
+@@ -10,6 +10,8 @@ import android.net.Uri;
+ import android.support.annotation.Nullable;
+ import android.support.annotation.VisibleForTesting;
+ import android.support.annotation.WorkerThread;
++
++import com.fsck.k9.DI;
+ import timber.log.Timber;
+ 
+ import com.fsck.k9.mail.Body;
+@@ -41,7 +43,7 @@ public class AttachmentResolver {
+ 
+     @WorkerThread
+     public static AttachmentResolver createFromPart(Part part) {
+-        AttachmentInfoExtractor attachmentInfoExtractor = AttachmentInfoExtractor.getInstance();
++        AttachmentInfoExtractor attachmentInfoExtractor = DI.get(AttachmentInfoExtractor.class);
+         Map<String, Uri> contentIdToAttachmentUriMap = buildCidToAttachmentUriMap(attachmentInfoExtractor, part);
+         return new AttachmentResolver(contentIdToAttachmentUriMap);
+     }
+diff --git a/app/core/src/main/java/com/fsck/k9/mailstore/KoinModule.kt b/app/core/src/main/java/com/fsck/k9/mailstore/KoinModule.kt
+index 14e060738..a0e7a060c 100644
+--- a/app/core/src/main/java/com/fsck/k9/mailstore/KoinModule.kt
++++ b/app/core/src/main/java/com/fsck/k9/mailstore/KoinModule.kt
+@@ -4,4 +4,5 @@ import org.koin.dsl.module.applicationContext
+ 
+ val mailStoreModule = applicationContext {
+     bean { FolderRepositoryManager() }
++    bean { MessageViewInfoExtractor(get(), get(), get()) }
+ }
+diff --git a/app/core/src/main/java/com/fsck/k9/mailstore/LocalStore.java b/app/core/src/main/java/com/fsck/k9/mailstore/LocalStore.java
+index 20c25e8ee..7082574cd 100644
+--- a/app/core/src/main/java/com/fsck/k9/mailstore/LocalStore.java
++++ b/app/core/src/main/java/com/fsck/k9/mailstore/LocalStore.java
+@@ -31,6 +31,7 @@ import android.text.TextUtils;
+ 
+ import com.fsck.k9.Account;
+ import com.fsck.k9.AccountStats;
++import com.fsck.k9.DI;
+ import com.fsck.k9.K9;
+ import com.fsck.k9.Preferences;
+ import com.fsck.k9.controller.MessagingControllerCommands.PendingCommand;
+@@ -204,7 +205,7 @@ public class LocalStore {
+         messageFulltextCreator = MessageFulltextCreator.newInstance();
+         attachmentCounter = AttachmentCounter.newInstance();
+         pendingCommandSerializer = PendingCommandSerializer.getInstance();
+-        attachmentInfoExtractor = AttachmentInfoExtractor.getInstance();
++        attachmentInfoExtractor = DI.get(AttachmentInfoExtractor.class);
+ 
+         this.account = account;
+ 
+diff --git a/app/core/src/main/java/com/fsck/k9/mailstore/MessageViewInfoExtractor.java b/app/core/src/main/java/com/fsck/k9/mailstore/MessageViewInfoExtractor.java
+index d8cf01b12..f22bb2393 100644
+--- a/app/core/src/main/java/com/fsck/k9/mailstore/MessageViewInfoExtractor.java
++++ b/app/core/src/main/java/com/fsck/k9/mailstore/MessageViewInfoExtractor.java
+@@ -11,7 +11,6 @@ import android.support.annotation.Nullable;
+ import android.support.annotation.VisibleForTesting;
+ import android.support.annotation.WorkerThread;
+ 
+-import com.fsck.k9.Globals;
+ import com.fsck.k9.core.R;
+ import com.fsck.k9.crypto.MessageCryptoStructureDetector;
+ import com.fsck.k9.mail.Address;
+@@ -54,14 +53,6 @@ public class MessageViewInfoExtractor {
+     private final HtmlProcessor htmlProcessor;
+ 
+ 
+-    public static MessageViewInfoExtractor getInstance() {
+-        Context context = Globals.getContext();
+-        AttachmentInfoExtractor attachmentInfoExtractor = AttachmentInfoExtractor.getInstance();
+-        HtmlProcessor htmlProcessor = HtmlProcessor.newInstance();
+-        return new MessageViewInfoExtractor(context, attachmentInfoExtractor, htmlProcessor);
+-    }
+-
+-    @VisibleForTesting
+     MessageViewInfoExtractor(Context context, AttachmentInfoExtractor attachmentInfoExtractor,
+             HtmlProcessor htmlProcessor) {
+         this.context = context;
+diff --git a/app/core/src/main/java/com/fsck/k9/message/PgpMessageBuilder.java b/app/core/src/main/java/com/fsck/k9/message/PgpMessageBuilder.java
+index 3b0fb8652..35ded0e55 100644
+--- a/app/core/src/main/java/com/fsck/k9/message/PgpMessageBuilder.java
++++ b/app/core/src/main/java/com/fsck/k9/message/PgpMessageBuilder.java
+@@ -14,7 +14,7 @@ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+ import android.support.annotation.VisibleForTesting;
+ 
+-import com.fsck.k9.Globals;
++import com.fsck.k9.DI;
+ import com.fsck.k9.core.R;
+ import com.fsck.k9.activity.compose.ComposeCryptoStatus;
+ import com.fsck.k9.autocrypt.AutocryptOpenPgpApiInteractor;
+@@ -60,7 +60,7 @@ public class PgpMessageBuilder extends MessageBuilder {
+ 
+ 
+     public static PgpMessageBuilder newInstance() {
+-        Context context = Globals.getContext();
++        Context context = DI.get(Context.class);
+         MessageIdGenerator messageIdGenerator = MessageIdGenerator.getInstance();
+         BoundaryGenerator boundaryGenerator = BoundaryGenerator.getInstance();
+         AutocryptOperations autocryptOperations = AutocryptOperations.getInstance();
+diff --git a/app/core/src/main/java/com/fsck/k9/message/SimpleMessageBuilder.java b/app/core/src/main/java/com/fsck/k9/message/SimpleMessageBuilder.java
+index 7d9ae635e..89a683161 100644
+--- a/app/core/src/main/java/com/fsck/k9/message/SimpleMessageBuilder.java
++++ b/app/core/src/main/java/com/fsck/k9/message/SimpleMessageBuilder.java
+@@ -5,7 +5,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.support.annotation.VisibleForTesting;
+ 
+-import com.fsck.k9.Globals;
++import com.fsck.k9.DI;
+ import com.fsck.k9.mail.BoundaryGenerator;
+ import com.fsck.k9.mail.MessagingException;
+ import com.fsck.k9.mail.internet.MessageIdGenerator;
+@@ -15,7 +15,7 @@ import com.fsck.k9.mail.internet.MimeMessage;
+ public class SimpleMessageBuilder extends MessageBuilder {
+ 
+     public static SimpleMessageBuilder newInstance() {
+-        Context context = Globals.getContext();
++        Context context = DI.get(Context.class);
+         MessageIdGenerator messageIdGenerator = MessageIdGenerator.getInstance();
+         BoundaryGenerator boundaryGenerator = BoundaryGenerator.getInstance();
+         return new SimpleMessageBuilder(context, messageIdGenerator, boundaryGenerator);
+diff --git a/app/core/src/main/java/com/fsck/k9/message/extractors/AttachmentInfoExtractor.java b/app/core/src/main/java/com/fsck/k9/message/extractors/AttachmentInfoExtractor.java
+index 52b75eac5..85b0282c6 100644
+--- a/app/core/src/main/java/com/fsck/k9/message/extractors/AttachmentInfoExtractor.java
++++ b/app/core/src/main/java/com/fsck/k9/message/extractors/AttachmentInfoExtractor.java
+@@ -11,10 +11,10 @@ import android.content.Context;
+ import android.net.Uri;
+ import android.support.annotation.Nullable;
+ import android.support.annotation.VisibleForTesting;
++
+ import timber.log.Timber;
+ import android.support.annotation.WorkerThread;
+ 
+-import com.fsck.k9.Globals;
+ import com.fsck.k9.mail.Body;
+ import com.fsck.k9.mail.MessagingException;
+ import com.fsck.k9.mail.Part;
+@@ -32,12 +32,6 @@ public class AttachmentInfoExtractor {
+     private final Context context;
+ 
+ 
+-    public static AttachmentInfoExtractor getInstance() {
+-        Context context = Globals.getContext();
+-        return new AttachmentInfoExtractor(context);
+-    }
+-
+-    @VisibleForTesting
+     AttachmentInfoExtractor(Context context) {
+         this.context = context;
+     }
+diff --git a/app/core/src/main/java/com/fsck/k9/message/extractors/KoinModule.kt b/app/core/src/main/java/com/fsck/k9/message/extractors/KoinModule.kt
+new file mode 100644
+index 000000000..f4b5660e6
+--- /dev/null
++++ b/app/core/src/main/java/com/fsck/k9/message/extractors/KoinModule.kt
+@@ -0,0 +1,7 @@
++package com.fsck.k9.message.extractors
++
++import org.koin.dsl.module.applicationContext
++
++val extractorModule = applicationContext {
++    bean { AttachmentInfoExtractor(get()) }
++}
+diff --git a/app/core/src/main/java/com/fsck/k9/message/html/HtmlProcessor.java b/app/core/src/main/java/com/fsck/k9/message/html/HtmlProcessor.java
+index a300bd471..53185f79b 100644
+--- a/app/core/src/main/java/com/fsck/k9/message/html/HtmlProcessor.java
++++ b/app/core/src/main/java/com/fsck/k9/message/html/HtmlProcessor.java
+@@ -8,12 +8,7 @@ public class HtmlProcessor {
+     private final HtmlSanitizer htmlSanitizer;
+ 
+ 
+-    public static HtmlProcessor newInstance() {
+-        HtmlSanitizer htmlSanitizer = new HtmlSanitizer();
+-        return new HtmlProcessor(htmlSanitizer);
+-    }
+-
+-    private HtmlProcessor(HtmlSanitizer htmlSanitizer) {
++    HtmlProcessor(HtmlSanitizer htmlSanitizer) {
+         this.htmlSanitizer = htmlSanitizer;
+     }
+ 
+diff --git a/app/core/src/main/java/com/fsck/k9/message/html/KoinModule.kt b/app/core/src/main/java/com/fsck/k9/message/html/KoinModule.kt
+new file mode 100644
+index 000000000..0f10e556c
+--- /dev/null
++++ b/app/core/src/main/java/com/fsck/k9/message/html/KoinModule.kt
+@@ -0,0 +1,8 @@
++package com.fsck.k9.message.html
++
++import org.koin.dsl.module.applicationContext
++
++val htmlModule = applicationContext {
++    bean { HtmlProcessor(get()) }
++    bean { HtmlSanitizer() }
++}
+diff --git a/app/core/src/main/java/com/fsck/k9/ui/message/LocalMessageExtractorLoader.java b/app/core/src/main/java/com/fsck/k9/ui/message/LocalMessageExtractorLoader.java
+index 9881a2842..5050f81a3 100644
+--- a/app/core/src/main/java/com/fsck/k9/ui/message/LocalMessageExtractorLoader.java
++++ b/app/core/src/main/java/com/fsck/k9/ui/message/LocalMessageExtractorLoader.java
+@@ -6,6 +6,7 @@ import android.support.annotation.Nullable;
+ import android.support.annotation.WorkerThread;
+ import android.support.v4.content.AsyncTaskLoader;
+ 
++import com.fsck.k9.DI;
+ import timber.log.Timber;
+ 
+ import com.fsck.k9.mailstore.LocalMessage;
+@@ -15,7 +16,7 @@ import com.fsck.k9.ui.crypto.MessageCryptoAnnotations;
+ 
+ 
+ public class LocalMessageExtractorLoader extends AsyncTaskLoader<MessageViewInfo> {
+-    private static final MessageViewInfoExtractor messageViewInfoExtractor = MessageViewInfoExtractor.getInstance();
++    private static final MessageViewInfoExtractor messageViewInfoExtractor = DI.get(MessageViewInfoExtractor.class);
+ 
+ 
+     private final LocalMessage message;
+diff --git a/app/core/src/test/java/com/fsck/k9/GlobalsHelper.java b/app/core/src/test/java/com/fsck/k9/GlobalsHelper.java
+deleted file mode 100644
+index 47758a953..000000000
+--- a/app/core/src/test/java/com/fsck/k9/GlobalsHelper.java
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package com.fsck.k9;
+-
+-
+-import android.content.Context;
+-
+-
+-public class GlobalsHelper {
+-    public static void setContext(Context context) {
+-        Globals.setContext(context);
+-    }
+-}
+diff --git a/app/core/src/test/java/com/fsck/k9/mailstore/MessageViewInfoExtractorTest.java b/app/core/src/test/java/com/fsck/k9/mailstore/MessageViewInfoExtractorTest.java
+index e5d256362..0d5ffbc73 100644
+--- a/app/core/src/test/java/com/fsck/k9/mailstore/MessageViewInfoExtractorTest.java
++++ b/app/core/src/test/java/com/fsck/k9/mailstore/MessageViewInfoExtractorTest.java
+@@ -11,6 +11,7 @@ import java.util.TimeZone;
+ import android.app.Application;
+ import android.support.annotation.NonNull;
+ 
++import com.fsck.k9.DI;
+ import com.fsck.k9.K9RobolectricTest;
+ import com.fsck.k9.activity.K9ActivityCommon;
+ import com.fsck.k9.mail.Address;
+@@ -73,7 +74,7 @@ public class MessageViewInfoExtractorTest extends K9RobolectricTest {
+         context = RuntimeEnvironment.application;
+ 
+         HtmlProcessor htmlProcessor = createFakeHtmlProcessor();
+-        attachmentInfoExtractor = spy(AttachmentInfoExtractor.getInstance());
++        attachmentInfoExtractor = spy(DI.get(AttachmentInfoExtractor.class));
+         messageViewInfoExtractor = new MessageViewInfoExtractor(context, attachmentInfoExtractor, htmlProcessor);
+     }
+ 
+diff --git a/app/core/src/test/java/com/fsck/k9/mailstore/StoreSchemaDefinitionTest.java b/app/core/src/test/java/com/fsck/k9/mailstore/StoreSchemaDefinitionTest.java
+index 87e40c816..4f3c96cbf 100644
+--- a/app/core/src/test/java/com/fsck/k9/mailstore/StoreSchemaDefinitionTest.java
++++ b/app/core/src/test/java/com/fsck/k9/mailstore/StoreSchemaDefinitionTest.java
+@@ -15,7 +15,6 @@ import android.text.TextUtils;
+ 
+ import com.fsck.k9.Account;
+ import com.fsck.k9.core.BuildConfig;
+-import com.fsck.k9.GlobalsHelper;
+ import com.fsck.k9.K9;
+ import com.fsck.k9.core.R;
+ import com.fsck.k9.RobolectricTest;
+@@ -45,7 +44,6 @@ public class StoreSchemaDefinitionTest extends RobolectricTest {
+ 
+         Application application = RuntimeEnvironment.application;
+         K9.app = application;
+-        GlobalsHelper.setContext(application);
+         StorageManager.getInstance(application);
+ 
+         storeSchemaDefinition = createStoreSchemaDefinition();

@@ -1,0 +1,169 @@
+diff --git a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/Logger.java b/app/src/main/java/com/drhoffmannstoolsdataloggerreader/Logger.java
+index aeafccc..cef2603 100644
+--- a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/Logger.java
++++ b/app/src/main/java/com/drhoffmannstoolsdataloggerreader/Logger.java
+@@ -519,37 +519,9 @@ public class Logger {
+     Product=device.getProductName();
+     if(Manufacturer==null || Manufacturer.equalsIgnoreCase("") || Manufacturer.equalsIgnoreCase(" ")) Manufacturer="UKN";
+     if(Product==null || Product.equalsIgnoreCase("")) Product="unknown logger";
+-    if(Serial_id==null) Serial_id="0000";
+-    if(Serial_id.contains(" ")) {
+-      int seppos=Serial_id.indexOf(" ");
+-      Serial_id=Serial_id.substring(0,seppos);
+-    }
+-    if(Serial_id.equalsIgnoreCase("")) Serial_id="00_0000000000";
++    Serial_id=clean_string(Serial_id,"0000");
+     
+ 
+-    /* Get Vendor name, Product name and Serial-Nr of Logger using the 
+-       shell (obsolete)*/
+-    String ana=USBTools.getUsbInfoViaShell();
+-    log2comproto("USB-Info via shell: "+ana,1);
+-    if(false) {
+-      String[] sep=ana.split("\n");
+-      int i;
+-      String a=String.format("%04x", Vid);
+-      String b=String.format("%04x", Pid);
+-
+-      for(i=0;i<sep.length; i++) {
+-        String[] sep2=sep[i].split(",");
+-        if(sep2.length>2) {
+-	  String c=sep2[0].replace("\"","");
+-	  String d=sep2[1].replace("\"","");
+-	  if(a.equalsIgnoreCase(c) && b.equalsIgnoreCase(d)) {
+-	    if(sep2.length>2) Serial_id=sep2[2].replace("\"","");
+-	    if(sep2.length>3) Manufacturer=sep2[3].replace("\"","");
+-	    if(sep2.length>4) Product=sep2[4].replace("\"","");
+-	  }
+-        }
+-      }
+-    }
+     UsbDeviceConnection connection = UsbManager.openDevice(device);
+     if(connection != null && connection.claimInterface(intf, true)) {
+       log2comproto("open SUCCESS: "+connection.toString(),1);
+@@ -1225,6 +1197,25 @@ public class Logger {
+       default: return "?";
+     }
+   }
++  
++  private String clean_string(String a, String d) {
++    if(a==null) return(d);
++    int i;
++    char un[]=a.toCharArray();
++    for(i=0;i<un.length;i++) {
++      if((int)un[i]==0 || (int)un[i]==24) break;
++      else if((int)un[i]==32 || (int)un[i]==9) un[i]='-';
++      else if((int)un[i]>=0x30 && (int)un[i]<=0x3a) ;
++      else if((int)un[i]>=0x41 && (int)un[i]<=0x5a) ;
++      else if((int)un[i]==0x5f) ;
++      else if((int)un[i]>=0x61 && (int)un[i]<=0x7a) ;
++      else un[i]='.';
++    }
++    if(i==0) return(d);
++    a=String.valueOf(un).substring(0,i);
++    if(a.equals("")) return(d);
++    return(a);
++  }
+ 
+   public void updateProgress(int n)         { if(!be_quiet && mActivity!=null) mActivity.updateProgress(n);}
+   public void updateMessage(String s,int n) { if(!be_quiet && mActivity!=null) mActivity.updateMessage(s,n);}
+diff --git a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/LoggerPreferencesActivity.java b/app/src/main/java/com/drhoffmannstoolsdataloggerreader/LoggerPreferencesActivity.java
+index e892ba2..4517818 100644
+--- a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/LoggerPreferencesActivity.java
++++ b/app/src/main/java/com/drhoffmannstoolsdataloggerreader/LoggerPreferencesActivity.java
+@@ -238,6 +238,7 @@ public class LoggerPreferencesActivity  extends Activity {
+     	String subject="Information about my data logger";
+     	String message="I like to support the development of this app.\n"+
+     	  		"USB Dataloggerreader app version: "+applicationVersion()+"\n"+
++			"My logger is a ____ (Model, Type, Brand)\n"+
+     	  		"This is all information which could be retrieved from my logger:\n"+
+     	  		logger.toString()+config.toString();
+     	Tools.sendEmail(v.getContext(),recipient, subject, message,null);
+diff --git a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/USBTools.java b/app/src/main/java/com/drhoffmannstoolsdataloggerreader/USBTools.java
+deleted file mode 100644
+index 2378e2e..0000000
+--- a/app/src/main/java/com/drhoffmannstoolsdataloggerreader/USBTools.java
++++ /dev/null
+@@ -1,82 +0,0 @@
+-package com.drhoffmannstoolsdataloggerreader;
+-
+-/* USBTools.java (c) 2011-2020 by Markus Hoffmann
+- *
+- * This file is part of USB-Dataloggerreader for Android, (c) by Markus Hoffmann 2011-2020
+- * ============================================================================
+- * USB-Dataloggerreader for Android is free software and comes with 
+- * NO WARRANTY - read the file COPYING/LICENSE for details.
+- */ 
+-
+-
+-import java.io.BufferedReader;
+-import java.io.DataInputStream;
+-import java.io.DataOutputStream;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-
+-import android.util.Log;
+-
+-public class USBTools {
+-	private static final String TAG="USBTools";
+-
+-	private static final String DEVICE_START = "__DEV_START__";
+-	private static final String DEVICE_END = "__DEV_END__";
+-	private static final String COMMAND = "for DEVICE in /sys/bus/usb/devices/*; do " +
+-			" echo "+ DEVICE_START + ";" +
+-			// " echo  $DEVICE;" +
+-			// " ls -al $DEVICE/* ;"+
+-			" cat $DEVICE/idVendor;"+
+-			" cat $DEVICE/idProduct;"+
+-			" cat $DEVICE/serial;"+
+-			" cat $DEVICE/manufacturer;"+
+-			" cat $DEVICE/product;"+ 
+-			" echo "+ DEVICE_END + ";" +
+-			" done";
+-
+-	public static String exec(String cmd) {
+-		try {
+-
+-			Process process = Runtime.getRuntime().exec("sh");
+-			DataInputStream is = new DataInputStream(process.getInputStream());
+-			DataOutputStream os = new DataOutputStream(process.getOutputStream());
+-			os.writeBytes(cmd + "\n");
+-			os.writeBytes("exit\n");
+-			os.flush();
+-			os.close();
+-
+-			BufferedReader reader = new BufferedReader(new InputStreamReader(is));
+-			try {
+-				String fullOutput = "";
+-				String line;
+-				while ((line = reader.readLine()) != null) {
+-					fullOutput = fullOutput + line + "\n";
+-				}
+-				return fullOutput;
+-			} catch (IOException e) {
+-				Log.e(TAG, "exec, IOException 1");
+-				e.printStackTrace();
+-			}
+-
+-			process.waitFor();
+-
+-		} catch (IOException e) {
+-			Log.e(TAG, "exec, IOException 2");
+-			e.printStackTrace();
+-
+-		} catch (InterruptedException e) {
+-			Log.e(TAG, "exec, InterruptedException");
+-			e.printStackTrace();
+-		}
+-		return "";
+-	}
+-	public static String getUsbInfoViaShell(){
+-		String res = exec(COMMAND);
+-		res = res.replace("\n", "\",\"");
+-		res = res.replace(",\""+DEVICE_END+"\",\"", "\n");
+-		res = res.replace(DEVICE_START+"\"\n", "");
+-		res = res.replace(DEVICE_START+"\",", "");
+-		return res;
+-	}
+-
+-}

@@ -1,0 +1,272 @@
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
+index cc99942..619cb31 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSFormActivity.java
+@@ -44,23 +44,27 @@ import org.xbill.DNS.Section;
+ import org.xbill.DNS.SimpleResolver;
+ import org.xbill.DNS.TextParseException;
+ import org.xbill.DNS.Type;
++import org.xbill.DNS.dnssec.ValidatingResolver;
+ 
++import java.io.ByteArrayInputStream;
+ import java.io.IOException;
+ import java.net.IDN;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+ import java.net.UnknownHostException;
++import java.nio.charset.StandardCharsets;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.concurrent.ExecutionException;
+ 
+ public class DNSFormActivity extends AppCompatActivity implements AdapterView.OnItemSelectedListener, View.OnFocusChangeListener {
+     private static final String TAG = "AndroDNS";
+     private Session activeSession = null;
+     private History history;
+     private BookmarkedQueries bookmarks;
+-    private DNSSECVerifier dnssecVerifier = null;
++
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -93,12 +97,7 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+         return true;
+     }
+ 
+-    public DNSSECVerifier getDnssecVerifier() {
+-        if (dnssecVerifier == null) {
+-            dnssecVerifier = new DNSSECVerifier();
+-        }
+-        return dnssecVerifier;
+-    }
++
+ 
+     /**
+      * update the the lower gui section with the Values from an AnswerScreenState
+@@ -373,7 +372,29 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+             Message response = null;
+             long startTS = System.currentTimeMillis();
+             setStatusText("query sent");
+-            response = resolver.send(query);
++
++
++            // use local validating resolver
++            if(session.validateDNSSEC ){
++                // TODO: we're most likely going to forget to update this when the root keys rolls next time.
++                final String ROOT_DS = ". IN DS 20326 8 2 E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D";
++
++                ValidatingResolver vr = new ValidatingResolver(resolver);
++                vr.loadTrustAnchors(new ByteArrayInputStream(ROOT_DS.getBytes(StandardCharsets.US_ASCII)));
++                response = vr.sendAsync(query)
++                        .whenComplete(
++                                (answer, ex) -> {
++                                    if (ex == null) {
++                                        System.out.println(answer);
++                                    } else {
++                                        ex.printStackTrace();
++                                    }
++                                })
++                        .toCompletableFuture()
++                        .get();
++            } else {
++                response = resolver.send(query);
++            }
+ 
+             if (activeSession != session) {
+                 return; // this query has been aborted/overwritten by a new one
+@@ -402,18 +423,6 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+             ansBuffer.append("ADDITIONAL SECTION:\n");
+             ansBuffer.append(rrSetsToString(response.getSectionRRsets(Section.ADDITIONAL)));
+ 
+-            // DNSSSEC validation
+-            DNSSECVerifier verifier = getDnssecVerifier();
+-            verifier.learnDNSSECKeysFromRRSETs(response.getSectionRRsets(Section.ANSWER));
+-
+-            if (session.flag_DO) {
+-                ansBuffer.append("\nvalidation status :\n");
+-                ansBuffer.append(verifier.verificationStatusString(response.getSectionRRsets(Section.ANSWER)));
+-                ansBuffer.append(verifier.verificationStatusString(response.getSectionRRsets(Section.AUTHORITY)));
+-                ansBuffer.append("\n");
+-            }
+-
+-
+             answerOutput = ansBuffer.toString();
+         } catch (TextParseException e) {
+             if (activeSession == session) {
+@@ -440,6 +449,10 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+         } catch (InvalidTypeException e) {
+             answerOutput = "Invalid type";
+             answerState.status = "INVALID";
++        } catch (ExecutionException e) {
++            throw new RuntimeException(e);
++        } catch (InterruptedException e) {
++            throw new RuntimeException(e);
+         }
+         session.answer = answerState;
+         answerState.answerText = answerOutput;
+@@ -467,6 +480,7 @@ public class DNSFormActivity extends AppCompatActivity implements AdapterView.On
+         screenSession.server = gettxtResolverContent().trim();
+         screenSession.TCP = ((CheckBox) findViewById(R.id.cbTCP)).isChecked();
+         screenSession.protocol = (((Spinner) findViewById(R.id.spinnerProto))).getSelectedItem().toString();
++        screenSession.validateDNSSEC =  ((CheckBox) findViewById(R.id.cbLocalValidation)).isChecked();
+         try {
+             screenSession.port = gettxtPortContent();
+         } catch (Exception e) {
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java
+deleted file mode 100644
+index 01f0442..0000000
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/DNSSECVerifier.java
++++ /dev/null
+@@ -1,106 +0,0 @@
+-package androdns.android.leetdreams.ch.androdns;
+-import android.util.Log;
+-
+-import org.xbill.DNS.DNSKEYRecord;
+-import org.xbill.DNS.DNSSEC;
+-import org.xbill.DNS.RRSIGRecord;
+-import org.xbill.DNS.RRset;
+-import org.xbill.DNS.Name;
+-import org.xbill.DNS.Record;
+-import org.xbill.DNS.Type;
+-
+-import java.util.Hashtable;
+-import java.util.List;
+-
+-public class DNSSECVerifier {
+-    private final Hashtable<String,DNSKEYRecord> knownDNSKeys = new Hashtable<>();
+-    private static final String TAG="DNSSECVerifier";
+-
+-    public void verifySignature(RRset rrset, RRSIGRecord rrsig) throws DNSSEC.DNSSECException,DNSKEYUnavailableException {
+-        Name ownerName = rrsig.getSigner();
+-        int keyTag = rrsig.getFootprint();
+-
+-        DNSKEYRecord dnskey=getDNSKEY(ownerName,keyTag);
+-        if(dnskey==null){
+-            Log.d(TAG,"missing DNSKEY "+hskey(ownerName.toString(),keyTag));
+-            throw new DNSKEYUnavailableException("DNSKEY "+ownerName+"/"+keyTag+" not available");
+-        }
+-
+-        DNSSEC.verify(rrset, rrsig, dnskey);
+-
+-    }
+-
+-    private String hskey(DNSKEYRecord dnskey){
+-        return hskey(dnskey.getName().toString(),dnskey.getFootprint());
+-    }
+-    private String hskey(String ownerName, int keyTag){
+-        return ownerName.toLowerCase()+"-"+keyTag;
+-    }
+-
+-    public DNSKEYRecord getDNSKEY(Name ownerName, int keyTag){
+-
+-        String hsKey = hskey(ownerName.toString(),keyTag);
+-        if (!knownDNSKeys.containsKey(hsKey)){
+-            return null;
+-        }
+-        return knownDNSKeys.get(hsKey);
+-
+-    }
+-
+-    public void addDNSKEY(DNSKEYRecord dnskey){
+-        knownDNSKeys.put(hskey(dnskey),dnskey);
+-        Log.d(TAG,"learned DNSKEY  "+hskey(dnskey));
+-    }
+-
+-    public String verificationStatusString(List<RRset> rrsets){
+-        StringBuilder buf = new StringBuilder();
+-        for(RRset rrset:rrsets) {
+-            for(RRSIGRecord sig:rrset.sigs()){
+-                buf.append(sig.getFootprint());
+-                buf.append("/");
+-                buf.append(sig.getSigner().toString());
+-                buf.append(":");
+-                buf.append(Type.string(rrset.getType()));
+-
+-                buf.append("=");
+-                try {
+-                    this.verifySignature(rrset, sig);
+-                    buf.append("verified");
+-                } catch (DNSKEYUnavailableException dku) {
+-                    buf.append("have to learn DNSKEY");
+-                } catch (DNSSEC.DNSSECException dse) {
+-                    if (dse instanceof DNSSEC.SignatureExpiredException) {
+-                        buf.append("expired");
+-                    } else if (dse instanceof DNSSEC.SignatureNotYetValidException) {
+-                        buf.append("not yet valid");
+-                    } else if (dse instanceof DNSSEC.UnsupportedAlgorithmException) {
+-                        buf.append("unsupported alg");
+-                    } else {
+-                        buf.append(dse.getMessage());
+-                    }
+-                }
+-                buf.append("\n");
+-            }
+-        }
+-        String validationStatus = buf.toString();
+-        Log.d(TAG,"Validation status: "+validationStatus);
+-        return validationStatus;
+-    }
+-
+-    public void learnDNSSECKeysFromRRSETs(List<RRset> rrsets){
+-        DNSKEYRecord dnskey;
+-
+-        for (RRset rrset:rrsets) {
+-            if (rrset.getType()!=Type.DNSKEY){
+-                continue;
+-            }
+-            for(Record r:rrset.rrs()){
+-                dnskey = (DNSKEYRecord) r;
+-                addDNSKEY(dnskey);
+-            }
+-
+-
+-        }
+-
+-    }
+-}
+diff --git a/app/src/main/java/androdns/android/leetdreams/ch/androdns/Session.java b/app/src/main/java/androdns/android/leetdreams/ch/androdns/Session.java
+index 4057a3f..5efd46a 100644
+--- a/app/src/main/java/androdns/android/leetdreams/ch/androdns/Session.java
++++ b/app/src/main/java/androdns/android/leetdreams/ch/androdns/Session.java
+@@ -21,6 +21,7 @@ public class Session implements Serializable {
+     public boolean flag_DO;
+     public boolean TCP;
+ 
++    public boolean validateDNSSEC;
+ 
+     public AnswerScreenState answer;
+ 
+@@ -52,6 +53,7 @@ public class Session implements Serializable {
+                 && other.flag_DO == this.flag_DO
+                 && other.TCP == this.TCP
+                 && other.port == this.port
++                && other.validateDNSSEC == this.validateDNSSEC
+         );
+     }
+ 
+@@ -71,6 +73,7 @@ public class Session implements Serializable {
+         this.flag_DO=false;
+         this.TCP = false;
+         this.port = 0;
++        this.validateDNSSEC = false;
+     }
+ 
+     public Session(String qname, int qtype){
+@@ -90,6 +93,7 @@ public class Session implements Serializable {
+         writer.name("flag_do").value(flag_DO);
+         writer.name("tcp").value(TCP);
+         writer.name("port").value(port);
++        writer.name("validate").value(validateDNSSEC);
+ 
+ 
+         writer.name("answer");
+@@ -111,6 +115,7 @@ public class Session implements Serializable {
+         flag_RD = json.getBoolean("flag_rd");
+         flag_CD = json.getBoolean("flag_cd");
+         flag_DO = json.getBoolean("flag_do");
++        validateDNSSEC = json.getBoolean("validate");
+         TCP = json.getBoolean("tcp");
+         try {
+             port = json.getInt("port");

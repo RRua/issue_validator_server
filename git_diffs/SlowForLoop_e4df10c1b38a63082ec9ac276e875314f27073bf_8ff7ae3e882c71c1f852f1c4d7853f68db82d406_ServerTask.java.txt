@@ -1,0 +1,197 @@
+diff --git a/app/src/main/java/be/humanoids/webthingify/Phone.java b/app/src/main/java/be/humanoids/webthingify/Phone.java
+index ade937b..11432d4 100644
+--- a/app/src/main/java/be/humanoids/webthingify/Phone.java
++++ b/app/src/main/java/be/humanoids/webthingify/Phone.java
+@@ -19,10 +19,10 @@ import org.json.JSONException;
+ import org.json.JSONObject;
+ import org.mozilla.iot.webthing.Property;
+ import org.mozilla.iot.webthing.Thing;
+-import org.mozilla.iot.webthing.Value;
+ 
+ import java.io.IOException;
+ import java.util.Arrays;
++import java.util.Objects;
+ import java.util.Timer;
+ import java.util.TimerTask;
+ 
+@@ -127,15 +127,16 @@ class Phone extends Thing implements SensorEventListener {
+                     try {
+                         cameraManager.setTorchMode(cameraId, newValue);
+                     } catch (CameraAccessException e) {
+-                        // e.printStackTrace();
++                        Log.e("wt:torch", "Could not set torch state", e);
+                     }
+                 });
+                 torchCallback = new CameraManager.TorchCallback() {
+                     @Override
+                     public void onTorchModeChanged(@NonNull String camId, boolean enabled) {
+                         super.onTorchModeChanged(camId, enabled);
+-                        if (cameraId.equals(camId)) {
+-                            on.set(enabled);
++                        //TODO this creates an infinite feedback loop.
++                        if (cameraId.equals(camId) && !Objects.equals(on.get(), enabled)) {
++                            on.setRemote(enabled);
+                         }
+                     }
+                 };
+@@ -313,36 +314,36 @@ class Phone extends Thing implements SensorEventListener {
+     }
+ 
+     void setCharging(boolean isCharging) {
+-        charging.set(isCharging);
++        charging.setRemote(isCharging);
+     }
+ 
+     void setBattery(int batteryPercentage) {
+-        battery.set(batteryPercentage);
++        battery.setRemote(batteryPercentage);
+     }
+ 
+     @Override
+     public void onSensorChanged(SensorEvent event) {
+         switch (event.sensor.getType()) {
+             case Sensor.TYPE_LIGHT:
+-                brightness.set(event.values[0]);
++                brightness.setRemote(event.values[0]);
+                 break;
+             case Sensor.TYPE_PRESSURE:
+-                pressure.set(event.values[0]);
++                pressure.setRemote(event.values[0]);
+                 break;
+             case Sensor.TYPE_PROXIMITY:
+-                proximity.set(event.values[0]);
++                proximity.setRemote(event.values[0]);
+                 break;
+             case Sensor.TYPE_RELATIVE_HUMIDITY:
+-                humidity.set(event.values[0]);
++                humidity.setRemote(event.values[0]);
+                 break;
+             case Sensor.TYPE_AMBIENT_TEMPERATURE:
+-                temperature.set(event.values[0]);
++                temperature.setRemote(event.values[0]);
+                 break;
+             case Sensor.TYPE_MOTION_DETECT:
+-                inMotion.set(true);
++                inMotion.setRemote(true);
+                 break;
+             case Sensor.TYPE_STATIONARY_DETECT:
+-                inMotion.set(false);
++                inMotion.setRemote(false);
+                 break;
+             case Sensor.TYPE_ACCELEROMETER:
+                 boolean isMoving = false;
+@@ -352,7 +353,7 @@ class Phone extends Thing implements SensorEventListener {
+                         isMoving = true;
+                     }
+                 }
+-                inMotion.set(isMoving);
++                inMotion.setRemote(isMoving);
+         }
+     }
+ 
+@@ -378,7 +379,7 @@ class Phone extends Thing implements SensorEventListener {
+         int amplitude = recorder.getMaxAmplitude();
+         if(amplitude != 0) {
+             double db = 20.0 * Math.log10((double) amplitude / MAX_AMPLITUDE);
+-            loudness.set((float) db);
++            loudness.setRemote((float) db);
+         }
+     }
+ }
+diff --git a/app/src/main/java/be/humanoids/webthingify/ServerTask.java b/app/src/main/java/be/humanoids/webthingify/ServerTask.java
+index 591f11c..1f2bf24 100644
+--- a/app/src/main/java/be/humanoids/webthingify/ServerTask.java
++++ b/app/src/main/java/be/humanoids/webthingify/ServerTask.java
+@@ -6,12 +6,10 @@ import android.support.annotation.Nullable;
+ import android.util.Log;
+ 
+ import org.mozilla.iot.webthing.Thing;
++import org.mozilla.iot.webthing.Utils;
+ import org.mozilla.iot.webthing.WebThingServer;
+ 
+ import java.io.IOException;
+-import java.net.InetAddress;
+-import java.net.NetworkInterface;
+-import java.util.Enumeration;
+ 
+ class ServerTask extends AsyncTask<Thing, Void, WebThingServer> {
+     private final ResultHandler delegate;
+@@ -27,21 +25,9 @@ class ServerTask extends AsyncTask<Thing, Void, WebThingServer> {
+     @Override
+     protected WebThingServer doInBackground(Thing... things) {
+         try {
+-            String ipAddress = null;
+-            NetworkInterface netInterface;
+-            InetAddress address;
+-            for (Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces(); interfaces.hasMoreElements(); ) {
+-                netInterface = interfaces.nextElement();
+-                for (Enumeration<InetAddress> addresses = netInterface.getInetAddresses(); addresses.hasMoreElements(); ) {
+-                    address = addresses.nextElement();
+-                    if (!address.isLoopbackAddress()) {
+-                        ipAddress = address.getHostAddress();
+-                    }
+-                }
+-            }
+-            WebThingServer server = new WebThingServer(new WebThingServer.SingleThing(things[0]), 8088, ipAddress);
++            WebThingServer server = new WebThingServer(new WebThingServer.SingleThing(things[0]), 8088);
+             server.start(false);
+-            Log.i("wt:server", ipAddress + ":" + Integer.toString(server.getListeningPort()));
++            Log.i("wt:server", Utils.getIP() + ":" + Integer.toString(server.getListeningPort()));
+             return server;
+         } catch (IOException e) {
+             Log.e("wt:server", "Error starting server", e);
+diff --git a/app/src/main/java/be/humanoids/webthingify/Value.java b/app/src/main/java/be/humanoids/webthingify/Value.java
+new file mode 100644
+index 0000000..b47d70e
+--- /dev/null
++++ b/app/src/main/java/be/humanoids/webthingify/Value.java
+@@ -0,0 +1,19 @@
++package be.humanoids.webthingify;
++
++
++import java.util.function.Consumer;
++
++class Value<T> extends org.mozilla.iot.webthing.Value<T> {
++    public Value(final T initialValue) {
++        super(initialValue);
++    }
++
++    public Value(final T initialValue, final Consumer<T> valueForwarder) {
++        super(initialValue, valueForwarder);
++    }
++
++    public void setRemote(T newValue) {
++        final ValueUpdateTask<T> task = new ValueUpdateTask<>(this);
++        task.execute(newValue);
++    }
++}
+diff --git a/app/src/main/java/be/humanoids/webthingify/ValueUpdateTask.java b/app/src/main/java/be/humanoids/webthingify/ValueUpdateTask.java
+new file mode 100644
+index 0000000..d906677
+--- /dev/null
++++ b/app/src/main/java/be/humanoids/webthingify/ValueUpdateTask.java
+@@ -0,0 +1,24 @@
++package be.humanoids.webthingify;
++
++import android.os.AsyncTask;
++import android.support.annotation.NonNull;
++
++import org.mozilla.iot.webthing.Value;
++
++class ValueUpdateTask<T> extends AsyncTask<T, Void, Void> {
++    private final Value<T> value;
++
++    ValueUpdateTask(@NonNull Value<T> value) {
++        super();
++        this.value = value;
++    }
++
++    public Void doInBackground(T... valueUpdates) {
++        for(T update : valueUpdates) {
++            if (update != null) {
++                value.set(update);
++            }
++        }
++        return null;
++    }
++}

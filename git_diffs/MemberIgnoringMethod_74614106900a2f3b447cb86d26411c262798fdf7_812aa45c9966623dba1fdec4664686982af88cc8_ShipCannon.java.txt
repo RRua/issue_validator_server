@@ -1,0 +1,1339 @@
+diff --git a/app/src/main/java/com/kaeruct/raumballer/AndroidGame.java b/app/src/main/java/com/kaeruct/raumballer/AndroidGame.java
+index ebd4b11..e6ccd65 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/AndroidGame.java
++++ b/app/src/main/java/com/kaeruct/raumballer/AndroidGame.java
+@@ -3,31 +3,36 @@ package com.kaeruct.raumballer;
+ import com.kaeruct.raumballer.background.BGImage;
+ import com.kaeruct.raumballer.background.BGStar;
+ import com.kaeruct.raumballer.cannon.Cannon;
++import com.kaeruct.raumballer.gamestates.GameState;
++import com.kaeruct.raumballer.gamestates.ShooterEnterHighScore;
++import com.kaeruct.raumballer.gamestates.ShooterGameOver;
++import com.kaeruct.raumballer.gamestates.ShooterInGame;
++import com.kaeruct.raumballer.gamestates.ShooterLevelDone;
++import com.kaeruct.raumballer.gamestates.ShooterTitle;
+ import com.kaeruct.raumballer.ship.PlayerShip;
+-import com.kaeruct.raumballer.ship.player.NimakRunner;
+-import com.kaeruct.raumballer.ship.player.SpinTurn;
+-import com.kaeruct.raumballer.ship.player.StenoShot;
+ import com.kaeruct.raumballer.wave.Wave;
+ 
+ import java.util.ArrayList;
+ 
+ import jgame.JGColor;
+ import jgame.JGPoint;
++import jgame.JGTimer;
+ import jgame.platform.JGEngine;
+ 
+ public class AndroidGame extends JGEngine {
+ 
+-    private PlayerShip p;
+-    private ShooterTitle titleState;
+-    private int gameOverStart = 0;
++    private PlayerShip player;
++    private GameState titleState;
++    private GameState gameOverState;
++    private GameState levelDoneState;
++    private GameState enterHighscoreState;
++    private GameState inGameState;
+     public int selectedShip = 0;
+-    public final byte PLAYER_ID = 1;
+-    public final byte ENEMY_ID = 2;
++    public static final byte PLAYER_ID = 1;
++    public static final byte ENEMY_ID = 2;
+     public int score;
+     public int starCount;
+-    public int starMax = 128;
+-    public int starFreq = 80;
+-    private boolean levelFinished = false;
++    private boolean levelDone = false;
+     public final int WIDTH = 48 / 3;
+     public final int HEIGHT = 68 / 3;
+     public LevelReader levelReader;
+@@ -36,11 +41,15 @@ public class AndroidGame extends JGEngine {
+     public boolean isTapping;
+     public boolean prevIsTapping;
+     public boolean isTouchDown;
+-    public int lastDown;
++    public int lastDown = -1;
+     public int lastUp;
++    public int level = 0;
++    private final int lastLevel = 4;
++    public int starMax = 128;
++    public int starFreq = 80;
+ 
+     public static void main(String[] args) {
+-        new AndroidGame(new JGPoint(480, 720));
++        new AndroidGame(new JGPoint(0, 0));
+     }
+ 
+     /**
+@@ -58,48 +67,81 @@ public class AndroidGame extends JGEngine {
+     }
+ 
+     public void initCanvas() {
+-        // we set the background colour to same colour as the splash background
+-        setCanvasSettings(WIDTH, HEIGHT, 16, 16, JGColor.black, new JGColor(0, 0, 0), null);
+-
++        setCanvasSettings(WIDTH, HEIGHT, 16, 16, JGColor.cyan, JGColor.black, null);
+     }
+ 
+     public void initGame() {
+-        this.setGameState("Title");
++        setAuthorMessage("");
++        defineMedia("shooter.tbl");
++        setPFSize(WIDTH, HEIGHT);
+ 
+-        this.dbgShowFullStackTrace(true);
+-        this.dbgShowMessagesInPf(false);
++        // init background
++        new BGImage("pipe", 2, this);
++        new BGImage("pipe", 6, this);
++        new BGImage("bg1", 4, this);
++
++        setGameState("Title");
++
++        dbgShowFullStackTrace(true);
++        dbgShowMessagesInPf(false);
+ 
+-        this.titleState = new ShooterTitle(this);
++        titleState = new ShooterTitle(this);
++        inGameState = new ShooterInGame(this);
++        gameOverState = new ShooterGameOver(this);
++        levelDoneState = new ShooterLevelDone(this);
++        enterHighscoreState = new ShooterEnterHighScore(this);
+         Cannon.game = this;
+ 
+         setFrameRate(60, 2);
+         setGameSpeed(1);
++    }
+ 
+-        defineMedia("shooter.tbl");
++    public void updateLevelState() {
++        if (levelReader != null && levelReader.isComplete()) {
++            levelDone = getObjects("", ENEMY_ID, false, null).size() == 0;
++        }
++        if (levelDone) {
++            levelDone = false;
++            new JGTimer(60, true,"InGame") {
++                public void alarm() {
++                    if (level == lastLevel) {
++                        setGameState("EnterHighscore");
++                    } else {
++                        setGameState("LevelDone");
++                    }
++                }
++            };
++        }
+     }
+ 
+-    public void loadLevel(String lvlFile) {
+-        this.starCount = 0;
++    public void updateWaves() {
++        for (int i = 0; i < waves.size(); i++) {
++            waves.get(i).update();
++        }
++
++        for (int i = waves.size() - 1; i > 0; i--) {
++            if (waves.get(i).stopped) waves.remove(i);
++        }
++    }
++
++    public void updateStars() {
++        if (t % starFreq == 0 && starCount < starMax) {
++            addStars(16);
++        }
++    }
+ 
++    public void loadLevel(String lvlFile) {
++        waves = new ArrayList<>();
++        starCount = 0;
+         try {
+-            this.levelReader = new LevelReader(this, getAssets().open(lvlFile));
++            levelReader = new LevelReader(this, getAssets().open(lvlFile));
+         } catch (Exception e) {
+-            this.dbgPrint(e.toString());
++            dbgPrint(e.toString());
++            return;
+         }
+ 
+-        // init background
+-        new BGImage("pipe", 2, this);
+-        new BGImage("pipe", 6, this);
+-        new BGImage("bg1", 4, this);
+-
+         removeObjects("bgstar", -1);
+         addStars(16);
+-
+-        this.levelReader.init();
+-    }
+-
+-    public void levelFinished() {
+-        levelFinished = true;
+     }
+ 
+     public void addStars(int n) {
+@@ -115,7 +157,7 @@ public class AndroidGame extends JGEngine {
+ 
+     public void addScore(double n) {
+         score += n;
+-        p.onScore(score);
++        player.onScore(score);
+     }
+ 
+     public void startTitle() {
+@@ -131,104 +173,82 @@ public class AndroidGame extends JGEngine {
+     }
+ 
+     public void startInGame() {
+-        setPFSize(WIDTH, HEIGHT);
++        inGameState.start();
++    }
+ 
+-        this.waves = new ArrayList<>();
+-        this.score = 0;
+-        this.t = 0;
+-
+-        switch (this.selectedShip) {
+-            default:
+-            case 0:
+-                p = new StenoShot(pfWidth() / 2 - 16, pfHeight() - 32, this);
+-                break;
+-            case 1:
+-                p = new NimakRunner(pfWidth() / 2 - 16, pfHeight() - 32, this);
+-                break;
+-            case 2:
+-                p = new SpinTurn(pfWidth() / 2 - 16, pfHeight() - 32, this);
+-
+-                break;
+-        }
++    public void doFrameInGame() {
++        inGameState.doFrame();
++    }
++
++    public void paintFrameInGame() {
++        inGameState.paintFrame();
++    }
+ 
+-        loadLevel("level1.lvl");
++    public void startLevel() {
++        level += 1;
++        loadLevel("level" + level + ".lvl");
+     }
+ 
+-    public void doFrameInGame() {
++    public void startGeneral() {
++        t = 0;
++    }
++
++    public void doFrameGeneral() {
++        if (t < lastDown) lastDown = -1;
+         boolean isDown = getMouseButton(1);
+         isTouchDown = isDown;
+         if (isDown) lastDown = t;
+-        isTapping = (t - lastDown < 10); // expire taps after 10 frames
++        isTapping = lastDown > 0 && (t - lastDown < 10); // expire taps after 10 frames
+ 
+         if (!isTapping && prevIsTapping) {
+             lastUp = t;
+         }
+ 
+         prevIsTapping = isTapping;
+-
+-        checkCollision(PLAYER_ID, ENEMY_ID);
+-        checkCollision(ENEMY_ID, PLAYER_ID);
+-
+-        setViewOffset(0, (int) p.y, true);
+-
+-        for (int i = 0; i < this.waves.size(); i++) {
+-            waves.get(i).update();
+-        }
+-
+-        for (int i = this.waves.size() - 1; i > 0; i--) {
+-            if (waves.get(i).stopped) {
+-                waves.remove(i);
+-            }
+-        }
+-
+-        moveObjects(null, 0);
+-
+-        if (t % starFreq == 0 && starCount < starMax) {
+-            addStars(16);
+-        }
+-
+         t++;
++    }
+ 
+-        if (gameOverStart > 0 && (t - gameOverStart < 30) && isTapping) {
+-            this.removeObjects("", 0);
+-            gameOverStart = 0;
+-            this.setGameState("Title");
+-        }
++    public void startLevelDone() {
++        levelDoneState.start();
++    }
+ 
+-        if (this.waves.size() == 0) {
+-            levelFinished = true;
+-        }
++    public void doFrameLevelDone() {
++        levelDoneState.doFrame();
++    }
++    public void paintFrameLevelDone() {
++        levelDoneState.paintFrame();
++    }
+ 
+-        if (levelFinished || p.isDead()) {
+-            gameOverStart = t;
+-        }
++    public void startEnterHighscore() {
++        enterHighscoreState.start();
+     }
+ 
+-    public void paintFrameInGame() {
+-        setColor(JGColor.white);
++    public void doFrameEnterHighscore() {
++        enterHighscoreState.doFrame();
++    }
+ 
+-        drawString("Mode:" + p.getMode(), 4, viewHeight() - 10, -1);
+-        drawString("Score:" + this.score, viewWidth() - 8, viewHeight() - 20, 1);
+-        drawString("Health:" + ((int) p.getHealth()), viewWidth() - 10, viewHeight() - 8, 1);
++    public void paintFrameEnterHighscore() {
++        enterHighscoreState.paintFrame();
++    }
+ 
+-        if (levelFinished) {
+-            int centerY = viewHeight() / 2;
+-            int centerX = viewWidth() / 2;
++    public void startGameOver() {
++        gameOverState.start();
++    }
+ 
+-            drawString("Congratulations! Level over!", centerX, centerY - 4, 0, "yellow");
+-            drawString("TAP to restart!", centerX, centerY + 4, 0, "blue");
+-            drawString("Try another ship!", centerX, centerY + 12, 0, "blue");
+-        } else if (p.isDead()) {
+-            int centerY = viewHeight() / 2;
+-            int centerX = viewWidth() / 2;
++    public void doFrameGameOver() {
++        gameOverState.doFrame();
++    }
+ 
+-            drawString("TAP to restart!", centerX - 4, centerY - 4, 0, "yellow");
+-            drawString("Try another ship!", centerX + 4, centerY + 12, 0, "blue");
+-        }
++    public void paintFrameGameOver() {
++        gameOverState.paintFrame();
+     }
+ 
+     public PlayerShip getPlayer() {
+-        return p;
++        return player;
++    }
++
++    public void setPlayer(PlayerShip p) {
++        this.player = p;
+     }
+ 
+     public boolean goingUp(double angle) {
+diff --git a/app/src/main/java/com/kaeruct/raumballer/LevelReader.java b/app/src/main/java/com/kaeruct/raumballer/LevelReader.java
+index 4e762c7..3c1b102 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/LevelReader.java
++++ b/app/src/main/java/com/kaeruct/raumballer/LevelReader.java
+@@ -14,20 +14,21 @@ public class LevelReader {
+ 
+     private final BufferedReader reader;
+     private String[] waveClasses;
+-    private int[] maxAmounts;
+     private String currentLine;
+     private final AndroidGame game;
+     private int wavesDone;
++    private boolean complete;
+ 
+     public LevelReader(AndroidGame game, InputStream inputStream) throws UnsupportedEncodingException {
+-
+         this.reader = new BufferedReader(new InputStreamReader(inputStream, "UTF-8"));
+         this.currentLine = null;
+         this.wavesDone = 0;
+         this.game = game;
++        this.complete = false;
++        init();
+     }
+ 
+-    public void init() {
++    private void init() {
+         this.executeNextLine();
+     }
+ 
+@@ -49,7 +50,7 @@ public class LevelReader {
+         wavesDone = 0;
+         String[] params = currentLine.split("\\+");
+         waveClasses = new String[params.length];
+-        maxAmounts = new int[params.length];
++        int[] maxAmounts = new int[params.length];
+ 
+         for (int i = 0; i < params.length; i++) {
+             params[i] = params[i].trim();
+@@ -64,7 +65,6 @@ public class LevelReader {
+     }
+ 
+     private void createWaves(String[] classNames, int[] maxAmounts) {
+-
+         for (int i = 0; i < classNames.length; i++) {
+             try {
+                 Class<Wave> wave = (Class<Wave>) Class.forName("com.kaeruct.raumballer.wave." + classNames[i]);
+@@ -89,10 +89,14 @@ public class LevelReader {
+ 
+     public void levelFinished() {
+         try {
++            complete = true;
+             this.reader.close();
+         } catch (IOException e) {
+             this.game.dbgPrint(e.toString());
+         }
+-        this.game.levelFinished();
++    }
++
++    public Boolean isComplete() {
++        return complete;
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/background/BGImage.java b/app/src/main/java/com/kaeruct/raumballer/background/BGImage.java
+index 8b6566b..afb9bf1 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/background/BGImage.java
++++ b/app/src/main/java/com/kaeruct/raumballer/background/BGImage.java
+@@ -46,11 +46,4 @@ public class BGImage {
+             }
+         }
+     }
+-
+-    public void setScroll(double scroll) {
+-        this.scroll = scroll;
+-        for (int i = 0; i < sprites.length; i++) {
+-            sprites[i].scroll = scroll;
+-        }
+-    }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/BitWaveCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/BitWaveCannon.java
+index f03732e..5cb15a3 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/BitWaveCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/BitWaveCannon.java
+@@ -16,7 +16,7 @@ public class BitWaveCannon extends Cannon {
+             new BitBullet(x, y, colid, angle - v);
+             new BitBullet(x, y, colid, angle + v);
+ 
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/Cannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/Cannon.java
+index 455bd82..7083337 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/Cannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/Cannon.java
+@@ -13,21 +13,11 @@ public abstract class Cannon {
+         lastShoot = 0;
+     }
+ 
+-    public int getWaitTime() {
+-        return waitTime;
+-    }
+-
+-    public void setLastShoot(int t) {
+-        lastShoot = t;
+-    }
+-
+-    public int getLastShoot() {
+-        return lastShoot;
+-    }
+-
+     public boolean canShoot(int t) {
+-        if (t - getLastShoot() >= getWaitTime()) {
+-            setLastShoot(t);
++        if (t < lastShoot) lastShoot = 0; // t can be reset externally, so we need to take this into account
++
++        if (t - lastShoot >= waitTime) {
++            lastShoot = t;
+             return true;
+         }
+         return false;
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/DiscCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/DiscCannon.java
+index e6a8642..cbad9a6 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/DiscCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/DiscCannon.java
+@@ -14,7 +14,7 @@ public class DiscCannon extends Cannon {
+         if (canShoot(t)) {
+             new DiscBullet(x, y, colid, angle);
+             new DiscBullet(x, y - 8, colid, angle);
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/FireCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/FireCannon.java
+index cd7f5c3..2c8e8f9 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/FireCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/FireCannon.java
+@@ -13,7 +13,7 @@ public class FireCannon extends Cannon {
+ 
+         if (canShoot(t)) {
+             new FireBullet(x, y, colid, angle);
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/NanoCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/NanoCannon.java
+index bacf639..97b528b 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/NanoCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/NanoCannon.java
+@@ -14,7 +14,7 @@ public class NanoCannon extends Cannon {
+         if (canShoot(t)) {
+             new BitBullet(x, y, colid, angle);
+ 
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/PlasmaCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/PlasmaCannon.java
+index 4ab38bd..4e9a16b 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/PlasmaCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/PlasmaCannon.java
+@@ -15,7 +15,7 @@ public class PlasmaCannon extends Cannon {
+             new PlasmaBullet(x, y, colid, angle);
+             new PlasmaBullet(x - 2, y - 4, colid, angle);
+             new PlasmaBullet(x + 2, y - 4, colid, angle);
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/ShipCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/ShipCannon.java
+deleted file mode 100644
+index e2fb45a..0000000
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/ShipCannon.java
++++ /dev/null
+@@ -1,24 +0,0 @@
+-package com.kaeruct.raumballer.cannon;
+-
+-import com.kaeruct.raumballer.ship.player.SpinTurn;
+-
+-public class ShipCannon extends Cannon {
+-
+-    public ShipCannon() {
+-        super();
+-        waitTime = 20;
+-    }
+-
+-    public void shoot(double x, double y, double angle, int colid, int t) {
+-
+-        if (canShoot(t)) {
+-            SpinTurn a = new SpinTurn((int) x, (int) y, game);
+-            a.setHealth(0);
+-            a.cannons.set(0, new CombinedCannon(new Cannon[]{}));
+-            a.cannonPrototypes[0] = new CombinedCannon(new Cannon[]{});
+-            a.cannonPrototypes[1] = new CombinedCannon(new Cannon[]{});
+-            a.cannonPrototypes[2] = new CombinedCannon(new Cannon[]{});
+-            //game.playAudio("shoot");
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/SoloPlasmaCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/SoloPlasmaCannon.java
+index 71ba7e1..743c497 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/SoloPlasmaCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/SoloPlasmaCannon.java
+@@ -14,7 +14,7 @@ public class SoloPlasmaCannon extends Cannon {
+         if (canShoot(t)) {
+ 
+             new PlasmaBullet(x, y, colid, angle);
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/cannon/TripleFireCannon.java b/app/src/main/java/com/kaeruct/raumballer/cannon/TripleFireCannon.java
+index f81cc24..eb3d480 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/cannon/TripleFireCannon.java
++++ b/app/src/main/java/com/kaeruct/raumballer/cannon/TripleFireCannon.java
+@@ -15,7 +15,7 @@ public class TripleFireCannon extends Cannon {
+             new FireBullet(x, y, colid, angle);
+             new FireBullet(x, y, colid, angle + 0.1);
+             new FireBullet(x, y, colid, angle - 0.1);
+-            //game.playAudio("shoot");
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/gamestates/GameState.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/GameState.java
+new file mode 100644
+index 0000000..758a2b3
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/GameState.java
+@@ -0,0 +1,16 @@
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
++
++public abstract class GameState {
++    protected AndroidGame game;
++    public GameState(AndroidGame game) {
++        this.game = game;
++    }
++
++    public abstract void start();
++
++    public abstract void doFrame();
++
++    public abstract void paintFrame();
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterEnterHighScore.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterEnterHighScore.java
+new file mode 100644
+index 0000000..65742ce
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterEnterHighScore.java
+@@ -0,0 +1,34 @@
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
++
++public class ShooterEnterHighScore extends GameState {
++    public ShooterEnterHighScore(AndroidGame game) {
++        super(game);
++    }
++
++    public void start() {
++        game.startGeneral();
++    }
++
++    public void doFrame() {
++        game.doFrameGeneral();
++        if (game.t > 120 && game.isTapping) {
++            game.setGameState("Title");
++        }
++    }
++
++    public void paintFrame() {
++        int centerY = game.viewHeight() / 2;
++        int centerX = game.viewWidth() / 2;
++        game.getPlayer().setPos(centerX, centerY);
++
++        game.drawString("YOU ARE WINNER" + game.score, centerX, centerY - 48, 0, "blue");
++        game.drawString("Y~U ~R~ W~N~E~" + game.score, centerX, centerY - 48, 0, "yellow");
++        game.drawString("Your score was: " + game.score, centerX, centerY - 32, 0, "blue");
++        game.drawString("~~~~~~~~~~~~~~~~" + game.score, centerX, centerY - 32, 0, "white");
++        game.drawString("TAP to restart!", centerX, centerY + 32, 0, "blue");
++        game.drawString("TAP~~~~~~~~~~~~", centerX, centerY + 32, 0, "yellow");
++        game.drawString("Maybe try another ship?", centerX, centerY + 48, 0, "blue");
++    }
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterGameOver.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterGameOver.java
+new file mode 100644
+index 0000000..8a76c57
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterGameOver.java
+@@ -0,0 +1,45 @@
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
++import com.kaeruct.raumballer.ship.PlayerShip;
++
++import jgame.JGObject;
++
++public class ShooterGameOver extends GameState {
++
++    private int centerX;
++    private int centerY;
++
++    public ShooterGameOver(AndroidGame game) {
++        super(game);
++        centerY = game.viewHeight() / 2;
++        centerX = game.viewWidth() / 2;
++    }
++
++    public void start() {
++        game.startGeneral();
++
++        game.removeObjects("", 0);
++        // show selected ship in game over screen
++        PlayerShip player = game.getPlayer();
++        if (player != null) {
++            new JGObject("game-over-player", true, centerX - 16, centerY, 0, player.getGraphic());
++        }
++    }
++
++    public void doFrame() {
++        game.doFrameGeneral();
++        if (game.t > 120 && game.isTapping) {
++            game.setGameState("Title");
++            game.setPlayer(null);
++        }
++    }
++
++    public void paintFrame() {
++        game.drawString("Your score was: " + game.score, centerX, centerY - 32, 0, "blue");
++        game.drawString("~~~~~~~~~~~~~~~~" + game.score, centerX, centerY - 32, 0, "yellow");
++        game.drawString("TAP to restart!", centerX, centerY + 32, 0, "blue");
++        game.drawString("TAP~~~~~~~~~~~~", centerX, centerY + 32, 0, "yellow");
++        game.drawString("Maybe try another ship?", centerX, centerY + 48, 0, "blue");
++    }
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterInGame.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterInGame.java
+new file mode 100644
+index 0000000..85d27d0
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterInGame.java
+@@ -0,0 +1,75 @@
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
++import com.kaeruct.raumballer.ship.PlayerShip;
++import com.kaeruct.raumballer.ship.player.NimakRunner;
++import com.kaeruct.raumballer.ship.player.SpinTurn;
++import com.kaeruct.raumballer.ship.player.StenoShot;
++
++import jgame.JGColor;
++
++public class ShooterInGame extends GameState {
++
++    public ShooterInGame(AndroidGame game) {
++        super(game);
++    }
++
++    public void start() {
++        game.startGeneral();
++        game.startLevel();
++
++        if (game.getPlayer() == null) {
++            switch (game.selectedShip) {
++                default:
++                case 0:
++                    game.setPlayer(new StenoShot(game.pfWidth() / 2 - 16, game.pfHeight() - 32, game));
++                    break;
++                case 1:
++                    game.setPlayer(new NimakRunner(game.pfWidth() / 2 - 16, game.pfHeight() - 32, game));
++                    break;
++                case 2:
++                    game.setPlayer(new SpinTurn(game.pfWidth() / 2 - 16, game.pfHeight() - 32, game));
++                    break;
++            }
++        }
++    }
++
++    public void doFrame() {
++        game.doFrameGeneral();
++
++        game.checkCollision(AndroidGame.PLAYER_ID, AndroidGame.ENEMY_ID);
++        game.checkCollision(AndroidGame.ENEMY_ID, AndroidGame.PLAYER_ID);
++
++        game.setViewOffset(0, (int) game.getPlayer().y, true);
++
++        if (game.getPlayer().isDead()) {
++            game.setGameState("GameOver");
++        } else {
++            game.updateWaves();
++            game.updateStars();
++            game.updateLevelState();
++        }
++
++        game.moveObjects(null, 0);
++    }
++
++    public void paintFrame() {
++        game.drawString("Score:" + game.score, game.viewWidth() - 8, game.viewHeight() - 20, 1);
++
++        PlayerShip player = game.getPlayer();
++        double amt = player.getHealth() / player.getMaxHealth();
++        double intensity = 0.6;
++        double amtColor = player.getHealth() / player.getMaxHealth() * intensity;
++        JGColor c = new JGColor(intensity - amtColor, amtColor, 0);
++        game.drawRect(
++                8,
++                game.viewHeight() - 8.0,
++                (game.viewWidth() * amt) - 16,
++                4,
++                true,
++                false,
++                1,
++                c
++        );
++    }
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterLevelDone.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterLevelDone.java
+new file mode 100644
+index 0000000..2396a2a
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterLevelDone.java
+@@ -0,0 +1,30 @@
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
++
++public class ShooterLevelDone extends GameState {
++    public ShooterLevelDone(AndroidGame game) {
++        super(game);
++    }
++
++    public void start() {
++        game.startGeneral();
++    }
++
++    public void doFrame() {
++        game.doFrameGeneral();
++        if (game.t > 120 && game.isTapping) {
++            game.setGameState("InGame");
++        }
++    }
++
++    public void paintFrame() {
++        int centerY = game.viewHeight() / 2;
++        int centerX = game.viewWidth() / 2;
++
++        game.drawString("Level " + game.level + " completed!", centerX, centerY - 16, 0, "blue");
++        game.drawString("~~~~~~" + game.level + "~~~~~~~~~~~", centerX, centerY - 16, 0, "yellow");
++        game.drawString("TAP to continue", centerX, centerY, 0, "blue");
++        game.drawString("TAP~~~~~~~~~~~~", centerX, centerY, 0, "yellow");
++    }
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ShooterTitle.java b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterTitle.java
+similarity index 59%
+rename from app/src/main/java/com/kaeruct/raumballer/ShooterTitle.java
+rename to app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterTitle.java
+index ff9ca3c..fd8278f 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ShooterTitle.java
++++ b/app/src/main/java/com/kaeruct/raumballer/gamestates/ShooterTitle.java
+@@ -1,4 +1,6 @@
+-package com.kaeruct.raumballer;
++package com.kaeruct.raumballer.gamestates;
++
++import com.kaeruct.raumballer.AndroidGame;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -6,21 +8,21 @@ import java.util.List;
+ import jgame.JGObject;
+ import jgame.JGRectangle;
+ 
+-public class ShooterTitle {
+-
+-    private final AndroidGame game;
+-    private final int centerX;
+-    private final int centerY;
+-    private List<JGObject> ships;
++public class ShooterTitle extends GameState {
++    public List<JGObject> ships;
++    private int centerY;
++    private int centerX;
+ 
+     public ShooterTitle(AndroidGame game) {
+-        this.game = game;
+-
++        super(game);
+         centerY = this.game.viewHeight() / 2;
+         centerX = this.game.viewWidth() / 2;
+     }
+ 
+     public void start() {
++        game.score = 0;
++        game.level = 0;
++        game.removeObjects("", 0);
+         game.addStars(128);
+         ships = new ArrayList<>();
+         ships.add(new JGObject("select-steno-shot", true, centerX - 48, centerY - 8, 0, "player1"));
+@@ -46,9 +48,14 @@ public class ShooterTitle {
+ 
+     public void paintFrame() {
+         game.drawString("-= RAUM BALLER =-", centerX, centerY - 48, 0, "blue");
+-        game.drawString("TAP a ship to begin", centerX, centerY - 32, 0);
+-        game.drawString("move by TAPPING where to go", centerX, centerY + 32, 0);
+-        game.drawString("get stronger by destroying", centerX, centerY + 48, 0);
+-        game.drawString("enemy ships", centerX, centerY + 64, 0);
++        game.drawString("-~~~~~~~~~~~~~~~-", centerX, centerY - 48, 0, "yellow");
++        game.drawString("TAP a ship to begin", centerX, centerY - 32, 0, "blue");
++        game.drawString("TAP~~~~~~~~~~~~~~~~", centerX, centerY - 32, 0, "yellow");
++        game.drawString("move by TAPPING where to go", centerX, centerY + 32, 0, "blue");
++        game.drawString("~~~~~~~~TAPPING~~~~~~~~~~~~", centerX, centerY + 32, 0, "yellow");
++        game.drawString("get STRONGER by DESTROYING", centerX, centerY + 48, 0, "blue");
++        game.drawString("~~~~STRONGER~~~~DESTROYING", centerX, centerY + 48, 0, "yellow");
++        game.drawString("enemy ships", centerX, centerY + 64, 0, "blue");
++        game.drawString("© KaeruCT 2012 - 2021", centerX, this.game.viewHeight() - 32, 0, "white");
+     }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/PlayerShip.java b/app/src/main/java/com/kaeruct/raumballer/ship/PlayerShip.java
+index c36e35a..a5916b4 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/PlayerShip.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/PlayerShip.java
+@@ -7,6 +7,7 @@ public abstract class PlayerShip extends Ship {
+ 
+     public Cannon[] cannonPrototypes;
+     protected double acc;
++    protected double drag = 0.3;
+ 
+     public PlayerShip(int x, int y, String anim, int health, AndroidGame game) {
+         super(x, y, "player", game.PLAYER_ID, anim, health, game);
+@@ -22,48 +23,30 @@ public abstract class PlayerShip extends Ship {
+         super.update();
+ 
+         // shooting
+-        boolean shooting = true;
+-        if (shooting) {
+-
+-            shoot();
+-
+-            // bounce
+-            // bounce is annoying, never uncomment
+-            //if(yspeed < velocity)
+-            //	this.yspeed += acc*0.1;
+-
+-            if (clock % 10 == 0) {
+-                game.playAudio("laser");
+-            }
++        shoot();
++        if (clock % 6 == 0) {
++            game.playAudio("laser");
+         }
+ 
+         double xacc = 0;
+         double yacc = 0;
+         if (game.isTapping) {
+-            double rad = Math.atan2(eng.getMouseY() - getLastY(), eng.getMouseX() - getLastX());
++            double rad = game.atan2(eng.getMouseY() - getLastY(), eng.getMouseX() - getLastX());
+             xacc = Math.cos(rad) * 0.1;
+             yacc = Math.sin(rad) * 0.1;
+         }
+ 
+-        this.xspeed += xacc;
+-        this.yspeed += yacc;
++        if (Math.abs(xspeed) < velocity) xspeed += xacc;
++        if (Math.abs(yspeed) < velocity) yspeed += yacc;
+ 
+-        if (yspeed != 0) {
+-            yspeed += 0.3 * (yspeed < 0 ? acc : -acc);
+-        }
+-        if (xspeed != 0) {
+-            xspeed += 0.3 * (xspeed < 0 ? acc : -acc);
+-        }
++        if (yspeed != 0) yspeed += drag * (yspeed < 0 ? acc : -acc);
++        if (xspeed != 0) xspeed += drag * (xspeed < 0 ? acc : -acc);
+ 
+         // correcting bounds (wrap horizontally)
+-        if (x <= -8)
+-            x = game.pfWidth() - 9;
+-        if (y <= -8)
+-            y = -8;
+-        if (x + 8 >= game.pfWidth())
+-            x = -8;
+-        if (y + 8 >= game.pfHeight())
+-            y = game.pfHeight() - 8;
++        if (x <= -8) x = game.pfWidth() - 9;
++        if (y <= -8) y = -8;
++        if (x + 8 >= game.pfWidth()) x = -8;
++        if (y + 8 >= game.pfHeight()) y = game.pfHeight() - 8;
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/Ship.java b/app/src/main/java/com/kaeruct/raumballer/ship/Ship.java
+index a11eae8..46ab6b6 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/Ship.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/Ship.java
+@@ -44,7 +44,7 @@ public abstract class Ship extends JGObject {
+         this.setHealth(maxHealth);
+ 
+         // initialize cannons
+-        this.cannons = new ArrayList<Cannon>();
++        this.cannons = new ArrayList<>();
+     }
+ 
+     public boolean flashing() {
+@@ -113,7 +113,7 @@ public abstract class Ship extends JGObject {
+         new Explosion(x + offset, y + offset, explosionColor);
+ 
+         for (int i = 0; i < this.width; i += 8) {
+-            new JGTimer(game.random(i, i + 20, 1), true) {
++            new JGTimer(game.random(i, i + 20, 1), true, "InGame") {
+                 public void alarm() {
+                     new Explosion(x + offset, y + offset + game.random(-r, r), explosionColor);
+                     new Explosion(x + offset + game.random(-r, r), y, explosionColor);
+@@ -144,6 +144,18 @@ public abstract class Ship extends JGObject {
+             Ship s = ((Ship) obj);
+             hurt(2 * s.getHealth() / this.getHealth());
+             flash();
++
++            // temporary invincibility to avoid getting hurt too much when hitting a ship with another ship
++            if (this instanceof PlayerShip) {
++                this.sturdy = true;
++                PlayerShip ship = (PlayerShip) this;
++                new JGTimer(10, true, "InGame") {
++                    @Override
++                    public void alarm() {
++                        ship.sturdy = false;
++                    }
++                };
++            }
+         }
+     }
+ 
+@@ -155,6 +167,10 @@ public abstract class Ship extends JGObject {
+         this.health = health;
+     }
+ 
++    public double getMaxHealth() {
++        return maxHealth;
++    }
++
+     public boolean isDead() {
+         return this.getHealth() == 0;
+     }
+@@ -163,6 +179,5 @@ public abstract class Ship extends JGObject {
+         this.parent = parent;
+     }
+ 
+-    public void onScore(int score) {
+-    }
++    public void onScore(int score) { }
+ }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/Asterisk.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/Asterisk.java
+index e03cd19..c4faf11 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/Asterisk.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/Asterisk.java
+@@ -3,10 +3,16 @@ package com.kaeruct.raumballer.ship.enemy;
+ import com.kaeruct.raumballer.AndroidGame;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ 
++/**
++ * Small ship that orbits a parent ship (SparkEye)
++ */
+ public class Asterisk extends EnemyShip {
+ 
+     private double offset;
+-    private final double radius;
++    public double radius;
++    public double speed = 0.01;
++    public boolean wavy = false;
++    public boolean odd = false;
+ 
+     public Asterisk(double x, double y, double vel, double angle, AndroidGame game) {
+         super(x, y, "asterisk", 5, game);
+@@ -24,14 +30,14 @@ public class Asterisk extends EnemyShip {
+     public void move() {
+         super.move();
+ 
+-        x = parent.x - Math.cos(-offset) * radius;
+-        y = parent.y + Math.sin(offset) * radius;
++        x = parent.x + parent.getImageBBoxConst().width/2 - Math.cos(-offset) * radius - this.getImageBBox().width/2;
++        y = parent.y + parent.getImageBBoxConst().height/2 - Math.sin(offset) * radius - this.getImageBBox().height/2;
+ 
+-        offset += 1;
++        if (wavy) {
++            radius += odd ? Math.sin(clock * 0.08) : Math.cos(clock * 0.08);
++        }
+ 
+-        // removing if out of range
+-        if (x <= -32 || y <= -32 || x - 32 >= game.pfWidth() || y - 32 >= game.pfHeight())
+-            remove();
++        offset += speed;
+ 
+         // die if parent died
+         if (!parent.isAlive()) {
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/BobbaDestroyer.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/BobbaDestroyer.java
+new file mode 100644
+index 0000000..45fadfa
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/BobbaDestroyer.java
+@@ -0,0 +1,52 @@
++package com.kaeruct.raumballer.ship.enemy;
++
++import com.kaeruct.raumballer.AndroidGame;
++import com.kaeruct.raumballer.cannon.BitWaveCannon;
++import com.kaeruct.raumballer.cannon.PlasmaCannon;
++import com.kaeruct.raumballer.cannon.SoloPlasmaCannon;
++import com.kaeruct.raumballer.cannon.TripleFireCannon;
++import com.kaeruct.raumballer.ship.EnemyShip;
++
++/**
++ * Big menacing "boss"?? ship with lots of health
++ */
++public class BobbaDestroyer extends EnemyShip {
++
++    public BobbaDestroyer(double x, double y, double vel, double angle, AndroidGame game) {
++        super(x, y, "bobbadestroyer", 400, game);
++
++        this.velocity = vel;
++        this.angle = angle;
++        this.cannons.add(new TripleFireCannon());
++        this.cannons.add(new PlasmaCannon());
++        this.cannons.add(new BitWaveCannon());
++        this.explosionColor = "green";
++        this.setBBox(4, 4, 60, 58);
++        this.width = 64;
++    }
++
++    public void move() {
++        super.move();
++
++        double ang = game.atan2(y - game.getPlayer().y, game.getPlayer().x - x);
++        if (clock % 60 == 0) {
++            shoot(ang);
++        }
++
++        if (clock % 25 == 0 && game.random(0, 2, 1) == 0) {
++            shoot(ang + game.random(-0.3, 0.3));
++            shoot(ang - game.random(-0.3, 0.3));
++        }
++
++        // only attempt to stay in screen if not near boundaries
++        if (x >= 40 && x + 40 <= game.viewWidth()) {
++            if (y + 40 >= game.viewHeight() && game.goingDown(angle) ||
++                    y <= 40 && game.goingUp(angle)) {
++
++                if (game.random(0, 1, 1) == 1) {
++                    this.angle = -this.angle;
++                }
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/CibumDestroyer.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/CibumDestroyer.java
+index 841248e..d34325c 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/CibumDestroyer.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/CibumDestroyer.java
+@@ -5,6 +5,9 @@ import com.kaeruct.raumballer.cannon.SoloPlasmaCannon;
+ import com.kaeruct.raumballer.cannon.TripleFireCannon;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ 
++/**
++ * Big menacing red ship with lots of health
++ */
+ public class CibumDestroyer extends EnemyShip {
+ 
+     public CibumDestroyer(double x, double y, double vel, double angle, AndroidGame game) {
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/FireStriker.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/FireStriker.java
+index f136e9e..e1c1656 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/FireStriker.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/FireStriker.java
+@@ -5,6 +5,10 @@ import com.kaeruct.raumballer.cannon.FireCannon;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ import com.kaeruct.raumballer.ship.PlayerShip;
+ 
++/**
++ * Quick small red ship. Will speed up when getting close the the player.
++ * These are usually dispatched in groups
++ */
+ public class FireStriker extends EnemyShip {
+ 
+     public FireStriker(double x, double y, double vel, double angle, AndroidGame game) {
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SpaceBall.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SpaceBall.java
+index 206e353..24d116c 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SpaceBall.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SpaceBall.java
+@@ -5,6 +5,9 @@ import com.kaeruct.raumballer.cannon.BitWaveCannon;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ import com.kaeruct.raumballer.ship.PlayerShip;
+ 
++/**
++ * Small ship that locks on and orbits the player ship
++ */
+ public class SpaceBall extends EnemyShip {
+ 
+     private boolean lockedOn;
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkDefender.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkDefender.java
+index 3cef6bc..edf2e97 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkDefender.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkDefender.java
+@@ -4,6 +4,9 @@ import com.kaeruct.raumballer.AndroidGame;
+ import com.kaeruct.raumballer.cannon.SparkCannon;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ 
++/**
++ * Basic quick ship which attempts to stay inside the screen as long as possible
++ */
+ public class SparkDefender extends EnemyShip {
+ 
+     public SparkDefender(double x, double y, double vel, double angle, AndroidGame game) {
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkEye.java b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkEye.java
+index 4c880c2..34c3946 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkEye.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/enemy/SparkEye.java
+@@ -4,6 +4,9 @@ import com.kaeruct.raumballer.AndroidGame;
+ import com.kaeruct.raumballer.cannon.NanoCannon;
+ import com.kaeruct.raumballer.ship.EnemyShip;
+ 
++/**
++ * Purple eye that follows the player ship (surrounded by Asterisk)
++ */
+ public class SparkEye extends EnemyShip {
+ 
+     public SparkEye(double x, double y, double vel, double angle, AndroidGame game) {
+@@ -23,9 +26,20 @@ public class SparkEye extends EnemyShip {
+         if (game.t % 50 == 0) {
+             double ang = game.atan2(y - game.getPlayer().y, game.getPlayer().x - x);
+             shoot(ang + game.random(-0.5, 0.5));
++            shoot(ang + game.random(-0.5, 0.5));
++            shoot(ang + game.random(-0.5, 0.5));
++        }
++
++        if (game.t % 30 == 0 && game.random(0, 1, 1) == 1) {
++            this.angle = game.atan2(y - game.viewHeight() / 2, game.viewWidth() / 2 - x);
++        }
++
++        // reverse angle if going out of the game area
++        if (x >= 32 && x + 32 <= game.viewWidth()) {
++            if (y + 32 >= game.viewHeight() && game.goingDown(angle) ||
++                    y <= 32 && game.goingUp(angle)) {
+ 
+-            if (game.random(0, 1, 1) == 1) {
+-                this.angle = game.atan2(y - game.viewHeight() / 2, game.viewWidth() / 2 - x);
++                this.angle = -this.angle;
+             }
+         }
+     }
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/player/NimakRunner.java b/app/src/main/java/com/kaeruct/raumballer/ship/player/NimakRunner.java
+index 060910f..7b6caf1 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/player/NimakRunner.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/player/NimakRunner.java
+@@ -14,11 +14,14 @@ public class NimakRunner extends PlayerShip {
+     public NimakRunner(int x, int y, AndroidGame game) {
+         super(x, y, "player2", 80, game);
+         this.velocity = 1.8;
++        this.drag = 0.3;
+         this.acc = 0.1;
+         this.explosionColor = "red";
+         this.width = 16;
+         this.cannonPrototypes[0] = new DiscCannon();
+-        this.cannonPrototypes[1] = new FireCannon();
++        this.cannonPrototypes[1] = new CombinedCannon(new Cannon[]{
++            new DiscCannon(), new FireCannon()
++        });
+         this.cannonPrototypes[2] = new TripleFireCannon();
+         this.cannonPrototypes[3] = new CombinedCannon(new Cannon[]{
+                 new TripleFireCannon(), new NanoCannon(), new FireCannon()
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/player/SpinTurn.java b/app/src/main/java/com/kaeruct/raumballer/ship/player/SpinTurn.java
+index f0805a1..c9495a1 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/player/SpinTurn.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/player/SpinTurn.java
+@@ -15,10 +15,13 @@ public class SpinTurn extends PlayerShip {
+         super(x, y, "player3", 100, game);
+         this.velocity = 2.4;
+         this.acc = 0.2;
++        this.drag = 0.2;
+         this.explosionColor = "blue";
+         this.width = 16;
+         this.cannonPrototypes[0] = new SparkCannon();
+-        this.cannonPrototypes[1] = new FireCannon();
++        this.cannonPrototypes[1] = new CombinedCannon(new Cannon[]{
++                new NanoCannon(), new FireCannon()
++        });
+         this.cannonPrototypes[2] = new CombinedCannon(new Cannon[]{
+                 new SparkCannon(), new FireCannon()
+         });
+diff --git a/app/src/main/java/com/kaeruct/raumballer/ship/player/StenoShot.java b/app/src/main/java/com/kaeruct/raumballer/ship/player/StenoShot.java
+index 76ed3c9..ada162e 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/ship/player/StenoShot.java
++++ b/app/src/main/java/com/kaeruct/raumballer/ship/player/StenoShot.java
+@@ -15,6 +15,7 @@ public class StenoShot extends PlayerShip {
+         super(x, y, "player1", 70, game);
+         this.velocity = 3.0;
+         this.acc = 0.2;
++        this.drag = 0.1;
+         this.explosionColor = "green";
+         this.width = 16;
+         this.cannonPrototypes[0] = new DiscCannon();
+diff --git a/app/src/main/java/com/kaeruct/raumballer/wave/BobbaWave.java b/app/src/main/java/com/kaeruct/raumballer/wave/BobbaWave.java
+new file mode 100644
+index 0000000..b7d7688
+--- /dev/null
++++ b/app/src/main/java/com/kaeruct/raumballer/wave/BobbaWave.java
+@@ -0,0 +1,45 @@
++package com.kaeruct.raumballer.wave;
++
++import com.kaeruct.raumballer.AndroidGame;
++import com.kaeruct.raumballer.LevelReader;
++import com.kaeruct.raumballer.ship.Ship;
++import com.kaeruct.raumballer.ship.enemy.Asterisk;
++
++public class BobbaWave extends Wave {
++
++    public BobbaWave(AndroidGame game, LevelReader r, int maxAmount) {
++        super(game, r, maxAmount); // it spawns 8 enemies per spawn
++        this.setFreq(200);
++        this.setShipClass("BobbaDestroyer");
++    }
++
++    public void spawn() {
++        double center = game.viewWidth() / 2;
++
++        Ship parent = super.spawn(
++                game.random(center - 44, center + 44),
++                -42,
++                0.5,
++                Math.PI * 3 / 2 - game.random(-0.1, 0.1)
++        );
++
++        double num = 16;
++
++        for (int i = 0; i < num; i++) {
++            double ang = Math.PI * (2 * (num / 2 - i) / num);
++
++            Asterisk a = (Asterisk)super.spawn(
++                    parent.x,
++                    parent.y,
++                    0.8,
++                    ang,
++                    "Asterisk",
++                    parent
++            );
++            a.radius = 54;
++            a.wavy = true;
++            if (i % 2 == 1) a.odd = true;
++        }
++    }
++
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/kaeruct/raumballer/wave/FireFormationWave.java b/app/src/main/java/com/kaeruct/raumballer/wave/FireFormationWave.java
+index cf618f8..ea747bb 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/wave/FireFormationWave.java
++++ b/app/src/main/java/com/kaeruct/raumballer/wave/FireFormationWave.java
+@@ -7,7 +7,7 @@ public class FireFormationWave extends Wave {
+ 
+     public FireFormationWave(AndroidGame game, LevelReader r, int maxAmount) {
+         super(game, r, maxAmount * 3); // *3 because it spawns in triads
+-        this.setFreq(50);
++        this.setFreq(70);
+         this.setShipClass("FireStriker");
+     }
+ 
+diff --git a/app/src/main/java/com/kaeruct/raumballer/wave/SparkEyeWave.java b/app/src/main/java/com/kaeruct/raumballer/wave/SparkEyeWave.java
+index 09be66c..95ebc13 100644
+--- a/app/src/main/java/com/kaeruct/raumballer/wave/SparkEyeWave.java
++++ b/app/src/main/java/com/kaeruct/raumballer/wave/SparkEyeWave.java
+@@ -3,6 +3,7 @@ package com.kaeruct.raumballer.wave;
+ import com.kaeruct.raumballer.AndroidGame;
+ import com.kaeruct.raumballer.LevelReader;
+ import com.kaeruct.raumballer.ship.Ship;
++import com.kaeruct.raumballer.ship.enemy.Asterisk;
+ 
+ public class SparkEyeWave extends Wave {
+ 
+@@ -33,10 +34,10 @@ public class SparkEyeWave extends Wave {
+ 
+         double num = 7; // number of asterisks around the eye
+ 
+-        for (int i = 0; i < 7; i++) {
++        for (int i = 0; i < num; i++) {
+             double ang = Math.PI * (2 * (num / 2 - i) / num);
+ 
+-            super.spawn(
++            Asterisk a = (Asterisk)super.spawn(
+                     xpos,
+                     ypos,
+                     6,
+@@ -44,6 +45,7 @@ public class SparkEyeWave extends Wave {
+                     "Asterisk",
+                     parent
+             );
++            a.speed = 0.07;
+         }
+     }
+ 

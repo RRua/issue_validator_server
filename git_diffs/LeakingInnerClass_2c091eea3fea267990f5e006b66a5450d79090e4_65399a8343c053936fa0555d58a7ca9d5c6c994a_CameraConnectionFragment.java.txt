@@ -1,0 +1,2717 @@
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java
+deleted file mode 100644
+index 466acc7..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java
++++ /dev/null
+@@ -1,697 +0,0 @@
+-/*
+- * Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *       http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.Manifest;
+-import android.content.Context;
+-import android.content.pm.PackageManager;
+-import android.hardware.Camera;
+-import android.hardware.camera2.CameraAccessException;
+-import android.hardware.camera2.CameraCharacteristics;
+-import android.hardware.camera2.CameraManager;
+-import android.hardware.camera2.params.StreamConfigurationMap;
+-import android.media.Image;
+-import android.media.Image.Plane;
+-import android.media.ImageReader;
+-import android.media.ImageReader.OnImageAvailableListener;
+-import android.os.Build;
+-import android.os.Bundle;
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-import android.os.Trace;
+-import android.support.v4.app.Fragment;
+-import android.support.v7.app.AppCompatActivity;
+-import android.util.Size;
+-import android.view.KeyEvent;
+-import android.view.Surface;
+-import android.view.View;
+-import android.view.WindowManager;
+-import android.widget.Toast;
+-
+-import com.lun.chin.aicamera.listener.CameraChangedListener;
+-import com.lun.chin.aicamera.GalleryViewPagerFragment;
+-import com.lun.chin.aicamera.ImageManager;
+-import com.lun.chin.aicamera.OverlayView;
+-import com.lun.chin.aicamera.R;
+-import com.lun.chin.aicamera.RecyclerViewFragment;
+-import com.lun.chin.aicamera.listener.RunInBackgroundListener;
+-import com.lun.chin.aicamera.env.ImageUtils;
+-import com.lun.chin.aicamera.env.Logger;
+-
+-import org.opencv.android.BaseLoaderCallback;
+-import org.opencv.android.LoaderCallbackInterface;
+-import org.opencv.android.OpenCVLoader;
+-
+-import java.nio.ByteBuffer;
+-
+-
+-public abstract class CameraActivity extends AppCompatActivity
+-        implements
+-            OnImageAvailableListener,
+-            Camera.PreviewCallback,
+-        CameraFragment.OnCameraButtonClickedListener,
+-        RunInBackgroundListener {
+-
+-    private static final Logger LOGGER = new Logger();
+-
+-    private static final int PERMISSIONS_REQUEST = 1;
+-
+-    private static final String PERMISSION_CAMERA = Manifest.permission.CAMERA;
+-    private static final String PERMISSION_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+-
+-    private boolean mDebug = false;
+-
+-    private Handler mHandler;
+-    private HandlerThread mHandlerThread;
+-    private boolean mIsProcessingFrame = false;
+-    private boolean mIsProcessingPreviewFrame = false;
+-    private byte[][] mYuvBytes = new byte[3][];
+-    private int[] mRgbBytes = null;
+-    private int[] mRgbBytesPreview = null;
+-    private int mYRowStride;
+-    private byte[] mPictureBytes;
+-
+-    protected boolean mUseCamera2API;
+-    protected int mPreviewWidth = 0;
+-    protected int mPreviewHeight = 0;
+-    protected int mPictureWidth = 0;
+-    protected int mPictureHeight = 0;
+-
+-    private Runnable mPostInferenceCallback;
+-    private Runnable mPostPreviewInferenceCallback;
+-    private Runnable mImageConverter;
+-    private Runnable mPreviewImageConverter;
+-
+-    private int mRotation = 90;
+-    protected String mFilename;
+-
+-    private BaseLoaderCallback _baseLoaderCallback = new BaseLoaderCallback(this) {
+-        @Override
+-        public void onManagerConnected(int status) {
+-            switch (status) {
+-                case LoaderCallbackInterface.SUCCESS: {
+-                    LOGGER.d("OpenCV loaded successfully");
+-                    // Load ndk built module, as specified in moduleName in build.gradle
+-                    // after opencv initialization
+-                    System.loadLibrary("native-lib");
+-                }
+-                break;
+-                default: {
+-                    super.onManagerConnected(status);
+-                }
+-            }
+-        }
+-    };
+-
+-    @Override
+-    protected void onCreate(final Bundle savedInstanceState) {
+-        LOGGER.d("onCreate " + this);
+-        super.onCreate(null);
+-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+-
+-        setContentView(R.layout.activity_camera_old);
+-
+-        if (hasPermission()) {
+-            setFragment();
+-        } else {
+-            requestPermission();
+-        }
+-    }
+-
+-    private byte[] lastPreviewFrame;
+-
+-    protected int[] getRgbBytes() {
+-        mImageConverter.run();
+-        return mRgbBytes;
+-    }
+-
+-    protected byte[] getPictureBytes() {
+-        return mPictureBytes;
+-    }
+-
+-    protected int[] getRgbBytesPreview() {
+-        mPreviewImageConverter.run();
+-        return mRgbBytesPreview;
+-    }
+-
+-    protected int getLuminanceStride() {
+-        return mYRowStride;
+-    }
+-
+-    protected byte[] getLuminance() {
+-        return mYuvBytes[0];
+-    }
+-
+-    /**
+-     * Callback for android.hardware.Camera API
+-     */
+-    @Override
+-    public void onPreviewFrame(final byte[] bytes, final Camera camera) {
+-        if (mIsProcessingPreviewFrame) {
+-            LOGGER.w("Dropping frame!");
+-            return;
+-        }
+-
+-        mIsProcessingPreviewFrame = true;
+-
+-        try {
+-            // Initialize the storage bitmaps once when the resolution is known.
+-            if (mRgbBytesPreview == null) {
+-                Camera.Size previewSize = camera.getParameters().getPreviewSize();
+-                mPreviewHeight = previewSize.height;
+-                mPreviewWidth = previewSize.width;
+-                mRgbBytesPreview = new int[mPreviewWidth * mPreviewHeight];
+-                onPreviewSizeChosen(new Size(previewSize.width, previewSize.height), 90);
+-            }
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            return;
+-        }
+-
+-        mPreviewImageConverter =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        ImageUtils.convertYUV420SPToARGB8888(bytes,
+-                                mPreviewWidth,
+-                                mPreviewHeight,
+-                                mRgbBytesPreview);
+-                    }
+-                };
+-
+-        mPostPreviewInferenceCallback =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        camera.addCallbackBuffer(bytes);
+-                        mIsProcessingPreviewFrame = false;
+-                    }
+-                };
+-
+-        processPreview();
+-    }
+-
+-    public void onCaptureStillFrame(final byte[] bytes, final Camera camera) {
+-        if (mIsProcessingFrame) {
+-            return;
+-        }
+-
+-        final Long timeStamp = System.currentTimeMillis();
+-        mFilename = "IMG_" + timeStamp.toString() + ".png";
+-        ImageManager.getInstance().addPendingImage(mFilename);
+-
+-        mIsProcessingFrame = true;
+-
+-        // Initialize the storage bitmaps once when the resolution is known.
+-        if (mPictureBytes == null) {
+-            prepareBitmap(camera.getParameters().getPictureSize());
+-        }
+-
+-        mPictureBytes = bytes;
+-
+-        mPostInferenceCallback =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        camera.addCallbackBuffer(bytes);
+-                        mIsProcessingFrame = false;
+-                    }
+-                };
+-
+-        processImage();
+-    }
+-
+-    private void prepareBitmap(Camera.Size pictureSize) {
+-        try {
+-            mPictureHeight = pictureSize.height;
+-            mPictureWidth = pictureSize.width;
+-            onPictureSizeChosen(new Size(pictureSize.width, pictureSize.height), mRotation);
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            return;
+-        }
+-    }
+-
+-    // Callback for when a still image is taken with the Camera2 API.
+-    @Override
+-    public void onImageAvailable(final ImageReader reader) {
+-        if (mPictureWidth == 0 || mPictureHeight == 0) {
+-            return;
+-        }
+-        try {
+-            final Image image = reader.acquireLatestImage();
+-
+-            if (image == null) {
+-                return;
+-            }
+-
+-            if (mIsProcessingFrame) {
+-                image.close();
+-                return;
+-            }
+-            mIsProcessingFrame = true;
+-            Trace.beginSection("imageAvailable");
+-
+-            final Plane[] planes = image.getPlanes();
+-            fillBytes(planes, mYuvBytes);
+-            mYRowStride = planes[0].getRowStride();
+-            final int uvRowStride = planes[1].getRowStride();
+-            final int uvPixelStride = planes[1].getPixelStride();
+-
+-            mImageConverter =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            ImageUtils.convertYUV420ToARGB8888(
+-                                    mYuvBytes[0],
+-                                    mYuvBytes[1],
+-                                    mYuvBytes[2],
+-                                    mPictureWidth,
+-                                    mPictureHeight,
+-                                    mYRowStride,
+-                                    uvRowStride,
+-                                    uvPixelStride,
+-                                    mRgbBytes);
+-                        }
+-                    };
+-
+-            mPostInferenceCallback =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            image.close();
+-                            mIsProcessingFrame = false;
+-                        }
+-                    };
+-
+-            processImage();
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            Trace.endSection();
+-            return;
+-        }
+-        Trace.endSection();
+-    }
+-
+-    // Callback when preview image is available from the Camera2 API
+-    private void onPreviewImageAvailable(final ImageReader reader) {
+-        if (mPreviewWidth == 0 || mPreviewHeight == 0) {
+-            return;
+-        }
+-        try {
+-            final Image image = reader.acquireLatestImage();
+-
+-            if (image == null) {
+-                LOGGER.i("image null");
+-                return;
+-            }
+-
+-            if (mIsProcessingPreviewFrame) {
+-                LOGGER.i("processing preview true");
+-                image.close();
+-                return;
+-            }
+-            mIsProcessingPreviewFrame  = true;
+-            Trace.beginSection("imageAvailable");
+-
+-            final Plane[] planes = image.getPlanes();
+-            fillBytes(planes, mYuvBytes);
+-            mYRowStride = planes[0].getRowStride();
+-            final int uvRowStride = planes[1].getRowStride();
+-            final int uvPixelStride = planes[1].getPixelStride();
+-
+-            mPreviewImageConverter =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            ImageUtils.convertYUV420ToARGB8888(
+-                                    mYuvBytes[0],
+-                                    mYuvBytes[1],
+-                                    mYuvBytes[2],
+-                                    mPreviewWidth,
+-                                    mPreviewHeight,
+-                                    mYRowStride,
+-                                    uvRowStride,
+-                                    uvPixelStride,
+-                                    mRgbBytesPreview);
+-                        }
+-                    };
+-
+-            mPostPreviewInferenceCallback =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            image.close();
+-                            mIsProcessingPreviewFrame = false;
+-                        }
+-                    };
+-
+-            processPreview();
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            Trace.endSection();
+-            return;
+-        }
+-        Trace.endSection();
+-    }
+-
+-    @Override
+-    public synchronized void onStart() {
+-        LOGGER.d("onStart " + this);
+-        super.onStart();
+-    }
+-
+-    @Override
+-    public synchronized void onResume() {
+-        LOGGER.d("onResume " + this);
+-        super.onResume();
+-
+-        if (!OpenCVLoader.initDebug()) {
+-            LOGGER.d("Internal OpenCV library not found. Using OpenCV Manager for initialization");
+-            OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_0_0, this, _baseLoaderCallback);
+-        } else {
+-            LOGGER.d("OpenCV library found inside package. Using it!");
+-            _baseLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
+-        }
+-
+-        mHandlerThread = new HandlerThread("inference");
+-        mHandlerThread.start();
+-        mHandler = new Handler(mHandlerThread.getLooper());
+-    }
+-
+-    @Override
+-    public synchronized void onPause() {
+-        LOGGER.d("onPause " + this);
+-        super.onPause();
+-    }
+-
+-    @Override
+-    public synchronized void onStop() {
+-        LOGGER.d("onStop " + this);
+-        super.onStop();
+-    }
+-
+-    @Override
+-    public synchronized void onDestroy() {
+-        LOGGER.d("onDestroy " + this);
+-
+-        mHandlerThread.quitSafely();
+-        try {
+-            mHandlerThread.join();
+-            mHandlerThread = null;
+-            mHandler = null;
+-        } catch (final InterruptedException e) {
+-            LOGGER.e(e, "Exception!");
+-        }
+-
+-        super.onDestroy();
+-    }
+-
+-    protected synchronized void runInBackground(final Runnable r) {
+-        if (mHandler != null) {
+-            mHandler.post(r);
+-        }
+-    }
+-
+-    @Override
+-    public void onRequestPermissionsResult(
+-            final int requestCode, final String[] permissions, final int[] grantResults) {
+-        if (requestCode == PERMISSIONS_REQUEST) {
+-            if (grantResults.length > 0
+-                    && grantResults[0] == PackageManager.PERMISSION_GRANTED
+-                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+-                setFragment();
+-            } else {
+-                requestPermission();
+-            }
+-        }
+-    }
+-
+-    @Override
+-    public void onCameraButtonClicked(View v) {
+-        switch (v.getId()) {
+-            case R.id.goto_gallery:
+-                GalleryViewPagerFragment galleryViewPagerFragment =
+-                        GalleryViewPagerFragment.newInstance(
+-                                0, ImageManager.getInstance().getImageItems());
+-
+-                getSupportFragmentManager()
+-                        .beginTransaction()
+-                        .replace(R.id.container, galleryViewPagerFragment)
+-                        .addToBackStack(null)
+-                        .commit();
+-
+-                // TODO improve the loading speed of the gallery page. Remove it for now.
+-                /*
+-                RecyclerViewFragment fragment
+-                        = RecyclerViewFragment.newInstance(
+-                                ImageManager.getInstance().getImageItems());
+-
+-                getSupportFragmentManager()
+-                        .beginTransaction()
+-                        .replace(R.id.container, fragment)
+-                        .addToBackStack(null)
+-                        .commit();
+-                */
+-                break;
+-        }
+-    }
+-
+-    @Override
+-    public void run(Runnable runnable) {
+-        runInBackground(runnable);
+-    }
+-
+-    private boolean hasPermission() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
+-                    checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
+-        } else {
+-            return true;
+-        }
+-    }
+-
+-    private void requestPermission() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
+-                    shouldShowRequestPermissionRationale(PERMISSION_STORAGE)) {
+-                Toast.makeText(CameraActivity.this,
+-                        "Camera AND storage permission are required for this demo", Toast.LENGTH_LONG).show();
+-            }
+-            requestPermissions(new String[] {PERMISSION_CAMERA, PERMISSION_STORAGE}, PERMISSIONS_REQUEST);
+-        }
+-    }
+-
+-    // Returns true if the device supports the required hardware level, or better.
+-    private boolean isHardwareLevelSupported(
+-            CameraCharacteristics characteristics, int requiredLevel) {
+-        int deviceLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+-        if (deviceLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
+-            return requiredLevel == deviceLevel;
+-        }
+-        // deviceLevel is not LEGACY, can use numerical sort
+-        return requiredLevel <= deviceLevel;
+-    }
+-
+-    private String chooseCamera() {
+-        final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+-        try {
+-            for (final String cameraId : manager.getCameraIdList()) {
+-                final CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+-
+-                // We don't use a front facing camera in this sample.
+-                final Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+-                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+-                    continue;
+-                }
+-
+-                final StreamConfigurationMap map =
+-                        characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+-
+-                if (map == null) {
+-                    continue;
+-                }
+-
+-                // Fallback to camera1 API for internal cameras that don't have full support.
+-                // This should help with legacy situations where using the camera2 API causes
+-                // distorted or otherwise broken previews.
+-                /*
+-                mUseCamera2API = (facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
+-                        || isHardwareLevelSupported(characteristics,
+-                        CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
+-                LOGGER.i("Camera API lv2?: %s", mUseCamera2API);
+-                */
+-
+-                // TODO add support for Camera2 API.
+-                mUseCamera2API = false;
+-                return cameraId;
+-            }
+-        } catch (CameraAccessException e) {
+-            LOGGER.e(e, "Not allowed to access camera");
+-        }
+-
+-        return null;
+-    }
+-
+-    protected void setFragment() {
+-        String cameraId = chooseCamera();
+-        if (cameraId == null) {
+-            Toast.makeText(this, "No Camera Detected", Toast.LENGTH_SHORT).show();
+-            finish();
+-        }
+-
+-        final Fragment fragment;
+-        if (mUseCamera2API) {
+-            LOGGER.i("Using Camera2 API");
+-            CameraConnectionFragment camera2Fragment =
+-                    CameraConnectionFragment.newInstance(
+-                            new CameraConnectionFragment.ConnectionCallback() {
+-                                @Override
+-                                public void onPreviewSizeChosen(final Size size, final int rotation) {
+-                                    mPreviewHeight = size.getHeight();
+-                                    mPreviewWidth = size.getWidth();
+-                                    CameraActivity.this.onPreviewSizeChosen(size, rotation);
+-                                }
+-                            },
+-                            this,
+-                            new OnImageAvailableListener() {
+-                                @Override
+-                                public void onImageAvailable(ImageReader reader) {
+-                                    onPreviewImageAvailable(reader);
+-                                }
+-                            },
+-                            getLayoutId(),
+-                            getDesiredPreviewFrameSize());
+-
+-            camera2Fragment.setCamera(cameraId);
+-            fragment = camera2Fragment;
+-        } else {
+-            LOGGER.i("Using Camera API");
+-            fragment = LegacyCameraConnectionFragment.newInstance(
+-                    new Camera.PreviewCallback() {
+-                        @Override
+-                        public void onPreviewFrame(final byte[] data, final Camera camera) {
+-                            onCaptureStillFrame(data, camera);
+-                        }
+-                    },
+-                    null, //this,
+-                    new CameraChangedListener() {
+-                        @Override
+-                        public void onCameraChangedListener(Camera camera, boolean isFrontFacing) {
+-                            mRotation = isFrontFacing ? -90 : 90;
+-                            prepareBitmap(camera.getParameters().getPictureSize());
+-                        }
+-                    },
+-                    getLayoutId(),
+-                    getDesiredPreviewFrameSize());
+-        }
+-
+-        getSupportFragmentManager()
+-                .beginTransaction()
+-                .replace(R.id.container, fragment)
+-                .commit();
+-    }
+-
+-    protected void fillBytes(final Plane[] planes, final byte[][] yuvBytes) {
+-        // Because of the variable row stride it's not possible to know in
+-        // advance the actual necessary dimensions of the yuv planes.
+-        for (int i = 0; i < planes.length; ++i) {
+-            final ByteBuffer buffer = planes[i].getBuffer();
+-            if (yuvBytes[i] == null) {
+-                LOGGER.d("Initializing buffer %d at size %d", i, buffer.capacity());
+-                yuvBytes[i] = new byte[buffer.capacity()];
+-            }
+-            buffer.get(yuvBytes[i]);
+-        }
+-    }
+-
+-    public boolean isDebug() {
+-        return mDebug;
+-    }
+-
+-    public void requestRender() {
+-        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
+-        if (overlay != null) {
+-            overlay.postInvalidate();
+-        }
+-    }
+-
+-    public void addCallback(final OverlayView.DrawCallback callback) {
+-        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
+-        if (overlay != null) {
+-            overlay.addCallback(callback);
+-        }
+-    }
+-
+-    public void onSetDebug(final boolean debug) {}
+-
+-    @Override
+-    public boolean onKeyDown(final int keyCode, final KeyEvent event) {
+-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+-                || keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+-            mDebug = !mDebug;
+-            requestRender();
+-            onSetDebug(mDebug);
+-            return true;
+-        }
+-        return super.onKeyDown(keyCode, event);
+-    }
+-
+-    protected void readyForNextImage() {
+-        if (mPostInferenceCallback != null) {
+-            mPostInferenceCallback.run();
+-        }
+-    }
+-
+-    protected void readyForNextPreviewImage() {
+-        if (mPostPreviewInferenceCallback != null) {
+-            mPostPreviewInferenceCallback.run();
+-        }
+-    }
+-
+-    protected int getScreenOrientation() {
+-        switch (getWindowManager().getDefaultDisplay().getRotation()) {
+-            case Surface.ROTATION_270:
+-                return 270;
+-            case Surface.ROTATION_180:
+-                return 180;
+-            case Surface.ROTATION_90:
+-                return 90;
+-            default:
+-                return 0;
+-        }
+-    }
+-
+-    protected void notifyFragmentOfImageChange(String filename) {
+-        Fragment fragment = getSupportFragmentManager().findFragmentById(R.id.container);
+-
+-        if (fragment != null && fragment.isAdded()) {
+-            if (fragment instanceof RecyclerViewFragment) {
+-                ((RecyclerViewFragment)fragment).notifyImageChange(filename);
+-            } else if (fragment instanceof GalleryViewPagerFragment) {
+-                ((GalleryViewPagerFragment)fragment).notifyImageChange(filename);
+-            }
+-        }
+-    }
+-
+-    protected abstract void processImage();
+-    protected abstract void processPreview();
+-    protected abstract void onPreviewSizeChosen(final Size size, final int rotation);
+-    protected abstract void onPictureSizeChosen(final Size size, final int rotation);
+-    protected abstract int getLayoutId();
+-    protected abstract Size getDesiredPreviewFrameSize();
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java
+deleted file mode 100644
+index acb38e6..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java
++++ /dev/null
+@@ -1,939 +0,0 @@
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.app.Activity;
+-import android.app.AlertDialog;
+-import android.app.Dialog;
+-import android.content.Context;
+-import android.content.DialogInterface;
+-import android.content.res.Configuration;
+-import android.graphics.ImageFormat;
+-import android.graphics.Matrix;
+-import android.graphics.RectF;
+-import android.graphics.SurfaceTexture;
+-import android.hardware.camera2.CameraAccessException;
+-import android.hardware.camera2.CameraCaptureSession;
+-import android.hardware.camera2.CameraCharacteristics;
+-import android.hardware.camera2.CameraDevice;
+-import android.hardware.camera2.CameraManager;
+-import android.hardware.camera2.CameraMetadata;
+-import android.hardware.camera2.CaptureRequest;
+-import android.hardware.camera2.CaptureResult;
+-import android.hardware.camera2.TotalCaptureResult;
+-import android.hardware.camera2.params.StreamConfigurationMap;
+-import android.media.Image;
+-import android.media.ImageReader;
+-import android.media.ImageReader.OnImageAvailableListener;
+-import android.support.v4.app.DialogFragment;
+-import android.os.Bundle;
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-import android.support.annotation.NonNull;
+-import android.text.TextUtils;
+-import android.util.Size;
+-import android.util.SparseIntArray;
+-import android.view.LayoutInflater;
+-import android.view.Surface;
+-import android.view.TextureView;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.ImageButton;
+-import android.widget.Toast;
+-
+-import java.io.File;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.nio.ByteBuffer;
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.Collections;
+-import java.util.Comparator;
+-import java.util.List;
+-import java.util.concurrent.Semaphore;
+-import java.util.concurrent.TimeUnit;
+-
+-import com.lun.chin.aicamera.AutoFitTextureView;
+-import com.lun.chin.aicamera.R;
+-import com.lun.chin.aicamera.env.Logger;
+-
+-
+-public class CameraConnectionFragment extends CameraFragment {
+-    private static final Logger LOGGER = new Logger();
+-
+-    private static final String TAG = "CameraConnectionFrag";
+-
+-    /**
+-     * The camera preview size will be chosen to be the smallest frame by pixel size capable of
+-     * containing a DESIRED_SIZE x DESIRED_SIZE square.
+-     */
+-    private static final int MINIMUM_PREVIEW_SIZE = 320;
+-
+-    /**
+-     * Conversion from screen rotation to JPEG orientation.
+-     */
+-    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+-    private static final String FRAGMENT_DIALOG = "dialog";
+-
+-    static {
+-        ORIENTATIONS.append(Surface.ROTATION_0, 90);
+-        ORIENTATIONS.append(Surface.ROTATION_90, 0);
+-        ORIENTATIONS.append(Surface.ROTATION_180, 270);
+-        ORIENTATIONS.append(Surface.ROTATION_270, 180);
+-    }
+-
+-    /**
+-     * {@link android.view.TextureView.SurfaceTextureListener} handles several lifecycle events on a
+-     * {@link TextureView}.
+-     */
+-    private final TextureView.SurfaceTextureListener mSurfaceTextureListener =
+-            new TextureView.SurfaceTextureListener() {
+-                @Override
+-                public void onSurfaceTextureAvailable(
+-                        final SurfaceTexture texture, final int width, final int height) {
+-                    openCamera(width, height);
+-                }
+-
+-                @Override
+-                public void onSurfaceTextureSizeChanged(
+-                        final SurfaceTexture texture, final int width, final int height) {
+-                    configureTransform(width, height);
+-                }
+-
+-                @Override
+-                public boolean onSurfaceTextureDestroyed(final SurfaceTexture texture) {
+-                    return true;
+-                }
+-
+-                @Override
+-                public void onSurfaceTextureUpdated(final SurfaceTexture texture) {}
+-            };
+-
+-    /**
+-     * Callback for Activities to use to initialize their data once the
+-     * selected preview size is known.
+-     */
+-    public interface ConnectionCallback {
+-        void onPreviewSizeChosen(Size size, int cameraRotation);
+-    }
+-
+-    /**
+-     * ID of the current {@link CameraDevice}.
+-     */
+-    private String mCameraId;
+-
+-    /**
+-     * An {@link AutoFitTextureView} for camera preview.
+-     */
+-    private AutoFitTextureView mTextureView;
+-
+-    /**
+-     * A {@link CameraCaptureSession } for camera preview.
+-     */
+-    private CameraCaptureSession mCaptureSession;
+-
+-    /**
+-     * A reference to the opened {@link CameraDevice}.
+-     */
+-    private CameraDevice mCameraDevice;
+-
+-    /**
+-     * The rotation in degrees of the camera sensor from the display.
+-     */
+-    private Integer mSensorOrientation;
+-
+-    /**
+-     * The {@link android.util.Size} of camera preview.
+-     */
+-    private Size mPreviewSize;
+-
+-    /**
+-     * {@link android.hardware.camera2.CameraDevice.StateCallback}
+-     * is called when {@link CameraDevice} changes its state.
+-     */
+-    private final CameraDevice.StateCallback mStateCallback =
+-            new CameraDevice.StateCallback() {
+-                @Override
+-                public void onOpened(final CameraDevice cd) {
+-                    // This method is called when the camera is opened.  We start camera preview here.
+-                    mCameraOpenCloseLock.release();
+-                    mCameraDevice = cd;
+-                    createCameraPreviewSession();
+-                }
+-
+-                @Override
+-                public void onDisconnected(final CameraDevice cd) {
+-                    mCameraOpenCloseLock.release();
+-                    cd.close();
+-                    mCameraDevice = null;
+-                }
+-
+-                @Override
+-                public void onError(final CameraDevice cd, final int error) {
+-                    mCameraOpenCloseLock.release();
+-                    cd.close();
+-                    mCameraDevice = null;
+-                    final Activity activity = getActivity();
+-                    if (null != activity) {
+-                        activity.finish();
+-                    }
+-                }
+-            };
+-
+-    /**
+-     * An additional thread for running tasks that shouldn't block the UI.
+-     */
+-    private HandlerThread mBackgroundThread;
+-
+-    /**
+-     * A {@link Handler} for running tasks in the background.
+-     */
+-    private Handler mBackgroundHandler;
+-
+-    /**
+-     * An {@link ImageReader} that handles preview frame capture.
+-     */
+-    private ImageReader mPreviewReader;
+-
+-    /**
+-     * {@link android.hardware.camera2.CaptureRequest.Builder} for the camera preview
+-     */
+-    private CaptureRequest.Builder mPreviewRequestBuilder;
+-
+-    /**
+-     * {@link CaptureRequest} generated by {@link #mPreviewRequestBuilder}
+-     */
+-    private CaptureRequest mPreviewRequest;
+-
+-    /**
+-     * A {@link Semaphore} to prevent the app from exiting before closing the camera.
+-     */
+-    private final Semaphore mCameraOpenCloseLock = new Semaphore(1);
+-
+-    /**
+-     * A {@link OnImageAvailableListener} to receive frame when a still shot is taken.
+-     */
+-    private final OnImageAvailableListener mImageListener;
+-
+-    /** The input size in pixels desired by TensorFlow (width and height of a square bitmap). */
+-    private final Size mInputSize;
+-
+-    /**
+-     * The layout identifier to inflate for this Fragment.
+-     */
+-    private final int mLayout;
+-
+-    /**
+-     * Camera state: Showing camera preview.
+-     */
+-    private static final int STATE_PREVIEW = 0;
+-
+-    /**
+-     * Camera state: Waiting for the focus to be locked.
+-     */
+-    private static final int STATE_WAITING_LOCK = 1;
+-
+-    /**
+-     * Camera state: Waiting for the exposure to be precapture state.
+-     */
+-    private static final int STATE_WAITING_PRECAPTURE = 2;
+-
+-    /**
+-     * Camera state: Waiting for the exposure state to be something other than precapture.
+-     */
+-    private static final int STATE_WAITING_NON_PRECAPTURE = 3;
+-
+-    /**
+-     * Camera state: Picture was taken.
+-     */
+-    private static final int STATE_PICTURE_TAKEN = 4;
+-
+-    /**
+-     * The current state of camera state for taking pictures.
+-     *
+-     * @see #captureCallback
+-     */
+-    private int mState = STATE_PREVIEW;
+-
+-    /**
+-     * An {@link ImageReader} that handles still image capture.
+-     */
+-    private ImageReader mImageReader;
+-
+-    /**
+-     * This is the output file for our picture.
+-     */
+-    private File mFile;
+-
+-    /**
+-     * Whether the current camera device supports Flash or not.
+-     */
+-    private boolean mFlashSupported;
+-
+-    private final ConnectionCallback mCameraConnectionCallback;
+-
+-    private CameraConnectionFragment(
+-            final ConnectionCallback connectionCallback,
+-            final OnImageAvailableListener mImageListener,
+-            final OnImageAvailableListener mPreviewImageListener,
+-            final int layout,
+-            final Size mInputSize) {
+-        this.mCameraConnectionCallback = connectionCallback;
+-        this.mImageListener = mImageListener;
+-        this.mPreviewImageListener = mPreviewImageListener;
+-        this.mLayout = layout;
+-        this.mInputSize = mInputSize;
+-    }
+-
+-    /**
+-     * Shows a {@link Toast} on the UI thread.
+-     *
+-     * @param text The message to show
+-     */
+-    private void showToast(final String text) {
+-        final Activity activity = getActivity();
+-        if (activity != null) {
+-            activity.runOnUiThread(
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            Toast.makeText(activity, text, Toast.LENGTH_SHORT).show();
+-                        }
+-                    });
+-        }
+-    }
+-
+-    /**
+-     * Given {@code choices} of {@code Size}s supported by a camera, chooses the smallest one whose
+-     * width and height are at least as large as the minimum of both, or an exact match if possible.
+-     *
+-     * @param choices The list of sizes that the camera supports for the intended output class
+-     * @param width The minimum desired width
+-     * @param height The minimum desired height
+-     * @return The optimal {@code Size}, or an arbitrary one if none were big enough
+-     */
+-    protected static Size chooseOptimalSize(final Size[] choices, final int width, final int height) {
+-        final int minSize = Math.max(Math.min(width, height), MINIMUM_PREVIEW_SIZE);
+-        final Size desiredSize = new Size(width, height);
+-
+-        // Collect the supported resolutions that are at least as big as the preview Surface
+-        boolean exactSizeFound = false;
+-        final List<Size> bigEnough = new ArrayList<Size>();
+-        final List<Size> tooSmall = new ArrayList<Size>();
+-        for (final Size option : choices) {
+-            if (option.equals(desiredSize)) {
+-                // Set the size but don't return yet so that remaining sizes will still be logged.
+-                exactSizeFound = true;
+-            }
+-
+-            if (option.getHeight() >= minSize && option.getWidth() >= minSize) {
+-                bigEnough.add(option);
+-            } else {
+-                tooSmall.add(option);
+-            }
+-        }
+-
+-        LOGGER.i("Desired size: " + desiredSize + ", min size: " + minSize + "x" + minSize);
+-        LOGGER.i("Valid preview sizes: [" + TextUtils.join(", ", bigEnough) + "]");
+-        LOGGER.i("Rejected preview sizes: [" + TextUtils.join(", ", tooSmall) + "]");
+-
+-        if (exactSizeFound) {
+-            LOGGER.i("Exact size match found.");
+-            return desiredSize;
+-        }
+-
+-        // Pick the smallest of those, assuming we found any
+-        if (bigEnough.size() > 0) {
+-            final Size chosenSize = Collections.min(bigEnough, new CompareSizesByArea());
+-            LOGGER.i("Chosen size: " + chosenSize.getWidth() + "x" + chosenSize.getHeight());
+-            return chosenSize;
+-        } else {
+-            LOGGER.e("Couldn't find any suitable preview size");
+-            return choices[0];
+-        }
+-    }
+-
+-    public static Size chooseLargestSize(final Size[] choices) {
+-        return Collections.max(Arrays.asList(choices), new CompareSizesByArea());
+-    }
+-
+-    public static CameraConnectionFragment newInstance(
+-            final ConnectionCallback callback,
+-            final OnImageAvailableListener imageListener,
+-            final OnImageAvailableListener previewImageListener,
+-            final int layout,
+-            final Size inputSize) {
+-        return new CameraConnectionFragment(
+-                callback, imageListener, previewImageListener, layout, inputSize);
+-    }
+-
+-    @Override
+-    public View onCreateView(
+-            final LayoutInflater inflater, final ViewGroup container, final Bundle savedInstanceState) {
+-
+-        View view = inflater.inflate(mLayout, container, false);
+-        ImageButton button = view.findViewById(R.id.picture);
+-        button.setOnClickListener(new View.OnClickListener() {
+-            @Override
+-            public void onClick(View v) {
+-                takePicture();
+-            }
+-        });
+-
+-        ImageButton galleryButton = view.findViewById(R.id.goto_gallery);
+-        galleryButton.setOnClickListener(mOnCameraButtonClicked);
+-
+-        return view;
+-    }
+-
+-    @Override
+-    public void onViewCreated(final View view, final Bundle savedInstanceState) {
+-        mTextureView = (AutoFitTextureView) view.findViewById(R.id.texture);
+-    }
+-
+-    @Override
+-    public void onActivityCreated(final Bundle savedInstanceState) {
+-        super.onActivityCreated(savedInstanceState);
+-        mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        startBackgroundThread();
+-
+-        // When the screen is turned off and turned back on, the SurfaceTexture is already
+-        // available, and "onSurfaceTextureAvailable" will not be called. In that case, we can open
+-        // a camera and start preview from here (otherwise, we wait until the surface is ready in
+-        // the SurfaceTextureListener).
+-        if (mTextureView.isAvailable()) {
+-            openCamera(mTextureView.getWidth(), mTextureView.getHeight());
+-        } else {
+-            mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
+-        }
+-    }
+-
+-    @Override
+-    public void onPause() {
+-        closeCamera();
+-        stopBackgroundThread();
+-        super.onPause();
+-    }
+-
+-    public void setCamera(String cameraId) {
+-        this.mCameraId = cameraId;
+-    }
+-
+-    /**
+-     * Sets up member variables related to camera.
+-     */
+-    private void setUpCameraOutputs() {
+-        final Activity activity = getActivity();
+-        final CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
+-        try {
+-            final CameraCharacteristics characteristics = manager.getCameraCharacteristics(mCameraId);
+-
+-            final StreamConfigurationMap map =
+-                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+-
+-            // For still image captures, we use the largest available size.
+-            mPreviewSize =
+-                    Collections.max(
+-                            Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888)),
+-                            new CompareSizesByArea());
+-
+-            LOGGER.i("Chosen size: " + mPreviewSize.getWidth() + "x" + mPreviewSize.getHeight());
+-
+-            mSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+-
+-            // We fit the aspect ratio of TextureView to the size of preview we picked.
+-            final int orientation = getResources().getConfiguration().orientation;
+-            if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+-                mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+-            } else {
+-                mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
+-            }
+-
+-            // Check if the flash is supported.
+-            Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
+-            mFlashSupported = available == null ? false : available;
+-        } catch (final CameraAccessException e) {
+-            LOGGER.e(e, "Exception!");
+-        } catch (final NullPointerException e) {
+-            // Currently an NPE is thrown when the Camera2API is used but not supported on the
+-            // device this code runs.
+-            // TODO(andrewharp): abstract ErrorDialog/RuntimeException handling out into new method and
+-            // reuse throughout app.
+-            ErrorDialog.newInstance(getString(R.string.camera_error))
+-                    .show(getChildFragmentManager(), FRAGMENT_DIALOG);
+-            throw new RuntimeException(getString(R.string.camera_error));
+-        }
+-
+-        mCameraConnectionCallback.onPreviewSizeChosen(mPreviewSize, mSensorOrientation);
+-    }
+-
+-    /**
+-     * Opens the camera specified by {@link CameraConnectionFragment#mCameraId}.
+-     */
+-    private void openCamera(final int width, final int height) {
+-        setUpCameraOutputs();
+-        configureTransform(width, height);
+-        final Activity activity = getActivity();
+-        final CameraManager manager = (CameraManager) activity.getSystemService(Context.CAMERA_SERVICE);
+-        try {
+-            if (!mCameraOpenCloseLock.tryAcquire(2500, TimeUnit.MILLISECONDS)) {
+-                throw new RuntimeException("Time out waiting to lock camera opening.");
+-            }
+-
+-            manager.openCamera(mCameraId, mStateCallback, mBackgroundHandler);
+-
+-        } catch (final CameraAccessException e) {
+-            LOGGER.e(e, "Exception!");
+-        } catch (final InterruptedException e) {
+-            throw new RuntimeException("Interrupted while trying to lock camera opening.", e);
+-        } catch (final SecurityException e) {
+-            LOGGER.e(e, "Security Exception!");
+-        }
+-    }
+-
+-    /**
+-     * Closes the current {@link CameraDevice}.
+-     */
+-    private void closeCamera() {
+-        try {
+-            mCameraOpenCloseLock.acquire();
+-            if (null != mCaptureSession) {
+-                mCaptureSession.close();
+-                mCaptureSession = null;
+-            }
+-            if (null != mCameraDevice) {
+-                mCameraDevice.close();
+-                mCameraDevice = null;
+-            }
+-            if (null != mPreviewReader) {
+-                mPreviewReader.close();
+-                mPreviewReader = null;
+-            }
+-
+-            if (null != mImageReader) {
+-                mImageReader.close();
+-                mImageReader = null;
+-            }
+-        } catch (final InterruptedException e) {
+-            throw new RuntimeException("Interrupted while trying to lock camera closing.", e);
+-        } finally {
+-            mCameraOpenCloseLock.release();
+-        }
+-    }
+-
+-    /**
+-     * Starts a background thread and its {@link Handler}.
+-     */
+-    private void startBackgroundThread() {
+-        mBackgroundThread = new HandlerThread("ImageListener");
+-        mBackgroundThread.start();
+-        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+-    }
+-
+-    /**
+-     * Stops the background thread and its {@link Handler}.
+-     */
+-    private void stopBackgroundThread() {
+-        mBackgroundThread.quitSafely();
+-        try {
+-            mBackgroundThread.join();
+-            mBackgroundThread = null;
+-            mBackgroundHandler = null;
+-        } catch (final InterruptedException e) {
+-            LOGGER.e(e, "Exception!");
+-        }
+-    }
+-
+-    private final CameraCaptureSession.CaptureCallback captureCallback =
+-            new CameraCaptureSession.CaptureCallback() {
+-
+-                private void process(CaptureResult result) {
+-                    switch (mState) {
+-                        case STATE_PREVIEW: {
+-                            // We have nothing to do when the camera preview is working normally.
+-                            break;
+-                        }
+-                        case STATE_WAITING_LOCK: {
+-                            Integer afState = result.get(CaptureResult.CONTROL_AF_STATE);
+-                            if (afState == null) {
+-                                captureStillPicture();
+-                            } else if (CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED == afState ||
+-                                    CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED == afState) {
+-                                // CONTROL_AE_STATE can be null on some devices
+-                                Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
+-                                if (aeState == null ||
+-                                        aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED) {
+-                                    mState = STATE_PICTURE_TAKEN;
+-                                    captureStillPicture();
+-                                } else {
+-                                    runPrecaptureSequence();
+-                                }
+-                            }
+-                            break;
+-                        }
+-                        case STATE_WAITING_PRECAPTURE: {
+-                            // CONTROL_AE_STATE can be null on some devices
+-                            Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
+-                            if (aeState == null ||
+-                                    aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE ||
+-                                    aeState == CaptureRequest.CONTROL_AE_STATE_FLASH_REQUIRED) {
+-                                mState = STATE_WAITING_NON_PRECAPTURE;
+-                            }
+-                            break;
+-                        }
+-                        case STATE_WAITING_NON_PRECAPTURE: {
+-                            // CONTROL_AE_STATE can be null on some devices
+-                            Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
+-                            if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+-                                mState = STATE_PICTURE_TAKEN;
+-                                captureStillPicture();
+-                            }
+-                            break;
+-                        }
+-                    }
+-                }
+-
+-                @Override
+-                public void onCaptureProgressed(
+-                        final CameraCaptureSession session,
+-                        final CaptureRequest request,
+-                        final CaptureResult partialResult) {
+-                    process(partialResult);
+-                }
+-
+-                @Override
+-                public void onCaptureCompleted(
+-                        final CameraCaptureSession session,
+-                        final CaptureRequest request,
+-                        final TotalCaptureResult result) {
+-                    process(result);
+-                }
+-            };
+-
+-    private OnImageAvailableListener mPreviewImageListener;
+-
+-    /**
+-     * Creates a new {@link CameraCaptureSession} for camera preview.
+-     */
+-    private void createCameraPreviewSession() {
+-        try {
+-            final SurfaceTexture texture = mTextureView.getSurfaceTexture();
+-            assert texture != null;
+-
+-            // We configure the size of default buffer to be the size of camera preview we want.
+-            texture.setDefaultBufferSize(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+-
+-            // This is the output Surface we need to start preview.
+-            final Surface surface = new Surface(texture);
+-
+-            // We set up a CaptureRequest.Builder with the output Surface.
+-            mPreviewRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+-            mPreviewRequestBuilder.addTarget(surface);
+-
+-            LOGGER.i("Opening camera preview: " + mPreviewSize.getWidth() + "x" + mPreviewSize.getHeight());
+-
+-            mImageReader = ImageReader.newInstance(mPreviewSize.getWidth(), mPreviewSize.getHeight(),
+-                    ImageFormat.YUV_420_888, 2);
+-
+-            mPreviewReader = ImageReader.newInstance(mPreviewSize.getWidth(), mPreviewSize.getHeight(),
+-                    ImageFormat.YUV_420_888, 2);
+-
+-            mPreviewReader.setOnImageAvailableListener(mPreviewImageListener, mBackgroundHandler);
+-            mPreviewRequestBuilder.addTarget(mPreviewReader.getSurface());
+-
+-            // Here, we create a CameraCaptureSession for camera preview.
+-            mCameraDevice.createCaptureSession(
+-                    Arrays.asList(surface, mImageReader.getSurface(), mPreviewReader.getSurface()),
+-                    new CameraCaptureSession.StateCallback() {
+-
+-                        @Override
+-                        public void onConfigured(final CameraCaptureSession cameraCaptureSession) {
+-                            // The camera is already closed
+-                            if (null == mCameraDevice) {
+-                                return;
+-                            }
+-
+-                            // When the session is ready, we start displaying the preview.
+-                            mCaptureSession = cameraCaptureSession;
+-                            try {
+-                                // Auto focus should be continuous for camera preview.
+-                                mPreviewRequestBuilder.set(
+-                                        CaptureRequest.CONTROL_AF_MODE,
+-                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+-                                // Flash is automatically enabled when necessary.
+-                                mPreviewRequestBuilder.set(
+-                                        CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+-
+-                                // Finally, we start displaying the camera preview.
+-                                mPreviewRequest = mPreviewRequestBuilder.build();
+-                                mCaptureSession.setRepeatingRequest(
+-                                        mPreviewRequest, captureCallback, mBackgroundHandler);
+-                            } catch (final CameraAccessException e) {
+-                                LOGGER.e(e, "Exception!");
+-                            }
+-                        }
+-
+-                        @Override
+-                        public void onConfigureFailed(final CameraCaptureSession cameraCaptureSession) {
+-                            showToast("Failed");
+-                        }
+-                    },
+-                    null);
+-        } catch (final CameraAccessException e) {
+-            LOGGER.e(e, "Exception!");
+-        }
+-    }
+-
+-    /**
+-     * Configures the necessary {@link android.graphics.Matrix} transformation to `mTextureView`.
+-     * This method should be called after the camera preview size is determined in
+-     * setUpCameraOutputs and also the size of `mTextureView` is fixed.
+-     *
+-     * @param viewWidth  The width of `mTextureView`
+-     * @param viewHeight The height of `mTextureView`
+-     */
+-    private void configureTransform(final int viewWidth, final int viewHeight) {
+-        final Activity activity = getActivity();
+-        if (null == mTextureView || null == mPreviewSize || null == activity) {
+-            return;
+-        }
+-        final int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+-        final Matrix matrix = new Matrix();
+-        final RectF viewRect = new RectF(0, 0, viewWidth, viewHeight);
+-        final RectF bufferRect = new RectF(0, 0, mPreviewSize.getHeight(), mPreviewSize.getWidth());
+-        final float centerX = viewRect.centerX();
+-        final float centerY = viewRect.centerY();
+-        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY());
+-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL);
+-            final float scale =
+-                    Math.max(
+-                            (float) viewHeight / mPreviewSize.getHeight(),
+-                            (float) viewWidth / mPreviewSize.getWidth());
+-            matrix.postScale(scale, scale, centerX, centerY);
+-            matrix.postRotate(90 * (rotation - 2), centerX, centerY);
+-        } else if (Surface.ROTATION_180 == rotation) {
+-            matrix.postRotate(180, centerX, centerY);
+-        }
+-        mTextureView.setTransform(matrix);
+-    }
+-
+-    /**
+-     * Compares two {@code Size}s based on their areas.
+-     */
+-    static class CompareSizesByArea implements Comparator<Size> {
+-        @Override
+-        public int compare(final Size lhs, final Size rhs) {
+-            // We cast here to ensure the multiplications won't overflow
+-            return Long.signum(
+-                    (long) lhs.getWidth() * lhs.getHeight() - (long) rhs.getWidth() * rhs.getHeight());
+-        }
+-    }
+-
+-    /**
+-     * Shows an error message dialog.
+-     */
+-    public static class ErrorDialog extends DialogFragment {
+-        private static final String ARG_MESSAGE = "message";
+-
+-        public static ErrorDialog newInstance(final String message) {
+-            final ErrorDialog dialog = new ErrorDialog();
+-            final Bundle args = new Bundle();
+-            args.putString(ARG_MESSAGE, message);
+-            dialog.setArguments(args);
+-            return dialog;
+-        }
+-
+-        @Override
+-        public Dialog onCreateDialog(final Bundle savedInstanceState) {
+-            final Activity activity = getActivity();
+-            return new AlertDialog.Builder(activity)
+-                    .setMessage(getArguments().getString(ARG_MESSAGE))
+-                    .setPositiveButton(
+-                            android.R.string.ok,
+-                            new DialogInterface.OnClickListener() {
+-                                @Override
+-                                public void onClick(final DialogInterface dialogInterface, final int i) {
+-                                    activity.finish();
+-                                }
+-                            })
+-                    .create();
+-        }
+-    }
+-
+-    /**
+-     * Initiate a still image capture.
+-     */
+-    private void takePicture() {
+-        lockFocus();
+-    }
+-
+-    /**
+-     * Lock the focus as the first step for a still image capture.
+-     */
+-    private void lockFocus() {
+-        try {
+-            // This is how to tell the camera to lock focus.
+-            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
+-                    CameraMetadata.CONTROL_AF_TRIGGER_START);
+-            // Tell #captureCallback to wait for the lock.
+-            mState = STATE_WAITING_LOCK;
+-            mCaptureSession.capture(mPreviewRequestBuilder.build(), captureCallback,
+-                    mBackgroundHandler);
+-        } catch (CameraAccessException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    /**
+-     * Unlock the focus. This method should be called when still image capture sequence is
+-     * finished.
+-     */
+-    private void unlockFocus() {
+-        try {
+-            // Reset the auto-focus trigger
+-            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
+-                    CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
+-            setAutoFlash(mPreviewRequestBuilder);
+-            mCaptureSession.capture(mPreviewRequestBuilder.build(), captureCallback,
+-                    mBackgroundHandler);
+-            // After this, the camera will go back to the normal state of preview.
+-            mState = STATE_PREVIEW;
+-            mCaptureSession.setRepeatingRequest(mPreviewRequest, captureCallback,
+-                    mBackgroundHandler);
+-        } catch (CameraAccessException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    /**
+-     * Capture a still picture. This method should be called when we get a response in
+-     * {@link #captureCallback} from both {@link #lockFocus()}.
+-     */
+-    private void captureStillPicture() {
+-        try {
+-            final Activity activity = getActivity();
+-            if (null == activity || null == mCameraDevice) {
+-                return;
+-            }
+-
+-            mImageReader.setOnImageAvailableListener(mImageListener, mBackgroundHandler);
+-
+-            // This is the CaptureRequest.Builder that we use to take a picture.
+-            final CaptureRequest.Builder captureBuilder =
+-                    mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+-            captureBuilder.addTarget(mImageReader.getSurface());
+-
+-            // Use the same AE and AF modes as the preview.
+-            captureBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+-                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+-            setAutoFlash(captureBuilder);
+-
+-            // Orientation
+-            int rotation = activity.getWindowManager().getDefaultDisplay().getRotation();
+-            captureBuilder.set(CaptureRequest.JPEG_ORIENTATION, getOrientation(rotation));
+-
+-            CameraCaptureSession.CaptureCallback CaptureCallback
+-                    = new CameraCaptureSession.CaptureCallback() {
+-
+-                @Override
+-                public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+-                                               @NonNull CaptureRequest request,
+-                                               @NonNull TotalCaptureResult result) {
+-                    unlockFocus();
+-                }
+-            };
+-
+-            mCaptureSession.stopRepeating();
+-            mCaptureSession.abortCaptures();
+-            mCaptureSession.capture(captureBuilder.build(), CaptureCallback, null);
+-        } catch (CameraAccessException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    /**
+-     * Retrieves the JPEG orientation from the specified screen rotation.
+-     *
+-     * @param rotation The screen rotation.
+-     * @return The JPEG orientation (one of 0, 90, 270, and 360)
+-     */
+-    private int getOrientation(int rotation) {
+-        // Sensor orientation is 90 for most devices, or 270 for some devices (eg. Nexus 5X)
+-        // We have to take that into account and rotate JPEG properly.
+-        // For devices with orientation of 90, we simply return our mapping from ORIENTATIONS.
+-        // For devices with orientation of 270, we need to rotate the JPEG 180 degrees.
+-        return (ORIENTATIONS.get(rotation) + mSensorOrientation + 270) % 360;
+-    }
+-
+-    private void setAutoFlash(CaptureRequest.Builder requestBuilder) {
+-        if (mFlashSupported) {
+-            requestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+-                    CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+-        }
+-    }
+-
+-    /**
+-     * Run the precapture sequence for capturing a still image. This method should be called when
+-     * we get a response in {@link #captureCallback} from {@link #lockFocus()}.
+-     */
+-    private void runPrecaptureSequence() {
+-        try {
+-            // This is how to tell the camera to trigger.
+-            mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+-                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
+-            // Tell #captureCallback to wait for the precapture sequence to be set.
+-            mState = STATE_WAITING_PRECAPTURE;
+-            mCaptureSession.capture(mPreviewRequestBuilder.build(), captureCallback,
+-                    mBackgroundHandler);
+-        } catch (CameraAccessException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    /**
+-     * Saves a JPEG {@link Image} into the specified {@link File}.
+-     */
+-    private static class ImageSaver implements Runnable {
+-
+-        /**
+-         * The JPEG image
+-         */
+-        private final Image mImage;
+-        /**
+-         * The file we save the image into.
+-         */
+-        private final File mFile;
+-
+-        ImageSaver(Image image, File file) {
+-            mImage = image;
+-            mFile = file;
+-        }
+-
+-        @Override
+-        public void run() {
+-            ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+-            byte[] bytes = new byte[buffer.remaining()];
+-            buffer.get(bytes);
+-            FileOutputStream output = null;
+-            try {
+-                output = new FileOutputStream(mFile);
+-                output.write(bytes);
+-            } catch (IOException e) {
+-                e.printStackTrace();
+-            } finally {
+-                mImage.close();
+-                if (null != output) {
+-                    try {
+-                        output.close();
+-                    } catch (IOException e) {
+-                        e.printStackTrace();
+-                    }
+-                }
+-            }
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java
+deleted file mode 100644
+index ba154a4..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java
++++ /dev/null
+@@ -1,34 +0,0 @@
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.app.Activity;
+-import android.support.v4.app.Fragment;
+-import android.view.View;
+-
+-public class CameraFragment extends Fragment {
+-    protected OnCameraButtonClickedListener mCameraButtonCallback;
+-
+-    protected View.OnClickListener mOnCameraButtonClicked = new View.OnClickListener() {
+-        @Override
+-        public void onClick(View v) {
+-            mCameraButtonCallback.onCameraButtonClicked(v);
+-        }
+-    };
+-
+-    public interface OnCameraButtonClickedListener {
+-        void onCameraButtonClicked(View v);
+-    }
+-
+-    @Override
+-    public void onAttach(Activity activity) {
+-        super.onAttach(activity);
+-
+-        // This makes sure that the container activity has implemented
+-        // the callback interface. If not, it throws an exception
+-        try {
+-            mCameraButtonCallback = (OnCameraButtonClickedListener) activity;
+-        } catch (ClassCastException e) {
+-            throw new ClassCastException(activity.toString()
+-                    + " must implement OnCameraButtonClickedListener");
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java
+deleted file mode 100644
+index 95e7aa6..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java
++++ /dev/null
+@@ -1,121 +0,0 @@
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.content.res.AssetManager;
+-import android.graphics.Bitmap;
+-
+-import com.lun.chin.aicamera.classifier.Classifier;
+-import com.lun.chin.aicamera.env.Logger;
+-
+-import org.tensorflow.Graph;
+-import org.tensorflow.Operation;
+-import org.tensorflow.contrib.android.TensorFlowInferenceInterface;
+-
+-import java.io.IOException;
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-public class DeepLab implements Classifier {
+-    private static final Logger LOGGER = new Logger();
+-
+-    private final String INPUT_NAME = "ImageTensor";
+-    private final String[] OUTPUT_NAMES = { "SemanticPredictions" };
+-
+-    private String[] mLabels = {
+-        "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus",
+-        "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
+-        "person", "pottedplant", "sheep", "sofa", "train", "tv"
+-    };
+-
+-    private TensorFlowInferenceInterface mInferenceInterface;
+-
+-    public static Classifier Create(final AssetManager assetManager,
+-                                    final String modelFilename,
+-                                    final String labelFilename) throws IOException {
+-
+-        final DeepLab d = new DeepLab();
+-
+-        /*
+-        InputStream labelsInput = null;
+-        String actualFilename = labelFilename.split("file:///android_asset/")[1];
+-        labelsInput = assetManager.open(actualFilename);
+-        BufferedReader br = null;
+-        br = new BufferedReader(new InputStreamReader(labelsInput));
+-        String line;
+-        while ((line = br.readLine()) != null) {
+-            d.mLabels.add(line);
+-        }
+-        br.close();
+-        */
+-
+-        d.mInferenceInterface = new TensorFlowInferenceInterface(assetManager, modelFilename);
+-        final Graph g = d.mInferenceInterface.graph();
+-
+-        // The INPUT_NAME node has a shape of [N, H, W, C], where
+-        // N is the batch size
+-        // H = W are the height and width
+-        // C is the number of channels (3 for our purposes - RGB)
+-        final Operation inputOp = g.operation(d.INPUT_NAME);
+-        if (inputOp == null) {
+-            throw new RuntimeException("Failed to find input Node '" + d.INPUT_NAME + "'");
+-        }
+-
+-        for (String name : d.OUTPUT_NAMES) {
+-            final Operation outputOp = g.operation(name);
+-            if (outputOp == null) {
+-                throw new RuntimeException("Failed to find output Node '" + name + "'");
+-            }
+-        }
+-
+-        return d;
+-    }
+-
+-    @Override
+-    public List<Recognition> recognizeImage(final Bitmap bitmap) {
+-        int inputWidth = bitmap.getWidth();
+-        int inputHeight = bitmap.getHeight();
+-        int[] intValues = new int[inputWidth * inputHeight];
+-        byte[] byteValues = new byte[inputWidth * inputHeight * 3];
+-        bitmap.getPixels(intValues, 0, inputWidth, 0, 0, inputWidth, inputHeight);
+-
+-        for (int i = 0; i < intValues.length; ++i) {
+-            byteValues[i * 3 + 2] = (byte) (intValues[i] & 0xFF);
+-            byteValues[i * 3 + 1] = (byte) ((intValues[i] >> 8) & 0xFF);
+-            byteValues[i * 3 + 0] = (byte) ((intValues[i] >> 16) & 0xFF);
+-        }
+-
+-        //mInferenceInterface.feed(INPUT_NAME, byteValues, 1, inputWidth, inputHeight, 3);
+-        mInferenceInterface.feed(INPUT_NAME, byteValues, 1, inputHeight, inputWidth, 3);
+-        mInferenceInterface.run(OUTPUT_NAMES, false);
+-
+-        // outputSegMap is an array where each element is an integer corresponding to the class label.
+-        int[] outputSegMap = new int[inputWidth * inputHeight];
+-        mInferenceInterface.fetch(OUTPUT_NAMES[0], outputSegMap);
+-
+-        // We don't care about the labels; just set it to "".
+-        Recognition recognition = new Recognition(
+-                "segmentation", "", 1f, null, outputSegMap);
+-
+-        final ArrayList<Recognition> recognitions = new ArrayList<Recognition>();
+-        recognitions.add(recognition);
+-
+-        return recognitions;
+-    }
+-
+-    @Override
+-    public List<Recognition> recognizeImage(byte[] data, int height, int width) {
+-        return null;
+-    }
+-
+-    @Override
+-    public void enableStatLogging(final boolean logStats) {}
+-
+-    @Override
+-    public String getStatString() {
+-        return mInferenceInterface.getStatString();
+-    }
+-
+-    @Override
+-    public void close() {
+-        mInferenceInterface.close();
+-    }
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java
+deleted file mode 100644
+index c94482f..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java
++++ /dev/null
+@@ -1,342 +0,0 @@
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+-import android.graphics.Matrix;
+-import android.media.ImageReader;
+-import android.util.Size;
+-import android.widget.Toast;
+-
+-import com.lun.chin.aicamera.classifier.Classifier;
+-import com.lun.chin.aicamera.ImageData;
+-import com.lun.chin.aicamera.ImageManager;
+-import com.lun.chin.aicamera.OverlayView;
+-import com.lun.chin.aicamera.R;
+-import com.lun.chin.aicamera.classifier.SegmentationModel;
+-import com.lun.chin.aicamera.env.ImageUtils;
+-import com.lun.chin.aicamera.env.Logger;
+-
+-import java.io.IOException;
+-import java.util.List;
+-
+-public class DetectorActivity extends CameraActivity implements ImageReader.OnImageAvailableListener {
+-    private static final Logger LOGGER = new Logger();
+-
+-    private static final boolean SAVE_PREVIEW_BITMAP = false;
+-
+-    // Minimum detection confidence to track a detection.
+-    private static final float MINIMUM_CONFIDENCE = 0.4f;
+-
+-    private static final Size DESIRED_PREVIEW_SIZE = new Size(640, 480);
+-
+-    private Classifier mDetector;
+-    private Classifier mClassifier;
+-
+-    private Integer mSensorOrientation;
+-
+-    private Bitmap mRgbFrameBitmap = null;
+-    private Bitmap mOriginalBitmap = null;
+-    private Bitmap mDisplayBitmap = null;
+-    private Bitmap mInferenceBitmap = null;
+-
+-    private Bitmap mRgbPreviewBitmap = null;
+-    private Bitmap mCroppedPreviewBitmap = null;
+-
+-    private int mDisplayWidth;
+-    private int mDisplayHeight;
+-    private int mInferenceWidth;
+-    private int mInferenceHeight;
+-
+-    private byte[] mLuminanceCopy;
+-
+-    private Matrix mFrameToCropTransform;
+-    private Matrix mCropToFrameTransform;
+-    private Matrix mFrameToClassifyTransform;
+-
+-    private long mTimestamp = 0;
+-    private long mLastProcessingTimeMs;
+-    private boolean mComputingDetection = false;
+-    private boolean mInitialised = false;
+-
+-    private OverlayView mTrackingOverlay;
+-
+-    // These are for the real time classifier.
+-    private static final int INPUT_SIZE = 224;
+-    private static final int IMAGE_MEAN = 117;
+-    private static final float IMAGE_STD = 1;
+-    private static final String INPUT_NAME = "input";
+-    private static final String OUTPUT_NAME = "output";
+-
+-    private static final String CLASSIFIER_MODEL_FILE =
+-            "file:///android_asset/tensorflow_inception_graph.pb";
+-    private static final String CLASSIFIER_LABELS_FILE =
+-            "file:///android_asset/imagenet_comp_graph_label_strings.txt";
+-
+-    // DeepLab Config
+-    private static final String DEEPLAB_MODEL_FILE =
+-            "file:///android_asset/deeplabv3_mobilenetv2_pascal_mod.pb";
+-    private static final int DEEPLAB_IMAGE_SIZE = 513;
+-
+-    // ShuffleSeg configs
+-    private static final String SHUFFLESEG_MODEL_FILE = "file:///android_asset/shuffleseg_human_cat_dog_39618.pb";
+-    private static final String SHUFFLESEG_INPUT_NAME = "image_tensor";
+-    private static final String[] SHUFFLESEG_OUTPUT_NAMES = { "output_mask" };
+-    private static final int MAX_SIZE = 500; // Length of the longest edge.
+-
+-    // Default post processing settings.
+-    private final int mBlurAmount = 11;
+-    private final boolean mGrayscale = true;
+-
+-    @Override
+-    public void onPreviewSizeChosen(final Size size, final int rotation) {
+-        if (!mInitialised) {
+-            initialiseDetectors();
+-        }
+-
+-        mPreviewWidth = size.getWidth();
+-        mPreviewHeight = size.getHeight();
+-
+-        mSensorOrientation = rotation - getScreenOrientation();
+-
+-        LOGGER.i("Camera orientation relative to screen canvas: %d", mSensorOrientation);
+-        LOGGER.i("Initializing at size %dx%d", mPreviewWidth, mPreviewHeight);
+-
+-        mRgbPreviewBitmap = Bitmap.createBitmap(mPreviewWidth, mPreviewHeight, Bitmap.Config.ARGB_8888);
+-        mCroppedPreviewBitmap = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
+-
+-        mFrameToClassifyTransform = ImageUtils.getTransformationMatrix(
+-                mPreviewWidth, mPreviewHeight,
+-                INPUT_SIZE, INPUT_SIZE,
+-                mSensorOrientation, true);
+-    }
+-
+-    @Override
+-    public void onPictureSizeChosen(final Size size, final int rotation) {
+-        if (!mInitialised) {
+-            initialiseDetectors();
+-        }
+-
+-        mSensorOrientation = rotation - getScreenOrientation();
+-        Size preferredSize = ImageManager.getPreferredImageSize();
+-
+-        mPictureWidth = size.getWidth();
+-        mPictureHeight = size.getHeight();
+-
+-        float scaleFactor = Math.max(preferredSize.getHeight(), preferredSize.getWidth()) /
+-                (float)Math.max(mPictureWidth, mPictureHeight);
+-
+-        mDisplayWidth = Math.round(scaleFactor * mPictureWidth);
+-        mDisplayHeight = Math.round(scaleFactor * mPictureHeight);
+-
+-        if (Math.abs(rotation) == 90) {
+-            int temp = mDisplayHeight;
+-            mDisplayHeight = mDisplayWidth;
+-            mDisplayWidth = temp;
+-        }
+-
+-        float scaleFactor2 = MAX_SIZE / (float)Math.max(mDisplayWidth, mDisplayHeight);
+-        mInferenceWidth = Math.round(scaleFactor2 * mDisplayWidth);
+-        mInferenceHeight = Math.round(scaleFactor2 * mDisplayHeight);
+-
+-        mRgbFrameBitmap = Bitmap.createBitmap(mPictureWidth, mPictureHeight, Bitmap.Config.ARGB_8888);
+-        mDisplayBitmap = Bitmap.createBitmap(mDisplayWidth, mDisplayHeight, Bitmap.Config.ARGB_8888);
+-        mInferenceBitmap = Bitmap.createBitmap(mInferenceWidth, mInferenceHeight, Bitmap.Config.ARGB_8888);
+-
+-        mCropToFrameTransform = new Matrix();
+-        mFrameToCropTransform = ImageUtils.getTransformationMatrix(
+-                mPictureWidth, mPictureHeight,
+-                mPictureWidth, mPictureHeight,
+-                mSensorOrientation, true);
+-
+-        mFrameToCropTransform.invert(mCropToFrameTransform);
+-    }
+-
+-    private void initialiseDetectors() {
+-        try {
+-            if (mDetector == null) {
+-                mDetector =
+-                        SegmentationModel.Create(
+-                                getAssets(),
+-                                SHUFFLESEG_MODEL_FILE,
+-                                "",
+-                                SHUFFLESEG_INPUT_NAME,
+-                                SHUFFLESEG_OUTPUT_NAMES);
+-            }
+-
+-            mInitialised = true;
+-        } catch (final IOException e) {
+-            LOGGER.e("Exception initializing classifier!", e);
+-            Toast toast =
+-                    Toast.makeText(
+-                            getApplicationContext(),
+-                            "Classifier could not be initialized",
+-                            Toast.LENGTH_SHORT);
+-            toast.show();
+-            finish();
+-        }
+-    }
+-
+-    protected void processPreview() {
+-        readyForNextPreviewImage();
+-    }
+-
+-    @Override
+-    protected void processImage() {
+-        LOGGER.i("Process still");
+-
+-        runInBackground(new Runnable() {
+-            @Override
+-            public void run() {
+-                final String filename = mFilename;
+-
+-                /*
+-                mRgbFrameBitmap = BitmapFactory.decodeResource(getResources(), R.drawable.nayeon);
+-                mPictureHeight = mRgbFrameBitmap.getHeight();
+-                mPictureWidth = mRgbFrameBitmap.getWidth();
+-                */
+-
+-                // Different ways of retrieving the image depending on the API used.
+-                if (mUseCamera2API) {
+-                    mRgbFrameBitmap.setPixels(
+-                            getRgbBytes(), 0, mPictureWidth, 0, 0, mPictureWidth, mPictureHeight);
+-                } else {
+-                    BitmapFactory.Options options = new BitmapFactory.Options();
+-                    options.inMutable = true;
+-                    byte[] bytes = getPictureBytes();
+-                    mRgbFrameBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+-                }
+-
+-                long start = System.nanoTime();
+-
+-                // Rotate image to the correct orientation.
+-                mOriginalBitmap = Bitmap.createBitmap(mRgbFrameBitmap,
+-                        0,
+-                        0,
+-                        mRgbFrameBitmap.getWidth(),
+-                        mRgbFrameBitmap.getHeight(),
+-                        mFrameToCropTransform,
+-                        true);
+-
+-                mRgbFrameBitmap.recycle();
+-
+-                // Resize to a smaller image for faster post processing. The size is large enough to
+-                // still look good for the resolution of the screen.
+-                mDisplayBitmap = Bitmap.createScaledBitmap(mOriginalBitmap, mDisplayWidth, mDisplayHeight, true);
+-
+-                // Resize to a smaller image for faster inference.
+-                mInferenceBitmap = Bitmap.createScaledBitmap(mDisplayBitmap, mInferenceWidth, mInferenceHeight, true);
+-
+-                readyForNextImage();
+-
+-                final long mid1 = System.nanoTime();
+-                long dur1 = (mid1 - start) / 1000000 ;
+-                LOGGER.i("Preparing bitmap took " + dur1 + " ms");
+-
+-                final List<Classifier.Recognition> results = mDetector.recognizeImage(mInferenceBitmap);
+-
+-                long mid2 = System.nanoTime();
+-                long dur2 = (mid2 - mid1) /1000000 ;
+-                LOGGER.i("Detection took " + dur2 + " ms");
+-
+-                if (results.size() == 0)
+-                    return;
+-
+-                Classifier.Recognition result = results.get(0);
+-                int[] mask = result.getMask();
+-
+-                ImageUtils.applyMask(mDisplayBitmap, mDisplayBitmap, mask, mInferenceWidth, mInferenceHeight, mBlurAmount, mGrayscale);
+-
+-                long mid3 = System.nanoTime();
+-                long dur3 = (mid3 - mid2) / 1000000;
+-                LOGGER.i("Post processing took " + dur3 + " ms");
+-
+-                ImageManager.getInstance().cacheBitmap(filename, mDisplayBitmap);
+-                ImageData imageData = new ImageData(mOriginalBitmap, mask, mInferenceWidth, mInferenceHeight, mBlurAmount, mGrayscale);
+-                ImageManager.getInstance().storeImageData(filename, imageData);
+-                onProcessingComplete(filename);
+-
+-                int blurAmount = Math.round(
+-                        (float)mBlurAmount * mOriginalBitmap.getWidth() / mDisplayBitmap.getWidth());
+-                Bitmap finalResult = Bitmap.createBitmap(mOriginalBitmap);
+-                ImageUtils.applyMask(mOriginalBitmap, finalResult, mask, mInferenceWidth, mInferenceHeight, blurAmount, mGrayscale);
+-                ImageManager.getInstance().saveBitmap(filename, finalResult);
+-
+-                long mid4 = System.nanoTime();
+-                long dur4 = (mid4 - mid3) / 1000000;
+-                LOGGER.i("Saving to file took " + dur4 + " ms");
+-
+-                finalResult.recycle();
+-                mInferenceBitmap.recycle();
+-                mComputingDetection = false;
+-            }
+-        });
+-    }
+-
+-    private void RecogniseObject() {
+-        /*
+-        mRgbPreviewBitmap.setPixels(
+-                getRgbBytesPreview(), 0, mPreviewWidth, 0, 0, mPreviewWidth, mPreviewHeight);
+-
+-        final Canvas canvas = new Canvas(mCroppedPreviewBitmap);
+-        canvas.drawBitmap(mRgbPreviewBitmap, mFrameToClassifyTransform, null);
+-
+-        runInBackground(new Runnable() {
+-            @Override
+-            public void run() {
+-                final List<Classifier.Recognition> results = mClassifier.recognizeImage(mCroppedPreviewBitmap);
+-                if (results.size() > 0) {
+-                    final Classifier.Recognition result = results.get(0);
+-                    runOnUiThread(new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            TextView textView = findViewById(R.id.label);
+-                            if (textView != null) {
+-                                if (result.getConfidence() >= MINIMUM_CONFIDENCE) {
+-                                    textView.setText(result.getTitle());
+-                                } else {
+-                                    textView.setText("");
+-                                }
+-                            }
+-                        }
+-                    });
+-                }
+-                readyForNextPreviewImage();
+-            }
+-        });
+-        */
+-    }
+-
+-    private void onProcessingComplete(final String filename) {
+-        runOnUiThread(new Runnable() {
+-            @Override
+-            public void run() {
+-                notifyFragmentOfImageChange(filename);
+-            }
+-        });
+-    }
+-
+-    private void showToast(final String text) {
+-        this.runOnUiThread(
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        Toast.makeText(getApplicationContext(), text, Toast.LENGTH_SHORT).show();
+-                    }
+-                });
+-    }
+-
+-    @Override
+-    protected int getLayoutId() {
+-        return R.layout.fragment_camera_connection;
+-    }
+-
+-    @Override
+-    protected Size getDesiredPreviewFrameSize() {
+-        return DESIRED_PREVIEW_SIZE;
+-    }
+-
+-    @Override
+-    public void onSetDebug(final boolean debug) {
+-        mDetector.enableStatLogging(debug);
+-    }
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java
+deleted file mode 100644
+index 655b85f..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java
++++ /dev/null
+@@ -1,334 +0,0 @@
+-package com.lun.chin.aicamera.oldCode;
+-
+-/*
+- * Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *       http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-import android.graphics.SurfaceTexture;
+-import android.hardware.Camera;
+-import android.hardware.Camera.CameraInfo;
+-import android.os.Bundle;
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-import android.util.Size;
+-import android.util.SparseIntArray;
+-import android.view.LayoutInflater;
+-import android.view.Surface;
+-import android.view.TextureView;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.ImageButton;
+-
+-import java.io.IOException;
+-import java.util.List;
+-
+-import com.lun.chin.aicamera.AutoFitTextureView;
+-import com.lun.chin.aicamera.listener.CameraChangedListener;
+-import com.lun.chin.aicamera.R;
+-import com.lun.chin.aicamera.env.Logger;
+-import com.lun.chin.aicamera.env.ImageUtils;
+-
+-public class LegacyCameraConnectionFragment extends CameraFragment {
+-    private Camera mCamera;
+-    private static final Logger LOGGER = new Logger();
+-    private final Camera.PreviewCallback mImageListener;
+-    private final Camera.PreviewCallback mPreviewImageListener;
+-    private final CameraChangedListener mCameraChangedListener;
+-    private final Size mDesiredSize;
+-    private boolean mUseFrontCamera = false;
+-
+-    /**
+-     * The layout identifier to inflate for this Fragment.
+-     */
+-    private final int mLayout;
+-
+-    /**
+-     * An {@link AutoFitTextureView} for mCamera preview.
+-     */
+-    private AutoFitTextureView mTextureView;
+-
+-    /**
+-     * An additional thread for running tasks that shouldn't block the UI.
+-     */
+-    private HandlerThread mBackgroundThread;
+-    private Handler mBackgroundHandler;
+-
+-    private LegacyCameraConnectionFragment(
+-            final Camera.PreviewCallback imageListener,
+-            final Camera.PreviewCallback previewImageListener,
+-            final CameraChangedListener cameraChangedListener,
+-            final int layout,
+-            final Size desiredSize) {
+-
+-        mImageListener = imageListener;
+-        mPreviewImageListener = previewImageListener;
+-        mCameraChangedListener = cameraChangedListener;
+-        mLayout = layout;
+-        mDesiredSize = desiredSize;
+-    }
+-
+-    public static LegacyCameraConnectionFragment newInstance(
+-            final Camera.PreviewCallback imageListener,
+-            final Camera.PreviewCallback previewImageListener,
+-            final CameraChangedListener cameraChangedListener,
+-            final int layout,
+-            final Size desiredSize) {
+-
+-        return new LegacyCameraConnectionFragment(
+-                imageListener, previewImageListener, cameraChangedListener, layout, desiredSize);
+-    }
+-
+-    /**
+-     * Conversion from screen rotation to JPEG orientation.
+-     */
+-    private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+-
+-    static {
+-        ORIENTATIONS.append(Surface.ROTATION_0, 90);
+-        ORIENTATIONS.append(Surface.ROTATION_90, 0);
+-        ORIENTATIONS.append(Surface.ROTATION_180, 270);
+-        ORIENTATIONS.append(Surface.ROTATION_270, 180);
+-    }
+-
+-    /**
+-     * {@link android.view.TextureView.SurfaceTextureListener} handles several lifecycle events on a
+-     * {@link TextureView}.
+-     */
+-    private final TextureView.SurfaceTextureListener surfaceTextureListener =
+-            new TextureView.SurfaceTextureListener() {
+-                @Override
+-                public void onSurfaceTextureAvailable(
+-                        final SurfaceTexture texture, final int width, final int height) {
+-                    openCamera(texture);
+-                }
+-
+-                @Override
+-                public void onSurfaceTextureSizeChanged(
+-                        final SurfaceTexture texture, final int width, final int height) {
+-                }
+-
+-                @Override
+-                public boolean onSurfaceTextureDestroyed(final SurfaceTexture texture) {
+-                    stopCamera();
+-                    return true;
+-                }
+-
+-                @Override
+-                public void onSurfaceTextureUpdated(final SurfaceTexture texture) {
+-                }
+-            };
+-
+-    private void openCamera(final SurfaceTexture texture) {
+-        int index = mUseFrontCamera ? getFrontCameraId() : getCameraId();
+-
+-        if (mCamera != null) {
+-            stopCamera();
+-        }
+-        mCamera = Camera.open(index);
+-
+-        try {
+-            Camera.Parameters parameters = mCamera.getParameters();
+-            List<String> focusModes = parameters.getSupportedFocusModes();
+-            if (focusModes != null
+-                    && focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+-                parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+-            }
+-            List<Camera.Size> cameraSizes = parameters.getSupportedPreviewSizes();
+-            Size[] sizes = new Size[cameraSizes.size()];
+-            int i = 0;
+-            for (Camera.Size size : cameraSizes) {
+-                sizes[i++] = new Size(size.width, size.height);
+-            }
+-            Size previewSize =
+-                    CameraConnectionFragment.chooseOptimalSize(
+-                            sizes, mDesiredSize.getWidth(), mDesiredSize.getHeight());
+-            parameters.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
+-
+-
+-            LOGGER.i("Chosen preview size: " + previewSize.getWidth() + "x" + previewSize.getHeight());
+-
+-            List<Camera.Size> pictureSizes = parameters.getSupportedPictureSizes();
+-            Size[] picSizes = new Size[pictureSizes.size()];
+-
+-            i = 0;
+-            for (Camera.Size size : pictureSizes) {
+-                picSizes[i++] = new Size(size.width, size.height);
+-            }
+-
+-            Size pictureSize = CameraConnectionFragment.chooseLargestSize(picSizes);
+-
+-            LOGGER.i("Chosen picture size: " + pictureSize.getWidth() + "x" + pictureSize.getHeight());
+-            parameters.setPictureSize(pictureSize.getWidth(), pictureSize.getHeight());
+-
+-            mCamera.setDisplayOrientation(90);
+-            mCamera.setParameters(parameters);
+-            mCamera.setPreviewTexture(texture);
+-        } catch (IOException exception) {
+-            mCamera.release();
+-        }
+-
+-        if (mPreviewImageListener != null) {
+-            mCamera.setPreviewCallbackWithBuffer(mPreviewImageListener);
+-        }
+-        Camera.Size s = mCamera.getParameters().getPreviewSize();
+-        mCamera.addCallbackBuffer(new byte[ImageUtils.getYUVByteSize(s.height, s.width)]);
+-
+-        mTextureView.setAspectRatio(s.height, s.width);
+-
+-        mCamera.startPreview();
+-    }
+-
+-    private Camera.PictureCallback mPictureCallback = new Camera.PictureCallback() {
+-        @Override
+-        public void onPictureTaken(final byte[] data, final Camera camera) {
+-            camera.stopPreview();
+-            final byte[] bytes = data.clone();
+-            mBackgroundHandler.post(new Runnable() {
+-                @Override
+-                public void run() {
+-                    camera.startPreview();
+-                    mImageListener.onPreviewFrame(bytes, camera);
+-
+-                    /*
+-                    BitmapFactory.Options options = new BitmapFactory.Options();
+-                    options.inMutable = true;
+-                    Bitmap bmp = BitmapFactory.decodeByteArray(data, 0, data.length, options);
+-
+-                    // Need to rotate it and all that.
+-                    final Long timestamp = System.currentTimeMillis();
+-                    ImageUtils.saveBitmap(bmp, "IMG_" + timestamp.toString() + ".png");
+-                    */
+-                }
+-            });
+-        }
+-    };
+-
+-    @Override
+-    public View onCreateView(
+-            final LayoutInflater inflater, final ViewGroup container, final Bundle savedInstanceState) {
+-        View view = inflater.inflate(mLayout, container, false);
+-
+-        ImageButton button = view.findViewById(R.id.picture);
+-        button.setOnClickListener(new View.OnClickListener() {
+-            @Override
+-            public void onClick(View v) {
+-                mCamera.takePicture(null, null, mPictureCallback);
+-            }
+-        });
+-
+-        ImageButton galleryButton = view.findViewById(R.id.goto_gallery);
+-        galleryButton.setOnClickListener(mOnCameraButtonClicked);
+-
+-        ImageButton switchCamera = view.findViewById(R.id.switch_camera);
+-        switchCamera.setOnClickListener(new View.OnClickListener() {
+-            @Override
+-            public void onClick(View v) {
+-                mUseFrontCamera = !mUseFrontCamera;
+-                mCameraChangedListener.onCameraChangedListener(mCamera, mUseFrontCamera);
+-                openCamera(mTextureView.getSurfaceTexture());
+-            }
+-        });
+-
+-        return view;
+-    }
+-
+-    @Override
+-    public void onViewCreated(final View view, final Bundle savedInstanceState) {
+-        mTextureView = (AutoFitTextureView) view.findViewById(R.id.texture);
+-    }
+-
+-    @Override
+-    public void onActivityCreated(final Bundle savedInstanceState) {
+-        super.onActivityCreated(savedInstanceState);
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        startBackgroundThread();
+-
+-        if (mTextureView.isAvailable()) {
+-            mTextureView.setVisibility(View.VISIBLE);
+-            if (mCamera == null) {
+-                openCamera(mTextureView.getSurfaceTexture());
+-            }
+-            mCamera.startPreview();
+-        } else {
+-            mTextureView.setSurfaceTextureListener(surfaceTextureListener);
+-        }
+-    }
+-
+-    @Override
+-    public void onPause() {
+-        stopCamera();
+-        stopBackgroundThread();
+-        super.onPause();
+-    }
+-
+-    /**
+-     * Starts a background thread and its {@link Handler}.
+-     */
+-    private void startBackgroundThread() {
+-        mBackgroundThread = new HandlerThread("CameraBackground");
+-        mBackgroundThread.start();
+-        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+-    }
+-
+-    /**
+-     * Stops the background thread and its {@link Handler}.
+-     */
+-    private void stopBackgroundThread() {
+-        mBackgroundThread.quitSafely();
+-        try {
+-            mBackgroundThread.join();
+-            mBackgroundThread = null;
+-            mBackgroundHandler = null;
+-        } catch (final InterruptedException e) {
+-            LOGGER.e(e, "Exception!");
+-        }
+-    }
+-
+-    protected void stopCamera() {
+-        if (mCamera != null) {
+-            mCamera.stopPreview();
+-            mCamera.setPreviewCallback(null);
+-            mCamera.release();
+-            mCamera = null;
+-        }
+-
+-        if (mTextureView != null) {
+-        }
+-    }
+-
+-    private int getCameraId() {
+-        CameraInfo ci = new CameraInfo();
+-        for (int i = 0; i < Camera.getNumberOfCameras(); i++) {
+-            Camera.getCameraInfo(i, ci);
+-            if (ci.facing == CameraInfo.CAMERA_FACING_BACK)
+-                return i;
+-        }
+-        return -1; // No mCamera found
+-    }
+-
+-    private int getFrontCameraId() {
+-        CameraInfo ci = new CameraInfo();
+-        for (int i = 0; i < Camera.getNumberOfCameras(); ++i) {
+-            Camera.getCameraInfo(i, ci);
+-            if (ci.facing == CameraInfo.CAMERA_FACING_FRONT)
+-                return i;
+-        }
+-        return -1;
+-    }
+-}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java
+deleted file mode 100644
+index 0c84ede..0000000
+--- a/app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java
++++ /dev/null
+@@ -1,208 +0,0 @@
+-/* Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+-
+-Licensed under the Apache License, Version 2.0 (the "License");
+-you may not use this file except in compliance with the License.
+-You may obtain a copy of the License at
+-
+-    http://www.apache.org/licenses/LICENSE-2.0
+-
+-Unless required by applicable law or agreed to in writing, software
+-distributed under the License is distributed on an "AS IS" BASIS,
+-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-See the License for the specific language governing permissions and
+-limitations under the License.
+-==============================================================================*/
+-
+-package com.lun.chin.aicamera.oldCode;
+-
+-import android.content.res.AssetManager;
+-import android.graphics.Bitmap;
+-import android.os.Trace;
+-import android.util.Log;
+-
+-import com.lun.chin.aicamera.classifier.Classifier;
+-
+-import org.tensorflow.Operation;
+-import org.tensorflow.contrib.android.TensorFlowInferenceInterface;
+-
+-import java.io.BufferedReader;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-import java.util.ArrayList;
+-import java.util.Comparator;
+-import java.util.List;
+-import java.util.PriorityQueue;
+-import java.util.Vector;
+-
+-/** A classifier specialized to label images using TensorFlow. */
+-public class TensorFlowImageClassifier implements Classifier {
+-  private static final String TAG = "ImageClassifier";
+-
+-  // Only return this many results with at least this confidence.
+-  private static final int MAX_RESULTS = 3;
+-  private static final float THRESHOLD = 0.1f;
+-
+-  // Config values.
+-  private String inputName;
+-  private String outputName;
+-  private int inputSize;
+-  private int imageMean;
+-  private float imageStd;
+-
+-  // Pre-allocated buffers.
+-  private Vector<String> labels = new Vector<String>();
+-  private int[] intValues;
+-  private float[] floatValues;
+-  private float[] outputs;
+-  private String[] outputNames;
+-
+-  private boolean logStats = false;
+-
+-  private TensorFlowInferenceInterface inferenceInterface;
+-
+-  private TensorFlowImageClassifier() {}
+-
+-  /**
+-   * Initializes a native TensorFlow session for classifying images.
+-   *
+-   * @param assetManager The asset manager to be used to load assets.
+-   * @param modelFilename The filepath of the model GraphDef protocol buffer.
+-   * @param labelFilename The filepath of label file for classes.
+-   * @param inputSize The input size. A square image of inputSize x inputSize is assumed.
+-   * @param imageMean The assumed mean of the image values.
+-   * @param imageStd The assumed std of the image values.
+-   * @param inputName The label of the image input node.
+-   * @param outputName The label of the output node.
+-   * @throws IOException
+-   */
+-  public static Classifier create(
+-      AssetManager assetManager,
+-      String modelFilename,
+-      String labelFilename,
+-      int inputSize,
+-      int imageMean,
+-      float imageStd,
+-      String inputName,
+-      String outputName) {
+-    TensorFlowImageClassifier c = new TensorFlowImageClassifier();
+-    c.inputName = inputName;
+-    c.outputName = outputName;
+-
+-    // Read the label names into memory.
+-    // TODO(andrewharp): make this handle non-assets.
+-    String actualFilename = labelFilename.split("file:///android_asset/")[1];
+-    Log.i(TAG, "Reading labels from: " + actualFilename);
+-    BufferedReader br = null;
+-    try {
+-      br = new BufferedReader(new InputStreamReader(assetManager.open(actualFilename)));
+-      String line;
+-      while ((line = br.readLine()) != null) {
+-        c.labels.add(line);
+-      }
+-      br.close();
+-    } catch (IOException e) {
+-      throw new RuntimeException("Problem reading label file!" , e);
+-    }
+-
+-    c.inferenceInterface = new TensorFlowInferenceInterface(assetManager, modelFilename);
+-
+-    // The shape of the output is [N, NUM_CLASSES], where N is the batch size.
+-    final Operation operation = c.inferenceInterface.graphOperation(outputName);
+-    final int numClasses = (int) operation.output(0).shape().size(1);
+-    Log.i(TAG, "Read " + c.labels.size() + " labels, output layer size is " + numClasses);
+-
+-    // Ideally, inputSize could have been retrieved from the shape of the input operation.  Alas,
+-    // the placeholder node for input in the graphdef typically used does not specify a shape, so it
+-    // must be passed in as a parameter.
+-    c.inputSize = inputSize;
+-    c.imageMean = imageMean;
+-    c.imageStd = imageStd;
+-
+-    // Pre-allocate buffers.
+-    c.outputNames = new String[] {outputName};
+-    c.intValues = new int[inputSize * inputSize];
+-    c.floatValues = new float[inputSize * inputSize * 3];
+-    c.outputs = new float[numClasses];
+-
+-    return c;
+-  }
+-
+-  @Override
+-  public List<Recognition> recognizeImage(final Bitmap bitmap) {
+-    // Log this method so that it can be analyzed with systrace.
+-    Trace.beginSection("recognizeImage");
+-
+-    Trace.beginSection("preprocessBitmap");
+-    // Preprocess the image data from 0-255 int to normalized float based
+-    // on the provided parameters.
+-    bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
+-    for (int i = 0; i < intValues.length; ++i) {
+-      final int val = intValues[i];
+-      floatValues[i * 3 + 0] = (((val >> 16) & 0xFF) - imageMean) / imageStd;
+-      floatValues[i * 3 + 1] = (((val >> 8) & 0xFF) - imageMean) / imageStd;
+-      floatValues[i * 3 + 2] = ((val & 0xFF) - imageMean) / imageStd;
+-    }
+-    Trace.endSection();
+-
+-    // Copy the input data into TensorFlow.
+-    Trace.beginSection("feed");
+-    inferenceInterface.feed(inputName, floatValues, 1, inputSize, inputSize, 3);
+-    Trace.endSection();
+-
+-    // Run the inference call.
+-    Trace.beginSection("run");
+-    inferenceInterface.run(outputNames, logStats);
+-    Trace.endSection();
+-
+-    // Copy the output Tensor back into the output array.
+-    Trace.beginSection("fetch");
+-    inferenceInterface.fetch(outputName, outputs);
+-    Trace.endSection();
+-
+-    // Find the best classifications.
+-    PriorityQueue<Recognition> pq =
+-        new PriorityQueue<Recognition>(
+-            3,
+-            new Comparator<Recognition>() {
+-              @Override
+-              public int compare(Recognition lhs, Recognition rhs) {
+-                // Intentionally reversed to put high confidence at the head of the queue.
+-                return Float.compare(rhs.getConfidence(), lhs.getConfidence());
+-              }
+-            });
+-    for (int i = 0; i < outputs.length; ++i) {
+-      if (outputs[i] > THRESHOLD) {
+-        pq.add(
+-            new Recognition(
+-                "" + i, labels.size() > i ? labels.get(i) : "unknown", outputs[i], null, null));
+-      }
+-    }
+-    final ArrayList<Recognition> recognitions = new ArrayList<Recognition>();
+-    int recognitionsSize = Math.min(pq.size(), MAX_RESULTS);
+-    for (int i = 0; i < recognitionsSize; ++i) {
+-      recognitions.add(pq.poll());
+-    }
+-    Trace.endSection(); // "recognizeImage"
+-    return recognitions;
+-  }
+-
+-  @Override
+-  public List<Recognition> recognizeImage(byte[] data, int height, int width) {
+-    return null;
+-  }
+-
+-  @Override
+-  public void enableStatLogging(boolean logStats) {
+-    this.logStats = logStats;
+-  }
+-
+-  @Override
+-  public String getStatString() {
+-    return inferenceInterface.getStatString();
+-  }
+-
+-  @Override
+-  public void close() {
+-    inferenceInterface.close();
+-  }
+-}

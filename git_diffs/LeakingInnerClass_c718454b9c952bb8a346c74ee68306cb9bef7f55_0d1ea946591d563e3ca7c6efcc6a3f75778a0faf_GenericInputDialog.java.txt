@@ -1,0 +1,303 @@
+diff --git a/src/main/java/com/jmartin/temaki/MainDrawerActivity.java b/src/main/java/com/jmartin/temaki/MainDrawerActivity.java
+index 735d9b6..09b4d08 100644
+--- a/src/main/java/com/jmartin/temaki/MainDrawerActivity.java
++++ b/src/main/java/com/jmartin/temaki/MainDrawerActivity.java
+@@ -2,6 +2,7 @@ package com.jmartin.temaki;
+ 
+ import android.app.FragmentManager;
+ import android.content.Context;
++import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.content.res.Configuration;
+ import android.os.Bundle;
+@@ -30,14 +31,16 @@ import java.util.HashMap;
+  * Author: Jeff Martin, 2013
+  */
+ public class MainDrawerActivity extends FragmentActivity
+-        implements GenericInputDialog.GenericInputDialogListener, GenericAlertDialog.GenericAlertDialogListener {
++        implements GenericAlertDialog.GenericAlertDialogListener {
+ 
++    private final int NEW_LIST_ID = 0;
++    private final int RENAME_LIST_ID = 1;
+     private final String ALERT_DIALOG_TAG = "generic_alert_dialog_fragment";
+     private final String INPUT_DIALOG_TAG = "generic_name_dialog_fragment";
+     private final String LIST_ITEMS_BUNDLE_KEY = "ListItems";
+     private final String LIST_NAME_BUNDLE_KEY = "ListName";
+ 
+-    private final String NEW_LIST_DIALOG_TITLE = "Enter the new list's name:";
++    private final String LIST_NAME_DIALOG_TITLE = "Enter this list's name:";
+     public static final String CONFIRM_DELETE_DIALOG_TITLE = "Delete this List?";
+     private final String DEFAULT_LIST_NAME = "NEW LIST ";
+     protected final String LISTS_SP_KEY = "MAIN_LISTS";
+@@ -175,12 +178,15 @@ public class MainDrawerActivity extends FragmentActivity
+ 
+         switch (item.getItemId()) {
+             case R.id.action_delete_list:
+-                deleteLoadedList();
++                showDeleteListPrompt();
+                 return true;
+             case R.id.action_new_list:
+                 saveList(mainListsFragment.getListName(), mainListsFragment.getListItems());
+-                createNewList();
++                showNewListPrompt();
+                 return true;
++            case R.id.action_rename_list:
++                saveList(mainListsFragment.getListName(), mainListsFragment.getListItems());
++                showRenameListPrompt();
+             default:
+                 return super.onOptionsItemSelected(item);
+         }
+@@ -188,18 +194,34 @@ public class MainDrawerActivity extends FragmentActivity
+ 
+     @Override
+     public void onFinishAlertDialog() {
+-        if (selectedItemPos != -1) {
+-            lists.remove(drawerItems.get(selectedItemPos));
+-            drawerItems.remove(selectedItemPos);
+-            drawerListAdapter.notifyDataSetChanged();
++        deleteList(drawerItems.get(selectedItemPos));
++    }
+ 
+-            // Reload
+-            loadListIntoFragment(null, null);
+-        }
++    @Override
++    public void onPause() {
++        // Make sure dialogs are closed (needed in order to maintain orientation change)
++        if (this.alertDialog != null) this.alertDialog.dismiss();
++        if (this.inputDialog != null) this.inputDialog.dismiss();
++
++        // Add the current list to the HashMap lists
++        saveList(mainListsFragment.getListName(), mainListsFragment.getListItems());
++        saveListsToSharedPreferences();
++        super.onPause();
+     }
+ 
+     @Override
+-    public void onFinishDialog(String newListName) {
++    public void onActivityResult(int requestCode, int resultCode, Intent data) {
++        String newListName = data.getStringExtra(GenericInputDialog.INTENT_RESULT_KEY).trim();
++
++        if (resultCode == RENAME_LIST_ID) {
++            renameList(newListName);
++        } else if (resultCode == NEW_LIST_ID) {
++            createNewList(newListName);
++        }
++        super.onActivityResult(requestCode, resultCode, data);
++    }
++
++    private void createNewList(String newListName) {
+         if (newListName.trim().equalsIgnoreCase("")) {
+             newListName = getDefaultTitle();
+         }
+@@ -213,23 +235,33 @@ public class MainDrawerActivity extends FragmentActivity
+         loadListIntoFragment(newListName, new ArrayList<String>());
+     }
+ 
+-    @Override
+-    public void onPause() {
+-        // Make sure dialogs are closed (needed in order to maintain orientation change)
+-        if (this.alertDialog != null) this.alertDialog.dismiss();
+-        if (this.inputDialog != null) this.inputDialog.dismiss();
++    private void deleteList(String listName) {
++        lists.remove(listName);
+ 
+-        // Add the current list to the HashMap lists
+-        saveList(mainListsFragment.getListName(), mainListsFragment.getListItems());
+-        saveListsToSharedPreferences();
+-        super.onPause();
++        drawerItems.remove(drawerItems.indexOf(listName));
++        drawerListAdapter.notifyDataSetChanged();
++
++        loadListIntoFragment(null, null);
+     }
+ 
+-    /**
+-     * Delete the currently checked list on the Navigation Drawer.
+-     */
+-    private void deleteLoadedList() {
+-        showDeleteListConfirmationDialog();
++    private void renameList(String newListName) {
++        if (newListName.equalsIgnoreCase("")) {
++            return;
++        }
++
++        ArrayList<String> currentListItems = mainListsFragment.getListItems();
++        String oldListName = mainListsFragment.getListName();
++
++        if (!lists.containsKey(newListName)) {
++            updateDrawer(newListName);
++            lists.put(newListName, currentListItems);
++            selectedItemPos = drawerItems.indexOf(newListName);
++
++            // Delete old list
++            deleteList(oldListName);
++        }
++
++        loadListIntoFragment(newListName, currentListItems);
+     }
+ 
+     /**
+@@ -269,18 +301,33 @@ public class MainDrawerActivity extends FragmentActivity
+     /**
+      * Prompt the user for the name of a list to be created.
+      */
+-    private void createNewList() {
++    private void showNewListPrompt() {
+         // Show dialog for the name of the list, check for duplicates on drawerItems
+-        showNewListDialog();
++        showNameInputDialog(NEW_LIST_ID);
++    }
++
++    /**
++     * Prompt the user for the name of the list to be renamed.
++     */
++    private void showRenameListPrompt() {
++        showNameInputDialog(RENAME_LIST_ID);
++    }
++
++    /**
++     * Delete the currently checked list on the Navigation Drawer.
++     */
++    private void showDeleteListPrompt() {
++        showDeleteListConfirmationDialog();
+     }
+ 
+     /**
+-     * Show the New List prompt dialog.
++     * Show the list name input dialog.
+      */
+-    private void showNewListDialog() {
++    private void showNameInputDialog(int inputType) {
+         FragmentManager fragManager = getFragmentManager();
+         inputDialog = new GenericInputDialog();
+-        inputDialog.setTitle(NEW_LIST_DIALOG_TITLE);
++        inputDialog.setActionIdentifier(inputType);
++        inputDialog.setTitle(LIST_NAME_DIALOG_TITLE);
+         inputDialog.show(fragManager, INPUT_DIALOG_TAG);
+     }
+ 
+@@ -340,7 +387,7 @@ public class MainDrawerActivity extends FragmentActivity
+ 
+             // Offset position by 1 because of the header (header @ index 0)
+             if (--position < 0) {
+-                createNewList();
++                showNewListPrompt();
+             } else {
+                 // Load the list specified by position 'position' on the nav drawer
+                 String listName = drawerItems.get(position);
+diff --git a/src/main/java/com/jmartin/temaki/MainListsFragment.java b/src/main/java/com/jmartin/temaki/MainListsFragment.java
+index 0f34bf4..49b030f 100644
+--- a/src/main/java/com/jmartin/temaki/MainListsFragment.java
++++ b/src/main/java/com/jmartin/temaki/MainListsFragment.java
+@@ -30,7 +30,7 @@ import java.util.ArrayList;
+  * Author: Jeff Martin, 2013
+  */
+ public class MainListsFragment extends Fragment
+-        implements GenericInputDialog.GenericInputDialogListener, GenericAlertDialog.GenericAlertDialogListener {
++        implements GenericAlertDialog.GenericAlertDialogListener {
+ 
+     private final String EDIT_ITEM_DIALOG_TITLE = "Edit List Item:";
+     public static final int CANCEL_RESULT_CODE = 0;
+@@ -92,8 +92,7 @@ public class MainListsFragment extends Fragment
+         clearItemSelection();
+     }
+ 
+-    @Override
+-    public void onFinishDialog(String inputValue) {
++    private void renameListItem(String inputValue) {
+         listItems.remove(selectedItemPos);
+         listItems.add(selectedItemPos, inputValue);
+         actionMode.finish();
+@@ -105,7 +104,7 @@ public class MainListsFragment extends Fragment
+         if (resultCode == DELETE_ITEM_ID) {
+             onFinishAlertDialog();
+         } else if (resultCode == EDIT_ITEM_ID) {
+-            onFinishDialog(data.getStringExtra(GenericInputDialog.INTENT_RESULT_KEY));
++            renameListItem(data.getStringExtra(GenericInputDialog.INTENT_RESULT_KEY));
+         } else if (resultCode == CANCEL_RESULT_CODE) {
+             actionMode.finish();
+             clearItemSelection();
+diff --git a/src/main/java/com/jmartin/temaki/dialog/GenericInputDialog.java b/src/main/java/com/jmartin/temaki/dialog/GenericInputDialog.java
+index 71d4fda..3a616d4 100644
+--- a/src/main/java/com/jmartin/temaki/dialog/GenericInputDialog.java
++++ b/src/main/java/com/jmartin/temaki/dialog/GenericInputDialog.java
+@@ -13,22 +13,20 @@ import android.widget.Button;
+ import android.widget.EditText;
+ import android.widget.TextView;
+ 
++import com.jmartin.temaki.MainDrawerActivity;
+ import com.jmartin.temaki.MainListsFragment;
+ import com.jmartin.temaki.R;
+ 
+ /**
+  * Author: Jeff Martin, 2013
+  */
+-public class GenericInputDialog extends DialogFragment implements TextView.OnEditorActionListener {
++public class GenericInputDialog extends DialogFragment {
+ 
+-    public interface GenericInputDialogListener {
+-        void onFinishDialog(String inputValue);
+-    }
+-
+-    public static final String INTENT_RESULT_KEY = "Input";
++    public static final String INTENT_RESULT_KEY = "ResultKey";
+     private EditText promptEditText;
+     private String dialogTitle;
+     private String optionalExistingValue;
++    private int inputType;
+ 
+     public GenericInputDialog() {
+     }
+@@ -65,40 +63,28 @@ public class GenericInputDialog extends DialogFragment implements TextView.OnEdi
+         okButton.setOnClickListener(new View.OnClickListener() {
+             @Override
+             public void onClick(View v) {
++                Intent resultIntent = new Intent();
++                String input = promptEditText.getText().toString();
++                resultIntent.putExtra(INTENT_RESULT_KEY, input);
++
+                 Fragment frag = getTargetFragment();
+                 if (frag == null) {
+-                    finishDialogWithResult();
++                    ((MainDrawerActivity) getActivity()).onActivityResult(inputType, inputType, resultIntent);
+                 } else {
+-                    Intent resultIntent = new Intent();
+-                    resultIntent.putExtra(INTENT_RESULT_KEY, promptEditText.getText().toString());
+-                    frag.onActivityResult(getTargetRequestCode(),
+-                            ((MainListsFragment)frag).EDIT_ITEM_ID, resultIntent);
+-                    dismiss();
++                    frag.onActivityResult(getTargetRequestCode(), ((MainListsFragment)frag).EDIT_ITEM_ID, resultIntent);
+                 }
++                dismiss();
+             }
+         });
+         getDialog().setTitle(dialogTitle);
+         return rootView;
+     }
+ 
+-    @Override
+-    public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+-        if (actionId == EditorInfo.IME_ACTION_DONE) {
+-            finishDialogWithResult();
+-            return true;
+-        }
+-        return false;
+-    }
+-
+-    private void finishDialogWithResult() {
+-        String inputValue = promptEditText.getText().toString();
+-
+-        GenericInputDialogListener listener = (GenericInputDialogListener) getActivity();
+-        listener.onFinishDialog(inputValue);
+-        this.dismiss();
+-    }
+-
+     public void setTitle(String dialogTitle) {
+         this.dialogTitle = dialogTitle;
+     }
++
++    public void setActionIdentifier(int inputType) {
++        this.inputType = inputType;
++    }
+ }

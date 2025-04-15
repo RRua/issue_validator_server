@@ -1,0 +1,2938 @@
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java b/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
+index 37bed29d..f24d616b 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
+@@ -12,9 +12,11 @@ import android.content.pm.ShortcutManager;
+ import android.graphics.drawable.Icon;
+ import android.os.Build;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseManager;
++import androidx.annotation.RequiresApi;
++
+ import com.beemdevelopment.aegis.services.NotificationService;
+ import com.beemdevelopment.aegis.ui.MainActivity;
++import com.beemdevelopment.aegis.vault.VaultManager;
+ import com.mikepenz.iconics.Iconics;
+ import com.mikepenz.material_design_iconic_typeface_library.MaterialDesignIconic;
+ 
+@@ -22,20 +24,18 @@ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+ 
+-import androidx.annotation.RequiresApi;
+-
+ public class AegisApplication extends Application {
+-    private DatabaseManager _manager;
++    private VaultManager _manager;
+     private Preferences _prefs;
+     private List<LockListener> _lockListeners;
+ 
+     private static final String CODE_LOCK_STATUS_ID = "lock_status_channel";
+-    private static final String CODE_LOCK_DATABASE_ACTION = "lock_database";
++    private static final String CODE_LOCK_VAULT_ACTION = "lock_vault";
+ 
+     @Override
+     public void onCreate() {
+         super.onCreate();
+-        _manager = new DatabaseManager(this);
++        _manager = new VaultManager(this);
+         _prefs = new Preferences(this);
+         _lockListeners = new ArrayList<>();
+ 
+@@ -46,7 +46,7 @@ public class AegisApplication extends Application {
+         ScreenOffReceiver receiver = new ScreenOffReceiver();
+         IntentFilter intentFilter = new IntentFilter();
+         intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
+-        intentFilter.addAction(CODE_LOCK_DATABASE_ACTION);
++        intentFilter.addAction(CODE_LOCK_VAULT_ACTION);
+         registerReceiver(receiver, intentFilter);
+ 
+         if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+@@ -58,7 +58,7 @@ public class AegisApplication extends Application {
+         }
+     }
+ 
+-    public DatabaseManager getDatabaseManager() {
++    public VaultManager getVaultManager() {
+         return _manager;
+     }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/SortCategory.java b/app/src/main/java/com/beemdevelopment/aegis/SortCategory.java
+index cf2636e2..bd56effb 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/SortCategory.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/SortCategory.java
+@@ -1,6 +1,6 @@
+ package com.beemdevelopment.aegis;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.helpers.comparators.AccountNameComparator;
+ import com.beemdevelopment.aegis.helpers.comparators.IssuerNameComparator;
+ 
+@@ -24,8 +24,8 @@ public enum SortCategory {
+         return _values[x];
+     }
+ 
+-    public Comparator<DatabaseEntry> getComparator() {
+-        Comparator<DatabaseEntry> comparator = null;
++    public Comparator<VaultEntry> getComparator() {
++        Comparator<VaultEntry> comparator = null;
+ 
+         switch (this) {
+             case ACCOUNT:
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseException.java b/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseException.java
+deleted file mode 100644
+index c639f818..00000000
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseException.java
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package com.beemdevelopment.aegis.db;
+-
+-public class DatabaseException extends Exception {
+-    public DatabaseException(Throwable cause) {
+-        super(cause);
+-    }
+-
+-    public DatabaseException(String message) {
+-        super(message);
+-    }
+-}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileException.java b/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileException.java
+deleted file mode 100644
+index 6a443599..00000000
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileException.java
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package com.beemdevelopment.aegis.db;
+-
+-public class DatabaseFileException extends Exception {
+-    public DatabaseFileException(Throwable cause) {
+-        super(cause);
+-    }
+-
+-    public DatabaseFileException(String message) {
+-        super(message);
+-    }
+-}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManagerException.java b/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManagerException.java
+deleted file mode 100644
+index ca2e756c..00000000
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManagerException.java
++++ /dev/null
+@@ -1,7 +0,0 @@
+-package com.beemdevelopment.aegis.db;
+-
+-public class DatabaseManagerException extends Exception {
+-    public DatabaseManagerException(Throwable cause) {
+-        super(cause);
+-    }
+-}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/helpers/BiometricSlotInitializer.java b/app/src/main/java/com/beemdevelopment/aegis/helpers/BiometricSlotInitializer.java
+index 7d634146..45dd33a8 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/helpers/BiometricSlotInitializer.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/helpers/BiometricSlotInitializer.java
+@@ -7,9 +7,9 @@ import androidx.fragment.app.FragmentActivity;
+ 
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
+ 
+ import java.util.Objects;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/helpers/SimpleItemTouchHelperCallback.java b/app/src/main/java/com/beemdevelopment/aegis/helpers/SimpleItemTouchHelperCallback.java
+index 3ff2bea5..b7cab156 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/helpers/SimpleItemTouchHelperCallback.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/helpers/SimpleItemTouchHelperCallback.java
+@@ -3,14 +3,12 @@ package com.beemdevelopment.aegis.helpers;
+ import androidx.recyclerview.widget.ItemTouchHelper;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.ui.views.EntryAdapter;
+ 
+-import java.util.Map;
+-
+ public class SimpleItemTouchHelperCallback extends ItemTouchHelper.Callback {
+ 
+-    private DatabaseEntry _selectedEntry;
++    private VaultEntry _selectedEntry;
+ 
+     private final ItemTouchHelperAdapter _adapter;
+     private boolean _positionChanged = false;
+@@ -29,7 +27,7 @@ public class SimpleItemTouchHelperCallback extends ItemTouchHelper.Callback {
+         _isLongPressDragEnabled = enabled;
+     }
+ 
+-    public void setSelectedEntry(DatabaseEntry entry) {
++    public void setSelectedEntry(VaultEntry entry) {
+         _selectedEntry = entry;
+     }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/AccountNameComparator.java b/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/AccountNameComparator.java
+index 07143749..fbd2cca6 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/AccountNameComparator.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/AccountNameComparator.java
+@@ -1,12 +1,12 @@
+ package com.beemdevelopment.aegis.helpers.comparators;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+ import java.util.Comparator;
+ 
+-public class AccountNameComparator implements Comparator<DatabaseEntry> {
++public class AccountNameComparator implements Comparator<VaultEntry> {
+     @Override
+-    public int compare(DatabaseEntry a, DatabaseEntry b) {
++    public int compare(VaultEntry a, VaultEntry b) {
+         return a.getName().compareToIgnoreCase(b.getName());
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/IssuerNameComparator.java b/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/IssuerNameComparator.java
+index 8f48daf6..b4032651 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/IssuerNameComparator.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/helpers/comparators/IssuerNameComparator.java
+@@ -1,12 +1,12 @@
+ package com.beemdevelopment.aegis.helpers.comparators;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+ import java.util.Comparator;
+ 
+-public class IssuerNameComparator implements Comparator<DatabaseEntry> {
++public class IssuerNameComparator implements Comparator<VaultEntry> {
+     @Override
+-    public int compare(DatabaseEntry a, DatabaseEntry b) {
++    public int compare(VaultEntry a, VaultEntry b) {
+         return a.getIssuer().compareToIgnoreCase(b.getIssuer());
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
+index e8ab4d90..7cff6531 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
+@@ -2,11 +2,11 @@ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
+-import com.beemdevelopment.aegis.db.DatabaseFile;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.DatabaseFileException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.VaultEntry;
++import com.beemdevelopment.aegis.vault.VaultFile;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.VaultFileException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ import com.beemdevelopment.aegis.encoding.Base64Exception;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
+ 
+@@ -36,20 +36,20 @@ public class AegisImporter extends DatabaseImporter {
+     public State read(FileReader reader) throws DatabaseImporterException {
+         try {
+             byte[] bytes = reader.readAll();
+-            DatabaseFile file = DatabaseFile.fromBytes(bytes);
++            VaultFile file = VaultFile.fromBytes(bytes);
+             if (file.isEncrypted()) {
+                 return new EncryptedState(file);
+             }
+             return new DecryptedState(file.getContent());
+-        } catch (DatabaseFileException | IOException e) {
++        } catch (VaultFileException | IOException e) {
+             throw new DatabaseImporterException(e);
+         }
+     }
+ 
+     public static class EncryptedState extends State {
+-        private DatabaseFile _file;
++        private VaultFile _file;
+ 
+-        private EncryptedState(DatabaseFile file) {
++        private EncryptedState(VaultFile file) {
+             super(true);
+             _file = file;
+         }
+@@ -58,7 +58,7 @@ public class AegisImporter extends DatabaseImporter {
+             return _file.getHeader().getSlots();
+         }
+ 
+-        public State decrypt(DatabaseFileCredentials creds) throws DatabaseFileException {
++        public State decrypt(VaultFileCredentials creds) throws VaultFileException {
+             JSONObject obj = _file.getContent(creds);
+             return new DecryptedState(obj);
+         }
+@@ -86,7 +86,7 @@ public class AegisImporter extends DatabaseImporter {
+                 for (int i = 0; i < array.length(); i++) {
+                     JSONObject entryObj = array.getJSONObject(i);
+                     try {
+-                        DatabaseEntry entry = convertEntry(entryObj);
++                        VaultEntry entry = convertEntry(entryObj);
+                         result.addEntry(entry);
+                     } catch (DatabaseImporterEntryException e) {
+                         result.addError(e);
+@@ -99,9 +99,9 @@ public class AegisImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
+             try {
+-                return DatabaseEntry.fromJson(obj);
++                return VaultEntry.fromJson(obj);
+             } catch (JSONException | OtpInfoException | Base64Exception e) {
+                 throw new DatabaseImporterEntryException(e, obj.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
+index ee1dac84..19f576e4 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
+@@ -8,7 +8,7 @@ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ import com.beemdevelopment.aegis.crypto.CryptResult;
+ import com.beemdevelopment.aegis.crypto.CryptoUtils;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+ import com.beemdevelopment.aegis.encoding.Base32Exception;
+ import com.beemdevelopment.aegis.otp.HotpInfo;
+@@ -184,7 +184,7 @@ public class AndOtpImporter extends DatabaseImporter {
+             for (int i = 0; i < _obj.length(); i++) {
+                 try {
+                     JSONObject obj = _obj.getJSONObject(i);
+-                    DatabaseEntry entry = convertEntry(obj);
++                    VaultEntry entry = convertEntry(obj);
+                     result.addEntry(entry);
+                 } catch (JSONException e) {
+                     throw new DatabaseImporterException(e);
+@@ -196,7 +196,7 @@ public class AndOtpImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
+             try {
+                 String type = obj.getString("type").toLowerCase();
+                 String algo = obj.getString("algorithm");
+@@ -229,7 +229,7 @@ public class AndOtpImporter extends DatabaseImporter {
+                     name = parts[0];
+                 }
+ 
+-                return new DatabaseEntry(info, name, issuer);
++                return new VaultEntry(info, name, issuer);
+             } catch (DatabaseImporterException | Base32Exception | OtpInfoException | JSONException e) {
+                 throw new DatabaseImporterEntryException(e, obj.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
+index 72890ef1..ef3fec8f 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
+@@ -3,7 +3,7 @@ package com.beemdevelopment.aegis.importers;
+ import android.content.Context;
+ import android.util.Xml;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+ import com.beemdevelopment.aegis.encoding.Base32Exception;
+ import com.beemdevelopment.aegis.otp.OtpInfo;
+@@ -74,7 +74,7 @@ public class AuthyImporter extends DatabaseImporter {
+                 for (int i = 0; i < _obj.length(); i++) {
+                     JSONObject entryObj = _obj.getJSONObject(i);
+                     try {
+-                        DatabaseEntry entry = convertEntry(entryObj);
++                        VaultEntry entry = convertEntry(entryObj);
+                         result.addEntry(entry);
+                     } catch (DatabaseImporterEntryException e) {
+                         result.addError(e);
+@@ -87,7 +87,7 @@ public class AuthyImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(JSONObject entry) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(JSONObject entry) throws DatabaseImporterEntryException {
+             try {
+                 AuthyEntryInfo authyEntryInfo = new AuthyEntryInfo();
+                 authyEntryInfo.OriginalName = entry.getString("originalName");
+@@ -101,7 +101,7 @@ public class AuthyImporter extends DatabaseImporter {
+ 
+                 OtpInfo info = new TotpInfo(secret, "SHA1", digits, 30);
+ 
+-                return new DatabaseEntry(info, authyEntryInfo.Name, authyEntryInfo.Issuer);
++                return new VaultEntry(info, authyEntryInfo.Name, authyEntryInfo.Issuer);
+             } catch (OtpInfoException | JSONException | Base32Exception e) {
+                 throw new DatabaseImporterEntryException(e, entry.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+index 84c065b8..f72711bb 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+@@ -2,17 +2,12 @@ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
+ import android.content.pm.PackageManager;
+-import android.net.Uri;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.util.ByteInputStream;
+ import com.beemdevelopment.aegis.util.UUIDMap;
+ import com.topjohnwu.superuser.io.SuFile;
+-import com.topjohnwu.superuser.io.SuFileInputStream;
+ 
+-import java.io.Closeable;
+-import java.io.FileInputStream;
+-import java.io.FileNotFoundException;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.lang.reflect.InvocationTargetException;
+@@ -117,10 +112,10 @@ public abstract class DatabaseImporter {
+     }
+ 
+     public static class Result {
+-        private UUIDMap<DatabaseEntry> _entries = new UUIDMap<>();
++        private UUIDMap<VaultEntry> _entries = new UUIDMap<>();
+         private List<DatabaseImporterEntryException> _errors = new ArrayList<>();
+ 
+-        public void addEntry(DatabaseEntry entry) {
++        public void addEntry(VaultEntry entry) {
+             _entries.add(entry);
+         }
+ 
+@@ -128,7 +123,7 @@ public abstract class DatabaseImporter {
+             _errors.add(error);
+         }
+ 
+-        public UUIDMap<DatabaseEntry> getEntries() {
++        public UUIDMap<VaultEntry> getEntries() {
+             return _entries;
+         }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpImporter.java
+index 982d66aa..be1fa9f2 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpImporter.java
+@@ -3,7 +3,7 @@ package com.beemdevelopment.aegis.importers;
+ import android.content.Context;
+ import android.util.Xml;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.otp.HotpInfo;
+ import com.beemdevelopment.aegis.otp.OtpInfo;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
+@@ -73,7 +73,7 @@ public class FreeOtpImporter extends DatabaseImporter {
+ 
+             for (JSONObject obj : _entries) {
+                 try {
+-                    DatabaseEntry entry = convertEntry(obj);
++                    VaultEntry entry = convertEntry(obj);
+                     result.addEntry(entry);
+                 } catch (DatabaseImporterEntryException e) {
+                     result.addError(e);
+@@ -83,7 +83,7 @@ public class FreeOtpImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
+             try {
+                 String type = obj.getString("type").toLowerCase();
+                 String algo = obj.getString("algo");
+@@ -110,7 +110,7 @@ public class FreeOtpImporter extends DatabaseImporter {
+                         throw new DatabaseImporterException("unsupported otp type: " + type);
+                 }
+ 
+-                return new DatabaseEntry(info, name, issuer);
++                return new VaultEntry(info, name, issuer);
+             } catch (DatabaseImporterException | OtpInfoException | JSONException e) {
+                 throw new DatabaseImporterEntryException(e, obj.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
+index ffea66ee..fc1e4169 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
+@@ -5,7 +5,7 @@ import android.database.Cursor;
+ import android.database.sqlite.SQLiteDatabase;
+ import android.database.sqlite.SQLiteException;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+ import com.beemdevelopment.aegis.encoding.Base32Exception;
+ import com.beemdevelopment.aegis.otp.HotpInfo;
+@@ -92,7 +92,7 @@ public class GoogleAuthImporter extends DatabaseImporter {
+ 
+             for (Entry sqlEntry : _entries) {
+                 try {
+-                    DatabaseEntry entry = convertEntry(sqlEntry);
++                    VaultEntry entry = convertEntry(sqlEntry);
+                     result.addEntry(entry);
+                 } catch (DatabaseImporterEntryException e) {
+                     result.addError(e);
+@@ -102,7 +102,7 @@ public class GoogleAuthImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(Entry entry) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(Entry entry) throws DatabaseImporterEntryException {
+             try {
+                 byte[] secret = Base32.decode(entry.getSecret().toCharArray());
+ 
+@@ -124,7 +124,7 @@ public class GoogleAuthImporter extends DatabaseImporter {
+                     name = parts[1];
+                 }
+ 
+-                return new DatabaseEntry(info, name, entry.getIssuer());
++                return new VaultEntry(info, name, entry.getIssuer());
+             } catch (Base32Exception | OtpInfoException | DatabaseImporterException e) {
+                 throw new DatabaseImporterEntryException(e, entry.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/SteamImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/SteamImporter.java
+index 86f719de..9cf3c921 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/SteamImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/SteamImporter.java
+@@ -3,7 +3,7 @@ package com.beemdevelopment.aegis.importers;
+ import android.content.Context;
+ import android.content.pm.PackageManager;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base64;
+ import com.beemdevelopment.aegis.encoding.Base64Exception;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
+@@ -66,7 +66,7 @@ public class SteamImporter extends DatabaseImporter {
+             Result result = new Result();
+ 
+             try {
+-                DatabaseEntry entry = convertEntry(_obj);
++                VaultEntry entry = convertEntry(_obj);
+                 result.addEntry(entry);
+             } catch (DatabaseImporterEntryException e) {
+                 result.addError(e);
+@@ -75,13 +75,13 @@ public class SteamImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
+             try {
+                 byte[] secret = Base64.decode(obj.getString("shared_secret"));
+                 SteamInfo info = new SteamInfo(secret);
+ 
+                 String account = obj.getString("account_name");
+-                return new DatabaseEntry(info, account, "Steam");
++                return new VaultEntry(info, account, "Steam");
+             } catch (JSONException | Base64Exception | OtpInfoException e) {
+                 throw new DatabaseImporterEntryException(e, obj.toString());
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/WinAuthImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/WinAuthImporter.java
+index 3926b55c..8841bf4e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/WinAuthImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/WinAuthImporter.java
+@@ -1,7 +1,7 @@
+ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfoException;
+ 
+@@ -57,7 +57,7 @@ public class WinAuthImporter extends DatabaseImporter {
+ 
+             for (String line : _lines) {
+                 try {
+-                    DatabaseEntry entry = convertEntry(line);
++                    VaultEntry entry = convertEntry(line);
+                     result.addEntry(entry);
+                 } catch (DatabaseImporterEntryException e) {
+                     result.addError(e);
+@@ -67,14 +67,14 @@ public class WinAuthImporter extends DatabaseImporter {
+             return result;
+         }
+ 
+-        private static DatabaseEntry convertEntry(String line) throws DatabaseImporterEntryException {
++        private static VaultEntry convertEntry(String line) throws DatabaseImporterEntryException {
+             try {
+                 GoogleAuthInfo info = GoogleAuthInfo.parseUri(line);
+-                DatabaseEntry databaseEntry = new DatabaseEntry(info);
+-                databaseEntry.setIssuer(databaseEntry.getName());
+-                databaseEntry.setName("WinAuth");
++                VaultEntry vaultEntry = new VaultEntry(info);
++                vaultEntry.setIssuer(vaultEntry.getName());
++                vaultEntry.setName("WinAuth");
+ 
+-                return databaseEntry;
++                return vaultEntry;
+             } catch (GoogleAuthInfoException e) {
+                 throw new DatabaseImporterEntryException(e, line);
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/services/NotificationService.java b/app/src/main/java/com/beemdevelopment/aegis/services/NotificationService.java
+index eec3d9ec..0e99a5a7 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/services/NotificationService.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/services/NotificationService.java
+@@ -9,14 +9,13 @@ import androidx.annotation.Nullable;
+ import androidx.core.app.NotificationCompat;
+ import androidx.core.app.NotificationManagerCompat;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+ import com.beemdevelopment.aegis.R;
+ 
+ public class NotificationService extends Service {
+-    public static final int DATABASE_UNLOCKED_ID = 1;
++    public static final int VAULT_UNLOCKED_ID = 1;
+ 
+     private static final String CODE_LOCK_STATUS_ID = "lock_status_channel";
+-    private static final String CODE_LOCK_DATABASE_ACTION = "lock_database";
++    private static final String CODE_LOCK_VAULT_ACTION = "lock_vault";
+ 
+     public NotificationService() {
+ 
+@@ -31,7 +30,7 @@ public class NotificationService extends Service {
+     }
+ 
+     public void serviceMethod() {
+-        Intent intentAction = new Intent(CODE_LOCK_DATABASE_ACTION);
++        Intent intentAction = new Intent(CODE_LOCK_VAULT_ACTION);
+         PendingIntent lockDatabaseIntent = PendingIntent.getBroadcast(this,1,intentAction, 0);
+         NotificationCompat.Builder builder = new NotificationCompat.Builder(this,  CODE_LOCK_STATUS_ID)
+                 .setSmallIcon(R.drawable.ic_fingerprint_black_24dp)
+@@ -42,7 +41,7 @@ public class NotificationService extends Service {
+                 .setContentIntent(lockDatabaseIntent);
+ 
+         NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
+-        notificationManager.notify(DATABASE_UNLOCKED_ID, builder.build());
++        notificationManager.notify(VAULT_UNLOCKED_ID, builder.build());
+     }
+ 
+     @Override
+@@ -50,7 +49,7 @@ public class NotificationService extends Service {
+         super.onDestroy();
+ 
+         NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
+-        notificationManager.cancel(DATABASE_UNLOCKED_ID);
++        notificationManager.cancel(VAULT_UNLOCKED_ID);
+     }
+ 
+     @Nullable
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+index 21ff7898..dc050a6b 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+@@ -3,7 +3,6 @@ package com.beemdevelopment.aegis.ui;
+ import android.animation.ValueAnimator;
+ import android.content.Intent;
+ import android.content.res.Configuration;
+-import android.os.Build;
+ import android.os.Bundle;
+ import android.provider.Settings;
+ import android.view.WindowManager;
+@@ -126,7 +125,7 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+      * the vault was locked by an external trigger while the Activity was still open.
+      */
+     private boolean isOrphan() {
+-        return !(this instanceof MainActivity) && _app.getDatabaseManager().isLocked();
++        return !(this instanceof MainActivity) && _app.getVaultManager().isLocked();
+     }
+ 
+     private void setGlobalAnimationDurationScale() {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+index e3034a13..8d9af242 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+@@ -21,12 +21,12 @@ import com.beemdevelopment.aegis.CancelAction;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+ import com.beemdevelopment.aegis.helpers.EditTextHelper;
+ import com.beemdevelopment.aegis.helpers.UiThreadExecutor;
+@@ -189,7 +189,7 @@ public class AuthActivity extends AegisActivity implements SlotListTask.Callback
+ 
+             // send the master key back to the main activity
+             Intent intent = new Intent();
+-            intent.putExtra("creds", new DatabaseFileCredentials(result.getKey(), _slots));
++            intent.putExtra("creds", new VaultFileCredentials(result.getKey(), _slots));
+             intent.putExtra("repairedSlot", result.isSlotRepaired());
+             setResult(RESULT_OK, intent);
+             finish();
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java b/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
+index 514d7404..4b2b9bcd 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
+@@ -22,9 +22,9 @@ import androidx.appcompat.app.AlertDialog;
+ 
+ import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
+ import com.beemdevelopment.aegis.helpers.EditTextHelper;
+ import com.beemdevelopment.aegis.ui.tasks.DerivationTask;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+index 782d7b50..1bf58044 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+@@ -25,7 +25,7 @@ import android.widget.TableRow;
+ import com.amulyakhare.textdrawable.TextDrawable;
+ import com.avito.android.krop.KropView;
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+ import com.beemdevelopment.aegis.encoding.Base32Exception;
+ import com.beemdevelopment.aegis.helpers.EditTextHelper;
+@@ -60,7 +60,7 @@ public class EditEntryActivity extends AegisActivity {
+     private static final int PICK_IMAGE_REQUEST = 0;
+ 
+     private boolean _isNew = false;
+-    private DatabaseEntry _origEntry;
++    private VaultEntry _origEntry;
+     private TreeSet<String> _groups;
+     private boolean _hasCustomIcon = false;
+     // keep track of icon changes separately as the generated jpeg's are not deterministic
+@@ -99,7 +99,7 @@ public class EditEntryActivity extends AegisActivity {
+ 
+         // retrieve info from the calling activity
+         Intent intent = getIntent();
+-        _origEntry = (DatabaseEntry) intent.getSerializableExtra("entry");
++        _origEntry = (VaultEntry) intent.getSerializableExtra("entry");
+         _isNew = intent.getBooleanExtra("isNew", false);
+         _groups = new TreeSet<>(Collator.getInstance());
+         _groups.addAll(intent.getStringArrayListExtra("groups"));
+@@ -320,7 +320,7 @@ public class EditEntryActivity extends AegisActivity {
+     @Override
+     public void onBackPressed() {
+         AtomicReference<String> msg = new AtomicReference<>();
+-        AtomicReference<DatabaseEntry> entry = new AtomicReference<>();
++        AtomicReference<VaultEntry> entry = new AtomicReference<>();
+ 
+         try {
+             entry.set(parseEntry());
+@@ -388,7 +388,7 @@ public class EditEntryActivity extends AegisActivity {
+         return true;
+     }
+ 
+-    private void finish(DatabaseEntry entry, boolean delete) {
++    private void finish(VaultEntry entry, boolean delete) {
+         Intent intent = new Intent();
+         intent.putExtra("entry", entry);
+         intent.putExtra("delete", delete);
+@@ -441,7 +441,7 @@ public class EditEntryActivity extends AegisActivity {
+         }
+     }
+ 
+-    private DatabaseEntry parseEntry() throws ParseException {
++    private VaultEntry parseEntry() throws ParseException {
+         if (_textSecret.length() == 0) {
+             throw new ParseException("Secret is a required field.");
+         }
+@@ -491,7 +491,7 @@ public class EditEntryActivity extends AegisActivity {
+             throw new ParseException("The entered info is incorrect: " + e.getMessage());
+         }
+ 
+-        DatabaseEntry entry = Cloner.clone(_origEntry);
++        VaultEntry entry = Cloner.clone(_origEntry);
+         entry.setInfo(info);
+         entry.setIssuer(_textIssuer.getText().toString());
+         entry.setName(_textName.getText().toString());
+@@ -528,7 +528,7 @@ public class EditEntryActivity extends AegisActivity {
+     }
+ 
+     private boolean onSave() {
+-        DatabaseEntry entry;
++        VaultEntry entry;
+         try {
+             entry = parseEntry();
+         } catch (ParseException e) {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
+index 059b26d6..baf28905 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
+@@ -8,16 +8,16 @@ import androidx.fragment.app.Fragment;
+ 
+ import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.Database;
+-import com.beemdevelopment.aegis.db.DatabaseFile;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.DatabaseFileException;
+-import com.beemdevelopment.aegis.db.DatabaseManager;
+-import com.beemdevelopment.aegis.db.DatabaseManagerException;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
++import com.beemdevelopment.aegis.vault.Vault;
++import com.beemdevelopment.aegis.vault.VaultFile;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.VaultFileException;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
+ import com.beemdevelopment.aegis.ui.slides.CustomAuthenticatedSlide;
+ import com.beemdevelopment.aegis.ui.slides.CustomAuthenticationSlide;
+ import com.beemdevelopment.aegis.ui.tasks.DerivationTask;
+@@ -38,8 +38,8 @@ public class IntroActivity extends AppIntro2 implements DerivationTask.Callback
+     private CustomAuthenticationSlide _authenticationSlide;
+     private Fragment _endSlide;
+ 
+-    private Database _database;
+-    private DatabaseFile _databaseFile;
++    private Vault _vault;
++    private VaultFile _vaultFile;
+     private PasswordSlot _passwordSlot;
+     private Cipher _passwordCipher;
+ 
+@@ -87,9 +87,8 @@ public class IntroActivity extends AppIntro2 implements DerivationTask.Callback
+         _endSlide = AppIntroFragment.newInstance(endSliderPage);
+         addSlide(_endSlide);
+ 
+-        // create the database and database file
+-        _database = new Database();
+-        _databaseFile = new DatabaseFile();
++        _vault = new Vault();
++        _vaultFile = new VaultFile();
+     }
+ 
+     private void setException(Exception e) {
+@@ -129,9 +128,9 @@ public class IntroActivity extends AppIntro2 implements DerivationTask.Callback
+         }
+ 
+         // generate the master key
+-        DatabaseFileCredentials creds = null;
++        VaultFileCredentials creds = null;
+         if (cryptType != CustomAuthenticationSlide.CRYPT_TYPE_NONE) {
+-            creds = new DatabaseFileCredentials();
++            creds = new VaultFileCredentials();
+         }
+ 
+         if (cryptType != CustomAuthenticationSlide.CRYPT_TYPE_NONE) {
+@@ -158,16 +157,16 @@ public class IntroActivity extends AppIntro2 implements DerivationTask.Callback
+             creds.getSlots().add(slot);
+         }
+ 
+-        // finally, save the database
++        // finally, save the vault
+         try {
+-            JSONObject obj = _database.toJson();
++            JSONObject obj = _vault.toJson();
+             if (cryptType == CustomAuthenticationSlide.CRYPT_TYPE_NONE) {
+-                _databaseFile.setContent(obj);
++                _vaultFile.setContent(obj);
+             } else {
+-                _databaseFile.setContent(obj, creds);
++                _vaultFile.setContent(obj, creds);
+             }
+-            DatabaseManager.save(getApplicationContext(), _databaseFile);
+-        } catch (DatabaseManagerException | DatabaseFileException e) {
++            VaultManager.save(getApplicationContext(), _vaultFile);
++        } catch (VaultManagerException | VaultFileException e) {
+             setException(e);
+             return;
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+index ce59bc7f..60e01b7c 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+@@ -21,19 +21,19 @@ import androidx.appcompat.view.ActionMode;
+ import androidx.appcompat.widget.SearchView;
+ 
+ import com.beemdevelopment.aegis.AegisApplication;
++import com.beemdevelopment.aegis.CancelAction;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.SortCategory;
+-import com.beemdevelopment.aegis.CancelAction;
+ import com.beemdevelopment.aegis.ViewMode;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.DatabaseManager;
+-import com.beemdevelopment.aegis.db.DatabaseManagerException;
+ import com.beemdevelopment.aegis.helpers.FabScrollHelper;
+ import com.beemdevelopment.aegis.helpers.PermissionHelper;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfoException;
+ import com.beemdevelopment.aegis.ui.views.EntryListView;
++import com.beemdevelopment.aegis.vault.VaultEntry;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultManagerException;
+ import com.getbase.floatingactionbutton.FloatingActionsMenu;
+ import com.google.zxing.BinaryBitmap;
+ import com.google.zxing.ChecksumException;
+@@ -45,7 +45,6 @@ import com.google.zxing.RGBLuminanceSource;
+ import com.google.zxing.Reader;
+ import com.google.zxing.Result;
+ import com.google.zxing.common.HybridBinarizer;
+-import com.mikepenz.iconics.context.IconicsContextWrapper;
+ 
+ import java.io.IOException;
+ import java.io.InputStream;
+@@ -69,12 +68,12 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     private static final int CODE_PERM_READ_STORAGE = 1;
+ 
+     private AegisApplication _app;
+-    private DatabaseManager _db;
++    private VaultManager _vault;
+     private boolean _loaded;
+     private String _selectedGroup;
+     private boolean _searchSubmitted;
+ 
+-    private DatabaseEntry _selectedEntry;
++    private VaultEntry _selectedEntry;
+     private ActionMode _actionMode;
+ 
+     private Menu _menu;
+@@ -91,7 +90,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         super.onCreate(savedInstanceState);
+ 
+         _app = (AegisApplication) getApplication();
+-        _db = _app.getDatabaseManager();
++        _vault = _app.getVaultManager();
+         _loaded = false;
+ 
+         // set up the main view
+@@ -164,7 +163,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         }
+ 
+         // don't process any activity results if the vault is locked
+-        if (requestCode != CODE_DECRYPT && requestCode != CODE_DO_INTRO && _db.isLocked()) {
++        if (requestCode != CODE_DECRYPT && requestCode != CODE_DO_INTRO && _vault.isLocked()) {
+             return;
+         }
+ 
+@@ -235,50 +234,50 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         }
+     }
+ 
+-    private void startEditProfileActivity(int requestCode, DatabaseEntry entry, boolean isNew) {
++    private void startEditProfileActivity(int requestCode, VaultEntry entry, boolean isNew) {
+         Intent intent = new Intent(this, EditEntryActivity.class);
+-        intent.putExtra("entry", entry != null ? entry : DatabaseEntry.getDefault());
++        intent.putExtra("entry", entry != null ? entry : VaultEntry.getDefault());
+         intent.putExtra("isNew", isNew);
+         intent.putExtra("selectedGroup", _selectedGroup);
+-        intent.putExtra("groups", new ArrayList<>(_db.getGroups()));
++        intent.putExtra("groups", new ArrayList<>(_vault.getGroups()));
+         startActivityForResult(intent, requestCode);
+     }
+ 
+     private void onScanResult(int resultCode, Intent data) {
+         if (resultCode == RESULT_OK) {
+-            DatabaseEntry entry = (DatabaseEntry) data.getSerializableExtra("entry");
++            VaultEntry entry = (VaultEntry) data.getSerializableExtra("entry");
+             startEditProfileActivity(CODE_ADD_ENTRY, entry, true);
+         }
+     }
+ 
+     private void onAddEntryResult(int resultCode, Intent data) {
+         if (resultCode == RESULT_OK) {
+-            DatabaseEntry entry = (DatabaseEntry) data.getSerializableExtra("entry");
++            VaultEntry entry = (VaultEntry) data.getSerializableExtra("entry");
+             addEntry(entry);
+-            saveDatabase();
++            saveVault();
+         }
+     }
+ 
+     private void onEditEntryResult(int resultCode, Intent data) {
+         if (resultCode == RESULT_OK) {
+-            DatabaseEntry entry = (DatabaseEntry) data.getSerializableExtra("entry");
++            VaultEntry entry = (VaultEntry) data.getSerializableExtra("entry");
+             if (data.getBooleanExtra("delete", false)) {
+                 deleteEntry(entry);
+             } else {
+                 // this profile has been serialized/deserialized and is no longer the same instance it once was
+                 // to deal with this, the replaceEntry functions are used
+-                DatabaseEntry oldEntry = _db.replaceEntry(entry);
++                VaultEntry oldEntry = _vault.replaceEntry(entry);
+                 _entryListView.replaceEntry(oldEntry, entry);
+-                saveDatabase();
++                saveVault();
+             }
+         }
+     }
+ 
+     private void onEnterEntryResult(int resultCode, Intent data) {
+         if (resultCode == RESULT_OK) {
+-            DatabaseEntry entry = (DatabaseEntry) data.getSerializableExtra("entry");
++            VaultEntry entry = (VaultEntry) data.getSerializableExtra("entry");
+             addEntry(entry);
+-            saveDatabase();
++            saveVault();
+         }
+     }
+ 
+@@ -304,7 +303,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                 Result result = reader.decode(binaryBitmap);
+ 
+                 GoogleAuthInfo info = GoogleAuthInfo.parseUri(result.getText());
+-                DatabaseEntry entry = new DatabaseEntry(info);
++                VaultEntry entry = new VaultEntry(info);
+ 
+                 startEditProfileActivity(CODE_ADD_ENTRY, entry, true);
+             } catch (NotFoundException | IOException | ChecksumException | FormatException | GoogleAuthInfoException e) {
+@@ -325,7 +324,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         }
+ 
+         // if the group no longer exists, switch back to 'All'
+-        TreeSet<String> groups = _db.getGroups();
++        TreeSet<String> groups = _vault.getGroups();
+         if (_selectedGroup != null && !groups.contains(_selectedGroup)) {
+             menu.findItem(R.id.menu_filter_all).setChecked(true);
+             setGroupFilter(null);
+@@ -356,8 +355,8 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         _entryListView.setGroupFilter(group, true);
+     }
+ 
+-    private void addEntry(DatabaseEntry entry) {
+-        _db.addEntry(entry);
++    private void addEntry(VaultEntry entry) {
++        _vault.addEntry(entry);
+         _entryListView.addEntry(entry);
+     }
+ 
+@@ -368,18 +367,18 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             throw new RuntimeException(e);
+         }
+ 
+-        DatabaseFileCredentials creds = (DatabaseFileCredentials) data.getSerializableExtra("creds");
+-        unlockDatabase(creds);
++        VaultFileCredentials creds = (VaultFileCredentials) data.getSerializableExtra("creds");
++        unlockVault(creds);
+     }
+ 
+     private void onDecryptResult(int resultCode, Intent intent) {
+-        DatabaseFileCredentials creds = (DatabaseFileCredentials) intent.getSerializableExtra("creds");
+-        boolean unlocked = unlockDatabase(creds);
++        VaultFileCredentials creds = (VaultFileCredentials) intent.getSerializableExtra("creds");
++        boolean unlocked = unlockVault(creds);
+ 
+-        // save the database in case a slot was repaired
++        // save the vault in case a slot was repaired
+         if (unlocked && intent.getBooleanExtra("repairedSlot", false)) {
+-            _db.setCredentials(creds);
+-            saveDatabase();
++            _vault.setCredentials(creds);
++            saveVault();
+         }
+ 
+         doShortcutActions();
+@@ -409,7 +408,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     private void doShortcutActions() {
+         Intent intent = getIntent();
+         String action = intent.getStringExtra("action");
+-        if (action == null || _db.isLocked()) {
++        if (action == null || _vault.isLocked()) {
+             return;
+         }
+ 
+@@ -423,7 +422,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     private void handleDeeplink() {
+-        if (_db.isLocked()) {
++        if (_vault.isLocked()) {
+             return;
+         }
+ 
+@@ -442,7 +441,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             }
+ 
+             if (info != null) {
+-                DatabaseEntry entry = new DatabaseEntry(info);
++                VaultEntry entry = new VaultEntry(info);
+                 startEditProfileActivity(CODE_ADD_ENTRY, entry, true);
+             }
+         }
+@@ -453,10 +452,10 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     protected void onResume() {
+         super.onResume();
+ 
+-        if (_db.isLocked()) {
+-            // start the intro if the database file doesn't exist
+-            if (!_db.isLoaded() && !_db.fileExists()) {
+-                // the db doesn't exist, start the intro
++        if (_vault.isLocked()) {
++            // start the intro if the vault file doesn't exist
++            if (!_vault.isLoaded() && !_vault.fileExists()) {
++                // the vault doesn't exist, start the intro
+                 if (getPreferences().isIntroDone()) {
+                     Toast.makeText(this, getString(R.string.vault_not_found), Toast.LENGTH_SHORT).show();
+                 }
+@@ -464,7 +463,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                 startActivityForResult(intro, CODE_DO_INTRO);
+                 return;
+             } else {
+-                unlockDatabase(null);
++                unlockVault(null);
+             }
+         } else if (_loaded) {
+             // update the list of groups in the filter menu
+@@ -503,9 +502,9 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         super.onBackPressed();
+     }
+ 
+-    private void deleteEntry(DatabaseEntry entry) {
+-        DatabaseEntry oldEntry = _db.removeEntry(entry);
+-        saveDatabase();
++    private void deleteEntry(VaultEntry entry) {
++        VaultEntry oldEntry = _vault.removeEntry(entry);
++        saveVault();
+ 
+         _entryListView.removeEntry(oldEntry);
+     }
+@@ -615,20 +614,20 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         _searchView.setIconified(true);
+     }
+ 
+-    private boolean unlockDatabase(DatabaseFileCredentials creds) {
++    private boolean unlockVault(VaultFileCredentials creds) {
+         try {
+-            if (!_db.isLoaded()) {
+-                _db.load();
++            if (!_vault.isLoaded()) {
++                _vault.load();
+             }
+-            if (_db.isLocked()) {
++            if (_vault.isLocked()) {
+                 if (creds == null) {
+                     startAuthActivity();
+                     return false;
+                 } else {
+-                    _db.unlock(creds);
++                    _vault.unlock(creds);
+                 }
+             }
+-        } catch (DatabaseManagerException e) {
++        } catch (VaultManagerException e) {
+             Toast.makeText(this, getString(R.string.decryption_error), Toast.LENGTH_LONG).show();
+             startAuthActivity();
+             return false;
+@@ -640,7 +639,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     private void loadEntries() {
+         // load all entries
+-        List<DatabaseEntry> entries = new ArrayList<DatabaseEntry>(_db.getEntries());
++        List<VaultEntry> entries = new ArrayList<VaultEntry>(_vault.getEntries());
+         _entryListView.addEntries(entries);
+         _entryListView.runEntriesAnimation();
+         _loaded = true;
+@@ -648,30 +647,30 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     private void startAuthActivity() {
+         Intent intent = new Intent(this, AuthActivity.class);
+-        intent.putExtra("slots", _db.getFileHeader().getSlots());
++        intent.putExtra("slots", _vault.getFileHeader().getSlots());
+         intent.putExtra("requiresUnlock", false);
+         intent.putExtra("cancelAction", CancelAction.KILL);
+         startActivityForResult(intent, CODE_DECRYPT);
+     }
+ 
+-    private void saveDatabase() {
++    private void saveVault() {
+         try {
+-            _db.save();
+-        } catch (DatabaseManagerException e) {
++            _vault.save();
++        } catch (VaultManagerException e) {
+             Toast.makeText(this, getString(R.string.saving_error), Toast.LENGTH_LONG).show();
+         }
+     }
+ 
+     private void updateLockIcon() {
+-        // hide the lock icon if the database is not unlocked
+-        if (_menu != null && !_db.isLocked()) {
++        // hide the lock icon if the vault is not unlocked
++        if (_menu != null && !_vault.isLocked()) {
+             MenuItem item = _menu.findItem(R.id.action_lock);
+-            item.setVisible(_db.isEncryptionEnabled());
++            item.setVisible(_vault.isEncryptionEnabled());
+         }
+     }
+ 
+     @Override
+-    public void onEntryClick(DatabaseEntry entry) {
++    public void onEntryClick(VaultEntry entry) {
+         if (_selectedEntry != null) {
+             if (_selectedEntry == entry) {
+                 _actionMode.finish();
+@@ -687,7 +686,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     @Override
+-    public void onLongEntryClick(DatabaseEntry entry) {
++    public void onLongEntryClick(VaultEntry entry) {
+         if (_selectedEntry != null) {
+             return;
+         }
+@@ -698,18 +697,18 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     @Override
+-    public void onEntryMove(DatabaseEntry entry1, DatabaseEntry entry2) {
+-        _db.swapEntries(entry1, entry2);
++    public void onEntryMove(VaultEntry entry1, VaultEntry entry2) {
++        _vault.swapEntries(entry1, entry2);
+     }
+ 
+     @Override
+-    public void onEntryDrop(DatabaseEntry entry) {
+-        saveDatabase();
++    public void onEntryDrop(VaultEntry entry) {
++        saveVault();
+     }
+ 
+     @Override
+-    public void onEntryChange(DatabaseEntry entry) {
+-        saveDatabase();
++    public void onEntryChange(VaultEntry entry) {
++        saveVault();
+     }
+ 
+     @Override
+@@ -759,7 +758,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                             deleteEntry(_selectedEntry);
+ 
+                             if (_selectedEntry.getGroup() != null) {
+-                                if (!_db.getGroups().contains(_selectedEntry.getGroup())) {
++                                if (!_vault.getGroups().contains(_selectedEntry.getGroup())) {
+                                     updateGroupFilterMenu();
+                                 }
+                             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+index eb249ec6..11360c82 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+@@ -26,16 +26,16 @@ import com.beemdevelopment.aegis.Theme;
+ import com.beemdevelopment.aegis.ViewMode;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.DatabaseFileException;
+-import com.beemdevelopment.aegis.db.DatabaseManager;
+-import com.beemdevelopment.aegis.db.DatabaseManagerException;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.VaultEntry;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.VaultFileException;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ import com.beemdevelopment.aegis.helpers.BiometricSlotInitializer;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+ import com.beemdevelopment.aegis.helpers.PermissionHelper;
+@@ -76,12 +76,12 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     private static final int CODE_PERM_EXPORT = 1;
+ 
+     private Intent _result;
+-    private DatabaseManager _db;
++    private VaultManager _vault;
+ 
+     // keep a reference to the type of database converter the user selected
+     private Class<? extends DatabaseImporter> _importerType;
+     private AegisImporter.State _importerState;
+-    private UUIDMap<DatabaseEntry> _importerEntries;
++    private UUIDMap<VaultEntry> _importerEntries;
+ 
+     private SwitchPreference _encryptionPreference;
+     private SwitchPreference _biometricsPreference;
+@@ -95,7 +95,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         addPreferencesFromResource(R.xml.preferences);
+ 
+         AegisApplication app = (AegisApplication) getActivity().getApplication();
+-        _db = app.getDatabaseManager();
++        _vault = app.getVaultManager();
+ 
+         // set the result intent in advance
+         setResult(new Intent());
+@@ -258,7 +258,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         _encryptionPreference.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+             @Override
+             public boolean onPreferenceChange(Preference preference, Object newValue) {
+-                if (!_db.isEncryptionEnabled()) {
++                if (!_vault.isEncryptionEnabled()) {
+                     Dialogs.showSetPasswordDialog(getActivity(), new EnableEncryptionListener());
+                 } else {
+                     Dialogs.showSecureDialog(new AlertDialog.Builder(getActivity())
+@@ -267,8 +267,8 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+                             .setPositiveButton(android.R.string.yes, new DialogInterface.OnClickListener() {
+                                 public void onClick(DialogInterface dialog, int which) {
+                                     try {
+-                                        _db.disableEncryption();
+-                                    } catch (DatabaseManagerException e) {
++                                        _vault.disableEncryption();
++                                    } catch (VaultManagerException e) {
+                                         Toast.makeText(getActivity(), R.string.disable_encryption_error, Toast.LENGTH_SHORT).show();
+                                         return;
+                                     }
+@@ -296,7 +296,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         _biometricsPreference.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+             @Override
+             public boolean onPreferenceChange(Preference preference, Object newValue) {
+-                DatabaseFileCredentials creds = _db.getCredentials();
++                VaultFileCredentials creds = _vault.getCredentials();
+                 SlotList slots = creds.getSlots();
+ 
+                 if (!slots.has(BiometricSlot.class)) {
+@@ -312,7 +312,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+                     // remove the biometric slot
+                     BiometricSlot slot = slots.find(BiometricSlot.class);
+                     slots.remove(slot);
+-                    _db.setCredentials(creds);
++                    _vault.setCredentials(creds);
+ 
+                     // remove the KeyStore key
+                     try {
+@@ -322,7 +322,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+                         e.printStackTrace();
+                     }
+ 
+-                    saveDatabase();
++                    saveVault();
+                     updateEncryptionPreferences();
+                 }
+ 
+@@ -341,7 +341,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+             @Override
+             public boolean onPreferenceClick(Preference preference) {
+                 Intent intent = new Intent(getActivity(), SlotManagerActivity.class);
+-                intent.putExtra("creds", _db.getCredentials());
++                intent.putExtra("creds", _vault.getCredentials());
+                 startActivityForResult(intent, CODE_SLOTS);
+                 return true;
+             }
+@@ -352,7 +352,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+             @Override
+             public boolean onPreferenceClick(Preference preference) {
+                 Intent intent = new Intent(getActivity(), GroupManagerActivity.class);
+-                intent.putExtra("groups", new ArrayList<>(_db.getGroups()));
++                intent.putExtra("groups", new ArrayList<>(_vault.getGroups()));
+                 startActivityForResult(intent, CODE_GROUPS);
+                 return true;
+             }
+@@ -485,7 +485,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         try {
+             DatabaseImporter.State state = importer.read(reader);
+             if (state.isEncrypted()) {
+-                // temporary special case for encrypted Aegis databases
++                // temporary special case for encrypted Aegis vaults
+                 if (state instanceof AegisImporter.EncryptedState) {
+                     _importerState = state;
+ 
+@@ -522,11 +522,11 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+             return;
+         }
+ 
+-        DatabaseFileCredentials creds = (DatabaseFileCredentials) data.getSerializableExtra("creds");
++        VaultFileCredentials creds = (VaultFileCredentials) data.getSerializableExtra("creds");
+         DatabaseImporter.State state;
+         try {
+             state = ((AegisImporter.EncryptedState) _importerState).decrypt(creds);
+-        } catch (DatabaseFileException e) {
++        } catch (VaultFileException e) {
+             e.printStackTrace();
+             Toast.makeText(getActivity(), R.string.decryption_error, Toast.LENGTH_SHORT).show();
+             return;
+@@ -567,7 +567,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+ 
+         _importerEntries = result.getEntries();
+         List<ImportEntry> entries = new ArrayList<>();
+-        for (DatabaseEntry entry : _importerEntries) {
++        for (VaultEntry entry : _importerEntries) {
+             entries.add(new ImportEntry(entry));
+         }
+ 
+@@ -585,24 +585,24 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         // TODO: create a custom layout to show a message AND a checkbox
+         final AtomicReference<Boolean> checked = new AtomicReference<>(true);
+         AlertDialog.Builder builder = new AlertDialog.Builder(getActivity())
+-                .setTitle("Export the database")
++                .setTitle(R.string.pref_export_summary)
+                 .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                     String filename;
+                     try {
+-                        filename = _db.export(checked.get());
+-                    } catch (DatabaseManagerException e) {
+-                        Toast.makeText(getActivity(), R.string.exporting_database_error, Toast.LENGTH_SHORT).show();
++                        filename = _vault.export(checked.get());
++                    } catch (VaultManagerException e) {
++                        Toast.makeText(getActivity(), R.string.exporting_vault_error, Toast.LENGTH_SHORT).show();
+                         return;
+                     }
+ 
+                     // make sure the new file is visible
+                     MediaScannerConnection.scanFile(getActivity(), new String[]{filename}, null, null);
+ 
+-                    Toast.makeText(getActivity(), getString(R.string.export_database_location) + filename, Toast.LENGTH_SHORT).show();
++                    Toast.makeText(getActivity(), getString(R.string.export_vault_location) + filename, Toast.LENGTH_SHORT).show();
+                 })
+                 .setNegativeButton(android.R.string.cancel, null);
+-        if (_db.isEncryptionEnabled()) {
+-            final String[] items = {"Keep the database encrypted"};
++        if (_vault.isEncryptionEnabled()) {
++            final String[] items = {"Keep the vault encrypted"};
+             final boolean[] checkedItems = {true};
+             builder.setMultiChoiceItems(items, checkedItems, new DialogInterface.OnMultiChoiceClickListener() {
+                 @Override
+@@ -621,9 +621,9 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+             return;
+         }
+ 
+-        DatabaseFileCredentials creds = (DatabaseFileCredentials) data.getSerializableExtra("creds");
+-        _db.setCredentials(creds);
+-        saveDatabase();
++        VaultFileCredentials creds = (VaultFileCredentials) data.getSerializableExtra("creds");
++        _vault.setCredentials(creds);
++        saveVault();
+         updateEncryptionPreferences();
+     }
+ 
+@@ -634,7 +634,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+ 
+         HashSet<String> groups = new HashSet<>(data.getStringArrayListExtra("groups"));
+ 
+-        for (DatabaseEntry entry : _db.getEntries()) {
++        for (VaultEntry entry : _vault.getEntries()) {
+             if (!groups.contains(entry.getGroup())) {
+                 entry.setGroup(null);
+             }
+@@ -648,18 +648,18 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+ 
+         List<ImportEntry> selectedEntries = (ArrayList<ImportEntry>) data.getSerializableExtra("entries");
+         for (ImportEntry selectedEntry : selectedEntries) {
+-            DatabaseEntry savedEntry = _importerEntries.getByUUID(selectedEntry.getUUID());
++            VaultEntry savedEntry = _importerEntries.getByUUID(selectedEntry.getUUID());
+ 
+             // temporary: randomize the UUID of duplicate entries and add them anyway
+-            if (_db.isEntryDuplicate(savedEntry)) {
++            if (_vault.isEntryDuplicate(savedEntry)) {
+                 savedEntry.resetUUID();
+             }
+ 
+-            _db.addEntry(savedEntry);
++            _vault.addEntry(savedEntry);
+         }
+ 
+         _importerEntries = null;
+-        if (!saveDatabase()) {
++        if (!saveVault()) {
+             return;
+         }
+ 
+@@ -669,10 +669,10 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         _result.putExtra("needsRecreate", true);
+     }
+ 
+-    private boolean saveDatabase() {
++    private boolean saveVault() {
+         try {
+-            _db.save();
+-        } catch (DatabaseManagerException e) {
++            _vault.save();
++        } catch (VaultManagerException e) {
+             Toast.makeText(getActivity(), R.string.saving_error, Toast.LENGTH_LONG).show();
+             return false;
+         }
+@@ -681,7 +681,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     }
+ 
+     private void updateEncryptionPreferences() {
+-        boolean encrypted = _db.isEncryptionEnabled();
++        boolean encrypted = _vault.isEncryptionEnabled();
+         _encryptionPreference.setChecked(encrypted, true);
+         _setPasswordPreference.setVisible(encrypted);
+         _biometricsPreference.setVisible(encrypted);
+@@ -689,7 +689,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         _autoLockPreference.setVisible(encrypted);
+ 
+         if (encrypted) {
+-            SlotList slots = _db.getCredentials().getSlots();
++            SlotList slots = _vault.getCredentials().getSlots();
+             boolean multiPassword = slots.findAll(PasswordSlot.class).size() > 1;
+             boolean multiBio = slots.findAll(BiometricSlot.class).size() > 1;
+             boolean showSlots = BuildConfig.DEBUG || multiPassword || multiBio;
+@@ -709,7 +709,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     private class SetPasswordListener implements Dialogs.SlotListener {
+         @Override
+         public void onSlotResult(Slot slot, Cipher cipher) {
+-            DatabaseFileCredentials creds = _db.getCredentials();
++            VaultFileCredentials creds = _vault.getCredentials();
+             SlotList slots = creds.getSlots();
+ 
+             try {
+@@ -727,8 +727,8 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+                 return;
+             }
+ 
+-            _db.setCredentials(creds);
+-            saveDatabase();
++            _vault.setCredentials(creds);
++            saveVault();
+         }
+ 
+         @Override
+@@ -741,7 +741,7 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     private class RegisterBiometricsListener implements BiometricSlotInitializer.Listener {
+         @Override
+         public void onInitializeSlot(BiometricSlot slot, Cipher cipher) {
+-            DatabaseFileCredentials creds = _db.getCredentials();
++            VaultFileCredentials creds = _vault.getCredentials();
+             try {
+                 slot.setKey(creds.getKey(), cipher);
+             } catch (SlotException e) {
+@@ -749,9 +749,9 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+                 return;
+             }
+             creds.getSlots().add(slot);
+-            _db.setCredentials(creds);
++            _vault.setCredentials(creds);
+ 
+-            saveDatabase();
++            saveVault();
+             updateEncryptionPreferences();
+         }
+ 
+@@ -766,13 +766,13 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     private class EnableEncryptionListener implements Dialogs.SlotListener {
+         @Override
+         public void onSlotResult(Slot slot, Cipher cipher) {
+-            DatabaseFileCredentials creds = new DatabaseFileCredentials();
++            VaultFileCredentials creds = new VaultFileCredentials();
+ 
+             try {
+                 slot.setKey(creds.getKey(), cipher);
+                 creds.getSlots().add(slot);
+-                _db.enableEncryption(creds);
+-            } catch (DatabaseManagerException | SlotException e) {
++                _vault.enableEncryption(creds);
++            } catch (VaultManagerException | SlotException e) {
+                 onException(e);
+                 return;
+             }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
+index 07566554..1abf82ad 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
+@@ -10,7 +10,7 @@ import android.widget.Toast;
+ 
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.Theme;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.helpers.SquareFinderView;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfoException;
+@@ -109,7 +109,7 @@ public class ScannerActivity extends AegisActivity implements ZXingScannerView.R
+         try {
+             // parse google auth uri
+             GoogleAuthInfo info = GoogleAuthInfo.parseUri(rawResult.getText());
+-            DatabaseEntry entry = new DatabaseEntry(info);
++            VaultEntry entry = new VaultEntry(info);
+ 
+             Intent intent = new Intent();
+             intent.putExtra("entry", entry);
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
+index 7b9cd1b6..20ca8a05 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
+@@ -17,12 +17,12 @@ import androidx.recyclerview.widget.RecyclerView;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+-import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.VaultFileCredentials;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ import com.beemdevelopment.aegis.helpers.BiometricSlotInitializer;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+ import com.beemdevelopment.aegis.ui.views.SlotAdapter;
+@@ -30,7 +30,7 @@ import com.beemdevelopment.aegis.ui.views.SlotAdapter;
+ import javax.crypto.Cipher;
+ 
+ public class SlotManagerActivity extends AegisActivity implements SlotAdapter.Listener {
+-    private DatabaseFileCredentials _creds;
++    private VaultFileCredentials _creds;
+     private SlotAdapter _adapter;
+ 
+     private boolean _edited;
+@@ -69,7 +69,7 @@ public class SlotManagerActivity extends AegisActivity implements SlotAdapter.Li
+         slotsView.setNestedScrollingEnabled(false);
+ 
+         // load the slots and masterKey
+-        _creds = (DatabaseFileCredentials) getIntent().getSerializableExtra("creds");
++        _creds = (VaultFileCredentials) getIntent().getSerializableExtra("creds");
+         for (Slot slot : _creds.getSlots()) {
+             _adapter.addSlot(slot);
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/glide/AegisGlideModule.java b/app/src/main/java/com/beemdevelopment/aegis/ui/glide/AegisGlideModule.java
+index b79c6b36..db906a4d 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/glide/AegisGlideModule.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/glide/AegisGlideModule.java
+@@ -4,7 +4,7 @@ import android.content.Context;
+ 
+ import androidx.annotation.NonNull;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.bumptech.glide.Glide;
+ import com.bumptech.glide.Registry;
+ import com.bumptech.glide.annotation.GlideModule;
+@@ -16,6 +16,6 @@ import java.nio.ByteBuffer;
+ public class AegisGlideModule extends AppGlideModule {
+     @Override
+     public void registerComponents(@NonNull Context context, @NonNull Glide glide, @NonNull Registry registry) {
+-        registry.prepend(DatabaseEntry.class, ByteBuffer.class, new IconLoader.Factory());
++        registry.prepend(VaultEntry.class, ByteBuffer.class, new IconLoader.Factory());
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/glide/IconLoader.java b/app/src/main/java/com/beemdevelopment/aegis/ui/glide/IconLoader.java
+index 6b3056e9..9e0143ca 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/glide/IconLoader.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/glide/IconLoader.java
+@@ -2,7 +2,7 @@ package com.beemdevelopment.aegis.ui.glide;
+ 
+ import androidx.annotation.NonNull;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.bumptech.glide.Priority;
+ import com.bumptech.glide.load.DataSource;
+ import com.bumptech.glide.load.Options;
+@@ -13,21 +13,21 @@ import com.bumptech.glide.load.model.MultiModelLoaderFactory;
+ 
+ import java.nio.ByteBuffer;
+ 
+-public class IconLoader implements ModelLoader<DatabaseEntry, ByteBuffer> {
++public class IconLoader implements ModelLoader<VaultEntry, ByteBuffer> {
+     @Override
+-    public LoadData<ByteBuffer> buildLoadData(@NonNull DatabaseEntry model, int width, int height, @NonNull Options options) {
++    public LoadData<ByteBuffer> buildLoadData(@NonNull VaultEntry model, int width, int height, @NonNull Options options) {
+         return new LoadData<>(new UUIDKey(model.getUUID()), new Fetcher(model));
+     }
+ 
+     @Override
+-    public boolean handles(@NonNull DatabaseEntry model) {
++    public boolean handles(@NonNull VaultEntry model) {
+         return true;
+     }
+ 
+     public static class Fetcher implements DataFetcher<ByteBuffer> {
+-        private DatabaseEntry _model;
++        private VaultEntry _model;
+ 
+-        private Fetcher(DatabaseEntry model) {
++        private Fetcher(VaultEntry model) {
+             _model = model;
+         }
+ 
+@@ -61,10 +61,10 @@ public class IconLoader implements ModelLoader<DatabaseEntry, ByteBuffer> {
+         }
+     }
+ 
+-    public static class Factory implements ModelLoaderFactory<DatabaseEntry, ByteBuffer> {
++    public static class Factory implements ModelLoaderFactory<VaultEntry, ByteBuffer> {
+         @NonNull
+         @Override
+-        public ModelLoader<DatabaseEntry, ByteBuffer> build(@NonNull MultiModelLoaderFactory unused) {
++        public ModelLoader<VaultEntry, ByteBuffer> build(@NonNull MultiModelLoaderFactory unused) {
+             return new IconLoader();
+         }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java b/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
+index 7e89f5db..507039c0 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
+@@ -1,6 +1,6 @@
+ package com.beemdevelopment.aegis.ui.models;
+ 
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+ import java.io.Serializable;
+ import java.util.UUID;
+@@ -13,7 +13,7 @@ public class ImportEntry implements Serializable {
+     private transient Listener _listener;
+     private boolean _isChecked = true;
+ 
+-    public ImportEntry(DatabaseEntry entry) {
++    public ImportEntry(VaultEntry entry) {
+         _uuid = entry.getUUID();
+         _name = entry.getName();
+         _issuer = entry.getIssuer();
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/slides/CustomAuthenticatedSlide.java b/app/src/main/java/com/beemdevelopment/aegis/ui/slides/CustomAuthenticatedSlide.java
+index ba44058b..10e45695 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/slides/CustomAuthenticatedSlide.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/slides/CustomAuthenticatedSlide.java
+@@ -15,7 +15,7 @@ import androidx.biometric.BiometricPrompt;
+ import androidx.fragment.app.Fragment;
+ 
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.helpers.BiometricSlotInitializer;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+ import com.beemdevelopment.aegis.helpers.EditTextHelper;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/DerivationTask.java b/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/DerivationTask.java
+index 15d68af1..74b81807 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/DerivationTask.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/DerivationTask.java
+@@ -5,7 +5,7 @@ import android.content.Context;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.CryptoUtils;
+ import com.beemdevelopment.aegis.crypto.SCryptParameters;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ 
+ import javax.crypto.SecretKey;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/SlotListTask.java b/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/SlotListTask.java
+index 25bc83de..e4301ffa 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/SlotListTask.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/tasks/SlotListTask.java
+@@ -5,12 +5,12 @@ import android.content.Context;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.CryptoUtils;
+ import com.beemdevelopment.aegis.crypto.MasterKey;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
+-import com.beemdevelopment.aegis.db.slots.SlotException;
+-import com.beemdevelopment.aegis.db.slots.SlotIntegrityException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.SlotException;
++import com.beemdevelopment.aegis.vault.slots.SlotIntegrityException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ 
+ import javax.crypto.Cipher;
+ import javax.crypto.SecretKey;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryAdapter.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryAdapter.java
+index 078de28d..fbf36061 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryAdapter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryAdapter.java
+@@ -10,7 +10,7 @@ import androidx.recyclerview.widget.RecyclerView;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.SortCategory;
+ import com.beemdevelopment.aegis.ViewMode;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.helpers.ItemTouchHelperAdapter;
+ import com.beemdevelopment.aegis.otp.HotpInfo;
+ import com.beemdevelopment.aegis.otp.OtpInfo;
+@@ -24,10 +24,10 @@ import java.util.List;
+ 
+ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements ItemTouchHelperAdapter {
+     private EntryListView _view;
+-    private List<DatabaseEntry> _entries;
+-    private List<DatabaseEntry> _shownEntries;
+-    private DatabaseEntry _selectedEntry;
+-    private DatabaseEntry _focusedEntry;
++    private List<VaultEntry> _entries;
++    private List<VaultEntry> _shownEntries;
++    private VaultEntry _selectedEntry;
++    private VaultEntry _focusedEntry;
+     private boolean _showAccountName;
+     private boolean _searchAccountName;
+     private boolean _highlightEntry;
+@@ -78,18 +78,18 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         _highlightEntry = highlightEntry;
+     }
+ 
+-    public DatabaseEntry getEntryAt(int position) {
++    public VaultEntry getEntryAt(int position) {
+         return _shownEntries.get(position);
+     }
+ 
+-    public void addEntry(DatabaseEntry entry) {
++    public void addEntry(VaultEntry entry) {
+         _entries.add(entry);
+         if (isEntryFiltered(entry)) {
+             return;
+         }
+ 
+         boolean added = false;
+-        Comparator<DatabaseEntry> comparator = _sortCategory.getComparator();
++        Comparator<VaultEntry> comparator = _sortCategory.getComparator();
+         if (comparator != null) {
+             // insert the entry in the correct order
+             // note: this assumes that _shownEntries has already been sorted
+@@ -117,13 +117,13 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         checkPeriodUniformity();
+     }
+ 
+-    public void addEntries(List<DatabaseEntry> entries) {
++    public void addEntries(List<VaultEntry> entries) {
+         _entries.addAll(entries);
+         updateShownEntries();
+         checkPeriodUniformity(true);
+     }
+ 
+-    public void removeEntry(DatabaseEntry entry) {
++    public void removeEntry(VaultEntry entry) {
+         _entries.remove(entry);
+ 
+         if (_shownEntries.contains(entry)) {
+@@ -142,7 +142,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         checkPeriodUniformity();
+     }
+ 
+-    public void replaceEntry(DatabaseEntry oldEntry, DatabaseEntry newEntry) {
++    public void replaceEntry(VaultEntry oldEntry, VaultEntry newEntry) {
+         _entries.set(_entries.indexOf(oldEntry), newEntry);
+ 
+         if (_shownEntries.contains(oldEntry)) {
+@@ -165,7 +165,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         checkPeriodUniformity();
+     }
+ 
+-    private boolean isEntryFiltered(DatabaseEntry entry) {
++    private boolean isEntryFiltered(VaultEntry entry) {
+         String group = entry.getGroup();
+         String issuer = entry.getIssuer().toLowerCase();
+         String name = entry.getName().toLowerCase();
+@@ -229,14 +229,14 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         _shownEntries.clear();
+ 
+         // add entries back that are not filtered out
+-        for (DatabaseEntry entry : _entries) {
++        for (VaultEntry entry : _entries) {
+             if (!isEntryFiltered(entry)) {
+                 _shownEntries.add(entry);
+             }
+         }
+ 
+         // sort the remaining list of entries
+-        Comparator<DatabaseEntry> comparator = _sortCategory.getComparator();
++        Comparator<VaultEntry> comparator = _sortCategory.getComparator();
+         if (comparator != null) {
+             Collections.sort(_shownEntries, comparator);
+         }
+@@ -270,7 +270,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+             return;
+         }
+ 
+-        // notify the database first
++        // notify the vault first
+         _view.onEntryMove(_entries.get(firstPosition), _entries.get(secondPosition));
+ 
+         // update our side of things
+@@ -301,7 +301,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+ 
+     @Override
+     public void onBindViewHolder(final EntryHolder holder, int position) {
+-        DatabaseEntry entry = _shownEntries.get(position);
++        VaultEntry entry = _shownEntries.get(position);
+         holder.setFocused(entry == _selectedEntry);
+ 
+         boolean hidden = _tapToReveal && entry != _focusedEntry;
+@@ -354,7 +354,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+                 }
+ 
+                 // notify the listener that the counter has been incremented
+-                // this gives it a chance to save the database
++                // this gives it a chance to save the vault
+                 _view.onEntryChange(entry);
+ 
+                 // finally, refresh the code in the UI
+@@ -385,7 +385,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+ 
+     public int getUniformPeriod() {
+         List<TotpInfo> infos = new ArrayList<>();
+-        for (DatabaseEntry entry : _shownEntries) {
++        for (VaultEntry entry : _shownEntries) {
+             OtpInfo info = entry.getInfo();
+             if (info instanceof TotpInfo) {
+                 infos.add((TotpInfo) info);
+@@ -406,7 +406,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         return period;
+     }
+ 
+-    private void focusEntry(DatabaseEntry entry) {
++    private void focusEntry(VaultEntry entry) {
+         _focusedEntry = entry;
+         _dimHandler.removeCallbacksAndMessages(null);
+ 
+@@ -444,7 +444,7 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+         _focusedEntry = null;
+     }
+ 
+-    public void setSelectedEntry(DatabaseEntry entry) {
++    public void setSelectedEntry(VaultEntry entry) {
+         if (entry == null) {
+             notifyItemChanged(_shownEntries.indexOf(_selectedEntry));
+         } else if (_highlightEntry) {
+@@ -468,11 +468,11 @@ public class EntryAdapter extends RecyclerView.Adapter<EntryHolder> implements I
+     }
+ 
+     public interface Listener {
+-        void onEntryClick(DatabaseEntry entry);
+-        boolean onLongEntryClick(DatabaseEntry entry);
+-        void onEntryMove(DatabaseEntry entry1, DatabaseEntry entry2);
+-        void onEntryDrop(DatabaseEntry entry);
+-        void onEntryChange(DatabaseEntry entry);
++        void onEntryClick(VaultEntry entry);
++        boolean onLongEntryClick(VaultEntry entry);
++        void onEntryMove(VaultEntry entry1, VaultEntry entry2);
++        void onEntryDrop(VaultEntry entry);
++        void onEntryChange(VaultEntry entry);
+         void onPeriodUniformityChanged(boolean uniform);
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryHolder.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryHolder.java
+index 031680f9..f0e15922 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryHolder.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryHolder.java
+@@ -10,7 +10,7 @@ import androidx.recyclerview.widget.RecyclerView;
+ 
+ import com.amulyakhare.textdrawable.TextDrawable;
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.helpers.TextDrawableHelper;
+ import com.beemdevelopment.aegis.helpers.ThemeHelper;
+ import com.beemdevelopment.aegis.helpers.UiRefresher;
+@@ -29,7 +29,7 @@ public class EntryHolder extends RecyclerView.ViewHolder {
+     private TextView _profileCode;
+     private TextView _profileIssuer;
+     private ImageView _profileDrawable;
+-    private DatabaseEntry _entry;
++    private VaultEntry _entry;
+     private ImageView _buttonRefresh;
+ 
+     private boolean _hidden;
+@@ -72,7 +72,7 @@ public class EntryHolder extends RecyclerView.ViewHolder {
+         });
+     }
+ 
+-    public void setData(DatabaseEntry entry, boolean showAccountName, boolean showProgress, boolean hidden, boolean dimmed) {
++    public void setData(VaultEntry entry, boolean showAccountName, boolean showProgress, boolean hidden, boolean dimmed) {
+         _entry = entry;
+         _hidden = hidden;
+ 
+@@ -97,7 +97,7 @@ public class EntryHolder extends RecyclerView.ViewHolder {
+         itemView.setAlpha(dimmed ? DIMMED_ALPHA : DEFAULT_ALPHA);
+     }
+ 
+-    public DatabaseEntry getEntry() {
++    public VaultEntry getEntry() {
+         return _entry;
+     }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
+index 67d359b8..d7dab9d4 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
+@@ -22,7 +22,7 @@ import androidx.recyclerview.widget.RecyclerView;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.SortCategory;
+ import com.beemdevelopment.aegis.ViewMode;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.helpers.SimpleItemTouchHelperCallback;
+ import com.beemdevelopment.aegis.helpers.UiRefresher;
+ import com.beemdevelopment.aegis.otp.TotpInfo;
+@@ -43,7 +43,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+ 
+     private RecyclerView _recyclerView;
+     private RecyclerView.ItemDecoration _dividerDecoration;
+-    private ViewPreloadSizeProvider<DatabaseEntry> _preloadSizeProvider;
++    private ViewPreloadSizeProvider<VaultEntry> _preloadSizeProvider;
+     private PeriodProgressBar _progressBar;
+     private boolean _showProgress;
+     private ViewMode _viewMode;
+@@ -82,7 +82,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+         // set up icon preloading
+         _preloadSizeProvider = new ViewPreloadSizeProvider<>();
+         IconPreloadProvider modelProvider = new IconPreloadProvider();
+-        RecyclerViewPreloader<DatabaseEntry> preloader = new RecyclerViewPreloader<>(Glide.with(this), modelProvider, _preloadSizeProvider, 10);
++        RecyclerViewPreloader<VaultEntry> preloader = new RecyclerViewPreloader<>(Glide.with(this), modelProvider, _preloadSizeProvider, 10);
+         _recyclerView.addOnScrollListener(preloader);
+ 
+         LinearLayoutManager layoutManager = new LinearLayoutManager(view.getContext());
+@@ -132,7 +132,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+         }
+     }
+ 
+-    public void setActionModeState(boolean enabled, DatabaseEntry entry) {
++    public void setActionModeState(boolean enabled, VaultEntry entry) {
+         _touchCallback.setSelectedEntry(entry);
+         _touchCallback.setIsLongPressDragEnabled(enabled && _adapter.isDragAndDropAllowed());
+         _adapter.setSelectedEntry(entry);
+@@ -170,27 +170,27 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+     }
+ 
+     @Override
+-    public void onEntryClick(DatabaseEntry entry) {
++    public void onEntryClick(VaultEntry entry) {
+         _listener.onEntryClick(entry);
+     }
+ 
+-    public boolean onLongEntryClick(DatabaseEntry entry) {
++    public boolean onLongEntryClick(VaultEntry entry) {
+         _listener.onLongEntryClick(entry);
+         return true;
+     }
+ 
+     @Override
+-    public void onEntryMove(DatabaseEntry entry1, DatabaseEntry entry2) {
++    public void onEntryMove(VaultEntry entry1, VaultEntry entry2) {
+         _listener.onEntryMove(entry1, entry2);
+     }
+ 
+     @Override
+-    public void onEntryDrop(DatabaseEntry entry) {
++    public void onEntryDrop(VaultEntry entry) {
+         _listener.onEntryDrop(entry);
+     }
+ 
+     @Override
+-    public void onEntryChange(DatabaseEntry entry) {
++    public void onEntryChange(VaultEntry entry) {
+         _listener.onEntryChange(entry);
+     }
+ 
+@@ -227,17 +227,17 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+         _adapter.setTapToRevealTime(number);
+     }
+ 
+-    public void addEntry(DatabaseEntry entry) {
++    public void addEntry(VaultEntry entry) {
+         _adapter.addEntry(entry);
+         updateEmptyState();
+     }
+ 
+-    public void addEntries(List<DatabaseEntry> entries) {
++    public void addEntries(List<VaultEntry> entries) {
+         _adapter.addEntries(entries);
+         updateEmptyState();
+     }
+ 
+-    public void removeEntry(DatabaseEntry entry) {
++    public void removeEntry(VaultEntry entry) {
+         _adapter.removeEntry(entry);
+         updateEmptyState();
+     }
+@@ -246,7 +246,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+         _adapter.clearEntries();
+     }
+ 
+-    public void replaceEntry(DatabaseEntry oldEntry, DatabaseEntry newEntry) {
++    public void replaceEntry(VaultEntry oldEntry, VaultEntry newEntry) {
+         _adapter.replaceEntry(oldEntry, newEntry);
+     }
+ 
+@@ -292,11 +292,11 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+     }
+ 
+     public interface Listener {
+-        void onEntryClick(DatabaseEntry entry);
+-        void onEntryMove(DatabaseEntry entry1, DatabaseEntry entry2);
+-        void onEntryDrop(DatabaseEntry entry);
+-        void onEntryChange(DatabaseEntry entry);
+-        void onLongEntryClick(DatabaseEntry entry);
++        void onEntryClick(VaultEntry entry);
++        void onEntryMove(VaultEntry entry1, VaultEntry entry2);
++        void onEntryDrop(VaultEntry entry);
++        void onEntryChange(VaultEntry entry);
++        void onLongEntryClick(VaultEntry entry);
+         void onScroll(int dx, int dy);
+     }
+ 
+@@ -318,11 +318,11 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+         }
+     }
+ 
+-    private class IconPreloadProvider implements ListPreloader.PreloadModelProvider<DatabaseEntry> {
++    private class IconPreloadProvider implements ListPreloader.PreloadModelProvider<VaultEntry> {
+         @NonNull
+         @Override
+-        public List<DatabaseEntry> getPreloadItems(int position) {
+-            DatabaseEntry entry = _adapter.getEntryAt(position);
++        public List<VaultEntry> getPreloadItems(int position) {
++            VaultEntry entry = _adapter.getEntryAt(position);
+             if (!entry.hasIcon()) {
+                 return Collections.emptyList();
+             }
+@@ -331,7 +331,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+ 
+         @Nullable
+         @Override
+-        public RequestBuilder getPreloadRequestBuilder(@NonNull DatabaseEntry entry) {
++        public RequestBuilder getPreloadRequestBuilder(@NonNull VaultEntry entry) {
+             return Glide.with(EntryListView.this)
+                         .asDrawable()
+                         .load(entry)
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
+index 811435ce..cc64a799 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
+@@ -5,7 +5,6 @@ import android.view.View;
+ import android.view.ViewGroup;
+ 
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
+ import com.beemdevelopment.aegis.ui.models.ImportEntry;
+ 
+ import java.util.ArrayList;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
+index bb70e466..16c120b9 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
+@@ -6,7 +6,6 @@ import android.widget.CheckBox;
+ import android.widget.TextView;
+ 
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.DatabaseEntry;
+ import com.beemdevelopment.aegis.ui.models.ImportEntry;
+ 
+ import androidx.recyclerview.widget.RecyclerView;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotAdapter.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotAdapter.java
+index 5c4c102c..5ae03ff0 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotAdapter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotAdapter.java
+@@ -5,7 +5,7 @@ import android.view.View;
+ import android.view.ViewGroup;
+ 
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.db.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
+ 
+ import java.util.ArrayList;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotHolder.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotHolder.java
+index bf0db5db..0b4907ce 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotHolder.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/SlotHolder.java
+@@ -10,10 +10,10 @@ import androidx.recyclerview.widget.RecyclerView;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+-import com.beemdevelopment.aegis.db.slots.BiometricSlot;
+-import com.beemdevelopment.aegis.db.slots.PasswordSlot;
+-import com.beemdevelopment.aegis.db.slots.RawSlot;
+-import com.beemdevelopment.aegis.db.slots.Slot;
++import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
++import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
++import com.beemdevelopment.aegis.vault.slots.RawSlot;
++import com.beemdevelopment.aegis.vault.slots.Slot;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+ 
+ public class SlotHolder extends RecyclerView.ViewHolder {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/Database.java b/app/src/main/java/com/beemdevelopment/aegis/vault/Vault.java
+similarity index 63%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/Database.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/Vault.java
+index 4562cbe9..99ec9202 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/Database.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/Vault.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db;
++package com.beemdevelopment.aegis.vault;
+ 
+ import com.beemdevelopment.aegis.encoding.Base64Exception;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
+@@ -8,14 +8,14 @@ import org.json.JSONArray;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
+-public class Database {
++public class Vault {
+     private static final int VERSION = 1;
+-    private UUIDMap<DatabaseEntry> _entries = new UUIDMap<>();
++    private UUIDMap<VaultEntry> _entries = new UUIDMap<>();
+ 
+     public JSONObject toJson() {
+         try {
+             JSONArray array = new JSONArray();
+-            for (DatabaseEntry e : _entries) {
++            for (VaultEntry e : _entries) {
+                 array.put(e.toJson());
+             }
+ 
+@@ -28,29 +28,29 @@ public class Database {
+         }
+     }
+ 
+-    public static Database fromJson(JSONObject obj) throws DatabaseException {
+-        Database db = new Database();
+-        UUIDMap<DatabaseEntry> entries = db.getEntries();
++    public static Vault fromJson(JSONObject obj) throws VaultException {
++        Vault vault = new Vault();
++        UUIDMap<VaultEntry> entries = vault.getEntries();
+ 
+         try {
+             int ver = obj.getInt("version");
+             if (ver != VERSION) {
+-                throw new DatabaseException("Unsupported version");
++                throw new VaultException("Unsupported version");
+             }
+ 
+             JSONArray array = obj.getJSONArray("entries");
+             for (int i = 0; i < array.length(); i++) {
+-                DatabaseEntry entry = DatabaseEntry.fromJson(array.getJSONObject(i));
++                VaultEntry entry = VaultEntry.fromJson(array.getJSONObject(i));
+                 entries.add(entry);
+             }
+         } catch (Base64Exception | OtpInfoException | JSONException e) {
+-            throw new DatabaseException(e);
++            throw new VaultException(e);
+         }
+ 
+-        return db;
++        return vault;
+     }
+ 
+-    public UUIDMap<DatabaseEntry> getEntries() {
++    public UUIDMap<VaultEntry> getEntries() {
+         return _entries;
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseEntry.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultEntry.java
+similarity index 83%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/DatabaseEntry.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/VaultEntry.java
+index fa18708a..ceba2518 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseEntry.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultEntry.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db;
++package com.beemdevelopment.aegis.vault;
+ 
+ import com.beemdevelopment.aegis.encoding.Base64;
+ import com.beemdevelopment.aegis.encoding.Base64Exception;
+@@ -15,30 +15,30 @@ import java.util.Arrays;
+ import java.util.Objects;
+ import java.util.UUID;
+ 
+-public class DatabaseEntry extends UUIDMap.Value {
++public class VaultEntry extends UUIDMap.Value {
+     private String _name = "";
+     private String _issuer = "";
+     private String _group;
+     private OtpInfo _info;
+     private byte[] _icon;
+ 
+-    private DatabaseEntry(UUID uuid, OtpInfo info) {
++    private VaultEntry(UUID uuid, OtpInfo info) {
+         super(uuid);
+         _info = info;
+     }
+ 
+-    public DatabaseEntry(OtpInfo info) {
++    public VaultEntry(OtpInfo info) {
+         super();
+         _info = info;
+     }
+ 
+-    public DatabaseEntry(OtpInfo info, String name, String issuer) {
++    public VaultEntry(OtpInfo info, String name, String issuer) {
+         this(info);
+         setName(name);
+         setIssuer(issuer);
+     }
+ 
+-    public DatabaseEntry(GoogleAuthInfo info) {
++    public VaultEntry(GoogleAuthInfo info) {
+         this(info.getOtpInfo(), info.getAccountName(), info.getIssuer());
+     }
+ 
+@@ -60,7 +60,7 @@ public class DatabaseEntry extends UUIDMap.Value {
+         return obj;
+     }
+ 
+-    public static DatabaseEntry fromJson(JSONObject obj) throws JSONException, OtpInfoException, Base64Exception {
++    public static VaultEntry fromJson(JSONObject obj) throws JSONException, OtpInfoException, Base64Exception {
+         // if there is no uuid, generate a new one
+         UUID uuid;
+         if (!obj.has("uuid")) {
+@@ -70,7 +70,7 @@ public class DatabaseEntry extends UUIDMap.Value {
+         }
+ 
+         OtpInfo info = OtpInfo.fromJson(obj.getString("type"), obj.getJSONObject("info"));
+-        DatabaseEntry entry = new DatabaseEntry(uuid, info);
++        VaultEntry entry = new VaultEntry(uuid, info);
+         entry.setName(obj.getString("name"));
+         entry.setIssuer(obj.getString("issuer"));
+         entry.setGroup(obj.optString("group", null));
+@@ -129,11 +129,11 @@ public class DatabaseEntry extends UUIDMap.Value {
+ 
+     @Override
+     public boolean equals(Object o) {
+-        if (!(o instanceof DatabaseEntry)) {
++        if (!(o instanceof VaultEntry)) {
+             return false;
+         }
+ 
+-        DatabaseEntry entry = (DatabaseEntry) o;
++        VaultEntry entry = (VaultEntry) o;
+         return super.equals(entry) && equivalates(entry);
+     }
+ 
+@@ -142,7 +142,7 @@ public class DatabaseEntry extends UUIDMap.Value {
+      * entries are ignored during the comparison, so they are not necessarily the same
+      * instance.
+      */
+-    public boolean equivalates(DatabaseEntry entry) {
++    public boolean equivalates(VaultEntry entry) {
+         return getName().equals(entry.getName())
+                 && getIssuer().equals(entry.getIssuer())
+                 && Objects.equals(getGroup(), entry.getGroup())
+@@ -157,9 +157,9 @@ public class DatabaseEntry extends UUIDMap.Value {
+         return equivalates(getDefault());
+     }
+ 
+-    public static DatabaseEntry getDefault() {
++    public static VaultEntry getDefault() {
+         try {
+-            return new DatabaseEntry(new TotpInfo(null));
++            return new VaultEntry(new TotpInfo(null));
+         } catch (OtpInfoException e) {
+             throw new RuntimeException(e);
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultException.java
+new file mode 100644
+index 00000000..9f5b1688
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultException.java
+@@ -0,0 +1,11 @@
++package com.beemdevelopment.aegis.vault;
++
++public class VaultException extends Exception {
++    public VaultException(Throwable cause) {
++        super(cause);
++    }
++
++    public VaultException(String message) {
++        super(message);
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFile.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFile.java
+similarity index 74%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFile.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/VaultFile.java
+index f99006eb..66f4a331 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFile.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFile.java
+@@ -1,10 +1,10 @@
+-package com.beemdevelopment.aegis.db;
++package com.beemdevelopment.aegis.vault;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ import com.beemdevelopment.aegis.crypto.CryptResult;
+ import com.beemdevelopment.aegis.crypto.MasterKeyException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
+-import com.beemdevelopment.aegis.db.slots.SlotListException;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
++import com.beemdevelopment.aegis.vault.slots.SlotListException;
+ import com.beemdevelopment.aegis.encoding.Base64;
+ import com.beemdevelopment.aegis.encoding.Base64Exception;
+ import com.beemdevelopment.aegis.encoding.HexException;
+@@ -14,17 +14,17 @@ import org.json.JSONObject;
+ 
+ import java.nio.charset.StandardCharsets;
+ 
+-public class DatabaseFile {
++public class VaultFile {
+     public static final byte VERSION = 1;
+ 
+     private Object _content;
+     private Header _header;
+ 
+-    public DatabaseFile() {
++    public VaultFile() {
+ 
+     }
+ 
+-    private DatabaseFile(Object content, Header header) {
++    private VaultFile(Object content, Header header) {
+         _content = content;
+         _header = header;
+     }
+@@ -60,29 +60,29 @@ public class DatabaseFile {
+         }
+     }
+ 
+-    public static DatabaseFile fromJson(JSONObject obj) throws DatabaseFileException {
++    public static VaultFile fromJson(JSONObject obj) throws VaultFileException {
+         try {
+             if (obj.getInt("version") > VERSION) {
+-                throw new DatabaseFileException("unsupported version");
++                throw new VaultFileException("unsupported version");
+             }
+ 
+             Header header = Header.fromJson(obj.getJSONObject("header"));
+             if (!header.isEmpty()) {
+-                return new DatabaseFile(obj.getString("db"), header);
++                return new VaultFile(obj.getString("db"), header);
+             }
+ 
+-            return new DatabaseFile(obj.getJSONObject("db"), header);
++            return new VaultFile(obj.getJSONObject("db"), header);
+         } catch (JSONException e) {
+-            throw new DatabaseFileException(e);
++            throw new VaultFileException(e);
+         }
+     }
+ 
+-    public static DatabaseFile fromBytes(byte[] data) throws DatabaseFileException {
++    public static VaultFile fromBytes(byte[] data) throws VaultFileException {
+         try {
+             JSONObject obj = new JSONObject(new String(data, StandardCharsets.UTF_8));
+-            return DatabaseFile.fromJson(obj);
++            return VaultFile.fromJson(obj);
+         } catch (JSONException e) {
+-            throw new DatabaseFileException(e);
++            throw new VaultFileException(e);
+         }
+     }
+ 
+@@ -90,13 +90,13 @@ public class DatabaseFile {
+         return (JSONObject) _content;
+     }
+ 
+-    public JSONObject getContent(DatabaseFileCredentials creds) throws DatabaseFileException {
++    public JSONObject getContent(VaultFileCredentials creds) throws VaultFileException {
+         try {
+             byte[] bytes = Base64.decode((String) _content);
+             CryptResult result = creds.decrypt(bytes, _header.getParams());
+             return new JSONObject(new String(result.getData(), StandardCharsets.UTF_8));
+         } catch (MasterKeyException | JSONException | Base64Exception e) {
+-            throw new DatabaseFileException(e);
++            throw new VaultFileException(e);
+         }
+     }
+ 
+@@ -105,16 +105,16 @@ public class DatabaseFile {
+         _header = new Header(null, null);
+     }
+ 
+-    public void setContent(JSONObject obj, DatabaseFileCredentials creds) throws DatabaseFileException {
++    public void setContent(JSONObject obj, VaultFileCredentials creds) throws VaultFileException {
+         try {
+             String string = obj.toString(4);
+-            byte[] dbBytes = string.getBytes(StandardCharsets.UTF_8);
++            byte[] vaultBytes = string.getBytes(StandardCharsets.UTF_8);
+ 
+-            CryptResult result = creds.encrypt(dbBytes);
++            CryptResult result = creds.encrypt(vaultBytes);
+             _content = Base64.encode(result.getData());
+             _header = new Header(creds.getSlots(), result.getParams());
+         } catch (MasterKeyException | JSONException e) {
+-            throw new DatabaseFileException(e);
++            throw new VaultFileException(e);
+         }
+     }
+ 
+@@ -127,7 +127,7 @@ public class DatabaseFile {
+             _params = params;
+         }
+ 
+-        public static Header fromJson(JSONObject obj) throws DatabaseFileException {
++        public static Header fromJson(JSONObject obj) throws VaultFileException {
+             if (obj.isNull("slots") && obj.isNull("params")) {
+                 return new Header(null, null);
+             }
+@@ -137,7 +137,7 @@ public class DatabaseFile {
+                 CryptParameters params = CryptParameters.fromJson(obj.getJSONObject("params"));
+                 return new Header(slots, params);
+             } catch (SlotListException | JSONException | HexException e) {
+-                throw new DatabaseFileException(e);
++                throw new VaultFileException(e);
+             }
+         }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileCredentials.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileCredentials.java
+similarity index 76%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileCredentials.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileCredentials.java
+index d4a2d5a4..1c9bf383 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseFileCredentials.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileCredentials.java
+@@ -1,23 +1,23 @@
+-package com.beemdevelopment.aegis.db;
++package com.beemdevelopment.aegis.vault;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ import com.beemdevelopment.aegis.crypto.CryptResult;
+ import com.beemdevelopment.aegis.crypto.MasterKey;
+ import com.beemdevelopment.aegis.crypto.MasterKeyException;
+-import com.beemdevelopment.aegis.db.slots.SlotList;
++import com.beemdevelopment.aegis.vault.slots.SlotList;
+ 
+ import java.io.Serializable;
+ 
+-public class DatabaseFileCredentials implements Serializable {
++public class VaultFileCredentials implements Serializable {
+     private MasterKey _key;
+     private SlotList _slots;
+ 
+-    public DatabaseFileCredentials() {
++    public VaultFileCredentials() {
+         _key = MasterKey.generate();
+         _slots = new SlotList();
+     }
+ 
+-    public DatabaseFileCredentials(MasterKey key, SlotList slots) {
++    public VaultFileCredentials(MasterKey key, SlotList slots) {
+         _key = key;
+         _slots = slots;
+     }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileException.java
+new file mode 100644
+index 00000000..bcd3cc80
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultFileException.java
+@@ -0,0 +1,11 @@
++package com.beemdevelopment.aegis.vault;
++
++public class VaultFileException extends Exception {
++    public VaultFileException(Throwable cause) {
++        super(cause);
++    }
++
++    public VaultFileException(String message) {
++        super(message);
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManager.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+similarity index 61%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManager.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+index 9ae2cf7f..7205b73e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/DatabaseManager.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db;
++package com.beemdevelopment.aegis.vault;
+ 
+ import android.content.Context;
+ import android.content.Intent;
+@@ -18,21 +18,20 @@ import java.io.IOException;
+ import java.text.Collator;
+ import java.util.Collection;
+ import java.util.TreeSet;
+-import java.util.UUID;
+ 
+-public class DatabaseManager {
++public class VaultManager {
+     private static final String FILENAME = "aegis.json";
+     private static final String FILENAME_EXPORT = "aegis_export.json";
+     private static final String FILENAME_EXPORT_PLAIN = "aegis_export_plain.json";
+ 
+-    private Database _db;
+-    private DatabaseFile _file;
+-    private DatabaseFileCredentials _creds;
++    private Vault _vault;
++    private VaultFile _file;
++    private VaultFileCredentials _creds;
+     private boolean _encrypt;
+ 
+     private Context _context;
+ 
+-    public DatabaseManager(Context context) {
++    public VaultManager(Context context) {
+         _context = context;
+     }
+ 
+@@ -41,7 +40,7 @@ public class DatabaseManager {
+         return file.exists() && file.isFile();
+     }
+ 
+-    public void load() throws DatabaseManagerException {
++    public void load() throws VaultManagerException {
+         assertState(true, false);
+ 
+         try (FileInputStream file = _context.openFileInput(FILENAME)) {
+@@ -50,70 +49,70 @@ public class DatabaseManager {
+             stream.readFully(fileBytes);
+             stream.close();
+ 
+-            _file = DatabaseFile.fromBytes(fileBytes);
++            _file = VaultFile.fromBytes(fileBytes);
+             _encrypt = _file.isEncrypted();
+             if (!isEncryptionEnabled()) {
+                 JSONObject obj = _file.getContent();
+-                _db = Database.fromJson(obj);
++                _vault = Vault.fromJson(obj);
+             }
+-        } catch (IOException | DatabaseFileException | DatabaseException e) {
+-            throw new DatabaseManagerException(e);
++        } catch (IOException | VaultFileException | VaultException e) {
++            throw new VaultManagerException(e);
+         }
+     }
+ 
+     public void lock() {
+         assertState(false, true);
+         _creds = null;
+-        _db = null;
++        _vault = null;
+     }
+ 
+-    public void unlock(DatabaseFileCredentials creds) throws DatabaseManagerException {
++    public void unlock(VaultFileCredentials creds) throws VaultManagerException {
+         assertState(true, true);
+ 
+         try {
+             JSONObject obj = _file.getContent(creds);
+-            _db = Database.fromJson(obj);
++            _vault = Vault.fromJson(obj);
+             _creds = creds;
+             _context.startService(new Intent(_context, NotificationService.class));
+-        } catch (DatabaseFileException | DatabaseException e) {
+-            throw new DatabaseManagerException(e);
++        } catch (VaultFileException | VaultException e) {
++            throw new VaultManagerException(e);
+         }
+     }
+ 
+-    public static void save(Context context, DatabaseFile file) throws DatabaseManagerException {
++    public static void save(Context context, VaultFile file) throws VaultManagerException {
+         byte[] bytes = file.toBytes();
+         try (FileOutputStream stream = context.openFileOutput(FILENAME, Context.MODE_PRIVATE)) {
+             stream.write(bytes);
+         } catch (IOException e) {
+-            throw new DatabaseManagerException(e);
++            throw new VaultManagerException(e);
+         }
+     }
+ 
+-    public void save() throws DatabaseManagerException {
++    public void save() throws VaultManagerException {
+         assertState(false, true);
+ 
+         try {
+-            JSONObject obj = _db.toJson();
++            JSONObject obj = _vault.toJson();
+             if (isEncryptionEnabled()) {
+                 _file.setContent(obj, _creds);
+             } else {
+                 _file.setContent(obj);
+             }
+             save(_context, _file);
+-        } catch (DatabaseFileException e) {
+-            throw new DatabaseManagerException(e);
++        } catch (VaultFileException e) {
++            throw new VaultManagerException(e);
+         }
+     }
+ 
+-    public String export(boolean encrypt) throws DatabaseManagerException {
++    public String export(boolean encrypt) throws VaultManagerException {
+         assertState(false, true);
+ 
+         try {
+-            DatabaseFile dbFile = new DatabaseFile();
++            VaultFile vaultFile = new VaultFile();
+             if (encrypt && isEncryptionEnabled()) {
+-                dbFile.setContent(_db.toJson(), _creds);
++                vaultFile.setContent(_vault.toJson(), _creds);
+             } else {
+-                dbFile.setContent(_db.toJson());
++                vaultFile.setContent(_vault.toJson());
+             }
+ 
+             String dirName = !BuildConfig.DEBUG ? _context.getString(R.string.app_name) : _context.getString(R.string.app_name_dev);
+@@ -122,53 +121,53 @@ public class DatabaseManager {
+                 throw new IOException("error creating external storage directory");
+             }
+ 
+-            byte[] bytes = dbFile.toBytes();
++            byte[] bytes = vaultFile.toBytes();
+             File file = new File(dir.getAbsolutePath(), encrypt ? FILENAME_EXPORT : FILENAME_EXPORT_PLAIN);
+             try (FileOutputStream stream = new FileOutputStream(file)) {
+                 stream.write(bytes);
+             }
+ 
+             return file.getAbsolutePath();
+-        } catch (IOException | DatabaseFileException e) {
+-            throw new DatabaseManagerException(e);
++        } catch (IOException | VaultFileException e) {
++            throw new VaultManagerException(e);
+         }
+     }
+ 
+-    public void addEntry(DatabaseEntry entry) {
++    public void addEntry(VaultEntry entry) {
+         assertState(false, true);
+-        _db.getEntries().add(entry);
++        _vault.getEntries().add(entry);
+     }
+ 
+-    public DatabaseEntry removeEntry(DatabaseEntry entry) {
++    public VaultEntry removeEntry(VaultEntry entry) {
+         assertState(false, true);
+-        return _db.getEntries().remove(entry);
++        return _vault.getEntries().remove(entry);
+     }
+ 
+-    public DatabaseEntry replaceEntry(DatabaseEntry entry) {
++    public VaultEntry replaceEntry(VaultEntry entry) {
+         assertState(false, true);
+-        return _db.getEntries().replace(entry);
++        return _vault.getEntries().replace(entry);
+     }
+ 
+-    public void swapEntries(DatabaseEntry entry1, DatabaseEntry entry2) {
++    public void swapEntries(VaultEntry entry1, VaultEntry entry2) {
+         assertState(false, true);
+-        _db.getEntries().swap(entry1, entry2);
++        _vault.getEntries().swap(entry1, entry2);
+     }
+ 
+-    public boolean isEntryDuplicate(DatabaseEntry entry) {
++    public boolean isEntryDuplicate(VaultEntry entry) {
+         assertState(false, true);
+-        return _db.getEntries().has(entry);
++        return _vault.getEntries().has(entry);
+     }
+ 
+-    public Collection<DatabaseEntry> getEntries() {
++    public Collection<VaultEntry> getEntries() {
+         assertState(false, true);
+-        return _db.getEntries().getValues();
++        return _vault.getEntries().getValues();
+     }
+ 
+     public TreeSet<String> getGroups() {
+         assertState(false, true);
+ 
+         TreeSet<String> groups = new TreeSet<>(Collator.getInstance());
+-        for (DatabaseEntry entry : getEntries()) {
++        for (VaultEntry entry : getEntries()) {
+             String group = entry.getGroup();
+             if (group != null) {
+                 groups.add(group);
+@@ -177,17 +176,17 @@ public class DatabaseManager {
+         return groups;
+     }
+ 
+-    public DatabaseFileCredentials getCredentials() {
++    public VaultFileCredentials getCredentials() {
+         assertState(false, true);
+         return _creds;
+     }
+ 
+-    public void setCredentials(DatabaseFileCredentials creds) {
++    public void setCredentials(VaultFileCredentials creds) {
+         assertState(false, true);
+         _creds = creds;
+     }
+ 
+-    public DatabaseFile.Header getFileHeader() {
++    public VaultFile.Header getFileHeader() {
+         assertLoaded(true);
+         return _file.getHeader();
+     }
+@@ -197,14 +196,14 @@ public class DatabaseManager {
+         return _encrypt;
+     }
+ 
+-    public void enableEncryption(DatabaseFileCredentials creds) throws DatabaseManagerException {
++    public void enableEncryption(VaultFileCredentials creds) throws VaultManagerException {
+         assertState(false, true);
+         _creds = creds;
+         _encrypt = true;
+         save();
+     }
+ 
+-    public void disableEncryption() throws DatabaseManagerException {
++    public void disableEncryption() throws VaultManagerException {
+         assertState(false, true);
+         _creds = null;
+         _encrypt = false;
+@@ -216,24 +215,24 @@ public class DatabaseManager {
+     }
+ 
+     public boolean isLocked() {
+-        return _db == null;
++        return _vault == null;
+     }
+ 
+     private void assertState(boolean locked, boolean loaded) {
+         assertLoaded(loaded);
+ 
+         if (isLocked() && !locked) {
+-            throw new AssertionError("database file has not been unlocked yet");
++            throw new AssertionError("vault file has not been unlocked yet");
+         } else if (!isLocked() && locked) {
+-            throw new AssertionError("database file has already been unlocked");
++            throw new AssertionError("vault file has already been unlocked");
+         }
+     }
+ 
+     private void assertLoaded(boolean loaded) {
+         if (isLoaded() && !loaded) {
+-            throw new AssertionError("database file has already been loaded");
++            throw new AssertionError("vault file has already been loaded");
+         } else if (!isLoaded() && loaded) {
+-            throw new AssertionError("database file has not been loaded yet");
++            throw new AssertionError("vault file has not been loaded yet");
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java
+new file mode 100644
+index 00000000..586aed0a
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java
+@@ -0,0 +1,7 @@
++package com.beemdevelopment.aegis.vault;
++
++public class VaultManagerException extends Exception {
++    public VaultManagerException(Throwable cause) {
++        super(cause);
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/BiometricSlot.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/BiometricSlot.java
+similarity index 88%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/BiometricSlot.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/BiometricSlot.java
+index 79330de9..d4a35a4e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/BiometricSlot.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/BiometricSlot.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/PasswordSlot.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/PasswordSlot.java
+similarity index 97%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/PasswordSlot.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/PasswordSlot.java
+index 8efa41c7..dd328673 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/PasswordSlot.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/PasswordSlot.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ import com.beemdevelopment.aegis.crypto.CryptoUtils;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/RawSlot.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/RawSlot.java
+similarity index 88%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/RawSlot.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/RawSlot.java
+index 31a29355..774d5b62 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/RawSlot.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/RawSlot.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/Slot.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/Slot.java
+similarity index 99%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/Slot.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/Slot.java
+index f2066604..0c29982a 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/Slot.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/Slot.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ import com.beemdevelopment.aegis.crypto.CryptParameters;
+ import com.beemdevelopment.aegis.crypto.CryptResult;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotException.java
+similarity index 80%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotException.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotException.java
+index e2e149d0..370ee5e0 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotException.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotException.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ public class SlotException extends Exception {
+     public SlotException(Throwable cause) {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotIntegrityException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotIntegrityException.java
+similarity index 79%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotIntegrityException.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotIntegrityException.java
+index 1ed38b12..768ebf77 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotIntegrityException.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotIntegrityException.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ public class SlotIntegrityException extends Exception {
+     public SlotIntegrityException() {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotList.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotList.java
+similarity index 96%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotList.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotList.java
+index d723d592..e5b19ace 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotList.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotList.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ import com.beemdevelopment.aegis.util.UUIDMap;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotListException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotListException.java
+similarity index 81%
+rename from app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotListException.java
+rename to app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotListException.java
+index 9ea31704..d7c6f316 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/db/slots/SlotListException.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/slots/SlotListException.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.db.slots;
++package com.beemdevelopment.aegis.vault.slots;
+ 
+ public class SlotListException extends Exception {
+     public SlotListException(Throwable cause) {

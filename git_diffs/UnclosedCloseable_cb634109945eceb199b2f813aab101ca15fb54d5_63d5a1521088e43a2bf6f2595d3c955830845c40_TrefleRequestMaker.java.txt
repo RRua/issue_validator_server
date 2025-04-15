@@ -1,0 +1,711 @@
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/ApplicationConfig.java b/backend/src/main/java/com/github/mdeluise/plantit/ApplicationConfig.java
+index 7498c34..78d8c42 100644
+--- a/backend/src/main/java/com/github/mdeluise/plantit/ApplicationConfig.java
++++ b/backend/src/main/java/com/github/mdeluise/plantit/ApplicationConfig.java
+@@ -5,7 +5,6 @@ import java.net.http.HttpClient;
+ 
+ import com.github.mdeluise.plantit.notification.otp.OtpService;
+ import com.github.mdeluise.plantit.notification.password.TemporaryPasswordService;
+-import com.github.mdeluise.plantit.plantinfo.trafle.TrefleMigrator;
+ import com.github.mdeluise.plantit.reminder.ReminderDispatcher;
+ import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+ import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
+@@ -133,25 +132,4 @@ public class ApplicationConfig {
+     public void dispatchReminders() {
+         reminderDispatcher.dispatch();
+     }
+-
+-
+-    @Bean
+-    public CommandLineRunner fillExternalInfo(@Value("${update_existing}") boolean update,
+-                                              @Value("${floracodex.key}") String floraCodexKey,
+-                                              TrefleMigrator trefleMigrator) {
+-        return args -> {
+-            if (!update) {
+-                logger.info("UPDATE_EXISTING flag set to false. Skipping update of existing species.");
+-                return;
+-            }
+-            if (floraCodexKey == null || floraCodexKey.isBlank()) {
+-                logger.info(
+-                    "UPDATE_EXISTING flag set to true but trefle key not provided. Skipping update of existing " +
+-                        "species.");
+-                return;
+-            }
+-            logger.info("trefle key provided. Starting update of existing species...");
+-            trefleMigrator.fillMissingExternalInfo();
+-        };
+-    }
+ }
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/MigratorTo050.java b/backend/src/main/java/com/github/mdeluise/plantit/MigratorTo050.java
+deleted file mode 100644
+index ef7078b..0000000
+--- a/backend/src/main/java/com/github/mdeluise/plantit/MigratorTo050.java
++++ /dev/null
+@@ -1,45 +0,0 @@
+-package com.github.mdeluise.plantit;
+-
+-import com.github.mdeluise.plantit.image.EntityImageImpl;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-/*
+- * FIXME
+- * This class is needed due to upgrade to 0.5.0 version of the project.
+- * In 0.5.0 version a new field called "contentType" is added.
+- * If no action is done, all uploaded photos would not be displayable.
+- *
+- * This class can be removed after upgrade to 0.5.0 version of the project.
+- *
+- */
+-public class MigratorTo050 {
+-    private static final Logger LOGGER = LoggerFactory.getLogger(MigratorTo050.class);
+-
+-    public static void fillMissingImageType(EntityImageImpl toFill) {
+-        LOGGER.debug("Adding missing content type to image {} ..", toFill.getId());
+-        toFill.setUrl(null);
+-        final String contentType = getContentType(toFill.getPath());
+-        toFill.setContentType(contentType);
+-    }
+-
+-
+-    private static String getContentType(String fileName) {
+-        final String extension = getFileExtension(fileName);
+-        return switch (extension.toLowerCase()) {
+-            case "jpg", "jpeg" -> "image/jpeg";
+-            case "png" -> "image/png";
+-            case "gif" -> "image/gif";
+-            default -> "application/octet-stream";
+-        };
+-    }
+-
+-
+-    private static String getFileExtension(String fileName) {
+-        final int lastDotIndex = fileName.lastIndexOf('.');
+-        if (lastDotIndex != -1 && lastDotIndex < fileName.length() - 1) {
+-            return fileName.substring(lastDotIndex + 1);
+-        }
+-        return "";
+-    }
+-}
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/common/AuthenticatedUserService.java b/backend/src/main/java/com/github/mdeluise/plantit/common/AuthenticatedUserService.java
+index d15649a..151c09e 100644
+--- a/backend/src/main/java/com/github/mdeluise/plantit/common/AuthenticatedUserService.java
++++ b/backend/src/main/java/com/github/mdeluise/plantit/common/AuthenticatedUserService.java
+@@ -20,9 +20,9 @@ public class AuthenticatedUserService {
+ 
+ 
+     public User getAuthenticatedUser() {
+-        SecurityContext context = SecurityContextHolder.getContext();
+-        Authentication authentication = context.getAuthentication();
+-        String username = authentication.getName();
++        final SecurityContext context = SecurityContextHolder.getContext();
++        final Authentication authentication = context.getAuthentication();
++        final String username = authentication.getName();
+         return userService.get(username);
+     }
+ }
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/image/storage/FileSystemImageStorageService.java b/backend/src/main/java/com/github/mdeluise/plantit/image/storage/FileSystemImageStorageService.java
+index fea33f7..2a91bac 100644
+--- a/backend/src/main/java/com/github/mdeluise/plantit/image/storage/FileSystemImageStorageService.java
++++ b/backend/src/main/java/com/github/mdeluise/plantit/image/storage/FileSystemImageStorageService.java
+@@ -15,7 +15,6 @@ import java.util.Collection;
+ import java.util.Date;
+ import java.util.Objects;
+ 
+-import com.github.mdeluise.plantit.MigratorTo050;
+ import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfo;
+ import com.github.mdeluise.plantit.common.AuthenticatedUserService;
+ import com.github.mdeluise.plantit.exception.ResourceNotFoundException;
+@@ -214,15 +213,7 @@ public class FileSystemImageStorageService implements ImageStorageService {
+ 
+     @Cacheable(value = "image-content", key = "{#id}")
+     public ImageContentResponse getImageContent(String id) throws IOException {
+-        //get(id);
+-
+-        final EntityImageImpl entityImage = (EntityImageImpl) get(id);
+-        if (entityImage.getContentType() == null && entityImage.getPath() != null) {
+-            logger.debug("Image {} is to update due to missing content/type", entityImage.getId());
+-            MigratorTo050.fillMissingImageType(entityImage);
+-            imageRepository.save(entityImage);
+-        }
+-
++        get(id);
+         return getImageContentInternal(id);
+     }
+ 
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/PlantInfoExtractorFacade.java b/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/PlantInfoExtractorFacade.java
+index b81af8f..08ab5cf 100644
+--- a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/PlantInfoExtractorFacade.java
++++ b/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/PlantInfoExtractorFacade.java
+@@ -5,7 +5,6 @@ import java.util.List;
+ import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfo;
+ import com.github.mdeluise.plantit.common.AuthenticatedUserService;
+ import com.github.mdeluise.plantit.plantinfo.floracodex.FloraCodexPlantInfoExtractorStep;
+-import com.github.mdeluise.plantit.plantinfo.trafle.TreflePlantInfoExtractorStep;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.beans.factory.annotation.Autowired;
+@@ -25,9 +24,7 @@ public class PlantInfoExtractorFacade {
+                                     List<PlantInfoExtractorStep> steps,
+                                     AuthenticatedUserService authenticatedUserService) {
+         this.authenticatedUserService = authenticatedUserService;
+-        List<PlantInfoExtractorStep> stepsToUse = steps.stream()
+-                                                       .filter(step -> !(step instanceof TreflePlantInfoExtractorStep))
+-                                                       .toList();
++        List<PlantInfoExtractorStep> stepsToUse = steps.stream().toList();
+         if (floraCodexKey == null || floraCodexKey.isBlank()) {
+             logger.debug("FloraCodex service not used");
+             stepsToUse = stepsToUse.stream().filter(step -> !(step instanceof FloraCodexPlantInfoExtractorStep)).toList();
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleMigrator.java b/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleMigrator.java
+deleted file mode 100644
+index 5b7609b..0000000
+--- a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleMigrator.java
++++ /dev/null
+@@ -1,91 +0,0 @@
+-package com.github.mdeluise.plantit.plantinfo.trafle;
+-
+-import java.util.Set;
+-
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfo;
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfoCreator;
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfoRepository;
+-import com.github.mdeluise.plantit.botanicalinfo.care.PlantCareInfo;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.stereotype.Service;
+-
+-/**
+- * This class is used to add new info in the existing species on system version updateInternal.
+- * v0.1.0: Botanical Info object has new `external_id` field.
+- * v0.2.0: Botanical Info object has new `PlantCareInfo` field.
+- * v0.2.0: Botanical Info object has new `synonyms` field.
+- */
+-@Service
+-public class TrefleMigrator {
+-    private final TrefleRequestMaker trefleRequestMaker;
+-    private final BotanicalInfoRepository botanicalInfoRepository;
+-    private final Logger logger = LoggerFactory.getLogger(TrefleMigrator.class);
+-
+-
+-    @Autowired
+-    public TrefleMigrator(TrefleRequestMaker trefleRequestMaker, BotanicalInfoRepository botanicalInfoRepository) {
+-        this.trefleRequestMaker = trefleRequestMaker;
+-        this.botanicalInfoRepository = botanicalInfoRepository;
+-    }
+-
+-
+-    public void fillMissingExternalInfo() {
+-        botanicalInfoRepository.findAll().forEach(botanicalInfo -> {
+-            logger.info(String.format("Checking updateInternal for species %s (id %s, creator: %s, external_id: %s)...",
+-                                      botanicalInfo.getSpecies(), botanicalInfo.getId(), botanicalInfo.getCreator(),
+-                                      botanicalInfo.getExternalId()
+-            ));
+-            if (botanicalInfo.getCreator() != BotanicalInfoCreator.TREFLE) {
+-                logger.info("Species already updated since it's a user created one.");
+-                return;
+-            }
+-            if (botanicalInfo.getExternalId() == null) {
+-                logger.info("external_id field not present, updating it...");
+-                fillMissingExternalId(botanicalInfo);
+-            }
+-            if (botanicalInfo.getExternalId() != null && botanicalInfo.isPlantCareEmpty()) {
+-                logger.info("external_id field found, updating care info...");
+-                fillMissingExternalCareInfo(botanicalInfo);
+-            } else if (botanicalInfo.getExternalId() != null && botanicalInfo.getSynonyms().isEmpty()) {
+-                logger.info("external_id field found, updating synonyms...");
+-                fillMissingExternalSynonyms(botanicalInfo);
+-            } else if (botanicalInfo.getExternalId() == null) {
+-                logger.info("external_id field not found.");
+-            } else {
+-                logger.info("external_id field found, care info already updated.");
+-            }
+-            botanicalInfoRepository.save(botanicalInfo);
+-        });
+-    }
+-
+-
+-    private void fillMissingExternalId(BotanicalInfo toUpdate) {
+-        final String externalId = trefleRequestMaker.getExternalId(toUpdate.getSpecies());
+-        if (externalId == null) {
+-            return;
+-        }
+-        logger.info(String.format("Found external_id %s for species %s (id: %s). Update...", externalId,
+-                                  toUpdate.getSpecies(), toUpdate.getId()
+-        ));
+-        toUpdate.setExternalId(externalId);
+-    }
+-
+-    private void fillMissingExternalCareInfo(BotanicalInfo toUpdate) {
+-        if (toUpdate.getExternalId() == null) {
+-            return;
+-        }
+-        final PlantCareInfo plantCareInfo = trefleRequestMaker.getPlantCare(toUpdate);
+-        toUpdate.setPlantCareInfo(plantCareInfo);
+-    }
+-
+-
+-    private void fillMissingExternalSynonyms(BotanicalInfo toUpdate) {
+-        if (toUpdate.getExternalId() == null) {
+-            return;
+-        }
+-        final Set<String> synonyms = trefleRequestMaker.getSynonyms(toUpdate);
+-        toUpdate.setSynonyms(synonyms);
+-    }
+-}
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TreflePlantInfoExtractorStep.java b/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TreflePlantInfoExtractorStep.java
+deleted file mode 100644
+index c4887bc..0000000
+--- a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TreflePlantInfoExtractorStep.java
++++ /dev/null
+@@ -1,56 +0,0 @@
+-package com.github.mdeluise.plantit.plantinfo.trafle;
+-
+-import java.util.HashSet;
+-import java.util.List;
+-import java.util.Set;
+-
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfo;
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfoCreator;
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfoService;
+-import com.github.mdeluise.plantit.plantinfo.AbstractPlantInfoExtractorStep;
+-import org.springframework.core.annotation.Order;
+-import org.springframework.data.domain.Page;
+-import org.springframework.data.domain.Pageable;
+-import org.springframework.stereotype.Service;
+-
+-@Service
+-@Order(3)
+-public class TreflePlantInfoExtractorStep extends AbstractPlantInfoExtractorStep {
+-    private final TrefleRequestMaker trefleRequestMaker;
+-    private final BotanicalInfoService botanicalInfoService;
+-
+-
+-    public TreflePlantInfoExtractorStep(TrefleRequestMaker trefleRequestMaker,
+-                                        BotanicalInfoService botanicalInfoService) {
+-        super();
+-        this.trefleRequestMaker = trefleRequestMaker;
+-        this.botanicalInfoService = botanicalInfoService;
+-    }
+-
+-
+-    @Override
+-    protected Set<BotanicalInfo> extractPlantsInternal(String partialPlantScientificName, int size) {
+-        final Page<BotanicalInfo> result =
+-            trefleRequestMaker.fetchInfoFromPartial(partialPlantScientificName, Pageable.ofSize(size));
+-        final List<BotanicalInfo> filteredResult = result.stream()
+-                                                         .filter(botanicalInfo -> !existAlreadyALocalVersion(botanicalInfo))
+-                                                         .toList();
+-        return new HashSet<>(filteredResult);
+-    }
+-
+-
+-    @Override
+-    protected Set<BotanicalInfo> getAllInternal(int size) {
+-        final Page<BotanicalInfo> result = trefleRequestMaker.fetchAll(Pageable.ofSize(size));
+-        final List<BotanicalInfo> filteredResult = result.stream()
+-                                                         .filter(botanicalInfo -> !existAlreadyALocalVersion(botanicalInfo))
+-                                                         .toList();
+-        return new HashSet<>(filteredResult);
+-    }
+-
+-
+-    private boolean existAlreadyALocalVersion(BotanicalInfo botanicalInfo) {
+-        return botanicalInfoService.existsExternalId(BotanicalInfoCreator.TREFLE, botanicalInfo.getExternalId()) ||
+-                   botanicalInfoService.existsSpecies(botanicalInfo.getSpecies());
+-    }
+-}
+diff --git a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleRequestMaker.java b/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleRequestMaker.java
+deleted file mode 100644
+index e8866e5..0000000
+--- a/backend/src/main/java/com/github/mdeluise/plantit/plantinfo/trafle/TrefleRequestMaker.java
++++ /dev/null
+@@ -1,375 +0,0 @@
+-package com.github.mdeluise.plantit.plantinfo.trafle;
+-
+-import java.io.IOException;
+-import java.net.URI;
+-import java.net.URLEncoder;
+-import java.net.http.HttpClient;
+-import java.net.http.HttpRequest;
+-import java.net.http.HttpResponse;
+-import java.nio.charset.StandardCharsets;
+-import java.security.KeyManagementException;
+-import java.security.NoSuchAlgorithmException;
+-import java.security.SecureRandom;
+-import java.security.cert.CertificateException;
+-import java.security.cert.X509Certificate;
+-import java.util.ArrayList;
+-import java.util.HashSet;
+-import java.util.List;
+-import java.util.Set;
+-import javax.net.ssl.SSLContext;
+-import javax.net.ssl.TrustManager;
+-import javax.net.ssl.X509TrustManager;
+-
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfo;
+-import com.github.mdeluise.plantit.botanicalinfo.BotanicalInfoCreator;
+-import com.github.mdeluise.plantit.botanicalinfo.care.PlantCareInfo;
+-import com.github.mdeluise.plantit.exception.InfoExtractionException;
+-import com.github.mdeluise.plantit.image.BotanicalInfoImage;
+-import com.google.gson.JsonElement;
+-import com.google.gson.JsonObject;
+-import com.google.gson.JsonParser;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-import org.springframework.beans.factory.annotation.Autowired;
+-import org.springframework.beans.factory.annotation.Value;
+-import org.springframework.data.domain.Page;
+-import org.springframework.data.domain.PageImpl;
+-import org.springframework.data.domain.Pageable;
+-import org.springframework.stereotype.Component;
+-
+-@SuppressWarnings("ClassDataAbstractionCoupling")
+-@Component
+-public class TrefleRequestMaker {
+-    private final String token;
+-    private final String domain;
+-    private final String baseEndpoint;
+-    private final boolean trefleSSLVerification;
+-    private final Logger logger = LoggerFactory.getLogger(TrefleRequestMaker.class);
+-
+-
+-    @Autowired
+-    public TrefleRequestMaker(@Value("${trefle.url}") String domain,
+-                              @Value("${trefle.key}") String token,
+-                              @Value("${trefle.ssl.verification.enabled}") boolean trefleSSLVerification) {
+-        this.domain = domain;
+-        this.baseEndpoint = domain + "/api/v1";
+-        this.token = token;
+-        this.trefleSSLVerification = trefleSSLVerification;
+-    }
+-
+-
+-    public Page<BotanicalInfo> fetchInfoFromPartial(String partialPlantScientificName, Pageable pageable)
+-        throws InfoExtractionException {
+-        logger.debug("Fetching info for \"{}\" from Trefle", partialPlantScientificName);
+-        final String encodedPartialName = URLEncoder.encode(partialPlantScientificName, StandardCharsets.UTF_8);
+-        final String url =
+-            String.format("%s/species/search?q=%s&limit=%s&page=%s&token=%s", baseEndpoint, encodedPartialName,
+-                          pageable.getPageSize(), pageable.getPageNumber() + 1, token
+-            );
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-        final List<BotanicalInfo> botanicalInfos = new ArrayList<>();
+-        responseJson.get("data").getAsJsonArray().forEach(plantResult -> {
+-            final BotanicalInfo botanicalInfo = new BotanicalInfo();
+-            botanicalInfo.setCreator(BotanicalInfoCreator.TREFLE);
+-            try {
+-                fillTrefleInfo(plantResult, botanicalInfo);
+-                botanicalInfos.add(botanicalInfo);
+-            } catch (UnsupportedOperationException e) {
+-                logger.error("Error while retrieving info about species", e);
+-            }
+-        });
+-        return new PageImpl<>(botanicalInfos);
+-    }
+-
+-
+-    private void fillTrefleInfo(JsonElement plantResult, BotanicalInfo botanicalInfo) {
+-        final JsonObject plantJson = plantResult.getAsJsonObject();
+-        botanicalInfo.setExternalId(plantJson.get("id").getAsString());
+-        botanicalInfo.setSpecies(plantJson.get("scientific_name").getAsString());
+-        botanicalInfo.setFamily(plantJson.get("family").getAsString());
+-        botanicalInfo.setGenus(plantJson.get("genus").getAsString());
+-        if (!isJsonValueNull(plantJson, "image_url")) {
+-            fillImage(botanicalInfo, plantJson.get("image_url").getAsString());
+-        }
+-        fillPlantCare(botanicalInfo, plantJson);
+-        fillSynonyms(botanicalInfo, getSynonymsJson(plantResult.getAsJsonObject()));
+-    }
+-
+-
+-
+-    private void fillPlantCare(BotanicalInfo botanicalInfo, JsonObject plantJson) {
+-        final JsonObject growthJson = getPlantGrowthJson(plantJson);
+-        final PlantCareInfo plantCareInfo = getPlantCare(growthJson);
+-        botanicalInfo.setPlantCareInfo(plantCareInfo);
+-    }
+-
+-
+-    private PlantCareInfo getPlantCare(JsonObject growthJson) {
+-        final PlantCareInfo plantCareInfo = new PlantCareInfo();
+-        if (!isJsonValueNull(growthJson, "light")) {
+-            plantCareInfo.setLight(growthJson.get("light").getAsInt());
+-        }
+-        if (!isJsonValueNull(growthJson, "ph_minimum")) {
+-            plantCareInfo.setPhMin(growthJson.get("ph_minimum").getAsDouble());
+-        }
+-        if (!isJsonValueNull(growthJson, "ph_maximum")) {
+-            plantCareInfo.setPhMax(growthJson.get("ph_maximum").getAsDouble());
+-        }
+-        if (!isJsonValueNull(growthJson, "minimum_temperature") &&
+-                !isJsonValueNull(growthJson.get("minimum_temperature").getAsJsonObject(), "deg_c")) {
+-            plantCareInfo.setMinTemp(
+-                growthJson.get("minimum_temperature").getAsJsonObject().get("deg_c").getAsDouble());
+-        }
+-        if (!isJsonValueNull(growthJson, "maximum_temperature") &&
+-                !isJsonValueNull(growthJson.get("maximum_temperature").getAsJsonObject(), "deg_c")) {
+-            plantCareInfo.setMaxTemp(
+-                growthJson.get("maximum_temperature").getAsJsonObject().get("deg_c").getAsDouble());
+-        }
+-        if (!isJsonValueNull(growthJson, "soil_humidity")) {
+-            plantCareInfo.setPhMin(growthJson.get("soil_humidity").getAsDouble());
+-        }
+-        return plantCareInfo;
+-    }
+-
+-
+-    private void fillSynonyms(BotanicalInfo botanicalInfo, JsonObject plantJson) {
+-        final Set<String> synonyms = getSynonyms(plantJson);
+-        botanicalInfo.setSynonyms(synonyms);
+-    }
+-
+-
+-    private Set<String> getSynonyms(JsonObject plantJson) {
+-        final Set<String> synonyms = new HashSet<>();
+-        plantJson.get("synonyms").getAsJsonArray()
+-                 .forEach(synonym -> synonyms.add(synonym.getAsJsonObject().get("name").getAsString()));
+-        if (!isJsonValueNull(plantJson, "common_name")) {
+-            synonyms.add(plantJson.get("common_name").getAsString());
+-        }
+-        if (plantJson.get("common_names").getAsJsonObject().has("en")) {
+-            plantJson.get("common_names").getAsJsonObject().get("en").getAsJsonArray()
+-                     .forEach(synonym -> synonyms.add(synonym.getAsString()));
+-        }
+-        return synonyms;
+-    }
+-
+-
+-    private boolean isJsonValueNull(JsonObject jsonObject, String key) {
+-        if (jsonObject.get(key).isJsonNull()) {
+-            return true;
+-        }
+-        try {
+-            return jsonObject.get(key).getAsString().equals("null");
+-        } catch (UnsupportedOperationException ignored) {
+-            return false;
+-        }
+-    }
+-
+-
+-    protected JsonObject getPlantGrowthJson(JsonObject plantJson) {
+-        final String link = plantJson.get("links").getAsJsonObject().get("self").getAsString();
+-        final String url = String.format("%s%s?token=%s", domain, link, token);
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-
+-        try {
+-            final JsonElement data = responseJson.get("data").getAsJsonObject().get("growth").getAsJsonObject();
+-            return data.getAsJsonObject();
+-        } catch (IndexOutOfBoundsException e) {
+-            logger.error(
+-                String.format("Error while retrieving growth of species %s from Trefle.", plantJson.get("id")));
+-            return null;
+-        }
+-    }
+-
+-
+-    private JsonObject getSynonymsJson(JsonObject searchSpeciesJson) {
+-        final String link = searchSpeciesJson.get("links").getAsJsonObject().get("self").getAsString();
+-        final String url = String.format("%s%s?token=%s", domain, link, token);
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-
+-        try {
+-            final JsonElement data = responseJson.get("data").getAsJsonObject();
+-            return data.getAsJsonObject();
+-        } catch (IndexOutOfBoundsException e) {
+-            logger.error(
+-                String.format("Error while retrieving species json for %s from Trefle.", searchSpeciesJson.get("id")));
+-            return null;
+-        }
+-    }
+-
+-
+-    public Page<BotanicalInfo> fetchAll(Pageable pageable) {
+-        logger.debug("Fetching all info from Trefle");
+-        final String url =
+-            String.format("%s/species/search?limit=%s&page=%s&token=%s&q=*", baseEndpoint, pageable.getPageSize(),
+-                          pageable.getPageNumber() + 1, token
+-            );
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-        List<BotanicalInfo> botanicalInfos = new ArrayList<>();
+-        responseJson.get("data").getAsJsonArray().forEach(plantResult -> {
+-            BotanicalInfo botanicalInfo = new BotanicalInfo();
+-            botanicalInfo.setCreator(BotanicalInfoCreator.TREFLE);
+-            fillTrefleInfo(plantResult, botanicalInfo);
+-            botanicalInfos.add(botanicalInfo);
+-        });
+-        return new PageImpl<>(botanicalInfos);
+-    }
+-
+-
+-    private void fillImage(BotanicalInfo botanicalInfo, String imageUrl) throws InfoExtractionException {
+-        final BotanicalInfoImage abstractEntityImage = new BotanicalInfoImage();
+-        abstractEntityImage.setUrl(imageUrl);
+-        abstractEntityImage.setId(null);
+-        botanicalInfo.setImage(abstractEntityImage);
+-    }
+-
+-
+-    protected String getExternalId(String species) {
+-        final String encodedSpecies = URLEncoder.encode(species, StandardCharsets.UTF_8);
+-        final String url =
+-            String.format("%s/species/search?limit=1&page=1&token=%s&q=%s", baseEndpoint, token, encodedSpecies);
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-
+-        try {
+-            final JsonElement data = responseJson.get("data").getAsJsonArray().get(0);
+-            return data.getAsJsonObject().get("id").getAsString();
+-        } catch (IndexOutOfBoundsException e) {
+-            logger.error(String.format("Error while retrieving external_id of species %s from Trefle.", species));
+-            return null;
+-        }
+-    }
+-
+-
+-    public PlantCareInfo getPlantCare(BotanicalInfo toUpdate) {
+-        final String url = String.format("%s/species/%s?token=%s", baseEndpoint, toUpdate.getExternalId(), token);
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-
+-        try {
+-            final JsonObject data = responseJson.get("data").getAsJsonObject().get("growth").getAsJsonObject();
+-            return getPlantCare(data);
+-        } catch (IndexOutOfBoundsException e) {
+-            logger.error(
+-                String.format("Error while retrieving growth of species %s from Trefle.", toUpdate.getExternalId()));
+-            return null;
+-        }
+-    }
+-
+-
+-    public Set<String> getSynonyms(BotanicalInfo toUpdate) {
+-        final String url = String.format("%s/species/%s?token=%s", baseEndpoint, toUpdate.getExternalId(), token);
+-        final HttpClient client = getHttpClient();
+-        final HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+-
+-        HttpResponse<String> response;
+-        try {
+-            response = client.send(request, HttpResponse.BodyHandlers.ofString());
+-        } catch (IOException | InterruptedException e) {
+-            throw new InfoExtractionException(e);
+-        }
+-        final JsonObject responseJson = JsonParser.parseString(response.body()).getAsJsonObject();
+-
+-        try {
+-            final JsonObject data = responseJson.get("data").getAsJsonObject();
+-            return getSynonyms(data);
+-        } catch (IndexOutOfBoundsException e) {
+-            logger.error(
+-                String.format("Error while retrieving growth of species %s from Trefle.", toUpdate.getExternalId()));
+-            return null;
+-        }
+-    }
+-
+-
+-    /**
+-     * Returns an HttpClient instance. If trefleSSLVerification is true, it returns a default HttpClient.
+-     * Otherwise, it returns an HttpClient with SSL verification disabled.
+-     * This method is needed only because the Trefle service certificate is expired.
+-     * It disables the check of the certificate if the user wants to use the Trefle service.
+-     * This is a temporary patch before migrating to another service.
+-     */
+-    private HttpClient getHttpClient() {
+-        if (trefleSSLVerification) {
+-            return HttpClient.newHttpClient();
+-        }
+-        return HttpClient.newBuilder().sslContext(trustAllSSLContext()).build();
+-    }
+-
+-
+-    private SSLContext trustAllSSLContext() {
+-        TrustManager[] trustAllCerts = new TrustManager[]{
+-            new X509TrustManager() {
+-                @Override
+-                public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+-                }
+-
+-                public X509Certificate[] getAcceptedIssuers() {
+-                    return null;
+-                }
+-
+-                public void checkServerTrusted(X509Certificate[] certs, String authType) {
+-                }
+-            }
+-        };
+-
+-        SSLContext sslContext;
+-        try {
+-            sslContext = SSLContext.getInstance("TLS");
+-            sslContext.init(null, trustAllCerts, new SecureRandom());
+-            return sslContext;
+-        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+-            throw new RuntimeException(e);
+-        }
+-    }
+-}
+diff --git a/backend/src/test/java/com/github/mdeluise/plantit/unit/service/BotanicalInfoServiceUnitTests.java b/backend/src/test/java/com/github/mdeluise/plantit/unit/service/BotanicalInfoServiceUnitTests.java
+index 31db2e9..f4f53ee 100644
+--- a/backend/src/test/java/com/github/mdeluise/plantit/unit/service/BotanicalInfoServiceUnitTests.java
++++ b/backend/src/test/java/com/github/mdeluise/plantit/unit/service/BotanicalInfoServiceUnitTests.java
+@@ -85,7 +85,7 @@ class BotanicalInfoServiceUnitTests {
+         botanicalInfo2.setUserCreator(authenticatedUser);
+         final BotanicalInfo botanicalInfo3 = new BotanicalInfo();
+         botanicalInfo2.setId(3L);
+-        botanicalInfo2.setCreator(BotanicalInfoCreator.TREFLE);
++        botanicalInfo2.setCreator(BotanicalInfoCreator.FLORA_CODEX);
+         final List<BotanicalInfo> botanicalInfoList = Arrays.asList(botanicalInfo1, botanicalInfo2, botanicalInfo3);
+         final Set<BotanicalInfo> expectedBotanicalInfoSet = new HashSet<>(botanicalInfoList);
+         Mockito.when(authenticatedUserService.getAuthenticatedUser()).thenReturn(authenticatedUser);

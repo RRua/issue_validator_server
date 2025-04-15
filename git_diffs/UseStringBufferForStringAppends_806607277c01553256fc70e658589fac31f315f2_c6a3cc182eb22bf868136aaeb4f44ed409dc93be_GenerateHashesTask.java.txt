@@ -1,0 +1,3711 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/CloudLoaderAsyncTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/CloudLoaderAsyncTask.java
+index 97a9f6ca2..7ca9671a5 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/CloudLoaderAsyncTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/CloudLoaderAsyncTask.java
+@@ -47,10 +47,10 @@ import androidx.annotation.NonNull;
+ 
+ public class CloudLoaderAsyncTask extends AsyncTask<Void, Void, Boolean> {
+ 
+-  private Cursor data;
+-  private WeakReference<MainActivity> mainActivity;
+-  private CloudHandler cloudHandler;
+-  private DataUtils dataUtils;
++  private final Cursor data;
++  private final WeakReference<MainActivity> mainActivity;
++  private final CloudHandler cloudHandler;
++  private final DataUtils dataUtils;
+ 
+   public CloudLoaderAsyncTask(MainActivity mainActivity, CloudHandler cloudHandler, Cursor data) {
+     this.data = data;
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/GenerateHashesTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/GenerateHashesTask.java
+deleted file mode 100644
+index dc5d4ae88..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/GenerateHashesTask.java
++++ /dev/null
+@@ -1,213 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks;
+-
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.security.MessageDigest;
+-import java.security.NoSuchAlgorithmException;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.filesystem.HybridFileParcelable;
+-import com.amaze.filemanager.filesystem.files.FileUtils;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-import com.amaze.filemanager.filesystem.ssh.SshClientSessionTemplate;
+-import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
+-
+-import android.content.Context;
+-import android.os.AsyncTask;
+-import android.view.View;
+-import android.widget.LinearLayout;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-
+-import net.schmizz.sshj.common.IOUtils;
+-import net.schmizz.sshj.connection.channel.direct.Session;
+-
+-/**
+- * Generates hashes from files (MD5 and SHA256)
+- *
+- * <p>Created by Vishal on 05-02-2015 edited by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+- */
+-public class GenerateHashesTask extends AsyncTask<Void, String, String[]> {
+-
+-  private HybridFileParcelable file;
+-  private Context context;
+-  private TextView md5HashText;
+-  private TextView sha256Text;
+-  private LinearLayout mMD5LinearLayout, mSHA256LinearLayout;
+-
+-  public GenerateHashesTask(HybridFileParcelable f, final Context c, final View view) {
+-    this.context = c;
+-    this.file = f;
+-
+-    md5HashText = view.findViewById(R.id.t9);
+-    sha256Text = view.findViewById(R.id.t10);
+-
+-    mMD5LinearLayout = view.findViewById(R.id.properties_dialog_md5);
+-    mSHA256LinearLayout = view.findViewById(R.id.properties_dialog_sha256);
+-  }
+-
+-  @Override
+-  protected String[] doInBackground(Void... params) {
+-    String md5 = context.getString(R.string.error);
+-    String sha256 = context.getString(R.string.error);
+-
+-    try {
+-      if (file.isSftp()) {
+-        md5 =
+-            SshClientUtils.execute(
+-                new SshClientSessionTemplate<String>(file.getPath()) {
+-                  @Override
+-                  public String execute(Session session) throws IOException {
+-                    Session.Command cmd =
+-                        session.exec(
+-                            String.format(
+-                                "md5sum -b \"%s\" | cut -c -32",
+-                                SshClientUtils.extractRemotePathFrom(file.getPath())));
+-                    String result =
+-                        new String(IOUtils.readFully(cmd.getInputStream()).toByteArray());
+-                    cmd.close();
+-                    if (cmd.getExitStatus() == 0) return result;
+-                    else {
+-                      return null;
+-                    }
+-                  }
+-                });
+-        sha256 =
+-            SshClientUtils.execute(
+-                new SshClientSessionTemplate<String>(file.getPath()) {
+-                  @Override
+-                  public String execute(Session session) throws IOException {
+-                    Session.Command cmd =
+-                        session.exec(
+-                            String.format(
+-                                "sha256sum -b \"%s\" | cut -c -64",
+-                                SshClientUtils.extractRemotePathFrom(file.getPath())));
+-                    String result = IOUtils.readFully(cmd.getInputStream()).toString();
+-                    cmd.close();
+-                    if (cmd.getExitStatus() == 0) return result;
+-                    else {
+-                      return null;
+-                    }
+-                  }
+-                });
+-      } else if (!file.isDirectory(context)) {
+-        md5 = getMD5Checksum();
+-        sha256 = getSHA256Checksum();
+-      }
+-    } catch (Exception e) {
+-      e.printStackTrace();
+-    }
+-
+-    return new String[] {md5, sha256};
+-  }
+-
+-  @Override
+-  protected void onPostExecute(final String[] hashes) {
+-    super.onPostExecute(hashes);
+-    if (!file.isDirectory() && file.getSize() != 0) {
+-      md5HashText.setText(hashes[0]);
+-      sha256Text.setText(hashes[1]);
+-
+-      mMD5LinearLayout.setOnLongClickListener(
+-          v -> {
+-            FileUtils.copyToClipboard(context, hashes[0]);
+-            Toast.makeText(
+-                    context,
+-                    context.getResources().getString(R.string.md5).toUpperCase()
+-                        + " "
+-                        + context.getResources().getString(R.string.properties_copied_clipboard),
+-                    Toast.LENGTH_SHORT)
+-                .show();
+-            return false;
+-          });
+-      mSHA256LinearLayout.setOnLongClickListener(
+-          v -> {
+-            FileUtils.copyToClipboard(context, hashes[1]);
+-            Toast.makeText(
+-                    context,
+-                    context.getResources().getString(R.string.hash_sha256)
+-                        + " "
+-                        + context.getResources().getString(R.string.properties_copied_clipboard),
+-                    Toast.LENGTH_SHORT)
+-                .show();
+-            return false;
+-          });
+-    } else {
+-      mMD5LinearLayout.setVisibility(View.GONE);
+-      mSHA256LinearLayout.setVisibility(View.GONE);
+-    }
+-  }
+-
+-  // see this How-to for a faster way to convert a byte array to a HEX string
+-
+-  private String getMD5Checksum() throws Exception {
+-    byte[] b = createChecksum();
+-    String result = "";
+-
+-    for (byte aB : b) {
+-      result += Integer.toString((aB & 0xff) + 0x100, 16).substring(1);
+-    }
+-    return result;
+-  }
+-
+-  private String getSHA256Checksum() throws NoSuchAlgorithmException, IOException {
+-    MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
+-    byte[] input = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-    int length;
+-    InputStream inputStream = file.getInputStream(context);
+-    while ((length = inputStream.read(input)) != -1) {
+-      if (length > 0) messageDigest.update(input, 0, length);
+-    }
+-
+-    byte[] hash = messageDigest.digest();
+-
+-    StringBuilder hexString = new StringBuilder();
+-
+-    for (byte aHash : hash) {
+-      // convert hash to base 16
+-      String hex = Integer.toHexString(0xff & aHash);
+-      if (hex.length() == 1) hexString.append('0');
+-      hexString.append(hex);
+-    }
+-    inputStream.close();
+-    return hexString.toString();
+-  }
+-
+-  private byte[] createChecksum() throws Exception {
+-    InputStream fis = file.getInputStream(context);
+-
+-    byte[] buffer = new byte[8192];
+-    MessageDigest complete = MessageDigest.getInstance("MD5");
+-    int numRead;
+-
+-    do {
+-      numRead = fis.read(buffer);
+-      if (numRead > 0) {
+-        complete.update(buffer, 0, numRead);
+-      }
+-    } while (numRead != -1);
+-
+-    fis.close();
+-    return complete.digest();
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFiles.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFiles.java
+deleted file mode 100644
+index e7068b954..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFiles.java
++++ /dev/null
+@@ -1,252 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks;
+-
+-import java.io.File;
+-import java.util.ArrayList;
+-import java.util.HashSet;
+-import java.util.List;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.application.AppConfig;
+-import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil;
+-import com.amaze.filemanager.asynchronous.services.CopyService;
+-import com.amaze.filemanager.database.CryptHandler;
+-import com.amaze.filemanager.database.models.explorer.EncryptedEntry;
+-import com.amaze.filemanager.file_operations.exceptions.ShellNotRunningException;
+-import com.amaze.filemanager.file_operations.filesystem.OpenMode;
+-import com.amaze.filemanager.filesystem.HybridFile;
+-import com.amaze.filemanager.filesystem.HybridFileParcelable;
+-import com.amaze.filemanager.filesystem.Operations;
+-import com.amaze.filemanager.filesystem.cloud.CloudUtil;
+-import com.amaze.filemanager.filesystem.files.CryptUtil;
+-import com.amaze.filemanager.filesystem.files.FileUtils;
+-import com.amaze.filemanager.filesystem.root.RenameFileCommand;
+-import com.amaze.filemanager.ui.activities.MainActivity;
+-import com.amaze.filemanager.utils.DataUtils;
+-import com.cloudrail.si.interfaces.CloudStorage;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-import android.os.AsyncTask;
+-import android.util.Log;
+-import android.widget.Toast;
+-
+-/**
+- * AsyncTask that moves files from source to destination by trying to rename files first, if they're
+- * in the same filesystem, else starting the copy service. Be advised - do not start this AsyncTask
+- * directly but use {@link PrepareCopyTask} instead
+- */
+-public class MoveFiles extends AsyncTask<ArrayList<String>, String, Boolean> {
+-
+-  private ArrayList<ArrayList<HybridFileParcelable>> files;
+-  private ArrayList<String> paths;
+-  private Context context;
+-  private OpenMode mode;
+-  private long totalBytes = 0l;
+-  private long destinationSize = 0l;
+-  private boolean invalidOperation = false;
+-  private boolean isRootExplorer;
+-  private String currentPath;
+-
+-  public MoveFiles(
+-      ArrayList<ArrayList<HybridFileParcelable>> files,
+-      boolean isRootExplorer,
+-      String currentPath,
+-      Context context,
+-      OpenMode mode) {
+-    this.context = context;
+-    this.files = files;
+-    this.mode = mode;
+-    this.isRootExplorer = isRootExplorer;
+-    this.currentPath = currentPath;
+-  }
+-
+-  @Override
+-  protected Boolean doInBackground(ArrayList<String>... strings) {
+-    paths = strings[0];
+-
+-    if (files.size() == 0) return true;
+-
+-    for (ArrayList<HybridFileParcelable> filesCurrent : files) {
+-      totalBytes += FileUtils.getTotalBytes(filesCurrent, context);
+-    }
+-    HybridFile destination = new HybridFile(mode, paths.get(0));
+-    destinationSize = destination.getUsableSpace();
+-
+-    for (int i = 0; i < paths.size(); i++) {
+-      for (HybridFileParcelable baseFile : files.get(i)) {
+-        String destPath = paths.get(i) + "/" + baseFile.getName(context);
+-        if (baseFile.getPath().indexOf('?') > 0)
+-          destPath += baseFile.getPath().substring(baseFile.getPath().indexOf('?'));
+-        if (!isMoveOperationValid(baseFile, new HybridFile(mode, paths.get(i)))) {
+-          // TODO: 30/06/20 Replace runtime exception with generic exception
+-          Log.w(
+-              getClass().getSimpleName(), "Some files failed to be moved", new RuntimeException());
+-          invalidOperation = true;
+-          continue;
+-        }
+-        switch (mode) {
+-          case FILE:
+-            File dest = new File(destPath);
+-            File source = new File(baseFile.getPath());
+-            if (!source.renameTo(dest)) {
+-
+-              // check if we have root
+-              if (isRootExplorer) {
+-                try {
+-                  if (!RenameFileCommand.INSTANCE.renameFile(baseFile.getPath(), destPath))
+-                    return false;
+-                } catch (ShellNotRunningException e) {
+-                  e.printStackTrace();
+-                  return false;
+-                }
+-              } else return false;
+-            }
+-            break;
+-          case DROPBOX:
+-          case BOX:
+-          case ONEDRIVE:
+-          case GDRIVE:
+-            DataUtils dataUtils = DataUtils.getInstance();
+-
+-            CloudStorage cloudStorage = dataUtils.getAccount(mode);
+-            if (baseFile.getMode() == mode) {
+-              // source and target both in same filesystem, use API method
+-              try {
+-
+-                cloudStorage.move(
+-                    CloudUtil.stripPath(mode, baseFile.getPath()),
+-                    CloudUtil.stripPath(mode, destPath));
+-              } catch (Exception e) {
+-                e.printStackTrace();
+-                return false;
+-              }
+-            } else {
+-              // not in same filesystem, execute service
+-              return false;
+-            }
+-          default:
+-            return false;
+-        }
+-      }
+-    }
+-    return true;
+-  }
+-
+-  @Override
+-  public void onPostExecute(Boolean movedCorrectly) {
+-    if (movedCorrectly) {
+-      if (currentPath.equals(paths.get(0))) {
+-        // mainFrag.updateList();
+-        Intent intent = new Intent(MainActivity.KEY_INTENT_LOAD_LIST);
+-
+-        intent.putExtra(MainActivity.KEY_INTENT_LOAD_LIST_FILE, paths.get(0));
+-        context.sendBroadcast(intent);
+-      }
+-
+-      if (invalidOperation) {
+-        Toast.makeText(context, R.string.some_files_failed_invalid_operation, Toast.LENGTH_LONG)
+-            .show();
+-      }
+-
+-      for (int i = 0; i < paths.size(); i++) {
+-        List<HybridFile> targetFiles = new ArrayList<>();
+-        List<HybridFileParcelable> sourcesFiles = new ArrayList<>();
+-        for (HybridFileParcelable f : files.get(i)) {
+-          targetFiles.add(new HybridFile(OpenMode.FILE, paths.get(i) + "/" + f.getName(context)));
+-        }
+-        for (List<HybridFileParcelable> hybridFileParcelables : files) {
+-          sourcesFiles.addAll(hybridFileParcelables);
+-        }
+-        FileUtils.scanFile(
+-            context, sourcesFiles.toArray(new HybridFileParcelable[sourcesFiles.size()]));
+-        FileUtils.scanFile(context, targetFiles.toArray(new HybridFile[targetFiles.size()]));
+-      }
+-
+-      // updating encrypted db entry if any encrypted file was moved
+-      AppConfig.getInstance()
+-          .runInBackground(
+-              () -> {
+-                for (int i = 0; i < paths.size(); i++) {
+-                  for (HybridFileParcelable file : files.get(i)) {
+-                    if (file.getName(context).endsWith(CryptUtil.CRYPT_EXTENSION)) {
+-                      try {
+-                        CryptHandler cryptHandler = CryptHandler.getInstance();
+-                        EncryptedEntry oldEntry = cryptHandler.findEntry(file.getPath());
+-                        EncryptedEntry newEntry = new EncryptedEntry();
+-                        newEntry.setId(oldEntry.getId());
+-                        newEntry.setPassword(oldEntry.getPassword());
+-                        newEntry.setPath(paths.get(i) + "/" + file.getName(context));
+-                        cryptHandler.updateEntry(oldEntry, newEntry);
+-                      } catch (Exception e) {
+-                        e.printStackTrace();
+-                        // couldn't change the entry, leave it alone
+-                      }
+-                    }
+-                  }
+-                }
+-              });
+-
+-    } else {
+-
+-      if (destinationSize < totalBytes) {
+-        // destination don't have enough space; return
+-        Toast.makeText(
+-                context, context.getResources().getString(R.string.in_safe), Toast.LENGTH_LONG)
+-            .show();
+-        return;
+-      }
+-
+-      for (int i = 0; i < paths.size(); i++) {
+-        Intent intent = new Intent(context, CopyService.class);
+-        intent.putExtra(CopyService.TAG_COPY_SOURCES, files.get(i));
+-        intent.putExtra(CopyService.TAG_COPY_TARGET, paths.get(i));
+-        intent.putExtra(CopyService.TAG_COPY_MOVE, true);
+-        intent.putExtra(CopyService.TAG_COPY_OPEN_MODE, mode.ordinal());
+-        intent.putExtra(CopyService.TAG_IS_ROOT_EXPLORER, isRootExplorer);
+-
+-        ServiceWatcherUtil.runService(context, intent);
+-      }
+-    }
+-  }
+-
+-  private boolean isMoveOperationValid(HybridFileParcelable sourceFile, HybridFile targetFile) {
+-    return !Operations.isCopyLoopPossible(sourceFile, targetFile) && sourceFile.exists(context);
+-  }
+-
+-  /**
+-   * Maintains a list of filesystems supporting the move/rename implementation. Please update to
+-   * return your {@link OpenMode} type if it is supported here
+-   *
+-   * @return
+-   */
+-  public static HashSet<OpenMode> getOperationSupportedFileSystem() {
+-    HashSet<OpenMode> hashSet = new HashSet<>();
+-    hashSet.add(OpenMode.SMB);
+-    hashSet.add(OpenMode.FILE);
+-    hashSet.add(OpenMode.DROPBOX);
+-    hashSet.add(OpenMode.BOX);
+-    hashSet.add(OpenMode.GDRIVE);
+-    hashSet.add(OpenMode.ONEDRIVE);
+-    return hashSet;
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperCallable.kt
+similarity index 92%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperCallable.kt
+index 7184fa140..cd82d3eac 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperCallable.kt
+@@ -24,9 +24,7 @@ import android.content.Context
+ import com.amaze.filemanager.R
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+ import com.amaze.filemanager.application.AppConfig
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.archivers.ArchiveEntry
+ import org.apache.commons.compress.archivers.ArchiveException
+ import org.apache.commons.compress.archivers.ArchiveInputStream
+@@ -36,14 +34,12 @@ import java.io.InputStream
+ import java.lang.ref.WeakReference
+ import java.util.*
+ 
+-abstract class AbstractCommonsArchiveHelperTask(
++abstract class AbstractCommonsArchiveHelperCallable(
+     context: Context,
+     private val filePath: String,
+     private val relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
+-) :
+-    CompressedHelperTask(goBack, l) {
++    goBack: Boolean
++) : CompressedHelperCallable(goBack) {
+ 
+     private val context: WeakReference<Context> = WeakReference(context)
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperCallable.kt
+similarity index 83%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperCallable.kt
+index 8db6bca07..bc720791b 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperCallable.kt
+@@ -21,24 +21,19 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+ import org.apache.commons.compress.compressors.CompressorInputStream
+ import java.io.InputStream
+ import java.lang.reflect.Constructor
+-import java.util.*
+ 
+-abstract class AbstractCompressedTarArchiveHelperTask(
++abstract class AbstractCompressedTarArchiveHelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCommonsArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCommonsArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     private val compressorInputStreamConstructor: Constructor<out CompressorInputStream>
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallable.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallable.kt
+new file mode 100644
+index 000000000..88e72fd6f
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallable.kt
+@@ -0,0 +1,49 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import androidx.annotation.WorkerThread
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import org.apache.commons.compress.archivers.ArchiveException
++import java.util.*
++import java.util.concurrent.Callable
++
++abstract class CompressedHelperCallable internal constructor(
++    private val createBackItem: Boolean
++) :
++    Callable<ArrayList<CompressedObjectParcelable>> {
++
++    @WorkerThread
++    @Throws(ArchiveException::class)
++    override fun call(): ArrayList<CompressedObjectParcelable> {
++        val elements = ArrayList<CompressedObjectParcelable>()
++        if (createBackItem) {
++            elements.add(0, CompressedObjectParcelable())
++        }
++
++        addElements(elements)
++        Collections.sort(elements, CompressedObjectParcelable.Sorter())
++        return elements
++    }
++
++    @Throws(ArchiveException::class)
++    protected abstract fun addElements(elements: ArrayList<CompressedObjectParcelable>)
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt
+deleted file mode 100644
+index cff2c6181..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt
++++ /dev/null
+@@ -1,62 +0,0 @@
+-/*
+- * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress
+-
+-import android.os.AsyncTask
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import org.apache.commons.compress.archivers.ArchiveException
+-import java.io.IOException
+-import java.util.*
+-
+-abstract class CompressedHelperTask internal constructor(
+-    private val createBackItem: Boolean,
+-    private val onFinish:
+-        OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
+-) :
+-    AsyncTask<Void, IOException, AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>() {
+-
+-    public override fun doInBackground(
+-        vararg voids: Void
+-    ): AsyncTaskResult<ArrayList<CompressedObjectParcelable>> {
+-
+-        val elements = ArrayList<CompressedObjectParcelable>()
+-        if (createBackItem) elements.add(0, CompressedObjectParcelable())
+-        return try {
+-            addElements(elements)
+-            Collections.sort(elements, CompressedObjectParcelable.Sorter())
+-            AsyncTaskResult(elements)
+-        } catch (ifArchiveIsCorruptOrInvalid: ArchiveException) {
+-            AsyncTaskResult(ifArchiveIsCorruptOrInvalid)
+-        }
+-    }
+-
+-    override fun onPostExecute(
+-        zipEntries: AsyncTaskResult<ArrayList<CompressedObjectParcelable>>
+-    ) {
+-        super.onPostExecute(zipEntries)
+-        onFinish.onAsyncTaskFinished(zipEntries)
+-    }
+-
+-    @Throws(ArchiveException::class)
+-    protected abstract fun addElements(elements: ArrayList<CompressedObjectParcelable>)
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallable.kt
+similarity index 92%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallable.kt
+index 799973d9a..bf074b82b 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallable.kt
+@@ -21,10 +21,8 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+ import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.RarDecompressor.Companion.convertName
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import com.github.junrar.Archive
+ import com.github.junrar.exception.RarException
+ import com.github.junrar.exception.UnsupportedRarV5Exception
+@@ -40,13 +38,12 @@ import java.util.*
+  * @param realFileDirectory the location of the zip file
+  * @param dir relativeDirectory to access inside the zip file
+  */
+-class RarHelperTask(
++class RarHelperCallable(
+     private val fileLocation: String,
+     private val relativeDirectory: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    CompressedHelperTask(goBack, l) {
++    CompressedHelperCallable(goBack) {
+ 
+     @Throws(ArchiveException::class)
+     override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallable.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallable.kt
+new file mode 100644
+index 000000000..38be3dd18
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallable.kt
+@@ -0,0 +1,81 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile
++import org.apache.commons.compress.PasswordRequiredException
++import org.apache.commons.compress.archivers.ArchiveException
++import java.io.File
++import java.io.IOException
++import java.util.*
++
++class SevenZipHelperCallable(
++    private val filePath: String,
++    private val relativePath: String,
++    goBack: Boolean
++) :
++    CompressedHelperCallable(goBack) {
++
++    @Throws(ArchiveException::class)
++    @Suppress("Detekt.RethrowCaughtException")
++    override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
++        try {
++            val sevenzFile = if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
++                SevenZFile(
++                    File(filePath),
++                    ArchivePasswordCache.getInstance()[filePath]!!.toCharArray()
++                )
++            } else {
++                SevenZFile(File(filePath))
++            }
++            for (entry in sevenzFile.entries) {
++                val name = entry.name
++                val isInBaseDir = (
++                    relativePath == "" &&
++                        !name.contains(CompressedHelper.SEPARATOR)
++                    )
++                val isInRelativeDir = (
++                    name.contains(CompressedHelper.SEPARATOR) &&
++                        name.substring(0, name.lastIndexOf(CompressedHelper.SEPARATOR))
++                        == relativePath
++                    )
++                if (isInBaseDir || isInRelativeDir) {
++                    elements.add(
++                        CompressedObjectParcelable(
++                            entry.name,
++                            entry.lastModifiedDate.time,
++                            entry.size,
++                            entry.isDirectory
++                        )
++                    )
++                }
++            }
++        } catch (e: PasswordRequiredException) {
++            // this is so that the caller can use onError to ask the user for the password
++            throw e
++        } catch (e: IOException) {
++            throw ArchiveException(String.format("7zip archive %s is corrupt", filePath))
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt
+deleted file mode 100644
+index 51aa05e3d..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt
++++ /dev/null
+@@ -1,123 +0,0 @@
+-/*
+- * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress
+-
+-import android.widget.EditText
+-import com.afollestad.materialdialogs.DialogAction
+-import com.afollestad.materialdialogs.MaterialDialog
+-import com.amaze.filemanager.R
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.application.AppConfig
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+-import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile
+-import com.amaze.filemanager.ui.activities.MainActivity
+-import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import org.apache.commons.compress.PasswordRequiredException
+-import org.apache.commons.compress.archivers.ArchiveException
+-import org.tukaani.xz.CorruptedInputException
+-import java.io.File
+-import java.io.IOException
+-import java.util.*
+-
+-class SevenZipHelperTask(
+-    private val filePath: String,
+-    private val relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
+-) :
+-    CompressedHelperTask(goBack, l) {
+-
+-    private var paused = false
+-    @Throws(ArchiveException::class)
+-    override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
+-        while (true) {
+-            if (paused) continue
+-            try {
+-                if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
+-                    SevenZFile(
+-                        File(filePath),
+-                        ArchivePasswordCache.getInstance()[filePath]!!.toCharArray()
+-                    )
+-                } else {
+-                    SevenZFile(File(filePath))
+-                }.use {
+-                    for (entry in it.entries) {
+-                        val name = entry.name
+-                        val isInBaseDir = (
+-                                relativePath == "" &&
+-                                        !name.contains(CompressedHelper.SEPARATOR)
+-                                )
+-                        val isInRelativeDir = (
+-                                name.contains(CompressedHelper.SEPARATOR) &&
+-                                        name.substring(0, name.lastIndexOf(CompressedHelper.SEPARATOR))
+-                                        == relativePath
+-                                )
+-                        if (isInBaseDir || isInRelativeDir) {
+-                            elements.add(
+-                                    CompressedObjectParcelable(
+-                                            entry.name,
+-                                            entry.lastModifiedDate.time,
+-                                            entry.size,
+-                                            entry.isDirectory
+-                                    )
+-                            )
+-                        }
+-                    }
+-                }
+-                paused = false
+-                break
+-            } catch (e: PasswordRequiredException) {
+-                paused = true
+-                publishProgress(e)
+-            } catch (e: IOException) {
+-                throw ArchiveException(String.format("7zip archive %s is corrupt", filePath))
+-            }
+-        }
+-    }
+-
+-    override fun onProgressUpdate(vararg values: IOException) {
+-        super.onProgressUpdate(*values)
+-        if (values.isEmpty()) return
+-        val result = values[0]
+-        // We only handle PasswordRequiredException here.
+-        if (result is PasswordRequiredException || result is CorruptedInputException) {
+-            ArchivePasswordCache.getInstance().remove(filePath)
+-            GeneralDialogCreation.showPasswordDialog(
+-                AppConfig.getInstance().mainActivityContext!!,
+-                (AppConfig.getInstance().mainActivityContext as MainActivity?)!!,
+-                AppConfig.getInstance().utilsProvider.appTheme,
+-                R.string.archive_password_prompt,
+-                R.string.authenticate_password,
+-                { dialog: MaterialDialog, _: DialogAction? ->
+-                    val editText = dialog.view.findViewById<EditText>(R.id.singleedittext_input)
+-                    val password = editText.text.toString()
+-                    ArchivePasswordCache.getInstance()[filePath] = password
+-                    paused = false
+-                    dialog.dismiss()
+-                },
+-                null
+-            )
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallable.kt
+similarity index 76%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallable.kt
+index 82917728c..444a0f59d 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallable.kt
+@@ -21,21 +21,16 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.compressors.CompressorInputStream
+ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+-import java.util.*
+ 
+-class TarBzip2HelperTask(
++class TarBzip2HelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCompressedTarArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
+         BZip2CompressorInputStream::class.java
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallable.kt
+similarity index 76%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallable.kt
+index afdb4c917..1f19fb47a 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallable.kt
+@@ -21,21 +21,16 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.compressors.CompressorInputStream
+ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
+-import java.util.*
+ 
+-class TarGzHelperTask(
++class TarGzHelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCompressedTarArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
+         GzipCompressorInputStream::class.java
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallable.kt
+similarity index 76%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallable.kt
+index b82964216..37b31265b 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallable.kt
+@@ -21,22 +21,17 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.archivers.ArchiveInputStream
+ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+ import java.io.InputStream
+-import java.util.*
+ 
+-class TarHelperTask(
++class TarHelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCommonsArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCommonsArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     override fun createFrom(inputStream: InputStream): ArchiveInputStream =
+         TarArchiveInputStream(inputStream)
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallable.kt
+similarity index 76%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallable.kt
+index 63c50367e..94e947a4e 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallable.kt
+@@ -21,21 +21,16 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.compressors.CompressorInputStream
+ import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream
+-import java.util.*
+ 
+-class TarLzmaHelperTask(
++class TarLzmaHelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCompressedTarArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
+         LZMACompressorInputStream::class.java
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallable.kt
+similarity index 76%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallable.kt
+index b6582de90..228dfea62 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallable.kt
+@@ -21,21 +21,16 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.apache.commons.compress.compressors.CompressorInputStream
+ import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
+-import java.util.*
+ 
+-class TarXzHelperTask(
++class TarXzHelperCallable(
+     context: Context,
+     filePath: String,
+     relativePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++    AbstractCompressedTarArchiveHelperCallable(context, filePath, relativePath, goBack) {
+ 
+     override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
+         XZCompressorInputStream::class.java
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperCallable.kt
+similarity index 93%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperCallable.kt
+index 8a3063298..6d3b0789e 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedFileHelperCallable.kt
+@@ -52,12 +52,11 @@ import java.util.ArrayList
+  * It is possible to implement uncompressed size for xz and lzma properly in the future, but are of
+  * lower priority. Any help would be appreciated.
+  */
+-class UnknownCompressedFileHelperTask(
++class UnknownCompressedFileHelperCallable(
+     private val filePath: String,
+-    goBack: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goBack: Boolean
+ ) :
+-    CompressedHelperTask(goBack, l) {
++        CompressedHelperCallable(goBack) {
+ 
+     override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
+         val entryName = filePath.substringAfterLast('/').substringBeforeLast('.')
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallable.kt
+similarity index 95%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallable.kt
+index 76837eb2b..3ab30a333 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallable.kt
+@@ -25,26 +25,22 @@ import android.net.Uri
+ import com.amaze.filemanager.R
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+ import com.amaze.filemanager.application.AppConfig
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import net.lingala.zip4j.ZipFile
+ import net.lingala.zip4j.exception.ZipException
+ import net.lingala.zip4j.model.FileHeader
+ import org.apache.commons.compress.archivers.ArchiveException
+ import java.io.File
+ import java.lang.ref.WeakReference
+-import java.util.*
+ import kotlin.collections.ArrayList
+ 
+-class ZipHelperTask(
++class ZipHelperCallable(
+     c: Context,
+     realFileDirectory: String,
+     dir: String?,
+-    goback: Boolean,
+-    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    goback: Boolean
+ ) :
+-    CompressedHelperTask(goback, l) {
++    CompressedHelperCallable(goback) {
+ 
+     private val context: WeakReference<Context> = WeakReference(c)
+     private val fileLocation: Uri = Uri.parse(realFileDirectory)
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashCallback.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashCallback.java
+new file mode 100644
+index 000000000..9b8e50c7d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashCallback.java
+@@ -0,0 +1,123 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.hashcalculator;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.util.Objects;
++import java.util.concurrent.Callable;
++
++import com.amaze.filemanager.filesystem.HybridFileParcelable;
++import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
++
++import android.content.Context;
++
++import androidx.annotation.WorkerThread;
++
++/** Generates hashes from files (MD5 and SHA256) */
++public class CalculateHashCallback implements Callable<Hash> {
++
++  private final boolean isNotADirectory;
++  private final InputStream inputStreamMd5;
++  private final InputStream inputStreamSha;
++
++  public CalculateHashCallback(HybridFileParcelable file, final Context context) {
++    if (file.isSftp()) {
++      throw new IllegalArgumentException("Use CalculateHashSftpCallback");
++    }
++
++    this.isNotADirectory = !file.isDirectory(context);
++    this.inputStreamMd5 = file.getInputStream(context);
++    this.inputStreamSha = file.getInputStream(context);
++  }
++
++  @WorkerThread
++  @Override
++  public Hash call() throws Exception {
++    String md5 = null;
++    String sha256 = null;
++
++    if (isNotADirectory) {
++      md5 = getMD5Checksum();
++      sha256 = getSHA256Checksum();
++    }
++
++    Objects.requireNonNull(md5);
++    Objects.requireNonNull(sha256);
++
++    return new Hash(md5, sha256);
++  }
++
++  // see this How-to for a faster way to convert a byte array to a HEX string
++
++  private String getMD5Checksum() throws Exception {
++    byte[] b = createChecksum();
++    String result = "";
++
++    for (byte aB : b) {
++      result += Integer.toString((aB & 0xff) + 0x100, 16).substring(1);
++    }
++    return result;
++  }
++
++  private String getSHA256Checksum() throws NoSuchAlgorithmException, IOException {
++    MessageDigest messageDigest = MessageDigest.getInstance("SHA-256");
++    byte[] input = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
++    int length;
++    InputStream inputStream = inputStreamMd5;
++    while ((length = inputStream.read(input)) != -1) {
++      if (length > 0) messageDigest.update(input, 0, length);
++    }
++
++    byte[] hash = messageDigest.digest();
++
++    StringBuilder hexString = new StringBuilder();
++
++    for (byte aHash : hash) {
++      // convert hash to base 16
++      String hex = Integer.toHexString(0xff & aHash);
++      if (hex.length() == 1) hexString.append('0');
++      hexString.append(hex);
++    }
++    inputStream.close();
++    return hexString.toString();
++  }
++
++  private byte[] createChecksum() throws Exception {
++    InputStream fis = inputStreamSha;
++
++    byte[] buffer = new byte[8192];
++    MessageDigest complete = MessageDigest.getInstance("MD5");
++    int numRead;
++
++    do {
++      numRead = fis.read(buffer);
++      if (numRead > 0) {
++        complete.update(buffer, 0, numRead);
++      }
++    } while (numRead != -1);
++
++    fis.close();
++    return complete.digest();
++  }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashSftpCallback.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashSftpCallback.java
+new file mode 100644
+index 000000000..b64e0826a
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashSftpCallback.java
+@@ -0,0 +1,79 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.hashcalculator;
++
++import java.io.IOException;
++import java.util.Objects;
++import java.util.concurrent.Callable;
++
++import com.amaze.filemanager.filesystem.HybridFileParcelable;
++import com.amaze.filemanager.filesystem.ssh.SshClientSessionTemplate;
++import com.amaze.filemanager.filesystem.ssh.SshClientUtils;
++
++import androidx.annotation.WorkerThread;
++
++import net.schmizz.sshj.common.IOUtils;
++import net.schmizz.sshj.connection.channel.direct.Session;
++
++public class CalculateHashSftpCallback implements Callable<Hash> {
++  private final HybridFileParcelable file;
++
++  public CalculateHashSftpCallback(HybridFileParcelable file) {
++    if (!file.isSftp()) {
++      throw new IllegalArgumentException("Use CalculateHashCallback");
++    }
++
++    this.file = file;
++  }
++
++  @WorkerThread
++  @Override
++  public Hash call() throws Exception {
++    String md5Command = "md5sum -b \"%s\" | cut -c -32";
++    String shaCommand = "sha256sum -b \"%s\" | cut -c -64";
++
++    String md5 = SshClientUtils.execute(getHash(md5Command));
++    String sha256 = SshClientUtils.execute(getHash(shaCommand));
++
++    Objects.requireNonNull(md5);
++    Objects.requireNonNull(sha256);
++
++    return new Hash(md5, sha256);
++  }
++
++  private SshClientSessionTemplate<String> getHash(String command) {
++    return new SshClientSessionTemplate<String>(file.getPath()) {
++      @Override
++      public String execute(Session session) throws IOException {
++        String path = SshClientUtils.extractRemotePathFrom(file.getPath());
++        String fullCommand = String.format(command, path);
++        Session.Command cmd = session.exec(fullCommand);
++        String result = new String(IOUtils.readFully(cmd.getInputStream()).toByteArray());
++        cmd.close();
++        if (cmd.getExitStatus() == 0) {
++          return result;
++        } else {
++          return null;
++        }
++      }
++    };
++  }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashTask.kt
+new file mode 100644
+index 000000000..98dfeb18c
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/hashcalculator/CalculateHashTask.kt
+@@ -0,0 +1,116 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.hashcalculator
++
++import android.content.Context
++import android.util.Log
++import android.view.View
++import android.widget.LinearLayout
++import android.widget.TextView
++import android.widget.Toast
++import com.amaze.filemanager.R
++import com.amaze.filemanager.asynchronous.asynctasks.Task
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.filesystem.files.FileUtils
++import java.lang.ref.WeakReference
++import java.util.*
++import java.util.concurrent.Callable
++
++data class Hash(val md5: String, val sha: String)
++
++class CalculateHashTask(
++    private val file: HybridFileParcelable,
++    context: Context,
++    view: View
++) : Task<Hash, Callable<Hash>> {
++
++    companion object {
++        private val TAG = CalculateHashTask::class.java.simpleName
++    }
++
++    private val task: Callable<Hash> = if (file.isSftp) {
++        CalculateHashSftpCallback(file)
++    } else {
++        CalculateHashCallback(file, context)
++    }
++
++    private val context = WeakReference(context)
++    private val view = WeakReference(view)
++
++    override fun getTask(): Callable<Hash> = task
++
++    override fun onError(error: Throwable) {
++        Log.e(TAG, "Error on calculate hash", error)
++        updateView(null)
++    }
++
++    override fun onFinish(value: Hash) {
++        updateView(value)
++    }
++
++    private fun updateView(hashes: Hash?) {
++        val context = context.get()
++        context ?: return
++
++        val view = view.get()
++        view ?: return
++
++        val md5Text = hashes?.md5 ?: context.getString(R.string.error)
++        val shaText = hashes?.sha ?: context.getString(R.string.error)
++
++        val md5HashText = view.findViewById<TextView>(R.id.t9)
++        val sha256Text = view.findViewById<TextView>(R.id.t10)
++
++        val mMD5LinearLayout = view.findViewById<LinearLayout>(R.id.properties_dialog_md5)
++        val mSHA256LinearLayout = view.findViewById<LinearLayout>(R.id.properties_dialog_sha256)
++
++        if (!file.isDirectory(context) && file.getSize() != 0L) {
++            md5HashText.text = md5Text
++            sha256Text.text = shaText
++            mMD5LinearLayout.setOnLongClickListener {
++                FileUtils.copyToClipboard(context, md5Text)
++                Toast.makeText(
++                    context,
++                    context.resources.getString(R.string.md5).uppercase(Locale.getDefault()) +
++                        " " +
++                        context.resources.getString(R.string.properties_copied_clipboard),
++                    Toast.LENGTH_SHORT
++                )
++                    .show()
++                false
++            }
++            mSHA256LinearLayout.setOnLongClickListener {
++                FileUtils.copyToClipboard(context, shaText)
++                Toast.makeText(
++                    context,
++                    context.resources.getString(R.string.hash_sha256) + " " +
++                        context.resources.getString(R.string.properties_copied_clipboard),
++                    Toast.LENGTH_SHORT
++                )
++                    .show()
++                false
++            }
++        } else {
++            mMD5LinearLayout.visibility = View.GONE
++            mSHA256LinearLayout.visibility = View.GONE
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFiles.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFiles.java
+new file mode 100644
+index 000000000..d4b6b6c9f
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFiles.java
+@@ -0,0 +1,175 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.movecopy;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.concurrent.Callable;
++
++import com.amaze.filemanager.file_operations.exceptions.ShellNotRunningException;
++import com.amaze.filemanager.file_operations.filesystem.OpenMode;
++import com.amaze.filemanager.filesystem.HybridFile;
++import com.amaze.filemanager.filesystem.HybridFileParcelable;
++import com.amaze.filemanager.filesystem.Operations;
++import com.amaze.filemanager.filesystem.cloud.CloudUtil;
++import com.amaze.filemanager.filesystem.files.FileUtils;
++import com.amaze.filemanager.filesystem.root.RenameFileCommand;
++import com.amaze.filemanager.utils.DataUtils;
++import com.cloudrail.si.interfaces.CloudStorage;
++
++import android.content.Context;
++import android.util.Log;
++
++import androidx.annotation.Nullable;
++import androidx.annotation.WorkerThread;
++
++/**
++ * AsyncTask that moves files from source to destination by trying to rename files first, if they're
++ * in the same filesystem, else starting the copy service. Be advised - do not start this AsyncTask
++ * directly but use {@link PrepareCopyTask} instead
++ */
++public class MoveFiles implements Callable<MoveFilesReturn> {
++
++  private final ArrayList<ArrayList<HybridFileParcelable>> files;
++  private final ArrayList<String> paths;
++  private final Context context;
++  private final OpenMode mode;
++  private long totalBytes = 0L;
++  private final boolean isRootExplorer;
++
++  public MoveFiles(
++      ArrayList<ArrayList<HybridFileParcelable>> files,
++      boolean isRootExplorer,
++      Context context,
++      OpenMode mode,
++      ArrayList<String> paths) {
++    this.context = context;
++    this.files = files;
++    this.mode = mode;
++    this.isRootExplorer = isRootExplorer;
++    this.paths = paths;
++  }
++
++  @WorkerThread
++  @Override
++  public MoveFilesReturn call() {
++    if (files.size() == 0) {
++      return new MoveFilesReturn(true, false, 0, 0);
++    }
++
++    for (ArrayList<HybridFileParcelable> filesCurrent : files) {
++      totalBytes += FileUtils.getTotalBytes(filesCurrent, context);
++    }
++    HybridFile destination = new HybridFile(mode, paths.get(0));
++    long destinationSize = destination.getUsableSpace();
++
++    for (int i = 0; i < paths.size(); i++) {
++      for (HybridFileParcelable baseFile : files.get(i)) {
++        final MoveFilesReturn r = processFile(baseFile, paths.get(i), destinationSize);
++        if (r != null) {
++          return r;
++        }
++      }
++    }
++    return new MoveFilesReturn(true, false, destinationSize, totalBytes);
++  }
++
++  @Nullable
++  private MoveFilesReturn processFile(
++      HybridFileParcelable baseFile, String path, long destinationSize) {
++    String destPath = path + "/" + baseFile.getName(context);
++    if (baseFile.getPath().indexOf('?') > 0)
++      destPath += baseFile.getPath().substring(baseFile.getPath().indexOf('?'));
++    if (!isMoveOperationValid(baseFile, new HybridFile(mode, path))) {
++      // TODO: 30/06/20 Replace runtime exception with generic exception
++      Log.w(getClass().getSimpleName(), "Some files failed to be moved", new RuntimeException());
++      return new MoveFilesReturn(false, true, destinationSize, totalBytes);
++    }
++    switch (mode) {
++      case FILE:
++        File dest = new File(destPath);
++        File source = new File(baseFile.getPath());
++        if (!source.renameTo(dest)) {
++
++          // check if we have root
++          if (isRootExplorer) {
++            try {
++              if (!RenameFileCommand.INSTANCE.renameFile(baseFile.getPath(), destPath)) {
++                return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++              }
++            } catch (ShellNotRunningException e) {
++              e.printStackTrace();
++              return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++            }
++          } else {
++            return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++          }
++        }
++        break;
++      case DROPBOX:
++      case BOX:
++      case ONEDRIVE:
++      case GDRIVE:
++        DataUtils dataUtils = DataUtils.getInstance();
++
++        CloudStorage cloudStorage = dataUtils.getAccount(mode);
++        if (baseFile.getMode() == mode) {
++          // source and target both in same filesystem, use API method
++          try {
++            cloudStorage.move(
++                CloudUtil.stripPath(mode, baseFile.getPath()), CloudUtil.stripPath(mode, destPath));
++          } catch (RuntimeException e) {
++            e.printStackTrace();
++            return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++          }
++        } else {
++          // not in same filesystem, execute service
++          return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++        }
++      default:
++        return new MoveFilesReturn(false, false, destinationSize, totalBytes);
++    }
++
++    return null;
++  }
++
++  private boolean isMoveOperationValid(HybridFileParcelable sourceFile, HybridFile targetFile) {
++    return !Operations.isCopyLoopPossible(sourceFile, targetFile) && sourceFile.exists(context);
++  }
++
++  /**
++   * Maintains a list of filesystems supporting the move/rename implementation. Please update to
++   * return your {@link OpenMode} type if it is supported here
++   *
++   * @return
++   */
++  public static HashSet<OpenMode> getOperationSupportedFileSystem() {
++    HashSet<OpenMode> hashSet = new HashSet<>();
++    hashSet.add(OpenMode.SMB);
++    hashSet.add(OpenMode.FILE);
++    hashSet.add(OpenMode.DROPBOX);
++    hashSet.add(OpenMode.BOX);
++    hashSet.add(OpenMode.GDRIVE);
++    hashSet.add(OpenMode.ONEDRIVE);
++    return hashSet;
++  }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFilesTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFilesTask.kt
+new file mode 100644
+index 000000000..a22a17735
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/MoveFilesTask.kt
+@@ -0,0 +1,157 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.movecopy
++
++import android.content.Context
++import android.content.Intent
++import android.util.Log
++import android.widget.Toast
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.asynchronous.asynctasks.Task
++import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil
++import com.amaze.filemanager.asynchronous.services.CopyService
++import com.amaze.filemanager.database.CryptHandler
++import com.amaze.filemanager.database.models.explorer.EncryptedEntry
++import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.filesystem.HybridFile
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.filesystem.files.CryptUtil
++import com.amaze.filemanager.filesystem.files.FileUtils
++import com.amaze.filemanager.ui.activities.MainActivity
++import java.util.*
++
++data class MoveFilesReturn(
++    val movedCorrectly: Boolean,
++    val invalidOperation: Boolean,
++    val destinationSize: Long,
++    val totalSize: Long
++)
++
++class MoveFilesTask(
++    val files: ArrayList<ArrayList<HybridFileParcelable>>,
++    val isRootExplorer: Boolean,
++    val currentPath: String,
++    context: Context,
++    val mode: OpenMode,
++    val paths: ArrayList<String>
++) : Task<MoveFilesReturn, MoveFiles> {
++
++    companion object {
++        private val TAG = MoveFilesTask::class.java.simpleName
++    }
++
++    private val task: MoveFiles = MoveFiles(files, isRootExplorer, context, mode, paths)
++    private val applicationContext: Context = context.applicationContext
++
++    override fun getTask(): MoveFiles = task
++
++    override fun onError(error: Throwable) {
++        Log.e(TAG, "Unexpected error on file move: ", error)
++    }
++
++    override fun onFinish(value: MoveFilesReturn) {
++        val (movedCorrectly, invalidOperation, destinationSize, totalBytes) = value
++
++        if (movedCorrectly) {
++            onMovedCorrectly(invalidOperation)
++        } else {
++            onMovedFail(destinationSize, totalBytes)
++        }
++    }
++
++    private fun onMovedCorrectly(invalidOperation: Boolean) {
++        if (currentPath == paths[0]) {
++            // mainFrag.updateList();
++            val intent = Intent(MainActivity.KEY_INTENT_LOAD_LIST)
++            intent.putExtra(MainActivity.KEY_INTENT_LOAD_LIST_FILE, paths[0])
++            applicationContext.sendBroadcast(intent)
++        }
++
++        if (invalidOperation) {
++            Toast.makeText(
++                applicationContext,
++                R.string.some_files_failed_invalid_operation,
++                Toast.LENGTH_LONG
++            )
++                .show()
++        }
++
++        for (i in paths.indices) {
++            val targetFiles: MutableList<HybridFile> = ArrayList()
++            val sourcesFiles: MutableList<HybridFileParcelable> = ArrayList()
++            for (f in files[i]) {
++                val file = HybridFile(
++                    OpenMode.FILE,
++                    paths[i] + "/" + f.getName(applicationContext)
++                )
++                targetFiles.add(file)
++            }
++            for (hybridFileParcelables in files) {
++                sourcesFiles.addAll(hybridFileParcelables)
++            }
++            FileUtils.scanFile(applicationContext, sourcesFiles.toTypedArray())
++            FileUtils.scanFile(applicationContext, targetFiles.toTypedArray())
++        }
++
++        // updating encrypted db entry if any encrypted file was moved
++        AppConfig.getInstance()
++            .runInBackground {
++                for (i in paths.indices) {
++                    for (file in files[i]) {
++                        if (file.getName(applicationContext).endsWith(CryptUtil.CRYPT_EXTENSION)) {
++                            val cryptHandler = CryptHandler.getInstance()
++                            val oldEntry = cryptHandler.findEntry(file.path)
++                            if (oldEntry != null) {
++                                val newEntry = EncryptedEntry()
++                                newEntry.id = oldEntry.id
++                                newEntry.password = oldEntry.password
++                                newEntry.path = paths[i] + "/" + file.getName(applicationContext)
++                                cryptHandler.updateEntry(oldEntry, newEntry)
++                            }
++                        }
++                    }
++                }
++            }
++    }
++
++    private fun onMovedFail(destinationSize: Long, totalBytes: Long) {
++        if (totalBytes > 0 && destinationSize < totalBytes) {
++            // destination don't have enough space; return
++            Toast.makeText(
++                applicationContext,
++                applicationContext.resources.getString(R.string.in_safe),
++                Toast.LENGTH_LONG
++            )
++                .show()
++            return
++        }
++        for (i in paths.indices) {
++            val intent = Intent(applicationContext, CopyService::class.java)
++            intent.putExtra(CopyService.TAG_COPY_SOURCES, files[i])
++            intent.putExtra(CopyService.TAG_COPY_TARGET, paths[i])
++            intent.putExtra(CopyService.TAG_COPY_MOVE, true)
++            intent.putExtra(CopyService.TAG_COPY_OPEN_MODE, mode.ordinal)
++            intent.putExtra(CopyService.TAG_IS_ROOT_EXPLORER, isRootExplorer)
++            ServiceWatcherUtil.runService(applicationContext, intent)
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/PrepareCopyTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/PrepareCopyTask.java
+similarity index 92%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/PrepareCopyTask.java
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/PrepareCopyTask.java
+index c6447a4f6..a740edf1d 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/PrepareCopyTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/movecopy/PrepareCopyTask.java
+@@ -18,7 +18,7 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.asynchronous.asynctasks;
++package com.amaze.filemanager.asynchronous.asynctasks.movecopy;
+ 
+ import static com.amaze.filemanager.file_operations.filesystem.FolderStateKt.CAN_CREATE_FILES;
+ import static com.amaze.filemanager.file_operations.filesystem.OperationTypeKt.COPY;
+@@ -34,6 +34,7 @@ import java.util.Set;
+ import com.afollestad.materialdialogs.DialogAction;
+ import com.afollestad.materialdialogs.MaterialDialog;
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.asynchronous.asynctasks.TaskKt;
+ import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil;
+ import com.amaze.filemanager.asynchronous.services.CopyService;
+ import com.amaze.filemanager.databinding.CopyDialogBinding;
+@@ -57,17 +58,14 @@ import android.widget.Toast;
+ import androidx.annotation.IntDef;
+ 
+ /**
+- * Created by arpitkh996 on 12-01-2016, modified by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+- *
+- * <p>This AsyncTask works by creating a tree where each folder that can be fusioned together with
++ * This AsyncTask works by creating a tree where each folder that can be fusioned together with
+  * another in the destination is a node (CopyNode). While the tree is being created an indeterminate
+  * ProgressDialog is shown. Each node is copied when the conflicts are dealt with (the dialog is
+  * shown, and the tree is walked via a BFS). If the process is cancelled (via the button in the
+  * dialog) the dialog closes without any more code to be executed, finishCopying() is never executed
+  * so no changes are made.
+  */
+-public class PrepareCopyTask
+-    extends AsyncTask<ArrayList<HybridFileParcelable>, String, PrepareCopyTask.CopyNode> {
++public class PrepareCopyTask extends AsyncTask<Void, String, PrepareCopyTask.CopyNode> {
+ 
+   private final String path;
+   private final Boolean move;
+@@ -85,7 +83,7 @@ public class PrepareCopyTask
+   private CopyNode copyFolder;
+   private final ArrayList<String> paths = new ArrayList<>();
+   private final ArrayList<ArrayList<HybridFileParcelable>> filesToCopyPerFolder = new ArrayList<>();
+-  private ArrayList<HybridFileParcelable> filesToCopy; // a copy of params sent to this
++  private final ArrayList<HybridFileParcelable> filesToCopy; // a copy of params sent to this
+ 
+   private static final int UNKNOWN = -1;
+   private static final int DO_NOT_REPLACE = 0;
+@@ -95,14 +93,19 @@ public class PrepareCopyTask
+   @interface DialogState {}
+ 
+   public PrepareCopyTask(
+-      String path, Boolean move, MainActivity con, boolean rootMode, OpenMode openMode) {
++      String path,
++      Boolean move,
++      MainActivity con,
++      boolean rootMode,
++      OpenMode openMode,
++      ArrayList<HybridFileParcelable> filesToCopy) {
+     this.move = move;
+     mainActivity = new WeakReference<>(con);
+     context = new WeakReference<>(con);
+     this.openMode = openMode;
+     this.rootMode = rootMode;
+-
+     this.path = path;
++    this.filesToCopy = filesToCopy;
+   }
+ 
+   @Override
+@@ -118,8 +121,7 @@ public class PrepareCopyTask
+   }
+ 
+   @Override
+-  protected CopyNode doInBackground(ArrayList<HybridFileParcelable>... params) {
+-    filesToCopy = params[0];
++  protected CopyNode doInBackground(Void... params) {
+     long totalBytes = 0;
+ 
+     if (openMode == OpenMode.OTG
+@@ -345,8 +347,9 @@ public class PrepareCopyTask
+             startService(filesToCopyPerFolder.get(i), paths.get(i), openMode);
+           }
+         } else {
+-          new MoveFiles(filesToCopyPerFolder, rootMode, path, context.get(), openMode)
+-              .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, paths);
++          TaskKt.fromTask(
++              new MoveFilesTask(
++                  filesToCopyPerFolder, rootMode, path, context.get(), openMode, paths));
+         }
+       }
+     } else {
+@@ -359,9 +362,10 @@ public class PrepareCopyTask
+   }
+ 
+   class CopyNode {
+-    private String path;
+-    private ArrayList<HybridFileParcelable> filesToCopy, conflictingFiles;
+-    private ArrayList<CopyNode> nextNodes = new ArrayList<>();
++    private final String path;
++    private final ArrayList<HybridFileParcelable> filesToCopy;
++    private final ArrayList<HybridFileParcelable> conflictingFiles;
++    private final ArrayList<CopyNode> nextNodes = new ArrayList<>();
+ 
+     CopyNode(String p, ArrayList<HybridFileParcelable> filesToCopy) {
+       path = p;
+@@ -427,14 +431,6 @@ public class PrepareCopyTask
+       return path;
+     }
+ 
+-    ArrayList<HybridFileParcelable> getFilesToCopy() {
+-      return filesToCopy;
+-    }
+-
+-    ArrayList<HybridFileParcelable> getConflictingFiles() {
+-      return conflictingFiles;
+-    }
+-
+     private CopyNode getUnvisitedChildNode(Set<CopyNode> visited, CopyNode node) {
+       for (CopyNode n : node.nextNodes) {
+         if (!visited.contains(n)) {
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/searchfilesystem/SearchAsyncTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/searchfilesystem/SearchAsyncTask.java
+index cb96a64ce..3207e3b27 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/searchfilesystem/SearchAsyncTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/searchfilesystem/SearchAsyncTask.java
+@@ -22,7 +22,6 @@ package com.amaze.filemanager.asynchronous.asynctasks.searchfilesystem;
+ 
+ import static com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants.PREFERENCE_SHOW_HIDDENFILES;
+ 
+-import java.lang.ref.WeakReference;
+ import java.util.regex.Pattern;
+ 
+ import com.amaze.filemanager.asynchronous.asynctasks.StatefulAsyncTask;
+@@ -31,31 +30,42 @@ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.ui.fragments.SearchWorkerFragment;
+ 
+-import android.app.Activity;
++import android.content.Context;
+ import android.os.AsyncTask;
+ import android.util.Log;
+ 
+ import androidx.preference.PreferenceManager;
+ 
+-public class SearchAsyncTask extends AsyncTask<String, HybridFileParcelable, Void>
++public class SearchAsyncTask extends AsyncTask<Void, HybridFileParcelable, Void>
+     implements StatefulAsyncTask<SearchWorkerFragment.HelperCallbacks> {
+ 
+   private static final String TAG = "SearchAsyncTask";
+ 
+-  private WeakReference<Activity> activity;
++  /** This necessarily leaks the context */
++  private final Context applicationContext;
++
+   private SearchWorkerFragment.HelperCallbacks callbacks;
+-  private String input;
+-  private OpenMode openMode;
+-  private boolean rootMode, isRegexEnabled, isMatchesEnabled;
++  private final String input;
++  private final boolean rootMode;
++  private final boolean isRegexEnabled;
++  private final boolean isMatchesEnabled;
++  private final HybridFile file;
+ 
+   public SearchAsyncTask(
+-      Activity a, String input, OpenMode openMode, boolean root, boolean regex, boolean matches) {
+-    activity = new WeakReference<>(a);
++      Context context,
++      String input,
++      OpenMode openMode,
++      boolean root,
++      boolean regex,
++      boolean matches,
++      String path) {
++    this.applicationContext = context.getApplicationContext();
+     this.input = input;
+-    this.openMode = openMode;
+     rootMode = root;
+     isRegexEnabled = regex;
+     isMatchesEnabled = matches;
++
++    this.file = new HybridFile(openMode, path);
+   }
+ 
+   @Override
+@@ -73,10 +83,7 @@ public class SearchAsyncTask extends AsyncTask<String, HybridFileParcelable, Voi
+   // callbacks not checked for null because of possibility of
+   // race conditions b/w worker thread main thread
+   @Override
+-  protected Void doInBackground(String... params) {
+-    String path = params[0];
+-    HybridFile file = new HybridFile(openMode, path);
+-    file.generateMode(activity.get());
++  protected Void doInBackground(Void... params) {
+     if (file.isSmb()) return null;
+ 
+     // level 1
+@@ -123,17 +130,18 @@ public class SearchAsyncTask extends AsyncTask<String, HybridFileParcelable, Voi
+    * @param directory the current path
+    */
+   private void search(HybridFile directory, final SearchFilter filter) {
+-    if (directory.isDirectory(activity.get())) { // do you have permission to read this directory?
++    if (directory.isDirectory(
++        applicationContext)) { // do you have permission to read this directory?
+       directory.forEachChildrenFile(
+-          activity.get(),
++          applicationContext,
+           rootMode,
+           file -> {
+             boolean showHiddenFiles =
+-                PreferenceManager.getDefaultSharedPreferences(activity.get())
++                PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                     .getBoolean(PREFERENCE_SHOW_HIDDENFILES, false);
+ 
+             if ((!isCancelled() && (showHiddenFiles || !file.isHidden()))) {
+-              if (filter.searchFilter(file.getName(activity.get()))) {
++              if (filter.searchFilter(file.getName(applicationContext))) {
+                 publishProgress(file);
+               }
+               if (file.isDirectory() && !isCancelled()) {
+@@ -142,7 +150,7 @@ public class SearchAsyncTask extends AsyncTask<String, HybridFileParcelable, Voi
+             }
+           });
+     } else {
+-      Log.d(TAG, "Cannot search " + directory.getPath() + ": Permission Denied");
++      Log.w(TAG, "Cannot search " + directory.getPath() + ": Permission Denied");
+     }
+   }
+ 
+@@ -199,7 +207,6 @@ public class SearchAsyncTask extends AsyncTask<String, HybridFileParcelable, Voi
+       }
+     }
+ 
+-    Log.d(getClass().getSimpleName(), stringBuilder.toString());
+     return stringBuilder.toString();
+   }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/database/CryptHandler.java b/app/src/main/java/com/amaze/filemanager/database/CryptHandler.java
+index 853b6c233..4686dad88 100644
+--- a/app/src/main/java/com/amaze/filemanager/database/CryptHandler.java
++++ b/app/src/main/java/com/amaze/filemanager/database/CryptHandler.java
+@@ -28,6 +28,7 @@ import com.amaze.filemanager.database.models.explorer.EncryptedEntry;
+ import android.util.Log;
+ 
+ import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
+ 
+ import io.reactivex.schedulers.Schedulers;
+ 
+@@ -61,6 +62,7 @@ public class CryptHandler {
+     database.encryptedEntryDao().update(newEncryptedEntry).subscribeOn(Schedulers.io()).subscribe();
+   }
+ 
++  @Nullable
+   public EncryptedEntry findEntry(String path) {
+     try {
+       return database.encryptedEntryDao().select(path).subscribeOn(Schedulers.io()).blockingGet();
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/PasteHelper.java b/app/src/main/java/com/amaze/filemanager/filesystem/PasteHelper.java
+index dfeabb2e3..3654967a6 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/PasteHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/PasteHelper.java
+@@ -25,7 +25,7 @@ import java.util.Arrays;
+ import java.util.Objects;
+ 
+ import com.amaze.filemanager.R;
+-import com.amaze.filemanager.asynchronous.asynctasks.PrepareCopyTask;
++import com.amaze.filemanager.asynchronous.asynctasks.movecopy.PrepareCopyTask;
+ import com.amaze.filemanager.ui.activities.MainActivity;
+ import com.amaze.filemanager.ui.fragments.MainFragment;
+ import com.amaze.filemanager.utils.Utils;
+@@ -169,8 +169,9 @@ public final class PasteHelper implements Parcelable {
+                                   move,
+                                   mainActivity,
+                                   mainActivity.isRootExplorer(),
+-                                  mainFragment.getMainFragmentViewModel().getOpenMode())
+-                              .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, arrayList);
++                                  mainFragment.getMainFragmentViewModel().getOpenMode(),
++                                  arrayList)
++                              .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                           dismissSnackbar(true);
+                         },
+                         () -> dismissSnackbar(true));
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt
+index d2b6c92bf..86824b93a 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt
+@@ -22,13 +22,9 @@ package com.amaze.filemanager.filesystem.compressed.showcontents
+ 
+ import android.content.Context
+ import android.content.Intent
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperCallable
+ import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil
+ import com.amaze.filemanager.asynchronous.services.ExtractService
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ /** @author Emmanuel on 20/11/2017, at 17:14.
+  */
+@@ -43,9 +39,8 @@ abstract class Decompressor(protected var context: Context) {
+      */
+     abstract fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
+-    ): CompressedHelperTask
++        addGoBackItem: Boolean
++    ): CompressedHelperCallable
+ 
+     /** Decompress a file somewhere  */
+     fun decompress(whereToDecompress: String) {
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt
+index a17ba7a07..1d520f2da 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt
+@@ -21,22 +21,17 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.RarHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.RarHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import com.github.junrar.rarfile.FileHeader
+-import java.util.*
+ 
+ class RarDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        RarHelperTask(filePath, path, addGoBackItem, onFinish)
++    RarHelperCallable(filePath, path, addGoBackItem)
+ 
+     override fun realRelativeDirectory(dir: String): String {
+         var dir = dir
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
+index 9bf72fc66..b6309eae5 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.SevenZipHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.SevenZipHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class SevenZipDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        SevenZipHelperTask(filePath, path, addGoBackItem, onFinish)
++    SevenZipHelperCallable(filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarBzip2Decompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarBzip2Decompressor.kt
+index 5a832b995..340af358c 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarBzip2Decompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarBzip2Decompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarBzip2HelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarBzip2HelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class TarBzip2Decompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        TarBzip2HelperTask(context, filePath, path, addGoBackItem, onFinish)
++        TarBzip2HelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
+index aebe64398..ad39d28a0 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class TarDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        TarHelperTask(context, filePath, path, addGoBackItem, onFinish)
++        TarHelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarGzDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarGzDecompressor.kt
+index acdb3fdc5..03e0d8026 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarGzDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarGzDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarGzHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarGzHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class TarGzDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        TarGzHelperTask(context, filePath, path, addGoBackItem, onFinish)
++        TarGzHelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarLzmaDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarLzmaDecompressor.kt
+index cf26b1859..a3697ba23 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarLzmaDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarLzmaDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarLzmaHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarLzmaHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class TarLzmaDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        TarLzmaHelperTask(context, filePath, path, addGoBackItem, onFinish)
++        TarLzmaHelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarXzDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarXzDecompressor.kt
+index 84325db03..adfbdd293 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarXzDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarXzDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarXzHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarXzHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class TarXzDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        TarXzHelperTask(context, filePath, path, addGoBackItem, onFinish)
++        TarXzHelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/UnknownCompressedFileDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/UnknownCompressedFileDecompressor.kt
+index 6f86c60ec..4088b5bc9 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/UnknownCompressedFileDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/UnknownCompressedFileDecompressor.kt
+@@ -23,7 +23,7 @@ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ import android.content.Context
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+ import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.UnknownCompressedFileHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.UnknownCompressedFileHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+ import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import java.util.ArrayList
+@@ -34,8 +34,7 @@ import java.util.ArrayList
+ class UnknownCompressedFileDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        UnknownCompressedFileHelperTask(filePath, addGoBackItem, onFinish)
++        UnknownCompressedFileHelperCallable(filePath, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
+index 1efcffcac..ab16ccd16 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
+@@ -21,18 +21,13 @@
+ package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+ import android.content.Context
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperTask
++import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperCallable
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+-import java.util.*
+ 
+ class ZipDecompressor(context: Context) : Decompressor(context) {
+     override fun changePath(
+         path: String,
+-        addGoBackItem: Boolean,
+-        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++        addGoBackItem: Boolean
+     ) =
+-        ZipHelperTask(context, filePath, path, addGoBackItem, onFinish)
++        ZipHelperCallable(context, filePath, path, addGoBackItem)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+index 36af90ef7..fd97249ea 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+@@ -73,7 +73,8 @@ import com.amaze.filemanager.application.AppConfig;
+ import com.amaze.filemanager.asynchronous.SaveOnDataUtilsChange;
+ import com.amaze.filemanager.asynchronous.asynctasks.CloudLoaderAsyncTask;
+ import com.amaze.filemanager.asynchronous.asynctasks.DeleteTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.MoveFiles;
++import com.amaze.filemanager.asynchronous.asynctasks.TaskKt;
++import com.amaze.filemanager.asynchronous.asynctasks.movecopy.MoveFilesTask;
+ import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil;
+ import com.amaze.filemanager.asynchronous.services.CopyService;
+ import com.amaze.filemanager.database.CloudContract;
+@@ -1541,13 +1542,14 @@ public class MainActivity extends PermissionsActivity
+                   oppathe = "";
+                 }
+ 
+-                new MoveFiles(
++                TaskKt.fromTask(
++                    new MoveFilesTask(
+                         oparrayListList,
+                         isRootExplorer(),
+                         mainFragment.getCurrentPath(),
+-                        mainFragment.getActivity(),
+-                        OpenMode.FILE)
+-                    .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, oppatheList);
++                        this,
++                        OpenMode.FILE,
++                        oppatheList));
+                 break;
+               case NEW_FOLDER: // mkdir
+                 mainActivityHelper.mkDir(
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/DragAndDropDialog.kt b/app/src/main/java/com/amaze/filemanager/ui/dialogs/DragAndDropDialog.kt
+index 8abed5a22..e51502beb 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/DragAndDropDialog.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/DragAndDropDialog.kt
+@@ -32,7 +32,7 @@ import com.afollestad.materialdialogs.DialogAction
+ import com.afollestad.materialdialogs.MaterialDialog
+ import com.afollestad.materialdialogs.Theme
+ import com.amaze.filemanager.R
+-import com.amaze.filemanager.asynchronous.asynctasks.PrepareCopyTask
++import com.amaze.filemanager.asynchronous.asynctasks.movecopy.PrepareCopyTask
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.ui.activities.MainActivity
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
+@@ -109,9 +109,10 @@ class DragAndDropDialog : DialogFragment() {
+                 move,
+                 mainActivity,
+                 mainActivity.isRootExplorer,
+-                mainActivity.currentMainFragment?.mainFragmentViewModel?.openMode
++                mainActivity.currentMainFragment?.mainFragmentViewModel?.openMode,
++                files
+             )
+-                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, files)
++                .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR)
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+index b662ef200..2ffa395a1 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+@@ -46,8 +46,9 @@ import com.amaze.filemanager.adapters.HiddenAdapter;
+ import com.amaze.filemanager.adapters.data.LayoutElementParcelable;
+ import com.amaze.filemanager.application.AppConfig;
+ import com.amaze.filemanager.asynchronous.asynctasks.CountItemsOrAndSizeTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.GenerateHashesTask;
+ import com.amaze.filemanager.asynchronous.asynctasks.LoadFolderSpaceDataTask;
++import com.amaze.filemanager.asynchronous.asynctasks.TaskKt;
++import com.amaze.filemanager.asynchronous.asynctasks.hashcalculator.CalculateHashTask;
+ import com.amaze.filemanager.asynchronous.services.EncryptService;
+ import com.amaze.filemanager.database.SortHandler;
+ import com.amaze.filemanager.database.models.explorer.Sort;
+@@ -539,8 +540,7 @@ public class GeneralDialogCreation {
+         new CountItemsOrAndSizeTask(c, itemsText, baseFile, forStorage);
+     countItemsOrAndSizeTask.executeOnExecutor(executor);
+ 
+-    GenerateHashesTask hashGen = new GenerateHashesTask(baseFile, c, v);
+-    hashGen.executeOnExecutor(executor);
++    TaskKt.fromTask(new CalculateHashTask(baseFile, c, v));
+ 
+     /*Chart creation and data loading*/
+     {
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
+index 31501e413..2ae577005 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
+@@ -34,6 +34,7 @@ import android.os.IBinder
+ import android.provider.MediaStore
+ import android.util.Log
+ import android.view.*
++import android.widget.EditText
+ import android.widget.TextView
+ import android.widget.Toast
+ import androidx.annotation.ColorInt
+@@ -45,33 +46,40 @@ import androidx.preference.PreferenceManager
+ import androidx.recyclerview.widget.LinearLayoutManager
+ import androidx.recyclerview.widget.RecyclerView
+ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
++import com.afollestad.materialdialogs.DialogAction
++import com.afollestad.materialdialogs.MaterialDialog
++import com.afollestad.materialdialogs.MaterialDialog.SingleButtonCallback
+ import com.amaze.filemanager.R
+ import com.amaze.filemanager.adapters.CompressedExplorerAdapter
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+ import com.amaze.filemanager.application.AppConfig
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.asynchronous.asynctasks.DeleteTask
+ import com.amaze.filemanager.asynchronous.services.ExtractService
+ import com.amaze.filemanager.databinding.ActionmodeBinding
+ import com.amaze.filemanager.databinding.MainFragBinding
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper
+ import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
+ import com.amaze.filemanager.filesystem.files.FileUtils
+ import com.amaze.filemanager.ui.activities.MainActivity
+ import com.amaze.filemanager.ui.colors.ColorPreferenceHelper
++import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation
+ import com.amaze.filemanager.ui.fragments.data.CompressedExplorerFragmentViewModel
+ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
+ import com.amaze.filemanager.ui.theme.AppTheme
+ import com.amaze.filemanager.ui.views.DividerItemDecoration
+ import com.amaze.filemanager.ui.views.FastScroller
+ import com.amaze.filemanager.utils.BottomBarButtonPath
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import com.amaze.filemanager.utils.Utils
+ import com.github.junrar.exception.UnsupportedRarV5Exception
+ import com.google.android.material.appbar.AppBarLayout
+ import com.google.android.material.appbar.AppBarLayout.OnOffsetChangedListener
++import io.reactivex.Flowable
++import io.reactivex.android.schedulers.AndroidSchedulers
++import io.reactivex.schedulers.Schedulers
++import org.apache.commons.compress.PasswordRequiredException
+ import java.io.File
+ import java.io.FileOutputStream
+ import java.io.IOException
+@@ -518,28 +526,60 @@ class CompressedExplorerFragment : Fragment(), BottomBarButtonPath {
+         if (folder.startsWith("/")) folder = folder.substring(1)
+         val addGoBackItem = gobackitem && !isRoot(folder)
+         decompressor.let {
+-            it.changePath(
+-                folder,
+-                addGoBackItem,
+-                object :
+-                    OnAsyncTaskFinished<AsyncTaskResult<
+-                            ArrayList<CompressedObjectParcelable>>> {
+-                    override fun onAsyncTaskFinished(
+-                        data:
+-                            AsyncTaskResult<ArrayList<CompressedObjectParcelable>>
+-                    ) {
+-                        if (data.exception == null) {
+-                            viewModel.elements.postValue(data.result)
+-                            viewModel.folder = folder
++            Flowable.fromCallable(it.changePath(folder, addGoBackItem))
++                .subscribeOn(Schedulers.io())
++                .observeOn(AndroidSchedulers.mainThread())
++                .subscribe(
++                    { result ->
++                        viewModel.elements.postValue(result)
++                        viewModel.folder = folder
++                    },
++                    { error ->
++                        if (error is PasswordRequiredException) {
++                            dialogGetPasswordFromUser(folder)
+                         } else {
+-                            archiveCorruptOrUnsupportedToast(data.exception)
++                            archiveCorruptOrUnsupportedToast(error)
+                         }
+                     }
+-                }
+-            ).execute()
++                )
+             swipeRefreshLayout.isRefreshing = true
+             updateBottomBar()
+-        } ?: archiveCorruptOrUnsupportedToast(null)
++        }
++    }
++
++    private fun dialogGetPasswordFromUser(filePath: String) {
++        val positiveCallback =
++            SingleButtonCallback { dialog: MaterialDialog, action: DialogAction? ->
++                val editText = dialog.view.findViewById<EditText>(R.id.singleedittext_input)
++                val password: String = editText.getText().toString()
++                ArchivePasswordCache.getInstance()[filePath] = password
++                dialog.dismiss()
++                changePath(filePath)
++            }
++        ArchivePasswordCache.getInstance().remove(filePath)
++        GeneralDialogCreation.showPasswordDialog(
++            requireContext(),
++            (requireActivity() as MainActivity),
++            AppConfig.getInstance().utilsProvider.appTheme,
++            R.string.archive_password_prompt,
++            R.string.authenticate_password,
++            positiveCallback,
++            null
++        )
++    }
++
++    private fun archiveCorruptOrUnsupportedToast(e: Throwable?) {
++        @StringRes val msg: Int =
++            if (e?.cause?.javaClass is UnsupportedRarV5Exception)
++                R.string.error_unsupported_v5_rar
++            else
++                R.string.archive_unsupported_or_corrupt
++        Toast.makeText(
++            activity,
++            requireContext().getString(msg, compressedFile.absolutePath),
++            Toast.LENGTH_LONG
++        ).show()
++        requireActivity().supportFragmentManager.beginTransaction().remove(this).commit()
+     }
+ 
+     override val path: String
+@@ -646,20 +686,6 @@ class CompressedExplorerFragment : Fragment(), BottomBarButtonPath {
+      */
+     fun requireMainActivity(): MainActivity = requireActivity() as MainActivity
+ 
+-    private fun archiveCorruptOrUnsupportedToast(e: Throwable?) {
+-        @StringRes val msg: Int =
+-            if (e?.cause?.javaClass is UnsupportedRarV5Exception)
+-                R.string.error_unsupported_v5_rar
+-            else
+-                R.string.archive_unsupported_or_corrupt
+-        Toast.makeText(
+-            activity,
+-            requireContext().getString(msg, compressedFile.absolutePath),
+-            Toast.LENGTH_LONG
+-        ).show()
+-        requireActivity().supportFragmentManager.beginTransaction().remove(this).commit()
+-    }
+-
+     companion object {
+         const val KEY_PATH = "path"
+         private const val KEY_CACHE_FILES = "cache_files"
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/SearchWorkerFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/SearchWorkerFragment.java
+index aa8b3749f..def309102 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/SearchWorkerFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/SearchWorkerFragment.java
+@@ -83,9 +83,9 @@ public class SearchWorkerFragment extends Fragment {
+ 
+     searchAsyncTask =
+         new SearchAsyncTask(
+-            getActivity(), input, openMode, rootMode, isRegexEnabled, isMatchesEnabled);
++            requireContext(), input, openMode, rootMode, isRegexEnabled, isMatchesEnabled, path);
+     searchAsyncTask.setCallback(callbacks);
+-    searchAsyncTask.execute(path);
++    searchAsyncTask.execute();
+   }
+ 
+   @Override
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFilesTest.java b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFilesTest.java
+index cde41819f..5d1afc7f3 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFilesTest.java
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/MoveFilesTest.java
+@@ -39,6 +39,7 @@ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ import org.robolectric.annotation.Config;
+ 
++import com.amaze.filemanager.asynchronous.asynctasks.movecopy.MoveFiles;
+ import com.amaze.filemanager.file_operations.filesystem.OpenMode;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.ssh.AbstractSftpServerTest;
+@@ -82,17 +83,18 @@ public class MoveFilesTest extends AbstractSftpServerTest {
+     filesToCopy.add(file);
+     ArrayList<ArrayList<HybridFileParcelable>> filesToCopyPerFolder = new ArrayList<>();
+     filesToCopyPerFolder.add(filesToCopy);
++
++    ArrayList<String> paths = new ArrayList<>();
++    paths.add(Environment.getExternalStorageDirectory().getAbsolutePath());
+     MoveFiles task =
+         new MoveFiles(
+             filesToCopyPerFolder,
+             false,
+-            null,
+             ApplicationProvider.getApplicationContext(),
+-            OpenMode.FILE);
++            OpenMode.FILE,
++            paths);
+ 
+-    ArrayList<String> paths = new ArrayList<>();
+-    paths.add(Environment.getExternalStorageDirectory().getAbsolutePath());
+-    task.doInBackground(paths);
++    task.call();
+ 
+     assertFalse(sourceFile.exists());
+     assertTrue(new File(Environment.getExternalStorageDirectory(), "testfile.bin").exists());
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableArchiveTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableArchiveTest.kt
+new file mode 100644
+index 000000000..717538cc3
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableArchiveTest.kt
+@@ -0,0 +1,123 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.os.Environment
++import org.junit.Assert.*
++import org.junit.Test
++import java.io.File
++import java.time.ZoneId
++import java.time.ZonedDateTime
++
++@Suppress("TooManyFunctions", "StringLiteralDuplication")
++abstract class AbstractCompressedHelperCallableArchiveTest : AbstractCompressedHelperCallableTest() {
++
++    private val EXPECTED_TIMESTAMP = ZonedDateTime.of(
++        2018,
++        5,
++        29,
++        10,
++        38,
++        0,
++        0,
++        ZoneId.of("UTC")
++    ).toInstant().toEpochMilli()
++
++    protected abstract val archiveFileName: String
++
++    /**
++     * Test browse archive top level.
++     */
++    @Test
++    open fun testRoot() {
++        val task = createCallable("")
++        val result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("test-archive", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++    }
++
++    /**
++     * Test browse archive sub levels.
++     */
++    @Test
++    open fun testSublevels() {
++        var task = createCallable("test-archive")
++        var result = task.call()
++        assertEquals("Thrown from $javaClass.name", 5, result.size.toLong())
++        assertEquals("1", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        assertEquals("2", result[1].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[1].date)
++        assertEquals("3", result[2].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[2].date)
++        assertEquals("4", result[3].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[3].date)
++        assertEquals("a", result[4].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[4].date)
++        task = createCallable("test-archive/1")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("8", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/2")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("7", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/3")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("6", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/4")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("5", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/a")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("b", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/a/b")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("c", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/a/b/c")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("d", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        task = createCallable("test-archive/a/b/c/d")
++        result = task.call()
++        assertEquals(1, result.size.toLong())
++        assertEquals("lipsum.bin", result[0].name)
++        assertEquals(EXPECTED_TIMESTAMP, result[0].date)
++        // assertEquals(512, result.get(0).size);
++    }
++
++    protected fun createCallable(relativePath: String): CompressedHelperCallable =
++        doCreateCallable(File(Environment.getExternalStorageDirectory(), archiveFileName), relativePath)
++
++    protected abstract fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableTest.kt
+similarity index 78%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableTest.kt
+index 74c0943b5..4c24574f5 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperCallableTest.kt
+@@ -25,10 +25,7 @@ import android.os.Build.VERSION_CODES.KITKAT
+ import android.os.Build.VERSION_CODES.P
+ import android.os.Environment
+ import androidx.test.ext.junit.runners.AndroidJUnit4
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
+ import com.amaze.filemanager.shadows.ShadowMultiDex
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished
+ import org.junit.After
+ import org.junit.Before
+ import org.junit.runner.RunWith
+@@ -38,11 +35,10 @@ import java.io.File
+ import java.io.FileInputStream
+ import java.io.FileOutputStream
+ import java.util.*
+-import kotlin.collections.ArrayList
+ 
+ @RunWith(AndroidJUnit4::class)
+ @Config(shadows = [ShadowMultiDex::class], sdk = [JELLY_BEAN, KITKAT, P])
+-abstract class AbstractCompressedHelperTaskTest {
++abstract class AbstractCompressedHelperCallableTest {
+ 
+     private lateinit var systemTz: TimeZone
+ 
+@@ -76,16 +72,4 @@ abstract class AbstractCompressedHelperTaskTest {
+             )
+         }
+     }
+-
+-    companion object {
+-
+-        @JvmStatic
+-        // To ensure this is created only once and for all.
+-        val emptyCallback = object :
+-            OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> {
+-            override fun onAsyncTaskFinished(
+-                data: AsyncTaskResult<ArrayList<CompressedObjectParcelable>>
+-            ) = Unit
+-        }
+-    }
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskArchiveTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskArchiveTest.kt
+deleted file mode 100644
+index b2a136570..000000000
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskArchiveTest.kt
++++ /dev/null
+@@ -1,128 +0,0 @@
+-/*
+- * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress
+-
+-import android.os.Environment
+-import com.amaze.filemanager.test.randomBytes
+-import com.amaze.filemanager.test.supportedArchiveExtensions
+-import org.apache.commons.compress.archivers.ArchiveException
+-import org.junit.Assert.*
+-import org.junit.Test
+-import java.io.ByteArrayInputStream
+-import java.io.File
+-import java.io.FileOutputStream
+-import java.time.ZoneId
+-import java.time.ZonedDateTime
+-
+-@Suppress("TooManyFunctions", "StringLiteralDuplication")
+-abstract class AbstractCompressedHelperTaskArchiveTest : AbstractCompressedHelperTaskTest() {
+-
+-    private val EXPECTED_TIMESTAMP = ZonedDateTime.of(
+-        2018,
+-        5,
+-        29,
+-        10,
+-        38,
+-        0,
+-        0,
+-        ZoneId.of("UTC")
+-    ).toInstant().toEpochMilli()
+-
+-    protected abstract val archiveFileName: String
+-
+-    /**
+-     * Test browse archive top level.
+-     */
+-    @Test
+-    open fun testRoot() {
+-        val task = createTask("")
+-        val result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("test-archive", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-    }
+-
+-    /**
+-     * Test browse archive sub levels.
+-     */
+-    @Test
+-    open fun testSublevels() {
+-        var task = createTask("test-archive")
+-        var result = task.doInBackground()
+-        assertEquals("Thrown from $javaClass.name", 5, result.result.size.toLong())
+-        assertEquals("1", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        assertEquals("2", result.result[1].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[1].date)
+-        assertEquals("3", result.result[2].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[2].date)
+-        assertEquals("4", result.result[3].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[3].date)
+-        assertEquals("a", result.result[4].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[4].date)
+-        task = createTask("test-archive/1")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("8", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/2")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("7", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/3")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("6", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/4")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("5", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/a")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("b", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/a/b")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("c", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/a/b/c")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("d", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        task = createTask("test-archive/a/b/c/d")
+-        result = task.doInBackground()
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("lipsum.bin", result.result[0].name)
+-        assertEquals(EXPECTED_TIMESTAMP, result.result[0].date)
+-        // assertEquals(512, result.get(0).size);
+-    }
+-
+-    protected fun createTask(relativePath: String): CompressedHelperTask =
+-        doCreateTask(File(Environment.getExternalStorageDirectory(), archiveFileName), relativePath)
+-
+-    protected abstract fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask
+-}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTaskTestSuite.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallableTestSuite.kt
+similarity index 64%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTaskTestSuite.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallableTestSuite.kt
+index 2d5822baf..c5125ab41 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTaskTestSuite.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperCallableTestSuite.kt
+@@ -26,21 +26,21 @@ import org.junit.runners.Suite.SuiteClasses
+ 
+ @RunWith(Suite::class)
+ @SuiteClasses(
+-    TarGzHelperTaskTest::class,
+-    ZipHelperTaskTest::class,
+-    TarHelperTaskTest::class,
+-    RarHelperTaskTest::class,
+-    TarBzip2HelperTaskTest::class,
+-    TarLzmaHelperTaskTest::class,
+-    TarXzHelperTaskTest::class,
+-    TarXzHelperTaskTest2::class,
+-    SevenZipHelperTaskTest::class,
+-    SevenZipHelperTaskTest2::class,
+-    EncryptedRarHelperTaskTest::class,
+-    EncryptedZipHelperTaskTest::class,
+-    EncryptedSevenZipHelperTaskTest::class,
+-    ListEncryptedSevenZipHelperTaskTest::class,
+-    UnknownCompressedHelperTaskTest::class,
++    TarGzHelperCallableTest::class,
++    ZipHelperCallableTest::class,
++    TarHelperCallableTest::class,
++    RarHelperCallableTest::class,
++    TarBzip2HelperCallableTest::class,
++    TarLzmaHelperCallableTest::class,
++    TarXzHelperCallableTest::class,
++    TarXzHelperCallableTest2::class,
++    SevenZipHelperCallableTest::class,
++    SevenZipHelperCallableTest2::class,
++    EncryptedRarHelperCallableTest::class,
++    EncryptedZipHelperCallableTest::class,
++    EncryptedSevenZipHelperCallableTest::class,
++    ListEncryptedSevenZipHelperCallableTest::class,
++    UnknownCompressedHelperCallableTest::class,
+     CompressedHelperForBadArchiveTest::class
+ )
+-class CompressedHelperTaskTestSuite
++class CompressedHelperCallableTestSuite
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperForBadArchiveTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperForBadArchiveTest.kt
+index 56cf714a1..cd286d961 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperForBadArchiveTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperForBadArchiveTest.kt
+@@ -47,15 +47,18 @@ class CompressedHelperForBadArchiveTest {
+             val badArchive = File(Environment.getExternalStorageDirectory(), "bad-archive.$archiveType")
+             ByteArrayInputStream(data).copyTo(FileOutputStream(badArchive))
+             val task = CompressedHelper.getCompressorInstance(
+-                ApplicationProvider.getApplicationContext(), badArchive
+-            ).changePath("", false, AbstractCompressedHelperTaskTest.emptyCallback)
+-            val result = task.doInBackground()
+-            Assert.assertNull("Thrown from ${task.javaClass}", result.result)
+-            Assert.assertNotNull(result.exception)
+-            Assert.assertTrue(
+-                "Thrown from ${task.javaClass}: ${result.exception.javaClass} was thrown",
+-                ArchiveException::class.java.isAssignableFrom(result.exception.javaClass)
+-            )
++                    ApplicationProvider.getApplicationContext(), badArchive
++            ).changePath("", false)
++            try {
++                val result = task.call()
++                Assert.assertNull("Thrown from ${task.javaClass}", result)
++            } catch (exception: ArchiveException) {
++                Assert.assertNotNull(exception)
++                Assert.assertTrue(
++                        "Thrown from ${task.javaClass}: ${exception.javaClass} was thrown",
++                        ArchiveException::class.java.isAssignableFrom(exception.javaClass)
++                )
++            }
+         }
+     }
+ 
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperCallableTest.kt
+similarity index 83%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperCallableTest.kt
+index a30f164e7..3169897c6 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedRarHelperCallableTest.kt
+@@ -22,16 +22,15 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import java.io.File
+ 
+-class EncryptedRarHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class EncryptedRarHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive-encrypted.rar"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        RarHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            RarHelperCallable(
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperCallableTest.kt
+similarity index 82%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperCallableTest.kt
+index 5c128b66f..d476ccfc6 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedSevenZipHelperCallableTest.kt
+@@ -22,16 +22,15 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import java.io.File
+ 
+-class EncryptedSevenZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class EncryptedSevenZipHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive-encrypted.7z"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        SevenZipHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            SevenZipHelperCallable(
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperCallableTest.kt
+index fd8a79003..fd91ec0b6 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/EncryptedZipHelperCallableTest.kt
+@@ -23,17 +23,16 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class EncryptedZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class EncryptedZipHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive-encrypted.zip"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        ZipHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            ZipHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperCallableTest.kt
+similarity index 83%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperCallableTest.kt
+index e9588794e..fa290cb2b 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ListEncryptedSevenZipHelperCallableTest.kt
+@@ -23,15 +23,15 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
+ import java.io.File
+ 
+-class ListEncryptedSevenZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class ListEncryptedSevenZipHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive-encrypted-list.7z"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask {
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable {
+         archive.absolutePath.let {
+             ArchivePasswordCache.getInstance()[it] = "123456"
+-            return SevenZipHelperTask(it, relativePath, false, emptyCallback)
++            return SevenZipHelperCallable(it, relativePath, false)
+         }
+     }
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallableTest.kt
+similarity index 67%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallableTest.kt
+index 04c5cd210..fbfbf8d22 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperCallableTest.kt
+@@ -27,7 +27,7 @@ import org.junit.Assert.*
+ import org.junit.Test
+ import java.io.File
+ 
+-class RarHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class RarHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.rar"
+@@ -37,52 +37,52 @@ class RarHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
+      */
+     @Test
+     fun testMultiVolumeRar() {
+-        val task: CompressedHelperTask = RarHelperTask(
++        val callable: CompressedHelperCallable = RarHelperCallable(
+             File(
+                 Environment.getExternalStorageDirectory(),
+                 "test-multipart-archive-v4.part1.rar"
+             )
+                 .absolutePath,
+             "",
+-            false,
+-            emptyCallback
++            false
+         )
+-        val result = task.doInBackground()
++        val result = callable.call()
+         assertNotNull(result)
+-        assertNotNull(result.result)
+-        assertEquals(1, result.result.size.toLong())
+-        assertEquals("test.bin", result.result[0].name)
+-        assertEquals((1024 * 128).toLong(), result.result[0].size)
++        assertNotNull(result)
++        assertEquals(1, result.size.toLong())
++        assertEquals("test.bin", result[0].name)
++        assertEquals((1024 * 128).toLong(), result[0].size)
+     }
+ 
+     /**
+      * Test RAR v5.
+      */
+     @Test
++    @Suppress("Detekt.TooGenericExceptionCaught")
+     fun testMultiVolumeRarV5() {
+-        val task: CompressedHelperTask = RarHelperTask(
++        val callable: CompressedHelperCallable = RarHelperCallable(
+             File(
+                 Environment.getExternalStorageDirectory(),
+                 "test-multipart-archive-v5.part1.rar"
+             )
+                 .absolutePath,
+             "",
+-            false,
+-            emptyCallback
++            false
+         )
+-        val result = task.doInBackground()
+-        assertNotNull(result)
+-        assertNull(result.result)
+-        assertNotNull(result.exception)
+-        assertEquals(ArchiveException::class.java, result.exception.javaClass)
+-        assertEquals(UnsupportedRarV5Exception::class.java, result.exception.cause!!.javaClass)
++        val result = try {
++            callable.call()
++        } catch (exception: Throwable) {
++            assertEquals(ArchiveException::class.java, exception.javaClass)
++            assertEquals(UnsupportedRarV5Exception::class.java, exception.cause!!.javaClass)
++            null
++        }
++        assertNull(result)
+     }
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        RarHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            RarHelperCallable(
+         archive.absolutePath,
+         relativePath,
+-        false,
+-        emptyCallback
++        false
+     )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest.kt
+similarity index 82%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest.kt
+index 5764c6b78..b6a426c11 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest.kt
+@@ -22,16 +22,15 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import java.io.File
+ 
+-class SevenZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class SevenZipHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.7z"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        SevenZipHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            SevenZipHelperCallable(
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest2.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest2.kt
+similarity index 79%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest2.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest2.kt
+index 97cec2c09..68171e79b 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTaskTest2.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperCallableTest2.kt
+@@ -26,27 +26,26 @@ import org.junit.Test
+ import java.io.File
+ 
+ @Ignore("Test skipped due to problem at upstream library.")
+-class SevenZipHelperTaskTest2 : AbstractCompressedHelperTaskArchiveTest() {
++class SevenZipHelperCallableTest2 : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "compress.7z"
+ 
+     @Test
+     override fun testRoot() {
+-        val task = createTask("")
+-        val result = task.doInBackground()
+-        Assert.assertEquals(result.result.size.toLong(), 0)
++        val task = createCallable("")
++        val result = task.call()
++        Assert.assertEquals(result.size.toLong(), 0)
+     }
+ 
+     @Test
+     @Ignore("Not testing this one")
+     override fun testSublevels() = Unit
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        SevenZipHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            SevenZipHelperCallable(
+         archive.absolutePath,
+         relativePath,
+-        false,
+-        emptyCallback
++        false
+     )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallableTest.kt
+index 2dd820e30..f4b4d6c08 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarBzip2HelperCallableTest.kt
+@@ -23,17 +23,15 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class TarBzip2HelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
+-
++class TarBzip2HelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+     override val archiveFileName: String
+         get() = "test-archive.tar.bz2"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarBzip2HelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarBzip2HelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallableTest.kt
+index 263e4a9b6..2fb20b075 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarGzHelperCallableTest.kt
+@@ -23,17 +23,16 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class TarGzHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class TarGzHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.tar.gz"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarGzHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarGzHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallableTest.kt
+index 97e91d521..0218910a9 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperCallableTest.kt
+@@ -23,17 +23,16 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class TarHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class TarHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.tar"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallableTest.kt
+index f92efc8ac..7b8d27781 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarLzmaHelperCallableTest.kt
+@@ -23,17 +23,16 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class TarLzmaHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class TarLzmaHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.tar.lzma"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarLzmaHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarLzmaHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest.kt
+index 0fd314951..526880534 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest.kt
+@@ -23,17 +23,16 @@ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+-class TarXzHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class TarXzHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.tar.xz"
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarXzHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarXzHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest2.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest2.kt
+similarity index 55%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest2.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest2.kt
+index 2f3de90d3..9ca0fb3cd 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperTaskTest2.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarXzHelperCallableTest2.kt
+@@ -25,44 +25,42 @@ import org.junit.Assert.assertEquals
+ import org.junit.Test
+ import java.io.File
+ 
+-class TarXzHelperTaskTest2 : AbstractCompressedHelperTaskArchiveTest() {
+-
++class TarXzHelperCallableTest2 : AbstractCompressedHelperCallableArchiveTest() {
+     override val archiveFileName: String
+         get() = "compress.tar.xz"
+ 
+     @Test
+     override fun testRoot() {
+-        val task = createTask("")
+-        val result = task.doInBackground()
+-        assertEquals(result.result.size.toLong(), 1)
+-        assertEquals("compress", result.result[0].name)
++        val task = createCallable("")
++        val result = task.call()
++        assertEquals(result.size.toLong(), 1)
++        assertEquals("compress", result[0].name)
+     }
+ 
+     @Test
+     override fun testSublevels() {
+-        var task = createTask("compress")
+-        var result = task.doInBackground()
+-        assertEquals(result.result.size.toLong(), 3)
+-        assertEquals("a", result.result[0].name)
+-        assertEquals("bç", result.result[1].name)
+-        assertEquals("r.txt", result.result[2].name)
+-        assertEquals(4, result.result[2].size)
+-        task = createTask("compress/a")
+-        result = task.doInBackground()
+-        assertEquals(result.result.size.toLong(), 0)
+-        task = createTask("compress/bç")
+-        result = task.doInBackground()
+-        assertEquals(result.result.size.toLong(), 1)
+-        assertEquals("t.txt", result.result[0].name)
+-        assertEquals(6, result.result[0].size)
++        var task = createCallable("compress")
++        var result = task.call()
++        assertEquals(result.size.toLong(), 3)
++        assertEquals("a", result[0].name)
++        assertEquals("bç", result[1].name)
++        assertEquals("r.txt", result[2].name)
++        assertEquals(4, result[2].size)
++        task = createCallable("compress/a")
++        result = task.call()
++        assertEquals(result.size.toLong(), 0)
++        task = createCallable("compress/bç")
++        result = task.call()
++        assertEquals(result.size.toLong(), 1)
++        assertEquals("t.txt", result[0].name)
++        assertEquals(6, result[0].size)
+     }
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        TarXzHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            TarXzHelperCallable(
+         ApplicationProvider.getApplicationContext(),
+         archive.absolutePath,
+         relativePath,
+-        false,
+-        emptyCallback
++        false
+     )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperCallableTest.kt
+similarity index 78%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperCallableTest.kt
+index 06954752d..921c797aa 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/UnknownCompressedHelperCallableTest.kt
+@@ -25,7 +25,7 @@ import org.junit.Assert
+ import org.junit.Test
+ import java.io.File
+ 
+-class UnknownCompressedHelperTaskTest : AbstractCompressedHelperTaskTest() {
++class UnknownCompressedHelperCallableTest : AbstractCompressedHelperCallableTest() {
+ 
+     /**
+      * Test file decompression.
+@@ -34,20 +34,20 @@ class UnknownCompressedHelperTaskTest : AbstractCompressedHelperTaskTest() {
+     fun testExtract() {
+         listOf("lzma", "gz", "xz", "bz2").forEach { ext ->
+             doTestExtract(
+-                UnknownCompressedFileHelperTask(
++                UnknownCompressedFileHelperCallable(
+                     File(
+                         Environment.getExternalStorageDirectory(),
+                         "test.txt.$ext"
+                     ).absolutePath,
+-                    false, emptyCallback
++                    false
+                 )
+             )
+         }
+     }
+ 
+-    private fun doTestExtract(task: CompressedHelperTask) {
+-        val result = task.doInBackground()
+-        Assert.assertEquals(1, result.result.size.toLong())
+-        Assert.assertEquals("test.txt", result.result[0].name)
++    private fun doTestExtract(task: CompressedHelperCallable) {
++        val result = task.call()
++        Assert.assertEquals(1, result.size.toLong())
++        Assert.assertEquals("test.txt", result[0].name)
+     }
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallableTest.kt
+similarity index 84%
+rename from app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTaskTest.kt
+rename to app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallableTest.kt
+index 8a481c51b..98e303c1e 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperCallableTest.kt
+@@ -26,15 +26,15 @@ import org.junit.Assert.assertEquals
+ import org.junit.Test
+ import java.io.File
+ 
+-class ZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
++class ZipHelperCallableTest : AbstractCompressedHelperCallableArchiveTest() {
+ 
+     override val archiveFileName: String
+         get() = "test-archive.zip"
+ 
+     /**
+-     * Verification on logic in [ZipHelperTask] assigning zip entry path.
++     * Verification on logic in [ZipHelperCallable] assigning zip entry path.
+      *
+-     * @see ZipHelperTask.addElements
++     * @see ZipHelperCallable.addElements
+      */
+     @Test
+     fun testVariableYAssignment() {
+@@ -59,21 +59,19 @@ class ZipHelperTaskTest : AbstractCompressedHelperTaskArchiveTest() {
+      */
+     @Test(expected = ArchiveException::class)
+     fun testInvalidFileUriShouldThrowArchiveException() {
+-        ZipHelperTask(
++        ZipHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             "mailto:test@test.com",
+             "",
+-            false,
+-            emptyCallback
++            false
+         ).addElements(ArrayList())
+     }
+ 
+-    override fun doCreateTask(archive: File, relativePath: String): CompressedHelperTask =
+-        ZipHelperTask(
++    override fun doCreateCallable(archive: File, relativePath: String): CompressedHelperCallable =
++            ZipHelperCallable(
+             ApplicationProvider.getApplicationContext(),
+             archive.absolutePath,
+             relativePath,
+-            false,
+-            emptyCallback
++            false
+         )
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/B0rkenZipTest.java b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/B0rkenZipTest.java
+index fee5aa12e..dcb7b61e6 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/B0rkenZipTest.java
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/B0rkenZipTest.java
+@@ -40,7 +40,7 @@ import org.robolectric.shadows.ShadowToast;
+ 
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperTask;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperCallable;
+ import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil;
+ import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+ import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.ZipExtractor;
+@@ -142,14 +142,10 @@ public class B0rkenZipTest {
+ 
+   @Test
+   public void testZipHelperTaskShouldOmitInvalidEntries() throws Exception {
+-    ZipHelperTask task =
+-        new ZipHelperTask(
+-            ApplicationProvider.getApplicationContext(),
+-            zipfile1.getAbsolutePath(),
+-            null,
+-            false,
+-            (data) -> {});
+-    List<CompressedObjectParcelable> result = task.execute().get().result;
++    ZipHelperCallable task =
++        new ZipHelperCallable(
++            ApplicationProvider.getApplicationContext(), zipfile1.getAbsolutePath(), null, false);
++    List<CompressedObjectParcelable> result = task.call();
+     assertEquals(1, result.size());
+     assertEquals("good.txt", result.get(0).path);
+     ShadowLooper.idleMainLooper();
+@@ -161,14 +157,10 @@ public class B0rkenZipTest {
+ 
+   @Test
+   public void testZipHelperTaskShouldOmitInvalidEntriesWithBackslash() throws Exception {
+-    ZipHelperTask task =
+-        new ZipHelperTask(
+-            ApplicationProvider.getApplicationContext(),
+-            zipfile2.getAbsolutePath(),
+-            null,
+-            false,
+-            (data) -> {});
+-    List<CompressedObjectParcelable> result = task.execute().get().result;
++    ZipHelperCallable task =
++        new ZipHelperCallable(
++            ApplicationProvider.getApplicationContext(), zipfile2.getAbsolutePath(), null, false);
++    List<CompressedObjectParcelable> result = task.call();
+     ShadowLooper.idleMainLooper();
+     assertEquals(1, result.size());
+     assertEquals("good.txt", result.get(0).path);

@@ -1,0 +1,2394 @@
+diff --git a/GPSLogger/src/com/mendhak/gpslogger/GpsLoggingService.java b/GPSLogger/src/com/mendhak/gpslogger/GpsLoggingService.java
+index 80a1c3d0..a01dbbc8 100644
+--- a/GPSLogger/src/com/mendhak/gpslogger/GpsLoggingService.java
++++ b/GPSLogger/src/com/mendhak/gpslogger/GpsLoggingService.java
+@@ -1,309 +1,303 @@
+ package com.mendhak.gpslogger;
+ 
+-import java.text.DecimalFormat;
+-import java.text.NumberFormat;
+-import java.text.SimpleDateFormat;
+-import java.util.Date;
+-import java.util.List;
+-import java.util.Locale;
+-
++import android.app.*;
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.content.res.Configuration;
++import android.location.Location;
++import android.location.LocationManager;
+ import android.os.*;
++import android.preference.PreferenceManager;
+ import com.mendhak.gpslogger.common.AppSettings;
+ import com.mendhak.gpslogger.common.Session;
+ import com.mendhak.gpslogger.common.Utilities;
+ import com.mendhak.gpslogger.loggers.FileLoggerFactory;
+ import com.mendhak.gpslogger.loggers.IFileLogger;
+-
+ import com.mendhak.gpslogger.senders.AlarmReceiver;
+ import com.mendhak.gpslogger.senders.email.AutoEmailHelper;
+-import android.app.AlarmManager;
+-import android.app.Notification;
+-import android.app.NotificationManager;
+-import android.app.PendingIntent;
+-import android.app.Service;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.SharedPreferences;
+-import android.content.res.Configuration;
+-import android.location.Location;
+-import android.location.LocationManager;
+-import android.preference.PreferenceManager;
++
++import java.text.DecimalFormat;
++import java.text.NumberFormat;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.List;
++import java.util.Locale;
+ 
+ public class GpsLoggingService extends Service
+ {
+-	private static NotificationManager gpsNotifyManager;
+-	private static int NOTIFICATION_ID;
+-
+-	/**
+-	 * General all purpose handler used for updating the UI from threads.
+-	 */
+-	public final Handler handler = new Handler();
+-	private final IBinder mBinder = new GpsLoggingBinder();
+-	private static IGpsLoggerServiceClient mainServiceClient;
+-
+-	// ---------------------------------------------------
+-	// Helpers and managers
+-	// ---------------------------------------------------
+-	private GeneralLocationListener gpsLocationListener;
+-	private GeneralLocationListener towerLocationListener;
+-	LocationManager gpsLocationManager;
+-	private LocationManager towerLocationManager;
+-
+-	private Intent alarmIntent;
++    private static NotificationManager gpsNotifyManager;
++    private static int NOTIFICATION_ID;
++
++    /**
++     * General all purpose handler used for updating the UI from threads.
++     */
++    public final Handler handler = new Handler();
++    private final IBinder mBinder = new GpsLoggingBinder();
++    private static IGpsLoggerServiceClient mainServiceClient;
++
++    // ---------------------------------------------------
++    // Helpers and managers
++    // ---------------------------------------------------
++    private GeneralLocationListener gpsLocationListener;
++    private GeneralLocationListener towerLocationListener;
++    LocationManager gpsLocationManager;
++    private LocationManager towerLocationManager;
++
++    private Intent alarmIntent;
+ 
+     AlarmManager nextPointAlarmManager;
+ 
+-	// ---------------------------------------------------
+-
+-	@Override
+-	public IBinder onBind(Intent arg0)
+-	{
+-		Utilities.LogDebug("GpsLoggingService.onBind");
+-		return mBinder;
+-	}
+-
+-	@Override
+-	public void onCreate()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.onCreate");
+-		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+-		String lang = prefs.getString("locale_override", "");
+-
+-		if (!lang.equalsIgnoreCase(""))
+-		{
+-			Utilities.LogVerbose("Setting app to user specified locale: " + lang);
+-			Locale locale = new Locale(lang);
+-			Locale.setDefault(locale);
+-			Configuration config = new Configuration();
+-			config.locale = locale;
+-			getBaseContext().getResources().updateConfiguration(config,
+-					getBaseContext().getResources().getDisplayMetrics());
+-		}
++    // ---------------------------------------------------
++
++    @Override
++    public IBinder onBind(Intent arg0)
++    {
++        Utilities.LogDebug("GpsLoggingService.onBind");
++        return mBinder;
++    }
++
++    @Override
++    public void onCreate()
++    {
++        Utilities.LogDebug("GpsLoggingService.onCreate");
++        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
++        String lang = prefs.getString("locale_override", "");
++
++        if (!lang.equalsIgnoreCase(""))
++        {
++            Utilities.LogVerbose("Setting app to user specified locale: " + lang);
++            Locale locale = new Locale(lang);
++            Locale.setDefault(locale);
++            Configuration config = new Configuration();
++            config.locale = locale;
++            getBaseContext().getResources().updateConfiguration(config,
++                    getBaseContext().getResources().getDisplayMetrics());
++        }
+ 
+         nextPointAlarmManager = (AlarmManager) getSystemService(ALARM_SERVICE);
+ 
+-		Utilities.LogInfo("GPSLoggerService created");
+-	}
+-
+-	@Override
+-	public void onStart(Intent intent, int startId)
+-	{
+-		Utilities.LogDebug("GpsLoggingService.onStart");
+-		HandleIntent(intent);
+-	}
+-
+-	@Override
+-	public int onStartCommand(Intent intent, int flags, int startId)
+-	{
+-
+-		Utilities.LogDebug("GpsLoggingService.onStartCommand");
+-		HandleIntent(intent);
+-		return START_REDELIVER_INTENT;
+-	}
+-
+-	@Override
+-	public void onDestroy()
+-	{
+-		Utilities.LogWarning("GpsLoggingService is being destroyed by Android OS.");
+-		mainServiceClient = null;
+-		super.onDestroy();
+-	}
+-
+-	@Override
+-	public void onLowMemory()
+-	{
+-		Utilities.LogWarning("Android is low on memory.");
+-		super.onLowMemory();
+-	}
+-	
+-	private void HandleIntent(Intent intent)
+-	{
+-		
+-		Utilities.LogDebug("GpsLoggingService.handleIntent");
+-		GetPreferences();
+-		// SetupAutoEmailTimers();
+-		
+-		Utilities.LogDebug("Null intent? " + String.valueOf(intent == null));
+-
+-		if (intent != null)
+-		{
+-			Bundle bundle = intent.getExtras();
+-
+-			if (bundle != null)
+-			{
+-				boolean startRightNow = bundle.getBoolean("immediate");
+-				boolean alarmWentOff = bundle.getBoolean("alarmWentOff");
++        Utilities.LogInfo("GPSLoggerService created");
++    }
++
++    @Override
++    public void onStart(Intent intent, int startId)
++    {
++        Utilities.LogDebug("GpsLoggingService.onStart");
++        HandleIntent(intent);
++    }
++
++    @Override
++    public int onStartCommand(Intent intent, int flags, int startId)
++    {
++
++        Utilities.LogDebug("GpsLoggingService.onStartCommand");
++        HandleIntent(intent);
++        return START_REDELIVER_INTENT;
++    }
++
++    @Override
++    public void onDestroy()
++    {
++        Utilities.LogWarning("GpsLoggingService is being destroyed by Android OS.");
++        mainServiceClient = null;
++        super.onDestroy();
++    }
++
++    @Override
++    public void onLowMemory()
++    {
++        Utilities.LogWarning("Android is low on memory.");
++        super.onLowMemory();
++    }
++
++    private void HandleIntent(Intent intent)
++    {
++
++        Utilities.LogDebug("GpsLoggingService.handleIntent");
++        GetPreferences();
++        // SetupAutoEmailTimers();
++
++        Utilities.LogDebug("Null intent? " + String.valueOf(intent == null));
++
++        if (intent != null)
++        {
++            Bundle bundle = intent.getExtras();
++
++            if (bundle != null)
++            {
++                boolean startRightNow = bundle.getBoolean("immediate");
++                boolean alarmWentOff = bundle.getBoolean("alarmWentOff");
+                 boolean getNextPoint = bundle.getBoolean("getnextpoint");
+-				
+-				Utilities.LogDebug("startRightNow - " + String.valueOf(startRightNow));
+-
+-				Utilities.LogDebug("alarmWentOff - " + String.valueOf(alarmWentOff));
+-				
+-				if (startRightNow)
+-				{
+-					Utilities.LogInfo("Auto starting logging");
+-					
+-					StartLogging();
+-				}
+-
+-				if (alarmWentOff)
+-				{
+-				
+-					Utilities.LogDebug("setEmailReadyToBeSent = true");
+-
+-					Session.setEmailReadyToBeSent(true);
+-					AutoEmailLogFile();
+-				}
+-
+-                if(getNextPoint)
++
++                Utilities.LogDebug("startRightNow - " + String.valueOf(startRightNow));
++
++                Utilities.LogDebug("alarmWentOff - " + String.valueOf(alarmWentOff));
++
++                if (startRightNow)
++                {
++                    Utilities.LogInfo("Auto starting logging");
++
++                    StartLogging();
++                }
++
++                if (alarmWentOff)
++                {
++
++                    Utilities.LogDebug("setEmailReadyToBeSent = true");
++
++                    Session.setEmailReadyToBeSent(true);
++                    AutoEmailLogFile();
++                }
++
++                if (getNextPoint)
+                 {
+                     Utilities.LogDebug("HandleIntent - getNextPoint");
+                     StartGpsManager();
+                 }
+-				
+-			}
+-		}
+-		else
+-		{
+-			// A null intent is passed in if the service has been killed and
+-			// restarted.
+-			Utilities.LogDebug("Service restarted with null intent. Start logging.");
+-			StartLogging();
+-
+-		}
+-	}
+-
+-	/**
+-	 * Can be used from calling classes as the go-between for methods and
+-	 * properties.
+-	 * 
+-	 */
+-	class GpsLoggingBinder extends Binder
+-	{
+-		public GpsLoggingService getService()
+-		{
+-			Utilities.LogDebug("GpsLoggingBinder.getService");
+-			return GpsLoggingService.this;
+-		}
+-	}
+-
+-	/**
+-	 * Sets up the auto email timers based on user preferences.
+-	 */
+-	private void SetupAutoEmailTimers()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.SetupAutoEmailTimers");
+-		Utilities.LogDebug("isAutoEmailEnabled - " + String.valueOf(AppSettings.isAutoEmailEnabled()));
+-		Utilities.LogDebug("Session.getAutoEmailDelay - " + String.valueOf(Session.getAutoEmailDelay()));
+-		if (AppSettings.isAutoEmailEnabled() && Session.getAutoEmailDelay() > 0)
+-		{
+-			Utilities.LogDebug("Setting up email alarm");
+-			long triggerTime = System.currentTimeMillis()
+-					+ (long) (Session.getAutoEmailDelay() * 60 * 60 * 1000);
+-
+-			alarmIntent = new Intent(getBaseContext(), AlarmReceiver.class);
+-
+-			PendingIntent sender = PendingIntent.getBroadcast(this, 0, alarmIntent,
+-					PendingIntent.FLAG_UPDATE_CURRENT);
+-
+-			AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+-			am.set(AlarmManager.RTC_WAKEUP, triggerTime, sender);
+-
+-		}
+-		else
+-		{
+-			Utilities.LogDebug("Checking if alarmIntent is null");
+-			if (alarmIntent != null)
+-			{
+-				Utilities.LogDebug("alarmIntent was null, canceling alarm");
+-				CancelAlarm();
+-			}
+-		}
+-	}
+-
+-	private void CancelAlarm()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.CancelAlarm");
+-
+-		if (alarmIntent != null)
+-		{
+-			Utilities.LogDebug("GpsLoggingService.CancelAlarm");
+-			AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
+-			PendingIntent sender = PendingIntent.getBroadcast(this, 0, alarmIntent,
+-					PendingIntent.FLAG_UPDATE_CURRENT);
+-			Utilities.LogDebug("Pending alarm intent was null? " + String.valueOf(sender == null));
+-			am.cancel(sender);
+-		}
+-
+-	}
+-
+-	/**
+-	 * Method to be called if user has chosen to auto email log files when he
+-	 * stops logging
+-	 */
+-	private void AutoEmailLogFileOnStop()
+-	{
++
++            }
++        }
++        else
++        {
++            // A null intent is passed in if the service has been killed and
++            // restarted.
++            Utilities.LogDebug("Service restarted with null intent. Start logging.");
++            StartLogging();
++
++        }
++    }
++
++    /**
++     * Can be used from calling classes as the go-between for methods and
++     * properties.
++     */
++    class GpsLoggingBinder extends Binder
++    {
++        public GpsLoggingService getService()
++        {
++            Utilities.LogDebug("GpsLoggingBinder.getService");
++            return GpsLoggingService.this;
++        }
++    }
++
++    /**
++     * Sets up the auto email timers based on user preferences.
++     */
++    private void SetupAutoEmailTimers()
++    {
++        Utilities.LogDebug("GpsLoggingService.SetupAutoEmailTimers");
++        Utilities.LogDebug("isAutoEmailEnabled - " + String.valueOf(AppSettings.isAutoEmailEnabled()));
++        Utilities.LogDebug("Session.getAutoEmailDelay - " + String.valueOf(Session.getAutoEmailDelay()));
++        if (AppSettings.isAutoEmailEnabled() && Session.getAutoEmailDelay() > 0)
++        {
++            Utilities.LogDebug("Setting up email alarm");
++            long triggerTime = System.currentTimeMillis()
++                    + (long) (Session.getAutoEmailDelay() * 60 * 60 * 1000);
++
++            alarmIntent = new Intent(getBaseContext(), AlarmReceiver.class);
++
++            PendingIntent sender = PendingIntent.getBroadcast(this, 0, alarmIntent,
++                    PendingIntent.FLAG_UPDATE_CURRENT);
++
++            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
++            am.set(AlarmManager.RTC_WAKEUP, triggerTime, sender);
++
++        }
++        else
++        {
++            Utilities.LogDebug("Checking if alarmIntent is null");
++            if (alarmIntent != null)
++            {
++                Utilities.LogDebug("alarmIntent was null, canceling alarm");
++                CancelAlarm();
++            }
++        }
++    }
++
++    private void CancelAlarm()
++    {
++        Utilities.LogDebug("GpsLoggingService.CancelAlarm");
++
++        if (alarmIntent != null)
++        {
++            Utilities.LogDebug("GpsLoggingService.CancelAlarm");
++            AlarmManager am = (AlarmManager) getSystemService(ALARM_SERVICE);
++            PendingIntent sender = PendingIntent.getBroadcast(this, 0, alarmIntent,
++                    PendingIntent.FLAG_UPDATE_CURRENT);
++            Utilities.LogDebug("Pending alarm intent was null? " + String.valueOf(sender == null));
++            am.cancel(sender);
++        }
++
++    }
++
++    /**
++     * Method to be called if user has chosen to auto email log files when he
++     * stops logging
++     */
++    private void AutoEmailLogFileOnStop()
++    {
+         Utilities.LogDebug("GpsLoggingService.AutoEmailLogFileOnStop");
+         Utilities.LogVerbose("isAutoEmailEnabled - " + AppSettings.isAutoEmailEnabled());
+-		// autoEmailDelay 0 means send it when you stop logging.
+-		if (AppSettings.isAutoEmailEnabled() && Session.getAutoEmailDelay() == 0)
+-		{
+-			Session.setEmailReadyToBeSent(true);
+-			AutoEmailLogFile();
+-		}
+-	}
+-
+-	/**
+-	 * Calls the Auto Email Helper which processes the file and sends it.
+-	 */
+-	private void AutoEmailLogFile()
+-	{
+-
+-		Utilities.LogDebug("GpsLoggingService.AutoEmailLogFile");
+-		Utilities.LogVerbose("isEmailReadyToBeSent - " + Session.isEmailReadyToBeSent());
+-
+-		// Check that auto emailing is enabled, there's a valid location and
+-		// file name.
+-		if (Session.getCurrentFileName() != null && Session.getCurrentFileName().length() > 0
+-				&& Session.isEmailReadyToBeSent())
+-		{
++        // autoEmailDelay 0 means send it when you stop logging.
++        if (AppSettings.isAutoEmailEnabled() && Session.getAutoEmailDelay() == 0)
++        {
++            Session.setEmailReadyToBeSent(true);
++            AutoEmailLogFile();
++        }
++    }
++
++    /**
++     * Calls the Auto Email Helper which processes the file and sends it.
++     */
++    private void AutoEmailLogFile()
++    {
++
++        Utilities.LogDebug("GpsLoggingService.AutoEmailLogFile");
++        Utilities.LogVerbose("isEmailReadyToBeSent - " + Session.isEmailReadyToBeSent());
++
++        // Check that auto emailing is enabled, there's a valid location and
++        // file name.
++        if (Session.getCurrentFileName() != null && Session.getCurrentFileName().length() > 0
++                && Session.isEmailReadyToBeSent())
++        {
+ 
+             //Don't show a progress bar when auto-emailing
+-			Utilities.LogInfo("Emailing Log File");
+-			AutoEmailHelper aeh = new AutoEmailHelper(GpsLoggingService.this);
+-			aeh.SendLogFile(Session.getCurrentFileName(), false);
+-			SetupAutoEmailTimers();
+-			
+-		}
+-	}
+-	
+-	protected void ForceEmailLogFile()
+-	{
+-		
+-		Utilities.LogDebug("GpsLoggingService.ForceEmailLogFile");
+-		if (Session.getCurrentFileName() != null && Session.getCurrentFileName().length() > 0)
+-		{
+-			if(IsMainFormVisible())
+-			{
+-				Utilities.ShowProgress(mainServiceClient.GetActivity(), getString(R.string.autoemail_sending),
+-					getString(R.string.please_wait));
+-			}
+-			
+-			Utilities.LogInfo("Force emailing Log File");
+-			AutoEmailHelper aeh = new AutoEmailHelper(GpsLoggingService.this);
+-			aeh.SendLogFile(Session.getCurrentFileName(), true);
+-			
+-
+-		}
+-	}
+-
+-	public final Runnable updateResultsEmailSendError = new Runnable()
+-	{
+-		public void run()
+-		{
+-			AutoEmailGenericError();
+-		}
+-	};
++            Utilities.LogInfo("Emailing Log File");
++            AutoEmailHelper aeh = new AutoEmailHelper(GpsLoggingService.this);
++            aeh.SendLogFile(Session.getCurrentFileName(), false);
++            SetupAutoEmailTimers();
++
++        }
++    }
++
++    protected void ForceEmailLogFile()
++    {
++
++        Utilities.LogDebug("GpsLoggingService.ForceEmailLogFile");
++        if (Session.getCurrentFileName() != null && Session.getCurrentFileName().length() > 0)
++        {
++            if (IsMainFormVisible())
++            {
++                Utilities.ShowProgress(mainServiceClient.GetActivity(), getString(R.string.autoemail_sending),
++                        getString(R.string.please_wait));
++            }
++
++            Utilities.LogInfo("Force emailing Log File");
++            AutoEmailHelper aeh = new AutoEmailHelper(GpsLoggingService.this);
++            aeh.SendLogFile(Session.getCurrentFileName(), true);
++
++
++        }
++    }
++
++    public final Runnable updateResultsEmailSendError = new Runnable()
++    {
++        public void run()
++        {
++            AutoEmailGenericError();
++        }
++    };
+ 
+     public final Runnable updateResultsEmailSent = new Runnable()
+     {
+@@ -316,373 +310,375 @@ public class GpsLoggingService extends Service
+     private void AutoEmailSent()
+     {
+         Utilities.LogInfo("Email sent");
+-        if(IsMainFormVisible())
++        if (IsMainFormVisible())
+         {
+             Utilities.HideProgress();
+         }
+     }
+ 
+ 
+-	private void AutoEmailGenericError()
+-	{
+-		Utilities.LogWarning("Could not send email, please check Internet and auto email settings.");
+-        if(IsMainFormVisible())
++    private void AutoEmailGenericError()
++    {
++        Utilities.LogWarning("Could not send email, please check Internet and auto email settings.");
++        if (IsMainFormVisible())
+         {
+             Utilities.HideProgress();
+         }
+-	}
+-
+-	/**
+-	 * Sets the activity form for this service. The activity form needs to
+-	 * implement IGpsLoggerServiceClient.
+-	 * 
+-	 * @param mainForm The calling client
+-	 */
+-	protected static void SetServiceClient(IGpsLoggerServiceClient mainForm)
+-	{
+-		mainServiceClient = mainForm;
+-	}
+-
+-	/**
+-	 * Gets preferences chosen by the user and populates the AppSettings object.
+-	 * Also sets up email timers if required.
+-	 */
+-	private void GetPreferences()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.GetPreferences");
+-		Utilities.PopulateAppSettings(getBaseContext());
+-
+-		Utilities.LogDebug("Session.getAutoEmailDelay: " + Session.getAutoEmailDelay());
+-		Utilities.LogDebug("AppSettings.getAutoEmailDelay: " + AppSettings.getAutoEmailDelay());
+-
+-		if (Session.getAutoEmailDelay() != AppSettings.getAutoEmailDelay())
+-		{
+-			Utilities.LogDebug("Old autoEmailDelay - " + String.valueOf(Session.getAutoEmailDelay())
+-					+ "; New -" + String.valueOf(AppSettings.getAutoEmailDelay()));
+-			Session.setAutoEmailDelay(AppSettings.getAutoEmailDelay());
+-			SetupAutoEmailTimers();
+-		}
+-		
+-	}
+-
+-	/**
+-	 * Resets the form, resets file name if required, reobtains preferences
+-	 */
+-	protected void StartLogging()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.StartLogging");
+-		Session.setAddNewTrackSegment(true);
+-
+-		if (Session.isStarted())
+-		{
+-			return;
+-		}
+-
+-		Utilities.LogInfo("Starting logging procedures");
+-		startForeground(NOTIFICATION_ID, null);
+-		Session.setStarted(true);
+-
+-		GetPreferences();
+-		Notify();
+-		ResetCurrentFileName();
+-		ClearForm();
+-		StartGpsManager();
+-
+-	}
+-
+-	/**
+-	 * Asks the main service client to clear its form.
+-	 */
+-	private void ClearForm()
+-	{
+-		if (IsMainFormVisible())
+-		{
+-			mainServiceClient.ClearForm();
+-		}
+-	}
+-
+-	/**
+-	 * Stops logging, removes notification, stops GPS manager, stops email timer
+-	 */
+-	protected void StopLogging()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.StopLogging");
+-		Session.setAddNewTrackSegment(true);
+-
+-		Utilities.LogInfo("Stopping logging");
+-		Session.setStarted(false);
+-		// Email log file before setting location info to null
+-		AutoEmailLogFileOnStop();
+-		CancelAlarm();
+-		Session.setCurrentLocationInfo(null);
+-		stopForeground(true);
+-
+-		RemoveNotification();
++    }
++
++    /**
++     * Sets the activity form for this service. The activity form needs to
++     * implement IGpsLoggerServiceClient.
++     *
++     * @param mainForm The calling client
++     */
++    protected static void SetServiceClient(IGpsLoggerServiceClient mainForm)
++    {
++        mainServiceClient = mainForm;
++    }
++
++    /**
++     * Gets preferences chosen by the user and populates the AppSettings object.
++     * Also sets up email timers if required.
++     */
++    private void GetPreferences()
++    {
++        Utilities.LogDebug("GpsLoggingService.GetPreferences");
++        Utilities.PopulateAppSettings(getBaseContext());
++
++        Utilities.LogDebug("Session.getAutoEmailDelay: " + Session.getAutoEmailDelay());
++        Utilities.LogDebug("AppSettings.getAutoEmailDelay: " + AppSettings.getAutoEmailDelay());
++
++        if (Session.getAutoEmailDelay() != AppSettings.getAutoEmailDelay())
++        {
++            Utilities.LogDebug("Old autoEmailDelay - " + String.valueOf(Session.getAutoEmailDelay())
++                    + "; New -" + String.valueOf(AppSettings.getAutoEmailDelay()));
++            Session.setAutoEmailDelay(AppSettings.getAutoEmailDelay());
++            SetupAutoEmailTimers();
++        }
++
++    }
++
++    /**
++     * Resets the form, resets file name if required, reobtains preferences
++     */
++    protected void StartLogging()
++    {
++        Utilities.LogDebug("GpsLoggingService.StartLogging");
++        Session.setAddNewTrackSegment(true);
++
++        if (Session.isStarted())
++        {
++            return;
++        }
++
++        Utilities.LogInfo("Starting logging procedures");
++        startForeground(NOTIFICATION_ID, null);
++        Session.setStarted(true);
++
++        GetPreferences();
++        Notify();
++        ResetCurrentFileName();
++        ClearForm();
++        StartGpsManager();
++
++    }
++
++    /**
++     * Asks the main service client to clear its form.
++     */
++    private void ClearForm()
++    {
++        if (IsMainFormVisible())
++        {
++            mainServiceClient.ClearForm();
++        }
++    }
++
++    /**
++     * Stops logging, removes notification, stops GPS manager, stops email timer
++     */
++    protected void StopLogging()
++    {
++        Utilities.LogDebug("GpsLoggingService.StopLogging");
++        Session.setAddNewTrackSegment(true);
++
++        Utilities.LogInfo("Stopping logging");
++        Session.setStarted(false);
++        // Email log file before setting location info to null
++        AutoEmailLogFileOnStop();
++        CancelAlarm();
++        Session.setCurrentLocationInfo(null);
++        stopForeground(true);
++
++        RemoveNotification();
+         StopAlarm();
+-		StopGpsManager();
++        StopGpsManager();
+         StopMainActivity();
+-	}
+-
+-	/**
+-	 * Manages the notification in the status bar
+-	 */
+-	private void Notify()
+-	{
+-
+-		Utilities.LogDebug("GpsLoggingService.Notify");
+-		if (AppSettings.shouldShowInNotificationBar())
+-		{
+-			gpsNotifyManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+-
+-			ShowNotification();
+-		}
+-		else
+-		{
+-			RemoveNotification();
+-		}
+-	}
+-
+-	/**
+-	 * Hides the notification icon in the status bar if it's visible.
+-	 */
+-	private void RemoveNotification()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.RemoveNotification");
+-		try
+-		{
+-			if (Session.isNotificationVisible())
+-			{
+-				gpsNotifyManager.cancelAll();
+-			}
+-		}
+-		catch (Exception ex)
+-		{
+-			Utilities.LogError("RemoveNotification", ex);
+-		}
+-		finally
+-		{
+-			// notificationVisible = false;
+-			Session.setNotificationVisible(false);
+-		}
+-	}
+-
+-	/**
+-	 * Shows a notification icon in the status bar for GPS Logger
+-	 */
+-	private void ShowNotification()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.ShowNotification");
+-		// What happens when the notification item is clicked
+-		Intent contentIntent = new Intent(this, GpsMainActivity.class);
+-
+-		PendingIntent pending = PendingIntent.getActivity(getBaseContext(), 0, contentIntent,
+-				android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+-
+-		Notification nfc = new Notification(R.drawable.gpsloggericon2, null, System.currentTimeMillis());
+-		nfc.flags |= Notification.FLAG_ONGOING_EVENT;
+-
+-		NumberFormat nf = new DecimalFormat("###.######");
+-
+-		String contentText = getString(R.string.gpslogger_still_running);
+-		if (Session.hasValidLocation())
+-		// if (currentLatitude != 0 && currentLongitude != 0)
+-		{
+-			contentText = nf.format(Session.getCurrentLatitude()) + ","
+-					+ nf.format(Session.getCurrentLongitude());
+-		}
+-
+-		nfc.setLatestEventInfo(getBaseContext(), getString(R.string.gpslogger_still_running),
+-				contentText, pending);
+-
+-		gpsNotifyManager.notify(NOTIFICATION_ID, nfc);
+-		Session.setNotificationVisible(true);
+-	}
+-
+-	/**
+-	 * Starts the location manager. There are two location managers - GPS and
+-	 * Cell Tower. This code determines which manager to request updates from
+-	 * based on user preference and whichever is enabled. If GPS is enabled on
+-	 * the phone, that is used. But if the user has also specified that they
+-	 * prefer cell towers, then cell towers are used. If neither is enabled,
+-	 * then nothing is requested.
+-	 */
+-	private void StartGpsManager()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.StartGpsManager");
+-
+-		GetPreferences();
+-
+-		gpsLocationListener = new GeneralLocationListener(this);
+-		towerLocationListener = new GeneralLocationListener(this);
+-
+-		gpsLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+-		towerLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+-
+-		CheckTowerAndGpsStatus();
+-
+-		if (Session.isGpsEnabled() && !AppSettings.shouldPreferCellTower())
+-		{
+-			Utilities.LogInfo("Requesting GPS location updates");
+-			// gps satellite based
+-			gpsLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,
+-					1000, 0,
+-					gpsLocationListener);
+-
+-			gpsLocationManager.addGpsStatusListener(gpsLocationListener);
+-
+-			Session.setUsingGps(true);
+-		}
+-		else if (Session.isTowerEnabled())
+-		{
+-			Utilities.LogInfo("Requesting tower location updates");
+-			Session.setUsingGps(false);
+-			// Cell tower and wifi based
+-			towerLocationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,
+-					1000, 0,
+-					towerLocationListener);
+-
+-		}
+-		else
+-		{
+-			Utilities.LogInfo("No provider available");
+-			Session.setUsingGps(false);
+-			SetStatus(R.string.gpsprovider_unavailable);
++    }
++
++    /**
++     * Manages the notification in the status bar
++     */
++    private void Notify()
++    {
++
++        Utilities.LogDebug("GpsLoggingService.Notify");
++        if (AppSettings.shouldShowInNotificationBar())
++        {
++            gpsNotifyManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
++
++            ShowNotification();
++        }
++        else
++        {
++            RemoveNotification();
++        }
++    }
++
++    /**
++     * Hides the notification icon in the status bar if it's visible.
++     */
++    private void RemoveNotification()
++    {
++        Utilities.LogDebug("GpsLoggingService.RemoveNotification");
++        try
++        {
++            if (Session.isNotificationVisible())
++            {
++                gpsNotifyManager.cancelAll();
++            }
++        }
++        catch (Exception ex)
++        {
++            Utilities.LogError("RemoveNotification", ex);
++        }
++        finally
++        {
++            // notificationVisible = false;
++            Session.setNotificationVisible(false);
++        }
++    }
++
++    /**
++     * Shows a notification icon in the status bar for GPS Logger
++     */
++    private void ShowNotification()
++    {
++        Utilities.LogDebug("GpsLoggingService.ShowNotification");
++        // What happens when the notification item is clicked
++        Intent contentIntent = new Intent(this, GpsMainActivity.class);
++
++        PendingIntent pending = PendingIntent.getActivity(getBaseContext(), 0, contentIntent,
++                android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
++
++        Notification nfc = new Notification(R.drawable.gpsloggericon2, null, System.currentTimeMillis());
++        nfc.flags |= Notification.FLAG_ONGOING_EVENT;
++
++        NumberFormat nf = new DecimalFormat("###.######");
++
++        String contentText = getString(R.string.gpslogger_still_running);
++        if (Session.hasValidLocation())
++        // if (currentLatitude != 0 && currentLongitude != 0)
++        {
++            contentText = nf.format(Session.getCurrentLatitude()) + ","
++                    + nf.format(Session.getCurrentLongitude());
++        }
++
++        nfc.setLatestEventInfo(getBaseContext(), getString(R.string.gpslogger_still_running),
++                contentText, pending);
++
++        gpsNotifyManager.notify(NOTIFICATION_ID, nfc);
++        Session.setNotificationVisible(true);
++    }
++
++    /**
++     * Starts the location manager. There are two location managers - GPS and
++     * Cell Tower. This code determines which manager to request updates from
++     * based on user preference and whichever is enabled. If GPS is enabled on
++     * the phone, that is used. But if the user has also specified that they
++     * prefer cell towers, then cell towers are used. If neither is enabled,
++     * then nothing is requested.
++     */
++    private void StartGpsManager()
++    {
++        Utilities.LogDebug("GpsLoggingService.StartGpsManager");
++
++        GetPreferences();
++
++        gpsLocationListener = new GeneralLocationListener(this);
++        towerLocationListener = new GeneralLocationListener(this);
++
++        gpsLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
++        towerLocationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
++
++        CheckTowerAndGpsStatus();
++
++        if (Session.isGpsEnabled() && !AppSettings.shouldPreferCellTower())
++        {
++            Utilities.LogInfo("Requesting GPS location updates");
++            // gps satellite based
++            gpsLocationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER,
++                    1000, 0,
++                    gpsLocationListener);
++
++            gpsLocationManager.addGpsStatusListener(gpsLocationListener);
++
++            Session.setUsingGps(true);
++        }
++        else if (Session.isTowerEnabled())
++        {
++            Utilities.LogInfo("Requesting tower location updates");
++            Session.setUsingGps(false);
++            // Cell tower and wifi based
++            towerLocationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,
++                    1000, 0,
++                    towerLocationListener);
++
++        }
++        else
++        {
++            Utilities.LogInfo("No provider available");
++            Session.setUsingGps(false);
++            SetStatus(R.string.gpsprovider_unavailable);
+             SetFatalMessage(R.string.gpsprovider_unavailable);
+             StopLogging();
+-			return;
+-		}
+-
+-		SetStatus(R.string.started);
+-	}
+-
+-	/**
+-	 * This method is called periodically to determine whether the cell tower /
+-	 * gps providers have been enabled, and sets class level variables to those
+-	 * values.
+-	 */
+-	private void CheckTowerAndGpsStatus()
+-	{
+-		Session.setTowerEnabled(towerLocationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+-		Session.setGpsEnabled(gpsLocationManager.isProviderEnabled(LocationManager.GPS_PROVIDER));
+-	}
+-
+-	/**
+-	 * Stops the location managers
+-	 */
+-	private void StopGpsManager()
+-	{
+-
+-		Utilities.LogDebug("GpsLoggingService.StopGpsManager");
+-
+-		if (towerLocationListener != null)
+-		{
+-			towerLocationManager.removeUpdates(towerLocationListener);
+-		}
+-
+-		if (gpsLocationListener != null)
+-		{
+-			gpsLocationManager.removeUpdates(gpsLocationListener);
+-			gpsLocationManager.removeGpsStatusListener(gpsLocationListener);
+-		}
+-
+-		SetStatus(getString(R.string.stopped));
+-	}
+-
+-	/**
+-	 * Sets the current file name based on user preference.
+-	 */
+-	private void ResetCurrentFileName()
+-	{
+-
+-		Utilities.LogDebug("GpsLoggingService.ResetCurrentFileName");
+-
+-		String newFileName;
+-		if (AppSettings.shouldCreateNewFileOnceADay())
+-		{
+-			// 20100114.gpx
+-			SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
+-			newFileName = sdf.format(new Date());
+-			Session.setCurrentFileName(newFileName);
+-		}
+-		else
+-		{
+-			// 20100114183329.gpx
+-			SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmss");
+-			newFileName = sdf.format(new Date());
+-			Session.setCurrentFileName(newFileName);
+-		}
+-
+-		if (IsMainFormVisible())
+-		{
+-			mainServiceClient.onFileName(newFileName);
+-		}
+-
+-	}
+-
+-	/**
+-	 * Gives a status message to the main service client to display
+-     * @param status  The status message
++            return;
++        }
++
++        SetStatus(R.string.started);
++    }
++
++    /**
++     * This method is called periodically to determine whether the cell tower /
++     * gps providers have been enabled, and sets class level variables to those
++     * values.
++     */
++    private void CheckTowerAndGpsStatus()
++    {
++        Session.setTowerEnabled(towerLocationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
++        Session.setGpsEnabled(gpsLocationManager.isProviderEnabled(LocationManager.GPS_PROVIDER));
++    }
++
++    /**
++     * Stops the location managers
++     */
++    private void StopGpsManager()
++    {
++
++        Utilities.LogDebug("GpsLoggingService.StopGpsManager");
++
++        if (towerLocationListener != null)
++        {
++            towerLocationManager.removeUpdates(towerLocationListener);
++        }
++
++        if (gpsLocationListener != null)
++        {
++            gpsLocationManager.removeUpdates(gpsLocationListener);
++            gpsLocationManager.removeGpsStatusListener(gpsLocationListener);
++        }
++
++        SetStatus(getString(R.string.stopped));
++    }
++
++    /**
++     * Sets the current file name based on user preference.
++     */
++    private void ResetCurrentFileName()
++    {
++
++        Utilities.LogDebug("GpsLoggingService.ResetCurrentFileName");
++
++        String newFileName;
++        if (AppSettings.shouldCreateNewFileOnceADay())
++        {
++            // 20100114.gpx
++            SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd");
++            newFileName = sdf.format(new Date());
++            Session.setCurrentFileName(newFileName);
++        }
++        else
++        {
++            // 20100114183329.gpx
++            SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmss");
++            newFileName = sdf.format(new Date());
++            Session.setCurrentFileName(newFileName);
++        }
++
++        if (IsMainFormVisible())
++        {
++            mainServiceClient.onFileName(newFileName);
++        }
++
++    }
++
++    /**
++     * Gives a status message to the main service client to display
++     *
++     * @param status The status message
+      */
+-	void SetStatus(String status)
+-	{
+-		if (IsMainFormVisible())
+-		{
+-			mainServiceClient.OnStatusMessage(status);
+-		}
+-	}
++    void SetStatus(String status)
++    {
++        if (IsMainFormVisible())
++        {
++            mainServiceClient.OnStatusMessage(status);
++        }
++    }
+ 
+     /**
+      * Gives an error message to the main service client to display
++     *
+      * @param messageId ID of string to lookup
+      */
+     void SetFatalMessage(int messageId)
+     {
+-        if(IsMainFormVisible())
++        if (IsMainFormVisible())
+         {
+             mainServiceClient.OnFatalMessage(getString(messageId));
+         }
+     }
+ 
+-	/**
+-	 * Gets string from given resource ID, passes to SetStatus(String)
+-	 * 
+-	 * @param stringId  ID of string to lookup
+-	 */
+-	private void SetStatus(int stringId)
+-	{
+-		String s = getString(stringId);
+-		SetStatus(s);
+-	}
++    /**
++     * Gets string from given resource ID, passes to SetStatus(String)
++     *
++     * @param stringId ID of string to lookup
++     */
++    private void SetStatus(int stringId)
++    {
++        String s = getString(stringId);
++        SetStatus(s);
++    }
+ 
+     /**
+      * Notifies main form that logging has stopped
+      */
+     void StopMainActivity()
+     {
+-        if(IsMainFormVisible())
++        if (IsMainFormVisible())
+         {
+             mainServiceClient.OnStopLogging();
+         }
+     }
+ 
+ 
+-	/**
+-	 * Stops location manager, then starts it.
+-	 */
+-	void RestartGpsManagers()
+-	{
+-		Utilities.LogDebug("GpsLoggingService.RestartGpsManagers");
+-		StopGpsManager();
+-		StartGpsManager();
+-	}
++    /**
++     * Stops location manager, then starts it.
++     */
++    void RestartGpsManagers()
++    {
++        Utilities.LogDebug("GpsLoggingService.RestartGpsManagers");
++        StopGpsManager();
++        StartGpsManager();
++    }
+ 
+-	/**
+-	 * Checks to see if providers have been enabled and switches providers based
+-	 * on user preferences.
+-	 */
+-	private void ResetManagersIfRequired()
+-	{
+-		CheckTowerAndGpsStatus();
++    /**
++     * Checks to see if providers have been enabled and switches providers based
++     * on user preferences.
++     */
++    private void ResetManagersIfRequired()
++    {
++        CheckTowerAndGpsStatus();
+         RestartGpsManagers();
+ 
+ //		if (Session.isUsingGps() && AppSettings.shouldPreferCellTower())
+@@ -699,40 +695,40 @@ public class GpsLoggingService extends Service
+ //			}
+ //			// Else do nothing
+ //		}
+-	}
+-
+-	/**
+-	 * This event is raised when the GeneralLocationListener has a new location.
+-	 * This method in turn updates notification, writes to file, reobtains
+-	 * preferences, notifies main service client and resets location managers.
+-	 * 
+-	 * @param loc   Location object
+-	 */
+-	void OnLocationChanged(Location loc)
+-	{
+-
+-		// Don't do anything until the proper time has elapsed
+-		long currentTimeStamp = System.currentTimeMillis();
+-		if ((currentTimeStamp - Session.getLatestTimeStamp()) < (AppSettings.getMinimumSeconds() * 1000))
+-		{
+-			return;
+-		}
+-
+-		Utilities.LogInfo("New location obtained");
+-		Session.setLatestTimeStamp(System.currentTimeMillis());
+-		Session.setCurrentLocationInfo(loc);
+-		Notify();
+-		WriteToFile(loc);
+-		GetPreferences();
+-		//ResetManagersIfRequired();
++    }
++
++    /**
++     * This event is raised when the GeneralLocationListener has a new location.
++     * This method in turn updates notification, writes to file, reobtains
++     * preferences, notifies main service client and resets location managers.
++     *
++     * @param loc Location object
++     */
++    void OnLocationChanged(Location loc)
++    {
++
++        // Don't do anything until the proper time has elapsed
++        long currentTimeStamp = System.currentTimeMillis();
++        if ((currentTimeStamp - Session.getLatestTimeStamp()) < (AppSettings.getMinimumSeconds() * 1000))
++        {
++            return;
++        }
++
++        Utilities.LogInfo("New location obtained");
++        Session.setLatestTimeStamp(System.currentTimeMillis());
++        Session.setCurrentLocationInfo(loc);
++        Notify();
++        WriteToFile(loc);
++        GetPreferences();
++        //ResetManagersIfRequired();
+         StopGpsManager();
+         SetAlarmForNextPoint();
+ 
+-		if (IsMainFormVisible())
+-		{
+-			mainServiceClient.OnLocationUpdate(loc);
+-		}
+-	}
++        if (IsMainFormVisible())
++        {
++            mainServiceClient.OnLocationUpdate(loc);
++        }
++    }
+ 
+     private void StopAlarm()
+     {
+@@ -741,69 +737,67 @@ public class GpsLoggingService extends Service
+         PendingIntent pi = PendingIntent.getService(this, 0, i, 0);
+         nextPointAlarmManager.cancel(pi);
+     }
+-            
+-    
++
++
+     private void SetAlarmForNextPoint()
+     {
+ 
+         Intent i = new Intent(this, GpsLoggingService.class);
+-        
++
+         i.putExtra("getnextpoint", true);
+-        
++
+         PendingIntent pi = PendingIntent.getService(this, 0, i, 0);
+         nextPointAlarmManager.cancel(pi);
+ 
+         nextPointAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+-                SystemClock.elapsedRealtime() + AppSettings.getMinimumSeconds()*1000, pi);
+-        
++                SystemClock.elapsedRealtime() + AppSettings.getMinimumSeconds() * 1000, pi);
++
+     }
+ 
+     /**
+-	 * Calls file helper to write a given location to a file.
+-	 * 
+-	 * @param loc   Location object
+-	 */
+-	private void WriteToFile(Location loc)
+-	{
++     * Calls file helper to write a given location to a file.
++     *
++     * @param loc Location object
++     */
++    private void WriteToFile(Location loc)
++    {
+         Utilities.LogDebug("GpsLoggingService.WriteToFile");
+-		List<IFileLogger> loggers = FileLoggerFactory.GetFileLoggers();
++        List<IFileLogger> loggers = FileLoggerFactory.GetFileLoggers();
+         Session.setAddNewTrackSegment(false);
+ 
+-		for(IFileLogger logger : loggers)
+-		{
+-			try
+-			{
+-				logger.Write(loc);
+-				Session.setAllowDescription(true);
+-			}
+-			catch (Exception e)
+-			{
+-				SetStatus(R.string.could_not_write_to_file);
+-			}
+-		}
+-
+-
+-		
+-	}
+-
+-	/**
+-	 * Informs the main service client of the number of visible satellites.
+-	 * 
+-	 * @param count  Number of Satellites
+-	 */
+-	void SetSatelliteInfo(int count)
+-	{
+-		if (IsMainFormVisible())
+-		{
+-			mainServiceClient.OnSatelliteCount(count);
+-		}
+-	}
+-
+-
+-	private boolean IsMainFormVisible()
+-	{
+-		return mainServiceClient != null;
+-	}
++        for (IFileLogger logger : loggers)
++        {
++            try
++            {
++                logger.Write(loc);
++                Session.setAllowDescription(true);
++            }
++            catch (Exception e)
++            {
++                SetStatus(R.string.could_not_write_to_file);
++            }
++        }
++
++    }
++
++    /**
++     * Informs the main service client of the number of visible satellites.
++     *
++     * @param count Number of Satellites
++     */
++    void SetSatelliteInfo(int count)
++    {
++        if (IsMainFormVisible())
++        {
++            mainServiceClient.OnSatelliteCount(count);
++        }
++    }
++
++
++    private boolean IsMainFormVisible()
++    {
++        return mainServiceClient != null;
++    }
+ 
+ 
+ }
+diff --git a/GPSLogger/src/com/mendhak/gpslogger/common/RejectionHandler.java b/GPSLogger/src/com/mendhak/gpslogger/common/RejectionHandler.java
+new file mode 100644
+index 00000000..c6f410a7
+--- /dev/null
++++ b/GPSLogger/src/com/mendhak/gpslogger/common/RejectionHandler.java
+@@ -0,0 +1,15 @@
++package com.mendhak.gpslogger.common;
++
++import java.util.concurrent.RejectedExecutionHandler;
++import java.util.concurrent.ThreadPoolExecutor;
++
++public class RejectionHandler implements RejectedExecutionHandler
++{
++
++    @Override
++    public void rejectedExecution(Runnable runnable, ThreadPoolExecutor threadPoolExecutor)
++    {
++        Utilities.LogWarning("Could not write to GPX file, there were too many queued tasks.");
++    }
++}
++
+diff --git a/GPSLogger/src/com/mendhak/gpslogger/loggers/Gpx10FileLogger.java b/GPSLogger/src/com/mendhak/gpslogger/loggers/Gpx10FileLogger.java
+index f9c1ac53..82461abd 100644
+--- a/GPSLogger/src/com/mendhak/gpslogger/loggers/Gpx10FileLogger.java
++++ b/GPSLogger/src/com/mendhak/gpslogger/loggers/Gpx10FileLogger.java
+@@ -1,207 +1,258 @@
+ package com.mendhak.gpslogger.loggers;
+ 
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileOutputStream;
+-import java.io.RandomAccessFile;
+-import java.util.Date;
++import android.location.Location;
++import com.mendhak.gpslogger.common.RejectionHandler;
+ import com.mendhak.gpslogger.common.Session;
+ import com.mendhak.gpslogger.common.Utilities;
+-import android.location.Location;
+ import org.w3c.dom.*;
+ 
+ import javax.xml.parsers.DocumentBuilder;
+ import javax.xml.parsers.DocumentBuilderFactory;
++import java.io.BufferedOutputStream;
++import java.io.File;
++import java.io.FileOutputStream;
++import java.util.Date;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
+ 
+ 
+ class Gpx10FileLogger implements IFileLogger
+ {
+-    private final static Object lock = new Object();
+-	private File gpxFile = null;
+-	private boolean useSatelliteTime = false;
+-	private final boolean addNewTrackSegment;
++    protected final static Object lock = new Object();
++
++    private final static ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS,
++            new LinkedBlockingQueue<Runnable>(128), new RejectionHandler());
++    private File gpxFile = null;
++    private boolean useSatelliteTime = false;
++    private final boolean addNewTrackSegment;
+     private final int satelliteCount;
+-	
+-	Gpx10FileLogger(File gpxFile, boolean useSatelliteTime, boolean addNewTrackSegment, int satelliteCount)
+-	{
+-		this.gpxFile = gpxFile;
+-		this.useSatelliteTime = useSatelliteTime;
+-		this.addNewTrackSegment = addNewTrackSegment;
++
++    Gpx10FileLogger(File gpxFile, boolean useSatelliteTime, boolean addNewTrackSegment, int satelliteCount)
++    {
++        this.gpxFile = gpxFile;
++        this.useSatelliteTime = useSatelliteTime;
++        this.addNewTrackSegment = addNewTrackSegment;
+         this.satelliteCount = satelliteCount;
+-	}
+-
+-
+-	public void Write(Location loc) throws Exception
+-	{
+-		try
+-		{
+-			Date now;
+-
+-			if (useSatelliteTime)
+-			{
+-				now = new Date(loc.getTime());
+-			}
+-			else
+-			{
+-				now = new Date();
+-			}
+-
+-			String dateTimeString = Utilities.GetIsoDateTime(now);
+-			
+-			if (!gpxFile.exists())
+-			{
+-				gpxFile.createNewFile();
+-				
+-				FileOutputStream initialWriter = new FileOutputStream(gpxFile, true);
+-				BufferedOutputStream initialOutput = new BufferedOutputStream(initialWriter);
+-
+-				String initialXml = "<?xml version=\"1.0\"?>"
+-						+ "<gpx version=\"1.0\" creator=\"GPSLogger - http://gpslogger.mendhak.com/\" "
+-                        + "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+-                        + "xmlns=\"http://www.topografix.com/GPX/1/0\" "
+-                        + "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/0 "
+-                        + "http://www.topografix.com/GPX/1/0/gpx.xsd\">"
+-						+ "<time>" + dateTimeString + "</time>" + "<bounds />" + "<trk></trk></gpx>";
+-				initialOutput.write(initialXml.getBytes());
+-				initialOutput.flush();
+-				initialOutput.close();
+-			}
+-
+-
+-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+-            DocumentBuilder builder = factory.newDocumentBuilder();
+-            Document doc = builder.parse(gpxFile);
+-
+-            Node trkSegNode;
+-
+-            NodeList trkSegNodeList = doc.getElementsByTagName("trkseg");
+-
+-            if(addNewTrackSegment || trkSegNodeList.getLength()==0)
+-            {
+-                NodeList trkNodeList = doc.getElementsByTagName("trk");
+-                trkSegNode = doc.createElement("trkseg");
+-                trkNodeList.item(0).appendChild(trkSegNode);
+-            }
+-            else
+-            {
+-                trkSegNode = trkSegNodeList.item(trkSegNodeList.getLength()-1);
+-            }
++    }
+ 
+-            Element trkptNode = doc.createElement("trkpt");
+ 
+-            Attr latAttribute = doc.createAttribute("lat");
+-            latAttribute.setValue(String.valueOf(loc.getLatitude()));
+-            trkptNode.setAttributeNode(latAttribute);
++    public void Write(Location loc) throws Exception
++    {
++        Date now;
+ 
+-            Attr lonAttribute = doc.createAttribute("lon");
+-            lonAttribute.setValue(String.valueOf(loc.getLongitude()));
+-            trkptNode.setAttributeNode(lonAttribute);
++        if (useSatelliteTime)
++        {
++            now = new Date(loc.getTime());
++        }
++        else
++        {
++            now = new Date();
++        }
+ 
+-            if(loc.hasAltitude())
+-            {
+-                Node eleNode = doc.createElement("ele");
+-                eleNode.appendChild(doc.createTextNode(String.valueOf(loc.getAltitude())));
+-                trkptNode.appendChild(eleNode);
+-            }
++        String dateTimeString = Utilities.GetIsoDateTime(now);
+ 
+-            Node timeNode = doc.createElement("time");
+-            timeNode.appendChild(doc.createTextNode(dateTimeString));
+-            trkptNode.appendChild(timeNode);
++        Gpx10WriteHandler writeHandler = new Gpx10WriteHandler(dateTimeString, gpxFile, loc, addNewTrackSegment, satelliteCount);
++        EXECUTOR.execute(writeHandler);
++    }
+ 
+-            trkSegNode.appendChild(trkptNode);
++    public void Annotate(String description) throws Exception
++    {
++        Gpx10AnnotateHandler annotateHandler = new Gpx10AnnotateHandler(description, gpxFile);
++        EXECUTOR.execute(annotateHandler);
++    }
+ 
+-            if(loc.hasBearing())
+-            {
+-                Node courseNode = doc.createElement("course");
+-                courseNode.appendChild(doc.createTextNode(String.valueOf(loc.getBearing())));
+-                trkptNode.appendChild(courseNode);
+-            }
+ 
+-            if(loc.hasSpeed())
+-            {
+-                Node speedNode = doc.createElement("speed");
+-                speedNode.appendChild(doc.createTextNode(String.valueOf(loc.getSpeed())));
+-                trkptNode.appendChild(speedNode);
+-            }
++}
++
++class Gpx10AnnotateHandler implements Runnable
++{
++    String description;
++    File gpxFile;
+ 
++    public Gpx10AnnotateHandler(String description, File gpxFile)
++    {
++        this.description = description;
++        this.gpxFile = gpxFile;
++    }
+ 
+-            Node srcNode = doc.createElement("src");
+-            srcNode.appendChild(doc.createTextNode(loc.getProvider()));
+-            trkptNode.appendChild(srcNode);
++    @Override
++    public void run()
++    {
+ 
+-            if(Session.getSatelliteCount() > 0)
++        synchronized (Gpx10FileLogger.lock)
++        {
++            if (!gpxFile.exists())
+             {
+-                Node satNode = doc.createElement("sat");
+-                satNode.appendChild(doc.createTextNode(String.valueOf(satelliteCount)));
+-                trkptNode.appendChild(satNode);
++                return;
+             }
+ 
++            try
++            {
++                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
++                DocumentBuilder builder = factory.newDocumentBuilder();
++                Document doc = builder.parse(gpxFile);
+ 
++                NodeList trkptNodeList = doc.getElementsByTagName("trkpt");
++                Node lastTrkPt = trkptNodeList.item(trkptNodeList.getLength() - 1);
+ 
++                Node nameNode = doc.createElement("name");
++                nameNode.appendChild(doc.createTextNode(description));
++                lastTrkPt.appendChild(nameNode);
++
++                Node descNode = doc.createElement("desc");
++                descNode.appendChild(doc.createTextNode(description));
++                lastTrkPt.appendChild(descNode);
++
++                String newFileContents = Utilities.GetStringFromNode(doc);
+ 
+-            String newFileContents = Utilities.GetStringFromNode(doc);
+ 
+-            synchronized(lock)
+-            {
+                 FileOutputStream fos = new FileOutputStream(gpxFile, false);
+                 fos.write(newFileContents.getBytes());
+                 fos.close();
+-            }
+ 
+-		}
+-		catch (Exception e)
+-		{
+-			Utilities.LogError("Gpx10FileLogger.Write", e);
+-			throw new Exception("Could not write to GPX file");
+-		}
+ 
+-		
+-	}
+-
+-
+-	public void Annotate(String description) throws Exception
+-	{
+-		if (!gpxFile.exists())
+-		{
+-			return;
+-		}
++            }
++            catch (Exception e)
++            {
++                Utilities.LogError("Gpx10FileLogger.Annotate", e);
++            }
++        }
++    }
++}
+ 
+-        try
+-        {
+-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+-            DocumentBuilder builder = factory.newDocumentBuilder();
+-            Document doc = builder.parse(gpxFile);
+ 
+-            NodeList trkptNodeList = doc.getElementsByTagName("trkpt");
+-            Node lastTrkPt = trkptNodeList.item(trkptNodeList.getLength()-1);
++class Gpx10WriteHandler implements Runnable
++{
++    String dateTimeString;
++    Location loc;
++    private File gpxFile = null;
++    private boolean addNewTrackSegment;
++    private int satelliteCount;
++
++    public Gpx10WriteHandler(String dateTimeString, File gpxFile, Location loc, boolean addNewTrackSegment, int satelliteCount)
++    {
++        this.dateTimeString = dateTimeString;
++        this.addNewTrackSegment = addNewTrackSegment;
++        this.gpxFile = gpxFile;
++        this.loc = loc;
++        this.satelliteCount = satelliteCount;
++    }
+ 
+-            Node nameNode = doc.createElement("name");
+-            nameNode.appendChild(doc.createTextNode(description));
+-            lastTrkPt.appendChild(nameNode);
+ 
+-            Node descNode = doc.createElement("desc");
+-            descNode.appendChild(doc.createTextNode(description));
+-            lastTrkPt.appendChild(descNode);
++    @Override
++    public void run()
++    {
++        synchronized (Gpx10FileLogger.lock)
++        {
+ 
+-            String newFileContents = Utilities.GetStringFromNode(doc);
++            try
++            {
++                if (!gpxFile.exists())
++                {
++                    gpxFile.createNewFile();
++
++                    FileOutputStream initialWriter = new FileOutputStream(gpxFile, true);
++                    BufferedOutputStream initialOutput = new BufferedOutputStream(initialWriter);
++
++                    String initialXml = "<?xml version=\"1.0\"?>"
++                            + "<gpx version=\"1.0\" creator=\"GPSLogger - http://gpslogger.mendhak.com/\" "
++                            + "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
++                            + "xmlns=\"http://www.topografix.com/GPX/1/0\" "
++                            + "xsi:schemaLocation=\"http://www.topografix.com/GPX/1/0 "
++                            + "http://www.topografix.com/GPX/1/0/gpx.xsd\">"
++                            + "<time>" + dateTimeString + "</time>" + "<bounds />" + "<trk></trk></gpx>";
++                    initialOutput.write(initialXml.getBytes());
++                    initialOutput.flush();
++                    initialOutput.close();
++                }
++
++
++                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
++                DocumentBuilder builder = factory.newDocumentBuilder();
++                Document doc = builder.parse(gpxFile);
++
++                Node trkSegNode;
++
++                NodeList trkSegNodeList = doc.getElementsByTagName("trkseg");
++
++                if (addNewTrackSegment || trkSegNodeList.getLength() == 0)
++                {
++                    NodeList trkNodeList = doc.getElementsByTagName("trk");
++                    trkSegNode = doc.createElement("trkseg");
++                    trkNodeList.item(0).appendChild(trkSegNode);
++                }
++                else
++                {
++                    trkSegNode = trkSegNodeList.item(trkSegNodeList.getLength() - 1);
++                }
++
++                Element trkptNode = doc.createElement("trkpt");
++
++                Attr latAttribute = doc.createAttribute("lat");
++                latAttribute.setValue(String.valueOf(loc.getLatitude()));
++                trkptNode.setAttributeNode(latAttribute);
++
++                Attr lonAttribute = doc.createAttribute("lon");
++                lonAttribute.setValue(String.valueOf(loc.getLongitude()));
++                trkptNode.setAttributeNode(lonAttribute);
++
++                if (loc.hasAltitude())
++                {
++                    Node eleNode = doc.createElement("ele");
++                    eleNode.appendChild(doc.createTextNode(String.valueOf(loc.getAltitude())));
++                    trkptNode.appendChild(eleNode);
++                }
++
++                Node timeNode = doc.createElement("time");
++                timeNode.appendChild(doc.createTextNode(dateTimeString));
++                trkptNode.appendChild(timeNode);
++
++                trkSegNode.appendChild(trkptNode);
++
++                if (loc.hasBearing())
++                {
++                    Node courseNode = doc.createElement("course");
++                    courseNode.appendChild(doc.createTextNode(String.valueOf(loc.getBearing())));
++                    trkptNode.appendChild(courseNode);
++                }
++
++                if (loc.hasSpeed())
++                {
++                    Node speedNode = doc.createElement("speed");
++                    speedNode.appendChild(doc.createTextNode(String.valueOf(loc.getSpeed())));
++                    trkptNode.appendChild(speedNode);
++                }
++
++
++                Node srcNode = doc.createElement("src");
++                srcNode.appendChild(doc.createTextNode(loc.getProvider()));
++                trkptNode.appendChild(srcNode);
++
++                if (Session.getSatelliteCount() > 0)
++                {
++                    Node satNode = doc.createElement("sat");
++                    satNode.appendChild(doc.createTextNode(String.valueOf(satelliteCount)));
++                    trkptNode.appendChild(satNode);
++                }
++
++
++                String newFileContents = Utilities.GetStringFromNode(doc);
+ 
+ 
+-            synchronized(lock)
+-            {
+                 FileOutputStream fos = new FileOutputStream(gpxFile, false);
+                 fos.write(newFileContents.getBytes());
+                 fos.close();
++
++            }
++            catch (Exception e)
++            {
++                Utilities.LogError("Gpx10FileLogger.Write", e);
+             }
+ 
+         }
+-        catch(Exception e)
+-        {
+-            Utilities.LogError("Gpx10FileLogger.Annotate", e);
+-            throw new Exception("Could not annotate GPX file");
+-        }
+ 
+-	}
+-
+-	
+-	
++    }
+ }
++
++
+diff --git a/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml10FileLogger.java b/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml10FileLogger.java
+index 4dc31548..3602868c 100644
+--- a/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml10FileLogger.java
++++ b/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml10FileLogger.java
+@@ -1,27 +1,32 @@
+ package com.mendhak.gpslogger.loggers;
+ 
++import android.location.Location;
++import com.mendhak.gpslogger.common.RejectionHandler;
++import com.mendhak.gpslogger.common.Utilities;
++import org.w3c.dom.Document;
++import org.w3c.dom.Node;
++import org.w3c.dom.NodeList;
++
++import javax.xml.parsers.DocumentBuilder;
++import javax.xml.parsers.DocumentBuilderFactory;
+ import java.io.BufferedOutputStream;
+ import java.io.File;
+ import java.io.FileOutputStream;
+-import java.io.RandomAccessFile;
+-import java.nio.channels.FileLock;
+ import java.util.Date;
+-import javax.xml.parsers.DocumentBuilder;
+-import javax.xml.parsers.DocumentBuilderFactory;
+-
+-import org.w3c.dom.Document;
+-import org.w3c.dom.Node;
+-import org.w3c.dom.NodeList;
+-import com.mendhak.gpslogger.common.Utilities;
+-import android.location.Location;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
+ 
+ 
+ class Kml10FileLogger implements IFileLogger
+ {
+-    private final static Object lock = new Object();
++
++    private final static ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS,
++            new LinkedBlockingQueue<Runnable>(128), new RejectionHandler());
++
++    protected final static Object lock = new Object();
+     private final boolean useSatelliteTime;
+     private final File kmlFile;
+-    private FileLock kmlLock;
+ 
+     Kml10FileLogger(File kmlFile, boolean useSatelliteTime)
+     {
+@@ -31,12 +36,95 @@ class Kml10FileLogger implements IFileLogger
+ 
+     public void Write(Location loc) throws Exception
+     {
++        Kml10WriteHandler writeHandler = new Kml10WriteHandler(useSatelliteTime, loc, kmlFile);
++        EXECUTOR.execute(writeHandler);
++    }
++
++
++    public void Annotate(String description) throws Exception
++    {
++        Kml10AnnotateHandler annotateHandler = new Kml10AnnotateHandler(kmlFile, description);
++        EXECUTOR.execute(annotateHandler);
++    }
++
++}
++
++
++class Kml10AnnotateHandler implements Runnable
++{
++    File kmlFile;
++    String description;
++
++    public Kml10AnnotateHandler(File kmlFile, String description)
++    {
++        this.kmlFile = kmlFile;
++        this.description = description;
++    }
++
++    @Override
++    public void run()
++    {
++        if (!kmlFile.exists())
++        {
++            return;
++        }
++
+         try
+         {
++            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
++            DocumentBuilder builder = factory.newDocumentBuilder();
++            Document doc = builder.parse(kmlFile);
++
++            NodeList placemarkList = doc.getElementsByTagName("Placemark");
++            Node lastPlacemark = placemarkList.item(placemarkList.getLength() - 1);
+ 
++            Node annotation = doc.createElement("name");
++            annotation.appendChild(doc.createTextNode(description));
++
++            lastPlacemark.appendChild(annotation);
++
++            String newFileContents = Utilities.GetStringFromNode(doc);
++
++            synchronized (Kml10FileLogger.lock)
++            {
++                FileOutputStream fos = new FileOutputStream(kmlFile, false);
++                fos.write(newFileContents.getBytes());
++                fos.close();
++            }
++
++
++        }
++        catch (Exception e)
++        {
++            Utilities.LogError("Kml10FileLogger.Annotate", e);
++        }
++
++    }
++}
++
++class Kml10WriteHandler implements Runnable
++{
++
++    boolean useSatelliteTime;
++    Location loc;
++    File kmlFile;
++
++    public Kml10WriteHandler(boolean useSatelliteTime, Location loc, File kmlFile)
++    {
++        this.useSatelliteTime = useSatelliteTime;
++        this.loc = loc;
++        this.kmlFile = kmlFile;
++    }
++
++
++    @Override
++    public void run()
++    {
++        try
++        {
+             Date now;
+ 
+-            if(useSatelliteTime)
++            if (useSatelliteTime)
+             {
+                 now = new Date(loc.getTime());
+             }
+@@ -47,7 +135,7 @@ class Kml10FileLogger implements IFileLogger
+ 
+             String dateTimeString = Utilities.GetIsoDateTime(now);
+ 
+-            if(!kmlFile.exists())
++            if (!kmlFile.exists())
+             {
+                 kmlFile.createNewFile();
+ 
+@@ -71,12 +159,12 @@ class Kml10FileLogger implements IFileLogger
+ 
+             NodeList coordinatesList = doc.getElementsByTagName("coordinates");
+ 
+-            if(coordinatesList.item(0) != null)
++            if (coordinatesList.item(0) != null)
+             {
+                 Node coordinates = coordinatesList.item(0);
+                 Node coordTextNode = coordinates.getFirstChild();
+ 
+-                if(coordTextNode == null)
++                if (coordTextNode == null)
+                 {
+                     coordTextNode = doc.createTextNode("");
+                     coordinates.appendChild(coordTextNode);
+@@ -114,7 +202,7 @@ class Kml10FileLogger implements IFileLogger
+ 
+             String newFileContents = Utilities.GetStringFromNode(doc);
+ 
+-            synchronized(lock)
++            synchronized (Kml10FileLogger.lock)
+             {
+                 FileOutputStream fos = new FileOutputStream(kmlFile, false);
+                 fos.write(newFileContents.getBytes());
+@@ -122,54 +210,9 @@ class Kml10FileLogger implements IFileLogger
+             }
+ 
+         }
+-        catch(Exception e)
++        catch (Exception e)
+         {
+             Utilities.LogError("Kml10FileLogger.Write", e);
+-            throw new Exception("Could not write to KML file");
+         }
+-
+     }
+-
+-
+-    public void Annotate(String description) throws Exception
+-    {
+-
+-        if(!kmlFile.exists())
+-        {
+-            return;
+-        }
+-
+-        try
+-        {
+-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+-            DocumentBuilder builder = factory.newDocumentBuilder();
+-            Document doc = builder.parse(kmlFile);
+-
+-            NodeList placemarkList = doc.getElementsByTagName("Placemark");
+-            Node lastPlacemark = placemarkList.item(placemarkList.getLength() - 1);
+-
+-            Node annotation = doc.createElement("name");
+-            annotation.appendChild(doc.createTextNode(description));
+-
+-            lastPlacemark.appendChild(annotation);
+-
+-            String newFileContents = Utilities.GetStringFromNode(doc);
+-
+-            synchronized(lock)
+-            {
+-                FileOutputStream fos = new FileOutputStream(kmlFile, false);
+-                fos.write(newFileContents.getBytes());
+-                fos.close();
+-            }
+-
+-
+-        }
+-        catch(Exception e)
+-        {
+-            Utilities.LogError("Kml10FileLogger.Annotate", e);
+-            throw new Exception("Could not annotate KML file");
+-        }
+-    }
+-
+-
+ }
+diff --git a/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml22FileLogger.java b/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml22FileLogger.java
+index 2b4a8855..6ad994ac 100644
+--- a/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml22FileLogger.java
++++ b/GPSLogger/src/com/mendhak/gpslogger/loggers/Kml22FileLogger.java
+@@ -1,6 +1,7 @@
+ package com.mendhak.gpslogger.loggers;
+ 
+ import android.location.Location;
++import com.mendhak.gpslogger.common.RejectionHandler;
+ import com.mendhak.gpslogger.common.Utilities;
+ import org.w3c.dom.Document;
+ import org.w3c.dom.Node;
+@@ -17,17 +18,19 @@ import javax.xml.transform.stream.StreamResult;
+ import java.io.BufferedOutputStream;
+ import java.io.File;
+ import java.io.FileOutputStream;
+-import java.nio.channels.FileLock;
+ import java.util.Date;
+-import java.util.logging.ConsoleHandler;
++import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.ThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
+ 
+ public class Kml22FileLogger implements IFileLogger
+ {
+-    private final static Object lock = new Object();
++    protected final static Object lock = new Object();
++    private final static ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(1, 1, 60, TimeUnit.SECONDS,
++            new LinkedBlockingQueue<Runnable>(128), new RejectionHandler());
+     private final boolean useSatelliteTime;
+     private final boolean addNewTrackSegment;
+     private final File kmlFile;
+-    private FileLock kmlLock;
+ 
+     public Kml22FileLogger(File kmlFile, boolean useSatelliteTime, boolean addNewTrackSegment)
+     {
+@@ -38,13 +41,110 @@ public class Kml22FileLogger implements IFileLogger
+ 
+ 
+     public void Write(Location loc) throws Exception
++    {
++        Kml22WriteHandler writeHandler = new Kml22WriteHandler(useSatelliteTime, loc, kmlFile, addNewTrackSegment);
++        EXECUTOR.execute(writeHandler);
++    }
++
++    public void Annotate(String description) throws Exception
++    {
++        Kml22AnnotateHandler annotateHandler = new Kml22AnnotateHandler(kmlFile, description);
++        EXECUTOR.execute(annotateHandler);
++    }
++}
++
++class Kml22AnnotateHandler implements Runnable
++{
++    File kmlFile;
++    String description;
++
++    public Kml22AnnotateHandler(File kmlFile, String description)
++    {
++        this.kmlFile = kmlFile;
++        this.description = description;
++    }
++
++
++    @Override
++    public void run()
++    {
++        if (!kmlFile.exists())
++        {
++            return;
++        }
++
++        try
++        {
++            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
++            factory.setNamespaceAware(true);
++            DocumentBuilder builder = factory.newDocumentBuilder();
++            Document doc = builder.parse(kmlFile);
++
++            Node documentNode = doc.getElementsByTagName("Document").item(0);
++            Node newPlacemark = doc.createElement("Placemark");
++
++            Node nameNode = doc.createElement("name");
++            nameNode.appendChild(doc.createTextNode(description));
++
++            Node pointNode = doc.createElement("Point");
++            Node coordinatesNode = doc.createElement("coordinates");
++
++            //Find the latest coordinates from the list of gx:coords.
++            NodeList gxCoords = doc.getElementsByTagNameNS("http://www.google.com/kml/ext/2.2", "coord");
++            Node latestCoordinates = gxCoords.item(gxCoords.getLength() - 1);
++            coordinatesNode.appendChild(doc.createTextNode(latestCoordinates.getTextContent().replace(" ", ",")));
++
++            pointNode.appendChild(coordinatesNode);
++            newPlacemark.appendChild(nameNode);
++            newPlacemark.appendChild(pointNode);
++
++            documentNode.appendChild(newPlacemark);
++
++            synchronized (Kml22FileLogger.lock)
++            {
++
++                Transformer transformer = TransformerFactory.newInstance().newTransformer();
++                Result output = new StreamResult(kmlFile);
++                Source input = new DOMSource(doc);
++
++                transformer.transform(input, output);
++            }
++        }
++        catch (Exception e)
++        {
++            Utilities.LogError("Kml22FileLogger.Annotate", e);
++        }
++    }
++}
++
++class Kml22WriteHandler implements Runnable
++{
++
++    boolean useSatelliteTime;
++    boolean addNewTrackSegment;
++    File kmlFile;
++    Location loc;
++
++
++    public Kml22WriteHandler(boolean useSatelliteTime, Location loc, File kmlFile, boolean addNewTrackSegment)
++    {
++
++        this.useSatelliteTime = useSatelliteTime;
++        this.loc = loc;
++        this.kmlFile = kmlFile;
++        this.addNewTrackSegment = addNewTrackSegment;
++    }
++
++
++    @Override
++    public void run()
+     {
+         try
+         {
+ 
+             Date now;
+ 
+-            if(useSatelliteTime)
++            if (useSatelliteTime)
+             {
+                 now = new Date(loc.getTime());
+             }
+@@ -55,7 +155,7 @@ public class Kml22FileLogger implements IFileLogger
+ 
+             String dateTimeString = Utilities.GetIsoDateTime(now);
+ 
+-            if(!kmlFile.exists())
++            if (!kmlFile.exists())
+             {
+                 kmlFile.createNewFile();
+ 
+@@ -84,7 +184,7 @@ public class Kml22FileLogger implements IFileLogger
+             NodeList trackNodes = doc.getElementsByTagNameNS("http://www.google.com/kml/ext/2.2", "Track");
+             Node gxTrack;
+ 
+-            if(addNewTrackSegment || trackNodes.getLength() == 0)
++            if (addNewTrackSegment || trackNodes.getLength() == 0)
+             {
+                 Node placeMark = doc.createElement("Placemark");
+                 documentNode.appendChild(placeMark);
+@@ -106,67 +206,19 @@ public class Kml22FileLogger implements IFileLogger
+             when.appendChild(doc.createTextNode(dateTimeString));
+             gxTrack.appendChild(gxCoord);
+ 
+-            Transformer transformer = TransformerFactory.newInstance().newTransformer();
+-            Result output = new StreamResult(kmlFile);
+-            Source input = new DOMSource(doc);
++            synchronized (Kml22FileLogger.lock)
++            {
++                Transformer transformer = TransformerFactory.newInstance().newTransformer();
++                Result output = new StreamResult(kmlFile);
++                Source input = new DOMSource(doc);
+ 
+-            transformer.transform(input, output);
++                transformer.transform(input, output);
++            }
+ 
+         }
+-        catch(Exception e)
++        catch (Exception e)
+         {
+             Utilities.LogError("Kml22FileLogger.Write", e);
+-            throw new Exception("Could not write to KML file");
+-        }
+-    }
+-
+-    public void Annotate(String description) throws Exception
+-    {
+-        if(!kmlFile.exists())
+-        {
+-            return;
+-        }
+-
+-        try
+-        {
+-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+-            factory.setNamespaceAware(true);
+-            DocumentBuilder builder = factory.newDocumentBuilder();
+-            Document doc = builder.parse(kmlFile);
+-
+-            Node documentNode = doc.getElementsByTagName("Document").item(0);
+-            Node newPlacemark = doc.createElement("Placemark");
+-
+-            Node nameNode = doc.createElement("name");
+-            nameNode.appendChild(doc.createTextNode(description));
+-
+-            Node pointNode = doc.createElement("Point");
+-            Node coordinatesNode = doc.createElement("coordinates");
+-
+-            //Find the latest coordinates from the list of gx:coords.
+-            NodeList gxCoords = doc.getElementsByTagNameNS("http://www.google.com/kml/ext/2.2", "coord");
+-            Node latestCoordinates = gxCoords.item(gxCoords.getLength()-1);
+-            coordinatesNode.appendChild(doc.createTextNode(latestCoordinates.getTextContent().replace(" ",",")));
+-
+-            pointNode.appendChild(coordinatesNode);
+-            newPlacemark.appendChild(nameNode);
+-            newPlacemark.appendChild(pointNode);
+-
+-            documentNode.appendChild(newPlacemark);
+-
+-            Transformer transformer = TransformerFactory.newInstance().newTransformer();
+-            Result output = new StreamResult(kmlFile);
+-            Source input = new DOMSource(doc);
+-
+-            transformer.transform(input, output);
+-
+-
+-
+-        }
+-        catch(Exception e)
+-        {
+-            Utilities.LogError("Kml22FileLogger.Annotate", e);
+-            throw new Exception("Could not annotate KML file");
+         }
+     }
+ }

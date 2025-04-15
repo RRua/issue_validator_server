@@ -1,0 +1,709 @@
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/GeoClue2Dbus.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/GeoClue2Dbus.java
+deleted file mode 100644
+index 04512aff..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/GeoClue2Dbus.java
++++ /dev/null
+@@ -1,110 +0,0 @@
+-package ch.bailu.aat_gtk.service.location;
+-
+-import org.freedesktop.dbus.DBusPath;
+-import org.freedesktop.dbus.connections.impl.DBusConnection;
+-import org.freedesktop.dbus.connections.impl.DBusConnectionBuilder;
+-import org.freedesktop.dbus.exceptions.DBusException;
+-import org.freedesktop.dbus.interfaces.DBusSigHandler;
+-import org.freedesktop.dbus.interfaces.Properties;
+-import org.freedesktop.dbus.types.UInt32;
+-
+-import ch.bailu.aat_gtk.service.location.interfaces.Client;
+-import ch.bailu.aat_gtk.service.location.interfaces.Location;
+-import ch.bailu.aat_gtk.service.location.interfaces.Manager;
+-import ch.bailu.aat_lib.app.AppConfig;
+-
+-public class GeoClue2Dbus {
+-    public final static String DESKTOP_ID = AppConfig.getInstance().getApplicationId();
+-    public final static String BUS_NAME = "org.freedesktop.GeoClue2";
+-    public final static String MANAGER_PATH = "/org/freedesktop/GeoClue2/Manager";
+-    public final static String CLIENT_INTERFACE = "org.freedesktop.GeoClue2.Client";
+-
+-    private final DBusConnection connection;
+-
+-    private final String client_path;
+-
+-    private final Manager manager;
+-    private final Client client;
+-    private final Properties properties;
+-
+-
+-    private final static UInt32 GCLUE_ACCURACY_LEVEL_COUNTRY = new UInt32(1);
+-    private final static UInt32 GCLUE_ACCURACY_LEVEL_CITY = new UInt32(4);
+-    private final static UInt32 GCLUE_ACCURACY_LEVEL_NEIGHBORHOOD = new UInt32(5);
+-    private final static UInt32 GCLUE_ACCURACY_LEVEL_STREET = new UInt32(6);
+-    private final static UInt32 GCLUE_ACCURACY_LEVEL_EXACT = new UInt32(8);
+-
+-
+-    public GeoClue2Dbus() throws DBusException {
+-        connection = DBusConnectionBuilder.forType(DBusConnection.DBusBusType.SYSTEM).build();
+-
+-        manager = connection.getRemoteObject(
+-                BUS_NAME,
+-                MANAGER_PATH,
+-                Manager.class);
+-
+-        client_path = manager.GetClient().getPath();
+-
+-        client = connection.getRemoteObject(BUS_NAME, client_path,Client.class);
+-        properties = connection.getRemoteObject(BUS_NAME, client_path, Properties.class);
+-
+-        setDesktopId(DESKTOP_ID);
+-        setRequestedAccuracyLevel(GCLUE_ACCURACY_LEVEL_EXACT);
+-    }
+-
+-
+-    public void start() {
+-        client.Start();
+-    }
+-    public void stop() {
+-        client.Stop();
+-    }
+-
+-    public void connect(DBusSigHandler<Client.LocationUpdated> handler) throws DBusException {
+-        connection.addSigHandler(Client.LocationUpdated.class, client, handler);
+-    }
+-
+-    public String getDesktopId() {
+-        return properties.Get(CLIENT_INTERFACE, "DesktopId");
+-    }
+-
+-    public void setDesktopId(String id) {
+-        properties.Set(CLIENT_INTERFACE, "DesktopId", id);
+-    }
+-
+-    public LocationReader getLocation() throws DBusException {
+-        return getLocation(properties.Get(CLIENT_INTERFACE,"Location"));
+-    }
+-
+-    public LocationReader getLocation(DBusPath path) throws DBusException {
+-        return new LocationReader(connection, connection.getRemoteObject(BUS_NAME, path.getPath(), Location.class));
+-    }
+-
+-    public UInt32 getDistanceThreshold() {
+-        return properties.Get(CLIENT_INTERFACE,"DistanceThreshold");
+-    }
+-
+-    public void setDistanceThreshold(UInt32 value) {
+-        properties.Set(CLIENT_INTERFACE,"DistanceThreshold", value);
+-    }
+-
+-    public UInt32 getTimeThreshold() {
+-        return properties.Get(CLIENT_INTERFACE,"TimeThreshold");
+-    }
+-
+-    public void setTimeThreshold(UInt32 value) {
+-        properties.Set(CLIENT_INTERFACE,"TimeThreshold", value);
+-    }
+-
+-    public UInt32 getRequestedAccuracyLevel() {
+-        return properties.Get(CLIENT_INTERFACE,"RequestedAccuracyLevel");
+-    }
+-
+-    public void setRequestedAccuracyLevel(UInt32 level) {
+-        properties.Set(CLIENT_INTERFACE,"RequestedAccuracyLevel", level);
+-    }
+-
+-    public Boolean getActive() {
+-        return properties.Get(CLIENT_INTERFACE,"Active");
+-    }
+-}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationProperties.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationProperties.java
+deleted file mode 100644
+index 4034ead0..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationProperties.java
++++ /dev/null
+@@ -1,35 +0,0 @@
+-package ch.bailu.aat_gtk.service.location;
+-
+-import org.freedesktop.dbus.connections.impl.DBusConnection;
+-import org.freedesktop.dbus.exceptions.DBusException;
+-import org.freedesktop.dbus.interfaces.DBusInterface;
+-import org.freedesktop.dbus.interfaces.Properties;
+-import org.freedesktop.dbus.types.UInt64;
+-
+-public class LocationProperties {
+-    private final static String LOCATION_INTERFACE = "org.freedesktop.GeoClue2.Location";
+-
+-    private final Properties properties;
+-
+-    public LocationProperties(DBusConnection connection, DBusInterface location) throws DBusException {
+-        properties = connection.getRemoteObject(GeoClue2Dbus.BUS_NAME, location.getObjectPath(), Properties.class);
+-
+-    }
+-
+-
+-    public Double readDouble(String key) {
+-        return properties.Get(LOCATION_INTERFACE, key);
+-    }
+-
+-    public String readDescription() {
+-        return properties.Get(LOCATION_INTERFACE, "Description");
+-    }
+-
+-    public long readTimeStamp() {
+-        Object times[];
+-
+-        times = properties.Get(LOCATION_INTERFACE, "Timestamp");
+-
+-        return ((UInt64) times[0]).longValue()*1000;
+-    }
+-}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationReader.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationReader.java
+deleted file mode 100644
+index b4f09b5c..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/LocationReader.java
++++ /dev/null
+@@ -1,116 +0,0 @@
+-package ch.bailu.aat_gtk.service.location;
+-
+-import org.freedesktop.dbus.connections.impl.DBusConnection;
+-import org.freedesktop.dbus.exceptions.DBusException;
+-import org.freedesktop.dbus.interfaces.DBusInterface;
+-
+-import ch.bailu.aat_lib.coordinates.LatLongE6;
+-import ch.bailu.aat_lib.service.location.LocationInformation;
+-import ch.bailu.foc.Foc;
+-import ch.bailu.foc.FocName;
+-
+-public class LocationReader extends LocationInformation {
+-
+-    private final LatLongE6 latLongE6;
+-    private final float accuracy;
+-    private final float speed;
+-    private final long time;
+-    private double altitude;
+-    private final long creationTime;
+-
+-    public LocationReader(DBusConnection connection, DBusInterface location) throws DBusException {
+-
+-        LocationProperties properties = new LocationProperties(connection, location);
+-
+-        latLongE6 = new LatLongE6(properties.readDouble("Latitude"), properties.readDouble("Longitude"));
+-        accuracy = properties.readDouble("Accuracy").floatValue();
+-        speed = properties.readDouble("Speed").floatValue();
+-        altitude = properties.readDouble("Altitude");
+-
+-        time = properties.readTimeStamp();
+-        creationTime = System.currentTimeMillis();
+-    }
+-
+-
+-    @Override
+-    public Foc getFile() {
+-        return new FocName(this.getClass().getSimpleName());
+-    }
+-
+-    @Override
+-    public long getTimeStamp() {
+-        return time;
+-    }
+-
+-    @Override
+-    public float getSpeed() {
+-        return speed;
+-    }
+-
+-    @Override
+-    public float getAccuracy() {
+-        return accuracy;
+-    }
+-
+-    @Override
+-    public double getLongitude() {
+-        return latLongE6.getLongitude();
+-    }
+-
+-    @Override
+-    public double getLatitude() {
+-        return latLongE6.getLatitude();
+-    }
+-
+-    @Override
+-    public int getLongitudeE6() {
+-        return latLongE6.getLongitudeE6();
+-    }
+-
+-    @Override
+-    public int getLatitudeE6() {
+-        return latLongE6.getLatitudeE6();
+-    }
+-
+-
+-    @Override
+-    public boolean hasAccuracy() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean hasSpeed() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean hasAltitude() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean hasBearing() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean isFromGPS() {
+-        // TODO how do we know
+-        return true;
+-    }
+-
+-    @Override
+-    public long getCreationTime() {
+-        return creationTime;
+-    }
+-
+-    @Override
+-    public void setAltitude(double altitude) {
+-        this.altitude = altitude;
+-    }
+-
+-    @Override
+-    public double getAltitude() {
+-        return altitude;
+-    }
+-}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Client.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Client.java
+deleted file mode 100644
+index e2c0e62b..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Client.java
++++ /dev/null
+@@ -1,45 +0,0 @@
+-package ch.bailu.aat_gtk.service.location.interfaces;
+-
+-import org.freedesktop.dbus.DBusPath;
+-import org.freedesktop.dbus.annotations.DBusInterfaceName;
+-import org.freedesktop.dbus.annotations.DBusProperty;
+-import org.freedesktop.dbus.annotations.DBusProperty.Access;
+-import org.freedesktop.dbus.exceptions.DBusException;
+-import org.freedesktop.dbus.interfaces.DBusInterface;
+-import org.freedesktop.dbus.messages.DBusSignal;
+-import org.freedesktop.dbus.types.UInt32;
+-
+-/**
+- * Semi-auto-generated class.
+- */
+-@DBusInterfaceName("org.freedesktop.GeoClue2.Client")
+-@DBusProperty(name = "Location", type = DBusPath.class, access = Access.READ)
+-@DBusProperty(name = "DistanceThreshold", type = UInt32.class, access = Access.READ_WRITE)
+-@DBusProperty(name = "TimeThreshold", type = UInt32.class, access = Access.READ_WRITE)
+-@DBusProperty(name = "DesktopId", type = String.class, access = Access.READ_WRITE)
+-@DBusProperty(name = "RequestedAccuracyLevel", type = UInt32.class, access = Access.READ_WRITE)
+-@DBusProperty(name = "Active", type = Boolean.class, access = Access.READ)
+-public interface Client extends DBusInterface {
+-
+-    void Start();
+-    void Stop();
+-
+-    class LocationUpdated extends DBusSignal {
+-
+-        private final DBusPath _old;
+-        private final DBusPath _new;
+-
+-        public LocationUpdated(String _path, DBusPath _old, DBusPath _new) throws DBusException {
+-            super(_path);
+-            this._old = _old;
+-            this._new = _new;
+-        }
+-
+-        public DBusPath getOld() {
+-            return _old;
+-        }
+-        public DBusPath getNew() {
+-            return _new;
+-        }
+-    }
+-}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Location.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Location.java
+deleted file mode 100644
+index 1ef00e31..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Location.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package ch.bailu.aat_gtk.service.location.interfaces;
+-
+-import org.freedesktop.dbus.annotations.DBusInterfaceName;
+-import org.freedesktop.dbus.annotations.DBusProperty;
+-import org.freedesktop.dbus.annotations.DBusProperty.Access;
+-import org.freedesktop.dbus.interfaces.DBusInterface;
+-
+-
+-/**
+- * Semi-auto-generated class.
+- */
+-@DBusInterfaceName("org.freedesktop.GeoClue2.Location")
+-@DBusProperty(name = "Latitude", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Longitude", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Accuracy", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Altitude", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Speed", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Heading", type = Double.class, access = Access.READ)
+-@DBusProperty(name = "Description", type = String.class, access = Access.READ)
+-@DBusProperty(name = "Timestamp", type = PropertyTimestampStruct.class, access = DBusProperty.Access.READ)
+-public interface Location extends DBusInterface {}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Manager.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Manager.java
+deleted file mode 100644
+index 5597f780..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/Manager.java
++++ /dev/null
+@@ -1,20 +0,0 @@
+-package ch.bailu.aat_gtk.service.location.interfaces;
+-
+-import org.freedesktop.dbus.DBusPath;
+-import org.freedesktop.dbus.annotations.DBusInterfaceName;
+-import org.freedesktop.dbus.annotations.DBusProperty;
+-import org.freedesktop.dbus.interfaces.DBusInterface;
+-import org.freedesktop.dbus.types.UInt32;
+-
+-/**
+- * Auto-generated class.
+- */
+-@DBusInterfaceName("org.freedesktop.GeoClue2.Manager")
+-@DBusProperty(name = "InUse", type = Boolean.class, access = DBusProperty.Access.READ)
+-@DBusProperty(name = "AvailableAccuracyLevel", type = UInt32.class, access = DBusProperty.Access.READ)
+-public interface Manager extends DBusInterface {
+-    DBusPath GetClient();
+-    DBusPath CreateClient();
+-    void DeleteClient(DBusPath client);
+-    void AddAgent(String id);
+-}
+diff --git a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/PropertyTimestampStruct.java b/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/PropertyTimestampStruct.java
+deleted file mode 100644
+index 35de8808..00000000
+--- a/aat-gtk/src/main/java/ch/bailu/aat_gtk/service/location/interfaces/PropertyTimestampStruct.java
++++ /dev/null
+@@ -1,28 +0,0 @@
+-package ch.bailu.aat_gtk.service.location.interfaces;
+-
+-import org.freedesktop.dbus.Struct;
+-import org.freedesktop.dbus.annotations.Position;
+-import org.freedesktop.dbus.types.UInt64;
+-
+-/**
+- * Semi-auto-generated class.
+- */
+-public class PropertyTimestampStruct extends Struct {
+-    @Position(0)
+-    private final UInt64 member0;
+-    @Position(1)
+-    private final UInt64 member1;
+-
+-    public PropertyTimestampStruct(UInt64 member0, UInt64 member1) {
+-        this.member0 = member0;
+-        this.member1 = member1;
+-    }
+-
+-    public UInt64 getMember0() {
+-        return member0;
+-    }
+-    public UInt64 getMember1() {
+-        return member1;
+-    }
+-
+-}
+\ No newline at end of file
+diff --git a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/app/App.kt b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/app/App.kt
+index 6612adca..d163f27f 100644
+--- a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/app/App.kt
++++ b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/app/App.kt
+@@ -1,7 +1,6 @@
+ package ch.bailu.aat_gtk.app
+ 
+ import ch.bailu.aat_gtk.lib.RuntimeInfo
+-import ch.bailu.aat_gtk.logger.SL4JLogger
+ import ch.bailu.aat_gtk.preferences.PreferenceLoadDefaults
+ import ch.bailu.aat_gtk.solid.GtkStorage
+ import ch.bailu.aat_gtk.view.MainWindow
+@@ -11,6 +10,7 @@ import ch.bailu.aat_lib.dispatcher.AppBroadcaster
+ import ch.bailu.aat_lib.dispatcher.Dispatcher
+ import ch.bailu.aat_lib.logger.AppLog
+ import ch.bailu.aat_lib.logger.BroadcastLogger
++import ch.bailu.aat_lib.logger.PrintLnLogger
+ import ch.bailu.gtk.gio.ApplicationFlags
+ import ch.bailu.gtk.gtk.Application
+ import ch.bailu.gtk.gtk.ApplicationWindow
+@@ -28,7 +28,7 @@ object App {
+ 
+     init {
+         RuntimeInfo.startLogging()
+-        AppLog.set(SL4JLogger())
++        AppLog.set(PrintLnLogger())
+         AppGraphicFactory.set(GtkGraphicFactory.INSTANCE)
+         AppConfig.setInstance(GtkAppConfig)
+ 
+@@ -36,14 +36,14 @@ object App {
+             BroadcastLogger(
+                 GtkAppContext.broadcaster,
+                 AppBroadcaster.LOG_ERROR,
+-                SL4JLogger()
++                PrintLnLogger()
+             )
+         )
+         AppLog.setInfo(
+             BroadcastLogger(
+                 GtkAppContext.broadcaster,
+                 AppBroadcaster.LOG_INFO,
+-                SL4JLogger()
++                PrintLnLogger()
+             )
+         )
+ 
+diff --git a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationInformation.kt b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationInformation.kt
+new file mode 100644
+index 00000000..669d60f5
+--- /dev/null
++++ b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationInformation.kt
+@@ -0,0 +1,85 @@
++package ch.bailu.aat_gtk.service.location
++
++import ch.bailu.aat_lib.service.location.LocationInformation
++import ch.bailu.foc.Foc
++import ch.bailu.foc.FocName
++import ch.bailu.gtk.geoclue.Location
++import org.mapsforge.core.model.LatLong
++
++class GeoClue2LocationInformation(location: Location, private val _state: Int): LocationInformation() {
++
++    private val _location = LatLong(location.latitude, location.longitude)
++    private var _altitude = location.altitude
++    private val _speed = location.speed.toFloat()
++    private val _provider = FocName("GeoClue2")
++    private val _accuracy = location.accuracy.toFloat()
++    private val _timestamp = System.currentTimeMillis()
++
++    override fun getState(): Int {
++        return _state
++    }
++
++    override fun getFile(): Foc {
++        return _provider
++    }
++
++    override fun getAccuracy(): Float {
++        return _accuracy
++    }
++
++    override fun getSpeed(): Float {
++        return _speed
++    }
++
++    override fun getAltitude(): Double {
++        return _altitude
++    }
++
++    override fun getLatitude(): Double {
++        return _location.getLatitude()
++    }
++
++    override fun getLongitude(): Double {
++        return _location.getLongitude()
++    }
++
++    override fun getTimeStamp(): Long {
++        return _timestamp
++    }
++
++    override fun getLatitudeE6(): Int {
++        return (latitude * 1e6).toInt()
++    }
++
++    override fun getLongitudeE6(): Int {
++        return (longitude * 1e6).toInt()
++    }
++
++    override fun hasAccuracy(): Boolean {
++        return _accuracy > 0
++    }
++
++    override fun hasSpeed(): Boolean {
++        return _speed > 0
++    }
++
++    override fun hasAltitude(): Boolean {
++        return true
++    }
++
++    override fun hasBearing(): Boolean {
++        return false
++    }
++
++    override fun isFromGPS(): Boolean {
++        return true
++    }
++
++    override fun getCreationTime(): Long {
++        return _timestamp
++    }
++
++    override fun setAltitude(altitude: Double) {
++        _altitude = altitude
++    }
++}
+diff --git a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationProvider.kt b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationProvider.kt
+index 8a7a05c2..cf639072 100644
+--- a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationProvider.kt
++++ b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/service/location/GeoClue2LocationProvider.kt
+@@ -1,96 +1,57 @@
+ package ch.bailu.aat_gtk.service.location
+ 
+-import ch.bailu.aat_gtk.service.location.interfaces.Client
++import ch.bailu.aat_gtk.config.Strings
+ import ch.bailu.aat_lib.gpx.StateID
+ import ch.bailu.aat_lib.logger.AppLog
+-import ch.bailu.aat_lib.service.location.*
+-import org.freedesktop.dbus.types.UInt32
++import ch.bailu.aat_lib.service.location.LocationStackChainedItem
++import ch.bailu.aat_lib.service.location.LocationStackItem
++import ch.bailu.gtk.geoclue.AccuracyLevel
++import ch.bailu.gtk.geoclue.ClientProxy
++import ch.bailu.gtk.geoclue.Location
++import ch.bailu.gtk.geoclue.Simple
++import ch.bailu.gtk.gio.AsyncResult
++import ch.bailu.gtk.type.Str
+ 
+ 
+-/**
+- * GeoClue2 DBus interface:
+- * https://www.freedesktop.org/software/geoclue/docs/
+- *
+- * Java-DBus library:
+- * https://github.com/hypfvieh/dbus-java
+- *
+- * Nice GUI DBus debugger:
+- * https://wiki.gnome.org/Apps/DFeet/
+- *
+- * How to create GeoClue2 java interfaces:
+- * 1. Install 'geoclue-2.0' package
+- * 2. Get introspection files (xml-format):
+- * 'ls /usr/share/dbus-1/interfaces/ * | grep GeoClue2'
+- * 3. Clone 'https://github.com/hypfvieh/dbus-java' and read 'docs/code-generation.html'
+- * 4. Generate java classes from introspection files according to documentation
+- * 5. Manually adjust java files
+- *
+- */
+-class GeoClue2LocationProvider(
+-    private val lock: LocationServiceInterface,
+-    item: LocationStackItem?
+-) :
+-    LocationStackChainedItem(item) {
+-    private var geoClue2: GeoClue2Dbus? = null
++class GeoClue2LocationProvider(item: LocationStackItem) : LocationStackChainedItem(item) {
+ 
+-    private fun updateStateAndLocation(signal: Client.LocationUpdated) {
+-        AppLog.d(this, "signal received")
+-        synchronized(lock) {
+-            try {
+-                val geoClue2 = geoClue2
+-                if (geoClue2 is GeoClue2Dbus) {
+-                    val location = geoClue2.getLocation(signal.new)
++    private var client: ClientProxy? = null
+ 
+-                    if (geoClue2.active) {
+-                        AppLog.d(this, "Geoclue2 is active")
+-                    }
+-
+-                    passLocation(location)
+-                } else {
+-                    passState(StateID.NOSERVICE)
+-                }
+-
+-            } catch (e: Exception) {
+-                passState(StateID.NOSERVICE)
+-            }
+-        }
+-    }
+-
+-    private fun updateState() {
+-        synchronized(lock) {
+-            val geoClue2 = geoClue2
+-            if (geoClue2 is GeoClue2Dbus && geoClue2.active) {
+-                passState(LocationService.INITIAL_STATE)
+-            } else {
+-                passState(StateID.OFF)
+-            }
+-        }
++    private fun updateStateAndLocation(location: Location) {
++        passLocation(GeoClue2LocationInformation(location, StateID.ON))
+     }
+ 
+     override fun close() {
+-        geoClue2?.stop()
++        val client = this.client
++        if (client is ClientProxy) {
++            client.disconnectSignals()
++            client.unref()
++            this.client = null
++        }
+     }
+ 
+     init {
+-        object :
+-            Thread(GeoClue2Dbus::class.java.simpleName) {
+-            override fun run() {
+-                try {
+-                    val geo = GeoClue2Dbus()
+-                    geo.connect { signal -> updateStateAndLocation(signal) }
+-                    geo.timeThreshold = UInt32(2)
+-                    geo.start()
+-                    AppLog.d(this, "Geoclue2 started")
+-                    geoClue2 = geo
+-
+-                    if (geo.active) {
+-                        AppLog.d(this, "Geoclue2 is active")
++        try {
++            Simple.newWithThresholds(Str(Strings.appId), AccuracyLevel.EXACT, 0, 0, null,
++                { self, _ , res: AsyncResult, _ ->
++                    try {
++                        val simple = Simple.newWithThresholdsFinishSimple(res)
++                        val client = simple.client
++                        client.ref()
++                        AppLog.d(this, "Client object: " + client.objectPath)
++                        client.onNotify { updateStateAndLocation(simple.location) }
++                        this.client = client
++                        updateStateAndLocation(simple.location)
++                    } catch (e: java.lang.Exception) {
++                        passState(StateID.NOSERVICE)
++                        AppLog.e(this, "Failed to connect to GeoClue2 service")
+                     }
+-                    updateState()
+-                } catch (e: Exception) {
+-                    passState(StateID.NOSERVICE)
+-                }
+-            }
+-        }.start()
++                    self.unregister()
++                }, null
++            )
++        } catch (e: java.lang.Exception) {
++            passState(StateID.NOSERVICE)
++            AppLog.e(this, "Failed to initialize GeoClue2")
++        }
+     }
+ }
+diff --git a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/solid/GtkSolidLocationProvider.kt b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/solid/GtkSolidLocationProvider.kt
+index 807ecee2..d71b9cfd 100644
+--- a/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/solid/GtkSolidLocationProvider.kt
++++ b/aat-gtk/src/main/kotlin/ch/bailu/aat_gtk/solid/GtkSolidLocationProvider.kt
+@@ -20,7 +20,7 @@ class GtkSolidLocationProvider (storage: StorageInterface) :
+     ): LocationStackItem {
+ 
+         return if (index == 0) {
+-            GeoClue2LocationProvider(locationService, last)
++            GeoClue2LocationProvider(last)
+         } else if (index == 1) {
+             GPSdLocationProvider(last)
+         } else {

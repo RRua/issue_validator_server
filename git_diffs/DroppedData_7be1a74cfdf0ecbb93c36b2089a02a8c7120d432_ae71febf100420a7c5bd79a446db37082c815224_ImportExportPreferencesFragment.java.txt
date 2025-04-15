@@ -1,0 +1,1049 @@
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
+index e767b0be..706cb1c2 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisImporter.java
+@@ -1,9 +1,14 @@
+ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
++import android.content.DialogInterface;
++
++import androidx.lifecycle.Lifecycle;
+ 
+ import com.beemdevelopment.aegis.encoding.EncodingException;
++import com.beemdevelopment.aegis.helpers.ContextHelper;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
++import com.beemdevelopment.aegis.ui.Dialogs;
+ import com.beemdevelopment.aegis.ui.tasks.PasswordSlotDecryptTask;
+ import com.beemdevelopment.aegis.util.IOUtils;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+@@ -79,7 +84,26 @@ public class AegisImporter extends DatabaseImporter {
+ 
+         @Override
+         public void decrypt(Context context, DecryptListener listener) {
++            Dialogs.showPasswordInputDialog(context, (Dialogs.TextInputListener) password -> {
++                List<PasswordSlot> slots = getSlots().findAll(PasswordSlot.class);
++                PasswordSlotDecryptTask.Params params = new PasswordSlotDecryptTask.Params(slots, password);
++                PasswordSlotDecryptTask task = new PasswordSlotDecryptTask(context, result -> {
++                    try {
++                        if (result == null) {
++                            throw new DatabaseImporterException("Password incorrect");
++                        }
++
++                        VaultFileCredentials creds = new VaultFileCredentials(result.getKey(), getSlots());
++                        State state = decrypt(creds);
++                        listener.onStateDecrypted(state);
++                    } catch (DatabaseImporterException e) {
++                        listener.onError(e);
++                    }
++                });
+ 
++                Lifecycle lifecycle = ContextHelper.getLifecycle(context);
++                task.execute(lifecycle, params);
++            }, (DialogInterface.OnCancelListener) dialog -> listener.onCanceled());
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
+index 9049f28a..17a43c9b 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpImporter.java
+@@ -190,7 +190,7 @@ public class AndOtpImporter extends DatabaseImporter {
+                             } catch (DatabaseImporterException e) {
+                                 listener.onError(e);
+                             }
+-                        });
++                        }, dialog1 -> listener.onCanceled());
+                     })
+                     .create());
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthenticatorPlusImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthenticatorPlusImporter.java
+index 9f49cc10..9b4df7cd 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthenticatorPlusImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthenticatorPlusImporter.java
+@@ -71,7 +71,7 @@ public class AuthenticatorPlusImporter extends DatabaseImporter {
+                 } catch (DatabaseImporterException e) {
+                     listener.onError(e);
+                 }
+-            });
++            }, dialog1 -> listener.onCanceled());
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
+index ec99294a..3e80e30d 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AuthyImporter.java
+@@ -204,7 +204,7 @@ public class AuthyImporter extends DatabaseImporter {
+                 } catch (DatabaseImporterException e) {
+                     listener.onError(e);
+                 }
+-            });
++            }, dialog1 -> listener.onCanceled());
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+index 9ea576c8..f3f58864 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+@@ -167,8 +167,9 @@ public abstract class DatabaseImporter {
+         }
+     }
+ 
+-    public interface DecryptListener {
+-        void onStateDecrypted(State state);
+-        void onError(Exception e);
++    public static abstract class DecryptListener {
++        protected abstract void onStateDecrypted(State state);
++        protected abstract void onError(Exception e);
++        protected abstract void onCanceled();
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/TotpAuthenticatorImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/TotpAuthenticatorImporter.java
+index b042541e..8b29f372 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/TotpAuthenticatorImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/TotpAuthenticatorImporter.java
+@@ -159,7 +159,7 @@ public class TotpAuthenticatorImporter extends DatabaseImporter {
+                     .setPositiveButton(R.string.yes, (dialog, which) -> {
+                         Dialogs.showPasswordInputDialog(context, password -> {
+                             decrypt(password, listener);
+-                        });
++                        }, dialog1 -> listener.onCanceled());
+                     })
+                     .setNegativeButton(R.string.no, (dialog, which) -> {
+                         decrypt(PASSWORD, listener);
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java b/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
+index ed7eb818..61891f74 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/Dialogs.java
+@@ -188,7 +188,7 @@ public class Dialogs {
+         showSecureDialog(dialog);
+     }
+ 
+-    private static void showTextInputDialog(Context context, @StringRes int titleId, @StringRes int messageId, @StringRes int hintId, TextInputListener listener, DialogInterface.OnDismissListener dismissListener, boolean isSecret) {
++    private static void showTextInputDialog(Context context, @StringRes int titleId, @StringRes int messageId, @StringRes int hintId, TextInputListener listener, DialogInterface.OnCancelListener cancelListener, boolean isSecret) {
+         View view = LayoutInflater.from(context).inflate(R.layout.dialog_text_input, null);
+         TextInputEditText input = view.findViewById(R.id.text_input);
+         TextInputLayout inputLayout = view.findViewById(R.id.text_input_layout);
+@@ -205,8 +205,8 @@ public class Dialogs {
+                     listener.onTextInputResult(text);
+                 });
+ 
+-        if (dismissListener != null) {
+-            builder.setOnDismissListener(dismissListener);
++        if (cancelListener != null) {
++            builder.setOnCancelListener(cancelListener);
+         }
+ 
+         if (messageId != 0) {
+@@ -214,6 +214,7 @@ public class Dialogs {
+         }
+ 
+         AlertDialog dialog = builder.create();
++        dialog.setCanceledOnTouchOutside(true);
+         dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+         showSecureDialog(dialog);
+     }
+@@ -230,12 +231,20 @@ public class Dialogs {
+         showTextInputDialog(context, R.string.set_password, R.string.password, listener, true);
+     }
+ 
++    public static void showPasswordInputDialog(Context context, TextInputListener listener, DialogInterface.OnCancelListener cancelListener) {
++        showTextInputDialog(context, R.string.set_password, 0, R.string.password, listener, cancelListener, true);
++    }
++
+     public static void showPasswordInputDialog(Context context, @StringRes int messageId, TextInputListener listener) {
+         showTextInputDialog(context, R.string.set_password, messageId, R.string.password, listener, null, true);
+     }
+ 
+-    public static void showPasswordInputDialog(Context context, @StringRes int setPasswordMessageId, @StringRes int messageId, TextInputListener listener, DialogInterface.OnDismissListener dismissListener) {
+-        showTextInputDialog(context, setPasswordMessageId, messageId, R.string.password, listener, dismissListener, true);
++    public static void showPasswordInputDialog(Context context, @StringRes int messageId, TextInputListener listener, DialogInterface.OnCancelListener cancelListener) {
++        showTextInputDialog(context, R.string.set_password, messageId, R.string.password, listener, cancelListener, true);
++    }
++
++    public static void showPasswordInputDialog(Context context, @StringRes int titleId, @StringRes int messageId, TextInputListener listener, DialogInterface.OnCancelListener cancelListener) {
++        showTextInputDialog(context, titleId, messageId, R.string.password, listener, cancelListener, true);
+     }
+ 
+     public static void showCheckboxDialog(Context context, @StringRes int titleId, @StringRes int messageId, @StringRes int checkboxMessageId, CheckboxInputListener listener) {
+@@ -334,6 +343,7 @@ public class Dialogs {
+         AlertDialog dialog = new AlertDialog.Builder(context)
+                 .setTitle(R.string.error_occurred)
+                 .setView(view)
++                .setCancelable(false)
+                 .setPositiveButton(android.R.string.ok, (dialog1, which) -> {
+                     if (listener != null) {
+                         listener.onClick(dialog1, which);
+@@ -342,11 +352,6 @@ public class Dialogs {
+                 .setNeutralButton(R.string.details, (dialog1, which) -> {
+                     textDetails.setVisibility(View.VISIBLE);
+                 })
+-                .setOnDismissListener(dialog12 -> {
+-                    if (listener != null) {
+-                        listener.onClick(dialog12, -1);
+-                    }
+-                })
+                 .create();
+ 
+         dialog.setOnShowListener(d -> {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java
+new file mode 100644
+index 00000000..10986050
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java
+@@ -0,0 +1,263 @@
++package com.beemdevelopment.aegis.ui;
++
++import android.content.ClipData;
++import android.content.ClipboardManager;
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.net.Uri;
++import android.os.Bundle;
++import android.text.TextUtils;
++import android.view.Menu;
++import android.view.MenuItem;
++import android.widget.Toast;
++
++import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
++import androidx.appcompat.app.ActionBar;
++import androidx.appcompat.app.AlertDialog;
++import androidx.recyclerview.widget.LinearLayoutManager;
++import androidx.recyclerview.widget.RecyclerView;
++
++import com.beemdevelopment.aegis.R;
++import com.beemdevelopment.aegis.helpers.FabScrollHelper;
++import com.beemdevelopment.aegis.importers.DatabaseImporter;
++import com.beemdevelopment.aegis.importers.DatabaseImporterEntryException;
++import com.beemdevelopment.aegis.importers.DatabaseImporterException;
++import com.beemdevelopment.aegis.ui.models.ImportEntry;
++import com.beemdevelopment.aegis.ui.views.ImportEntriesAdapter;
++import com.beemdevelopment.aegis.util.UUIDMap;
++import com.beemdevelopment.aegis.vault.VaultEntry;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.google.android.material.floatingactionbutton.FloatingActionButton;
++import com.topjohnwu.superuser.Shell;
++
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.io.InputStream;
++import java.util.ArrayList;
++import java.util.List;
++
++public class ImportEntriesActivity extends AegisActivity {
++    private ImportEntriesAdapter _adapter;
++    private FabScrollHelper _fabScrollHelper;
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_import_entries);
++        setSupportActionBar(findViewById(R.id.toolbar));
++
++        ActionBar bar = getSupportActionBar();
++        bar.setHomeAsUpIndicator(R.drawable.ic_close);
++        bar.setDisplayHomeAsUpEnabled(true);
++
++        _adapter = new ImportEntriesAdapter();
++        RecyclerView entriesView = findViewById(R.id.list_entries);
++        entriesView.addOnScrollListener(new RecyclerView.OnScrollListener() {
++            @Override
++            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
++                super.onScrolled(recyclerView, dx, dy);
++                _fabScrollHelper.onScroll(dx, dy);
++            }
++        });
++
++        LinearLayoutManager layoutManager = new LinearLayoutManager(this);
++        entriesView.setLayoutManager(layoutManager);
++        entriesView.setAdapter(_adapter);
++        entriesView.setNestedScrollingEnabled(false);
++
++        FloatingActionButton fab = findViewById(R.id.fab);
++        fab.setOnClickListener(v -> {
++            if (getApp().getVaultManager().getEntries().size() > 0) {
++                showWipeEntriesDialog();
++            } else {
++                saveAndFinish(false);
++            }
++        });
++        _fabScrollHelper = new FabScrollHelper(fab);
++
++        Class<? extends DatabaseImporter> importerType = (Class<? extends DatabaseImporter>) getIntent().getSerializableExtra("importerType");
++        startImport(importerType, getIntent().getStringExtra("fileUri"));
++    }
++
++    private void startImport(@NonNull Class<? extends DatabaseImporter> importerType, @Nullable String fileUri) {
++        if (fileUri == null) {
++            startImportApp(importerType);
++        } else {
++            startImportFile(importerType, Uri.parse(fileUri));
++        }
++    }
++
++    private void startImportFile(@NonNull Class<? extends DatabaseImporter> importerType, @NonNull Uri fileUri) {
++        try (InputStream stream = getContentResolver().openInputStream(fileUri)) {
++            DatabaseImporter importer = DatabaseImporter.create(this, importerType);
++            DatabaseImporter.State state = importer.read(stream);
++            processImporterState(state);
++        } catch (FileNotFoundException e) {
++            Toast.makeText(this, R.string.file_not_found, Toast.LENGTH_SHORT).show();
++        } catch (DatabaseImporterException | IOException e) {
++            e.printStackTrace();
++            Dialogs.showErrorDialog(this, R.string.reading_file_error, e, (dialog, which) -> finish());
++        }
++    }
++
++    private void startImportApp(@NonNull Class<? extends DatabaseImporter> importerType) {
++        DatabaseImporter importer = DatabaseImporter.create(this, importerType);
++
++        // obtain the global root shell and close it immediately after we're done
++        // TODO: find a way to use SuFileInputStream with Shell.newInstance()
++        try (Shell shell = Shell.getShell()) {
++            if (!shell.isRoot()) {
++                Toast.makeText(this, R.string.root_error, Toast.LENGTH_SHORT).show();
++                finish();
++                return;
++            }
++
++            DatabaseImporter.State state = importer.readFromApp();
++            processImporterState(state);
++        } catch (PackageManager.NameNotFoundException e) {
++            e.printStackTrace();
++            Toast.makeText(this, R.string.app_lookup_error, Toast.LENGTH_SHORT).show();
++            finish();
++        } catch (IOException | DatabaseImporterException e) {
++            e.printStackTrace();
++            Dialogs.showErrorDialog(this, R.string.reading_file_error, e, (dialog, which) -> finish());
++        }
++    }
++
++    private void processImporterState(DatabaseImporter.State state) {
++        try {
++            if (state.isEncrypted()) {
++                state.decrypt(this, new DatabaseImporter.DecryptListener() {
++                    @Override
++                    public void onStateDecrypted(DatabaseImporter.State state) {
++                        importDatabase(state);
++                    }
++
++                    @Override
++                    public void onError(Exception e) {
++                        e.printStackTrace();
++                        Dialogs.showErrorDialog(ImportEntriesActivity.this, R.string.decryption_error, e, (dialog, which) -> finish());
++                    }
++
++                    @Override
++                    public void onCanceled() {
++                        finish();
++                    }
++                });
++            } else {
++                importDatabase(state);
++            }
++        } catch (DatabaseImporterException e) {
++            e.printStackTrace();
++            Dialogs.showErrorDialog(this, R.string.parsing_file_error, e, (dialog, which) -> finish());
++        }
++    }
++
++    private void importDatabase(DatabaseImporter.State state) {
++        DatabaseImporter.Result result;
++        try {
++            result = state.convert();
++        } catch (DatabaseImporterException e) {
++            e.printStackTrace();
++            Dialogs.showErrorDialog(this, R.string.parsing_file_error, e, (dialog, which) -> finish());
++            return;
++        }
++
++        UUIDMap<VaultEntry> entries = result.getEntries();
++        for (VaultEntry entry : entries.getValues()) {
++            _adapter.addEntry(new ImportEntry(entry));
++        }
++
++        List<DatabaseImporterEntryException> errors = result.getErrors();
++        if (errors.size() > 0) {
++            showErrorDialog(errors);
++        }
++    }
++
++    private void showErrorDialog(List<DatabaseImporterEntryException> errors) {
++        Dialogs.showSecureDialog(new AlertDialog.Builder(this)
++                .setTitle(R.string.import_error_title)
++                .setMessage(getResources().getQuantityString(R.plurals.import_error_dialog, errors.size(), errors.size()))
++                .setPositiveButton(android.R.string.ok, null)
++                .setNeutralButton(getString(R.string.details), (dialog, which) -> showDetailedErrorDialog(errors))
++                .create());
++    }
++
++    private void showDetailedErrorDialog(List<DatabaseImporterEntryException> errors) {
++        List<String> messages = new ArrayList<>();
++        for (DatabaseImporterEntryException e : errors) {
++            messages.add(e.getMessage());
++        }
++
++        String message = TextUtils.join("\n\n", messages);
++        Dialogs.showSecureDialog(new AlertDialog.Builder(this)
++                .setTitle(R.string.import_error_title)
++                .setMessage(message)
++                .setPositiveButton(android.R.string.ok, null)
++                .setNeutralButton(android.R.string.copy, (dialog2, which2) -> {
++                    ClipboardManager clipboard = (ClipboardManager) this.getSystemService(Context.CLIPBOARD_SERVICE);
++                    ClipData clip = ClipData.newPlainText("text/plain", message);
++                    clipboard.setPrimaryClip(clip);
++                    Toast.makeText(this, R.string.errors_copied, Toast.LENGTH_SHORT).show();
++                })
++                .create());
++    }
++
++    private void showWipeEntriesDialog() {
++        Dialogs.showCheckboxDialog(this, R.string.dialog_wipe_entries_title,
++                R.string.dialog_wipe_entries_message,
++                R.string.dialog_wipe_entries_checkbox,
++                this::saveAndFinish
++        );
++    }
++
++    private void saveAndFinish(boolean wipeEntries) {
++        VaultManager vault = getApp().getVaultManager();
++        if (wipeEntries) {
++            vault.wipeEntries();
++        }
++
++        List<ImportEntry> selectedEntries = _adapter.getCheckedEntries();
++        for (ImportEntry selectedEntry : selectedEntries) {
++            VaultEntry entry = selectedEntry.getEntry();
++
++            // temporary: randomize the UUID of duplicate entries and add them anyway
++            if (vault.isEntryDuplicate(entry)) {
++                entry.resetUUID();
++            }
++
++            vault.addEntry(entry);
++        }
++
++        if (saveVault(true)) {
++            String toastMessage = getResources().getQuantityString(R.plurals.imported_entries_count, selectedEntries.size(), selectedEntries.size());
++            Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show();
++
++            setResult(RESULT_OK, null);
++            finish();
++        }
++    }
++
++    @Override
++    public boolean onCreateOptionsMenu(Menu menu) {
++        getMenuInflater().inflate(R.menu.menu_import_entries, menu);
++        return true;
++    }
++
++    @Override
++    public boolean onOptionsItemSelected(MenuItem item) {
++        switch (item.getItemId()) {
++            case android.R.id.home:
++                onBackPressed();
++                break;
++            case R.id.toggle_checkboxes:
++                _adapter.toggleCheckboxes();
++                break;
++            default:
++                return super.onOptionsItemSelected(item);
++        }
++
++        return true;
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/SelectEntriesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/SelectEntriesActivity.java
+deleted file mode 100644
+index 69ea33bc..00000000
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/SelectEntriesActivity.java
++++ /dev/null
+@@ -1,154 +0,0 @@
+-package com.beemdevelopment.aegis.ui;
+-
+-import android.content.ClipData;
+-import android.content.ClipboardManager;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.os.Bundle;
+-import android.text.TextUtils;
+-import android.view.Menu;
+-import android.view.MenuItem;
+-import android.widget.Toast;
+-
+-import androidx.annotation.NonNull;
+-import androidx.appcompat.app.ActionBar;
+-import androidx.appcompat.app.AlertDialog;
+-import androidx.recyclerview.widget.LinearLayoutManager;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.helpers.FabScrollHelper;
+-import com.beemdevelopment.aegis.importers.DatabaseImporterEntryException;
+-import com.beemdevelopment.aegis.ui.models.ImportEntry;
+-import com.beemdevelopment.aegis.ui.views.ImportEntriesAdapter;
+-import com.google.android.material.floatingactionbutton.FloatingActionButton;
+-
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-public class SelectEntriesActivity extends AegisActivity {
+-    private ImportEntriesAdapter _adapter;
+-    private FabScrollHelper _fabScrollHelper;
+-    private boolean _vaultContainsEntries;
+-
+-    @Override
+-    protected void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_select_entries);
+-        setSupportActionBar(findViewById(R.id.toolbar));
+-
+-        ActionBar bar = getSupportActionBar();
+-        bar.setHomeAsUpIndicator(R.drawable.ic_close);
+-        bar.setDisplayHomeAsUpEnabled(true);
+-
+-        _adapter = new ImportEntriesAdapter();
+-        RecyclerView entriesView = findViewById(R.id.list_entries);
+-        entriesView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+-            @Override
+-            public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
+-                super.onScrolled(recyclerView, dx, dy);
+-                onScroll(dx, dy);
+-            }
+-        });
+-
+-        LinearLayoutManager layoutManager = new LinearLayoutManager(this);
+-        entriesView.setLayoutManager(layoutManager);
+-        entriesView.setAdapter(_adapter);
+-        entriesView.setNestedScrollingEnabled(false);
+-
+-        Intent intent = getIntent();
+-        List<ImportEntry> entries = (ArrayList<ImportEntry>) intent.getSerializableExtra("entries");
+-        List<DatabaseImporterEntryException> errors = (ArrayList<DatabaseImporterEntryException>) intent.getSerializableExtra("errors");
+-        _vaultContainsEntries = intent.getBooleanExtra("vaultContainsEntries", false);
+-
+-        for (ImportEntry entry : entries) {
+-            _adapter.addEntry(entry);
+-        }
+-
+-        if (errors.size() > 0) {
+-            showErrorDialog(errors);
+-        }
+-
+-        FloatingActionButton fab = findViewById(R.id.fab);
+-        fab.setOnClickListener(v -> {
+-            if (_vaultContainsEntries) {
+-                showWipeEntriesDialog();
+-            } else {
+-                returnSelectedEntries(false);
+-            }
+-        });
+-        _fabScrollHelper = new FabScrollHelper(fab);
+-    }
+-
+-    private void showErrorDialog(List<DatabaseImporterEntryException> errors) {
+-        Dialogs.showSecureDialog(new AlertDialog.Builder(this)
+-                .setTitle(R.string.import_error_title)
+-                .setMessage(getResources().getQuantityString(R.plurals.import_error_dialog, errors.size(), errors.size()))
+-                .setPositiveButton(android.R.string.ok, null)
+-                .setNeutralButton(getString(R.string.details), (dialog, which) -> showDetailedErrorDialog(errors))
+-                .create());
+-    }
+-
+-    private void showDetailedErrorDialog(List<DatabaseImporterEntryException> errors) {
+-        List<String> messages = new ArrayList<>();
+-        for (DatabaseImporterEntryException e : errors) {
+-            messages.add(e.getMessage());
+-        }
+-
+-        String message = TextUtils.join("\n\n", messages);
+-        Dialogs.showSecureDialog(new AlertDialog.Builder(this)
+-                .setTitle(R.string.import_error_title)
+-                .setMessage(message)
+-                .setPositiveButton(android.R.string.ok, null)
+-                .setNeutralButton(android.R.string.copy, (dialog2, which2) -> {
+-                    ClipboardManager clipboard = (ClipboardManager) this.getSystemService(Context.CLIPBOARD_SERVICE);
+-                    ClipData clip = ClipData.newPlainText("text/plain", message);
+-                    clipboard.setPrimaryClip(clip);
+-                    Toast.makeText(this, R.string.errors_copied, Toast.LENGTH_SHORT).show();
+-                })
+-                .create());
+-    }
+-
+-    private void showWipeEntriesDialog() {
+-        Dialogs.showCheckboxDialog(this, R.string.dialog_wipe_entries_title,
+-                R.string.dialog_wipe_entries_message,
+-                R.string.dialog_wipe_entries_checkbox,
+-                this::returnSelectedEntries
+-        );
+-    }
+-
+-    private void returnSelectedEntries(boolean wipeEntries) {
+-        Intent intent = new Intent();
+-        List<ImportEntry> entries = _adapter.getCheckedEntries();
+-        intent.putExtra("entries", (ArrayList<ImportEntry>) entries);
+-        intent.putExtra("wipeEntries", wipeEntries);
+-        setResult(RESULT_OK, intent);
+-        finish();
+-    }
+-
+-    public void onScroll(int dx, int dy) {
+-        _fabScrollHelper.onScroll(dx, dy);
+-    }
+-
+-    @Override
+-    public boolean onCreateOptionsMenu(Menu menu) {
+-        getMenuInflater().inflate(R.menu.menu_select_entries, menu);
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean onOptionsItemSelected(MenuItem item) {
+-        switch (item.getItemId()) {
+-            case android.R.id.home:
+-                onBackPressed();
+-                break;
+-            case R.id.toggle_checkboxes:
+-                _adapter.toggleCheckboxes();
+-                break;
+-            default:
+-                return super.onOptionsItemSelected(item);
+-        }
+-
+-        return true;
+-    }
+-}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java
+index 9330b3b8..ce916cf4 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java
+@@ -2,7 +2,6 @@ package com.beemdevelopment.aegis.ui.fragments;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+-import android.content.pm.PackageManager;
+ import android.net.Uri;
+ import android.os.Bundle;
+ import android.view.LayoutInflater;
+@@ -14,6 +13,7 @@ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.ArrayRes;
++import androidx.annotation.NonNull;
+ import androidx.appcompat.app.AlertDialog;
+ import androidx.core.content.FileProvider;
+ import androidx.preference.Preference;
+@@ -21,47 +21,37 @@ import androidx.preference.Preference;
+ import com.beemdevelopment.aegis.BuildConfig;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.helpers.DropdownHelper;
+-import com.beemdevelopment.aegis.importers.AegisImporter;
+ import com.beemdevelopment.aegis.importers.DatabaseImporter;
+-import com.beemdevelopment.aegis.importers.DatabaseImporterEntryException;
+-import com.beemdevelopment.aegis.importers.DatabaseImporterException;
+-import com.beemdevelopment.aegis.ui.AuthActivity;
+ import com.beemdevelopment.aegis.ui.Dialogs;
+-import com.beemdevelopment.aegis.ui.SelectEntriesActivity;
+-import com.beemdevelopment.aegis.ui.models.ImportEntry;
++import com.beemdevelopment.aegis.ui.ImportEntriesActivity;
+ import com.beemdevelopment.aegis.ui.tasks.ExportTask;
+-import com.beemdevelopment.aegis.util.UUIDMap;
+ import com.beemdevelopment.aegis.vault.VaultBackupManager;
+-import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+ import com.beemdevelopment.aegis.vault.VaultManager;
+ import com.beemdevelopment.aegis.vault.VaultManagerException;
+ import com.beemdevelopment.aegis.vault.slots.Slot;
+ import com.beemdevelopment.aegis.vault.slots.SlotException;
+-import com.topjohnwu.superuser.Shell;
+ 
+ import java.io.File;
+-import java.io.FileNotFoundException;
+ import java.io.FileOutputStream;
+ import java.io.IOException;
+-import java.io.InputStream;
+ import java.io.OutputStream;
+-import java.util.ArrayList;
+-import java.util.List;
+ 
+ import javax.crypto.Cipher;
+ 
+ public class ImportExportPreferencesFragment extends PreferencesFragment {
+-    // keep a reference to the type of database converter the user selected
++    // keep a reference to the type of database converter that was selected
+     private Class<? extends DatabaseImporter> _importerType;
+-    private AegisImporter.State _importerState;
+-    private UUIDMap<VaultEntry> _importerEntries;
+ 
+     @Override
+     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+         super.onCreatePreferences(savedInstanceState, rootKey);
+         addPreferencesFromResource(R.xml.preferences_import_export);
+ 
++        if (savedInstanceState != null) {
++            _importerType = (Class<? extends DatabaseImporter>) savedInstanceState.getSerializable("importerType");
++        }
++
+         Preference importPreference = findPreference("pref_import");
+         importPreference.setOnPreferenceClickListener(preference -> {
+             Dialogs.showImportersDialog(getContext(), false, definition -> {
+@@ -69,7 +59,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+ 
+                 Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                 intent.setType("*/*");
+-                startActivityForResult(intent, CODE_IMPORT);
++                startActivityForResult(intent, CODE_IMPORT_SELECT);
+             });
+             return true;
+         });
+@@ -77,8 +67,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+         Preference importAppPreference = findPreference("pref_import_app");
+         importAppPreference.setOnPreferenceClickListener(preference -> {
+             Dialogs.showImportersDialog(getContext(), true, definition -> {
+-                DatabaseImporter importer = DatabaseImporter.create(getContext(), definition.getType());
+-                importApp(importer);
++                startImportEntriesActivity(definition.getType(), null);
+             });
+             return true;
+         });
+@@ -90,18 +79,20 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+         });
+     }
+ 
++    @Override
++    public void onSaveInstanceState(@NonNull Bundle outState) {
++        super.onSaveInstanceState(outState);
++        outState.putSerializable("importerType", _importerType);
++    }
++
+     @Override
+     public void onActivityResult(int requestCode, int resultCode, Intent data) {
+-        if (data != null) {
++        if (requestCode == CODE_IMPORT) {
++            getResult().putExtra("needsRecreate", true);
++        } else if (data != null) {
+             switch (requestCode) {
+-                case CODE_IMPORT:
+-                    onImportResult(resultCode, data);
+-                    break;
+-                case CODE_IMPORT_DECRYPT:
+-                    onImportDecryptResult(resultCode, data);
+-                    break;
+-                case CODE_SELECT_ENTRIES:
+-                    onSelectEntriesResult(resultCode, data);
++                case CODE_IMPORT_SELECT:
++                    onImportSelectResult(resultCode, data);
+                     break;
+                 case CODE_EXPORT:
+                     // intentional fallthrough
+@@ -114,118 +105,20 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+         }
+     }
+ 
+-    private void importApp(DatabaseImporter importer) {
+-        // obtain the global root shell and close it immediately after we're done
+-        // TODO: find a way to use SuFileInputStream with Shell.newInstance()
+-        try (Shell shell = Shell.getShell()) {
+-            if (!shell.isRoot()) {
+-                Toast.makeText(getActivity(), R.string.root_error, Toast.LENGTH_SHORT).show();
+-                return;
+-            }
+-
+-            DatabaseImporter.State state = importer.readFromApp();
+-            processImporterState(state);
+-        } catch (PackageManager.NameNotFoundException e) {
+-            e.printStackTrace();
+-            Toast.makeText(getActivity(), R.string.app_lookup_error, Toast.LENGTH_SHORT).show();
+-        } catch (IOException | DatabaseImporterException e) {
+-            e.printStackTrace();
+-            Toast.makeText(getActivity(), R.string.reading_file_error, Toast.LENGTH_SHORT).show();
+-        }
+-    }
+-
+-    private void processImporterState(DatabaseImporter.State state) {
+-        try {
+-            if (state.isEncrypted()) {
+-                // temporary special case for encrypted Aegis vaults
+-                if (state instanceof AegisImporter.EncryptedState) {
+-                    _importerState = state;
+-
+-                    Intent intent = new Intent(getActivity(), AuthActivity.class);
+-                    intent.putExtra("slots", ((AegisImporter.EncryptedState) state).getSlots());
+-                    startActivityForResult(intent, CODE_IMPORT_DECRYPT);
+-                } else {
+-                    state.decrypt(getActivity(), new DatabaseImporter.DecryptListener() {
+-                        @Override
+-                        public void onStateDecrypted(DatabaseImporter.State state) {
+-                            importDatabase(state);
+-                        }
+-
+-                        @Override
+-                        public void onError(Exception e) {
+-                            e.printStackTrace();
+-                            Dialogs.showErrorDialog(getContext(), R.string.decryption_error, e);
+-                        }
+-                    });
+-                }
+-            } else {
+-                importDatabase(state);
+-            }
+-        } catch (DatabaseImporterException e) {
+-            e.printStackTrace();
+-            Dialogs.showErrorDialog(getContext(), R.string.parsing_file_error, e);
+-        }
+-    }
+-
+-    private void onImportDecryptResult(int resultCode, Intent data) {
+-        if (resultCode != Activity.RESULT_OK) {
+-            _importerState = null;
+-            return;
+-        }
+-
+-        VaultFileCredentials creds = (VaultFileCredentials) data.getSerializableExtra("creds");
+-        DatabaseImporter.State state;
+-        try {
+-            state = ((AegisImporter.EncryptedState) _importerState).decrypt(creds);
+-        } catch (DatabaseImporterException e) {
+-            e.printStackTrace();
+-            Dialogs.showErrorDialog(getContext(), R.string.decryption_error, e);
+-            return;
+-        }
+-
+-        importDatabase(state);
+-        _importerState = null;
+-    }
+-
+-    private void onImportResult(int resultCode, Intent data) {
++    private void onImportSelectResult(int resultCode, Intent data) {
+         Uri uri = data.getData();
+         if (resultCode != Activity.RESULT_OK || uri == null) {
+             return;
+         }
+ 
+-        try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
+-            DatabaseImporter importer = DatabaseImporter.create(getContext(), _importerType);
+-            DatabaseImporter.State state = importer.read(stream);
+-            processImporterState(state);
+-        } catch (FileNotFoundException e) {
+-            Toast.makeText(getActivity(), R.string.file_not_found, Toast.LENGTH_SHORT).show();
+-        } catch (DatabaseImporterException | IOException e) {
+-            e.printStackTrace();
+-            Dialogs.showErrorDialog(getContext(), R.string.reading_file_error, e);
+-        }
++        startImportEntriesActivity(_importerType, uri);
+     }
+ 
+-    private void importDatabase(DatabaseImporter.State state) {
+-        DatabaseImporter.Result result;
+-        try {
+-            result = state.convert();
+-        } catch (DatabaseImporterException e) {
+-            e.printStackTrace();
+-            Dialogs.showErrorDialog(getContext(), R.string.parsing_file_error, e);
+-            return;
+-        }
+-
+-        _importerEntries = result.getEntries();
+-        List<ImportEntry> entries = new ArrayList<>();
+-        for (VaultEntry entry : _importerEntries) {
+-            entries.add(new ImportEntry(entry));
+-        }
+-
+-        Intent intent = new Intent(getActivity(), SelectEntriesActivity.class);
+-        intent.putExtra("entries", (ArrayList<ImportEntry>) entries);
+-        intent.putExtra("errors", (ArrayList<DatabaseImporterEntryException>) result.getErrors());
+-        intent.putExtra("vaultContainsEntries", getVault().getEntries().size() > 0);
+-        startActivityForResult(intent, CODE_SELECT_ENTRIES);
++    private void startImportEntriesActivity(Class<? extends DatabaseImporter> importerType, Uri fileUri) {
++        Intent intent = new Intent(getActivity(), ImportEntriesActivity.class);
++        intent.putExtra("importerType", importerType);
++        intent.putExtra("fileUri", fileUri == null ? null : fileUri.toString());
++        startActivityForResult(intent, CODE_IMPORT);
+     }
+ 
+     private void startExport() {
+@@ -326,39 +219,6 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+         Dialogs.showSecureDialog(dialog);
+     }
+ 
+-    private void onSelectEntriesResult(int resultCode, Intent data) {
+-        if (resultCode != Activity.RESULT_OK) {
+-            return;
+-        }
+-
+-        boolean wipeEntries = data.getBooleanExtra("wipeEntries", false);
+-        if (wipeEntries) {
+-            getVault().wipeEntries();
+-        }
+-
+-        List<ImportEntry> selectedEntries = (ArrayList<ImportEntry>) data.getSerializableExtra("entries");
+-        for (ImportEntry selectedEntry : selectedEntries) {
+-            VaultEntry savedEntry = _importerEntries.getByUUID(selectedEntry.getUUID());
+-
+-            // temporary: randomize the UUID of duplicate entries and add them anyway
+-            if (getVault().isEntryDuplicate(savedEntry)) {
+-                savedEntry.resetUUID();
+-            }
+-
+-            getVault().addEntry(savedEntry);
+-        }
+-
+-        _importerEntries = null;
+-        if (!saveVault()) {
+-            return;
+-        }
+-
+-        String toastMessage = getResources().getQuantityString(R.plurals.imported_entries_count, selectedEntries.size(), selectedEntries.size());
+-        Toast.makeText(getContext(), toastMessage, Toast.LENGTH_SHORT).show();
+-
+-        getResult().putExtra("needsRecreate", true);
+-    }
+-
+     private static int getExportRequestCode(int spinnerPos, boolean encrypt) {
+         if (spinnerPos == 0) {
+             return encrypt ? CODE_EXPORT : CODE_EXPORT_PLAIN;
+@@ -433,7 +293,6 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+             return;
+         }
+ 
+-
+         startExportVault(requestCode, cb -> {
+             File file;
+             OutputStream outStream = null;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java
+index c79e4aab..e8ce9777 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java
+@@ -16,11 +16,10 @@ import com.beemdevelopment.aegis.vault.VaultManagerException;
+ 
+ public abstract class PreferencesFragment extends PreferenceFragmentCompat {
+     // activity request codes
+-    public static final int CODE_IMPORT = 0;
+-    public static final int CODE_IMPORT_DECRYPT = 1;
++    public static final int CODE_IMPORT_SELECT = 0;
+     public static final int CODE_SLOTS = 2;
+     public static final int CODE_GROUPS = 3;
+-    public static final int CODE_SELECT_ENTRIES = 4;
++    public static final int CODE_IMPORT = 4;
+     public static final int CODE_EXPORT = 5;
+     public static final int CODE_EXPORT_PLAIN = 6;
+     public static final int CODE_EXPORT_GOOGLE_URI = 7;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java b/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
+index 507039c0..be40d86a 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/models/ImportEntry.java
+@@ -3,32 +3,19 @@ package com.beemdevelopment.aegis.ui.models;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+ import java.io.Serializable;
+-import java.util.UUID;
+ 
+ public class ImportEntry implements Serializable {
+-    private UUID _uuid;
+-    private String _name;
+-    private String _issuer;
++    private final VaultEntry _entry;
+ 
+     private transient Listener _listener;
+     private boolean _isChecked = true;
+ 
+     public ImportEntry(VaultEntry entry) {
+-        _uuid = entry.getUUID();
+-        _name = entry.getName();
+-        _issuer = entry.getIssuer();
++        _entry = entry;
+     }
+ 
+-    public UUID getUUID() {
+-        return _uuid;
+-    }
+-
+-    public String getName() {
+-        return _name;
+-    }
+-
+-    public String getIssuer() {
+-        return _issuer;
++    public VaultEntry getEntry() {
++        return _entry;
+     }
+ 
+     public void setOnCheckedChangedListener(Listener listener) {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
+index cc64a799..024472b1 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntriesAdapter.java
+@@ -4,15 +4,15 @@ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+ 
++import androidx.annotation.NonNull;
++import androidx.recyclerview.widget.RecyclerView;
++
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.ui.models.ImportEntry;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import androidx.annotation.NonNull;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+ public class ImportEntriesAdapter extends RecyclerView.Adapter<ImportEntryHolder> {
+     private List<ImportEntry> _entries;
+ 
+@@ -47,7 +47,7 @@ public class ImportEntriesAdapter extends RecyclerView.Adapter<ImportEntryHolder
+ 
+     @Override
+     public void onViewRecycled(@NonNull ImportEntryHolder holder) {
+-        holder.getEntry().setOnCheckedChangedListener(null);
++        holder.getData().setOnCheckedChangedListener(null);
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
+index 16c120b9..a00d2fb3 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/ImportEntryHolder.java
+@@ -15,7 +15,7 @@ public class ImportEntryHolder extends RecyclerView.ViewHolder implements Import
+     private TextView _accountName;
+     private CheckBox _checkbox;
+ 
+-    private ImportEntry _entry;
++    private ImportEntry _data;
+ 
+     public ImportEntryHolder(final View view) {
+         super(view);
+@@ -23,20 +23,20 @@ public class ImportEntryHolder extends RecyclerView.ViewHolder implements Import
+         _issuer = view.findViewById(R.id.profile_issuer);
+         _accountName = view.findViewById(R.id.profile_account_name);
+         _checkbox = view.findViewById(R.id.checkbox_import_entry);
+-        view.setOnClickListener(v -> _entry.setIsChecked(!_entry.isChecked()));
++        view.setOnClickListener(v -> _data.setIsChecked(!_data.isChecked()));
+     }
+ 
+-    public void setData(ImportEntry entry) {
+-        _entry = entry;
++    public void setData(ImportEntry data) {
++        _data = data;
+ 
+         Context context = itemView.getContext();
+-        _issuer.setText(!entry.getIssuer().isEmpty() ? entry.getIssuer() : context.getString(R.string.unknown_issuer));
+-        _accountName.setText(!entry.getName().isEmpty() ? entry.getName() : context.getString(R.string.unknown_account_name));
+-        _checkbox.setChecked(entry.isChecked());
++        _issuer.setText(!_data.getEntry().getIssuer().isEmpty() ? _data.getEntry().getIssuer() : context.getString(R.string.unknown_issuer));
++        _accountName.setText(!_data.getEntry().getName().isEmpty() ? _data.getEntry().getName() : context.getString(R.string.unknown_account_name));
++        _checkbox.setChecked(_data.isChecked());
+     }
+ 
+-    public ImportEntry getEntry() {
+-        return _entry;
++    public ImportEntry getData() {
++        return _data;
+     }
+ 
+     @Override

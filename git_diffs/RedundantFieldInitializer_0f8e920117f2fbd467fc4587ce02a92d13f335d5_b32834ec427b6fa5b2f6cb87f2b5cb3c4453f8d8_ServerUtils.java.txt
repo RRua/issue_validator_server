@@ -1,0 +1,181 @@
+diff --git a/app/src/main/java/com/akansh/fileserversuit/Constants.java b/app/src/main/java/com/akansh/fileserversuit/Constants.java
+index 580eb1e..da4655e 100644
+--- a/app/src/main/java/com/akansh/fileserversuit/Constants.java
++++ b/app/src/main/java/com/akansh/fileserversuit/Constants.java
+@@ -15,6 +15,7 @@ public class Constants {
+     public static final int SERVER_OFF = 0;
+     public static final int MATISSE_REQ_CODE = 101;
+     public static final int STORAGE_REQ_CODE = 1;
++    public static final int CAMERA_REQ_CODE = 2;
+     public static final int ITEM_TYPE_SENT = 0;
+     public static final int ITEM_TYPE_RECEIVED = 1;
+     public static final int DEVICE_TYPE_TEMP = 0;
+diff --git a/app/src/main/java/com/akansh/fileserversuit/MainActivity.java b/app/src/main/java/com/akansh/fileserversuit/MainActivity.java
+index 706750f..dc4eb7f 100644
+--- a/app/src/main/java/com/akansh/fileserversuit/MainActivity.java
++++ b/app/src/main/java/com/akansh/fileserversuit/MainActivity.java
+@@ -84,14 +84,13 @@ import java.util.TimerTask;
+ 
+ public class MainActivity extends AppCompatActivity {
+ 
+-    private final String[] PERMISSIONS_OLD = {
+-            Manifest.permission.CAMERA,
++    private final String[] PERMISSIONS = {
+             Manifest.permission.READ_EXTERNAL_STORAGE,
+             Manifest.permission.WRITE_EXTERNAL_STORAGE,
+     };
+-    private final String[] PERMISSIONS_NEW = {
+-            Manifest.permission.CAMERA,
+-    };
++//    private final String[] PERMISSIONS_NEW = {
++//            Manifest.permission.CAMERA,
++//    };
+ 
+     private ImageButton serverBtn,hide_logger_btn;
+     Utils utils;
+@@ -200,7 +199,7 @@ public class MainActivity extends AppCompatActivity {
+         });
+ 
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            requestPermissions();
++            initRequestPermissions();
+         } else {
+             initializeApp();
+         }
+@@ -482,7 +481,11 @@ public class MainActivity extends AppCompatActivity {
+             if(itemId == R.id.settings) {
+                 toggleSettings();
+             }else if(itemId == R.id.scan_qr) {
+-                initQrScanner();
++                if(checkCameraPermission()) {
++                    initQrScanner();
++                }else{
++                    requestCameraPermission();
++                }
+             }else if(itemId == R.id.trans_hist) {
+                 Intent intent=new Intent(MainActivity.this,TransferHistory.class);
+                 startActivity(intent);
+@@ -523,17 +526,24 @@ public class MainActivity extends AppCompatActivity {
+         }
+     }
+ 
+-    public boolean checkPermissions() {
++    public boolean checkStoragePermissions() {
+         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+-            return ActivityCompat.checkSelfPermission(this,PERMISSIONS_OLD[0]) == PackageManager.PERMISSION_GRANTED &&
+-                    ActivityCompat.checkSelfPermission(this,PERMISSIONS_OLD[1]) == PackageManager.PERMISSION_GRANTED &&
+-                    ActivityCompat.checkSelfPermission(this,PERMISSIONS_OLD[2]) == PackageManager.PERMISSION_GRANTED;
+-        }else if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R){
+-            return ActivityCompat.checkSelfPermission(this,PERMISSIONS_NEW[0]) == PackageManager.PERMISSION_GRANTED;
++            return ActivityCompat.checkSelfPermission(this,PERMISSIONS[0]) == PackageManager.PERMISSION_GRANTED &&
++                    ActivityCompat.checkSelfPermission(this,PERMISSIONS[1]) == PackageManager.PERMISSION_GRANTED;
+         }
+         return true;
+     }
+ 
++    public boolean checkCameraPermission() {
++        return ActivityCompat.checkSelfPermission(this,Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
++    }
++
++    public void requestCameraPermission() {
++        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            requestPermissions(new String[]{Manifest.permission.CAMERA},Constants.CAMERA_REQ_CODE);
++        }
++    }
++
+     public void requestStoragePermissions() {
+         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+             try {
+@@ -553,29 +563,29 @@ public class MainActivity extends AppCompatActivity {
+         }
+     }
+ 
+-    public void requestPermissions() {
++    public void initRequestPermissions() {
+         if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+-            requestPermissions(PERMISSIONS_OLD,Constants.STORAGE_REQ_CODE);
++            requestPermissions(PERMISSIONS,Constants.STORAGE_REQ_CODE);
+         }else if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R){
+-            requestPermissions(PERMISSIONS_NEW,Constants.STORAGE_REQ_CODE);
++            if (!Environment.isExternalStorageManager()) {
++                requestStoragePermissions();
++            } else {
++                initializeApp();
++            }
+         }
+     }
+ 
+     @Override
+     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+         if(requestCode == Constants.STORAGE_REQ_CODE) {
+-            if (!checkPermissions()) {
+-                requestPermissions();
++            if (!checkStoragePermissions()) {
++                initRequestPermissions();
+                 return;
+             }
+-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+-                if (!Environment.isExternalStorageManager()) {
+-                    requestStoragePermissions();
+-                } else {
+-                    initializeApp();
+-                }
+-            } else {
+-                initializeApp();
++            initializeApp();
++        }else if(requestCode == Constants.CAMERA_REQ_CODE) {
++            if(checkCameraPermission()) {
++                initQrScanner();
+             }
+         }else{
+             super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+diff --git a/app/src/main/java/com/akansh/fileserversuit/ServerUtils.java b/app/src/main/java/com/akansh/fileserversuit/ServerUtils.java
+index 2ca3182..7fe002d 100644
+--- a/app/src/main/java/com/akansh/fileserversuit/ServerUtils.java
++++ b/app/src/main/java/com/akansh/fileserversuit/ServerUtils.java
+@@ -25,13 +25,12 @@ import java.util.Comparator;
+ import java.util.List;
+ 
+ import fi.iki.elonen.NanoHTTPD;
+-
+ import static fi.iki.elonen.NanoHTTPD.newFixedLengthResponse;
+ 
+ public class ServerUtils {
+-    private List<ApplicationInfo> packages = null;
+-    private PackageManager packageManager=null;
+-    private Context ctx;
++    private final List<ApplicationInfo> packages;
++    private final PackageManager packageManager;
++    private final Context ctx;
+     Utils utils;
+     SendProgressListener sendProgressListener;
+     UpdateTransferHistoryListener updateTransferHistoryListener;
+@@ -365,12 +364,9 @@ public class ServerUtils {
+                     FileInputStream fis = new FileInputStream(path);
+                     fis.skip(start);
+                     ProgressInputStream pis = new ProgressInputStream(fis, (int) fileLength);
+-                    pis.addListener(new ProgressInputStream.ProgressListener() {
+-                        @Override
+-                        public void process(double percent) {
+-                            if (sendProgressListener != null) {
+-                                sendProgressListener.onProgressUpdate((int) percent);
+-                            }
++                    pis.addListener(percent -> {
++                        if (sendProgressListener != null) {
++                            sendProgressListener.onProgressUpdate((int) percent);
+                         }
+                     });
+                     response = newFixedLengthResponse(NanoHTTPD.Response.Status.PARTIAL_CONTENT,"application/octet-stream", pis,fileLength);
+diff --git a/app/src/main/java/com/akansh/fileserversuit/Utils.java b/app/src/main/java/com/akansh/fileserversuit/Utils.java
+index ce0b245..c7a8811 100644
+--- a/app/src/main/java/com/akansh/fileserversuit/Utils.java
++++ b/app/src/main/java/com/akansh/fileserversuit/Utils.java
+@@ -150,7 +150,7 @@ public class Utils {
+ 
+     public boolean loadSetting(String constant) {
+         boolean def = false;
+-        if (constant == Constants.FORCE_DOWNLOAD || constant == Constants.IS_LOGGER_VISIBLE) {
++        if (constant.equals(Constants.FORCE_DOWNLOAD) || constant.equals(Constants.IS_LOGGER_VISIBLE) || constant.equals(Constants.RESTRICT_MODIFY)) {
+             def = true;
+         }
+         SharedPreferences sharedPrefs = ctx.getSharedPreferences(ctx.getPackageName(), MODE_PRIVATE);

@@ -1,0 +1,141 @@
+diff --git a/src/com/android/launcher3/Hotseat.java b/src/com/android/launcher3/Hotseat.java
+index 052f7ac90..e691b480a 100644
+--- a/src/com/android/launcher3/Hotseat.java
++++ b/src/com/android/launcher3/Hotseat.java
+@@ -55,7 +55,7 @@ public class Hotseat extends FrameLayout
+         mHasVerticalHotseat = mLauncher.getDeviceProfile().isVerticalBarLayout();
+     }
+ 
+-    CellLayout getLayout() {
++    public CellLayout getLayout() {
+         return mContent;
+     }
+ 
+diff --git a/src/com/android/launcher3/PagedView.java b/src/com/android/launcher3/PagedView.java
+index fc8bb4507..5606a244d 100644
+--- a/src/com/android/launcher3/PagedView.java
++++ b/src/com/android/launcher3/PagedView.java
+@@ -625,17 +625,23 @@ public abstract class PagedView extends ViewGroup implements ViewGroup.OnHierarc
+ 
+     // we moved this functionality to a helper function so SmoothPagedView can reuse it
+     protected boolean computeScrollHelper() {
++        return computeScrollHelper(true);
++    }
++
++    protected boolean computeScrollHelper(boolean shouldInvalidate) {
+         if (mScroller.computeScrollOffset()) {
+             // Don't bother scrolling if the page does not need to be moved
+             if (getScrollX() != mScroller.getCurrX()
+-                || getScrollY() != mScroller.getCurrY()) {
++                    || getScrollY() != mScroller.getCurrY()) {
+                 float scaleX = mFreeScroll ? getScaleX() : 1f;
+                 int scrollX = (int) (mScroller.getCurrX() * (1 / scaleX));
+                 scrollTo(scrollX, mScroller.getCurrY());
+             }
+-            invalidate();
++            if (shouldInvalidate) {
++                invalidate();
++            }
+             return true;
+-        } else if (mNextPage != INVALID_PAGE) {
++        } else if (mNextPage != INVALID_PAGE && shouldInvalidate) {
+             sendScrollAccessibilityEvent();
+ 
+             mCurrentPage = validateNewPage(mNextPage);
+diff --git a/src/com/android/launcher3/Workspace.java b/src/com/android/launcher3/Workspace.java
+index 0b72ef793..44a17cce8 100644
+--- a/src/com/android/launcher3/Workspace.java
++++ b/src/com/android/launcher3/Workspace.java
+@@ -149,7 +149,7 @@ public class Workspace extends PagedView
+      */
+     @Thunk CellLayout mDragTargetLayout = null;
+     /**
+-     * The CellLayout that we will show as glowing
++     * The CellLayout that we will show as highlighted
+      */
+     private CellLayout mDragOverlappingLayout = null;
+ 
+@@ -1421,6 +1421,10 @@ public class Workspace extends PagedView
+         mWallpaperOffset.syncWithScroll();
+     }
+ 
++    public void computeScrollWithoutInvalidation() {
++        computeScrollHelper(false);
++    }
++
+     @Override
+     protected void determineScrollingStart(MotionEvent ev, float touchSlopScale) {
+         if (!isSwitchingState()) {
+@@ -2836,7 +2840,13 @@ public class Workspace extends PagedView
+         if (mDragOverlappingLayout != null) {
+             mDragOverlappingLayout.setIsDragOverlapping(true);
+         }
+-        invalidate();
++        // Invalidating the scrim will also force this CellLayout
++        // to be invalidated so that it is highlighted if necessary.
++        mLauncher.getDragLayer().invalidateScrim();
++    }
++
++    public CellLayout getCurrentDragOverlappingLayout() {
++        return mDragOverlappingLayout;
+     }
+ 
+     void setCurrentDropOverCell(int x, int y) {
+diff --git a/src/com/android/launcher3/dragndrop/DragLayer.java b/src/com/android/launcher3/dragndrop/DragLayer.java
+index 647ec5e9f..058a58cde 100644
+--- a/src/com/android/launcher3/dragndrop/DragLayer.java
++++ b/src/com/android/launcher3/dragndrop/DragLayer.java
+@@ -26,6 +26,7 @@ import android.content.res.Resources;
+ import android.graphics.Canvas;
+ import android.graphics.Color;
+ import android.graphics.Rect;
++import android.graphics.Region;
+ import android.graphics.drawable.Drawable;
+ import android.util.AttributeSet;
+ import android.view.DragEvent;
+@@ -42,6 +43,7 @@ import android.widget.TextView;
+ 
+ import com.android.launcher3.AppWidgetResizeFrame;
+ import com.android.launcher3.CellLayout;
++import com.android.launcher3.Hotseat;
+ import com.android.launcher3.InsettableFrameLayout;
+ import com.android.launcher3.ItemInfo;
+ import com.android.launcher3.Launcher;
+@@ -92,6 +94,7 @@ public class DragLayer extends InsettableFrameLayout {
+ 
+     private boolean mHoverPointClosesFolder = false;
+     private final Rect mHitRect = new Rect();
++    private final Rect mHighlightRect = new Rect();
+ 
+     private TouchCompleteListener mTouchCompleteListener;
+ 
+@@ -922,12 +925,29 @@ public class DragLayer extends InsettableFrameLayout {
+         invalidate();
+     }
+ 
++    public void invalidateScrim() {
++        if (mBackgroundAlpha > 0.0f) {
++            invalidate();
++        }
++    }
++
+     @Override
+     protected void dispatchDraw(Canvas canvas) {
+         // Draw the background below children.
+         if (mBackgroundAlpha > 0.0f) {
++            // Update the scroll position first to ensure scrim cutout is in the right place.
++            mLauncher.getWorkspace().computeScrollWithoutInvalidation();
++
+             int alpha = (int) (mBackgroundAlpha * 255);
++            CellLayout currCellLayout = mLauncher.getWorkspace().getCurrentDragOverlappingLayout();
++            canvas.save();
++            if (currCellLayout != null && currCellLayout != mLauncher.getHotseat().getLayout()) {
++                // Cut a hole in the darkening scrim on the page that should be highlighted, if any.
++                getDescendantRectRelativeToSelf(currCellLayout, mHighlightRect);
++                canvas.clipRect(mHighlightRect, Region.Op.DIFFERENCE);
++            }
+             canvas.drawColor((alpha << 24) | SCRIM_COLOR);
++            canvas.restore();
+         }
+ 
+         super.dispatchDraw(canvas);

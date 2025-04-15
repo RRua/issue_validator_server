@@ -1,0 +1,2966 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt
+index 097db8a12..37e1c6858 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt
+@@ -27,9 +27,6 @@ import android.app.Service
+ import android.content.Context
+ import android.content.Intent
+ import android.content.SharedPreferences
+-import android.net.ConnectivityManager
+-import android.net.NetworkCapabilities
+-import android.net.wifi.WifiManager
+ import android.os.Build.VERSION.SDK_INT
+ import android.os.Build.VERSION_CODES.KITKAT
+ import android.os.Build.VERSION_CODES.LOLLIPOP
+@@ -66,9 +63,6 @@ import org.greenrobot.eventbus.EventBus
+ import org.slf4j.Logger
+ import org.slf4j.LoggerFactory
+ import java.io.IOException
+-import java.net.InetAddress
+-import java.net.NetworkInterface
+-import java.net.UnknownHostException
+ import java.security.GeneralSecurityException
+ import java.security.KeyStore
+ import java.util.*
+@@ -368,110 +362,8 @@ class FtpService : Service(), Runnable {
+             return !server.isStopped
+         }
+ 
+-        /**
+-         * Is the device connected to local network, either Ethernet or Wifi?
+-         */
+-        @JvmStatic
+-        fun isConnectedToLocalNetwork(context: Context): Boolean {
+-            val cm = context.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+-            var connected: Boolean
+-            if (SDK_INT >= M) {
+-                connected = cm.activeNetwork?.let { activeNetwork ->
+-                    cm.getNetworkCapabilities(activeNetwork)?.let { ni ->
+-                        ni.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) or
+-                            ni.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+-                    } ?: false
+-                } ?: false
+-            } else {
+-                connected = cm.activeNetworkInfo?.let { ni ->
+-                    ni.isConnected && (
+-                        ni.type and (
+-                            ConnectivityManager.TYPE_WIFI
+-                                or ConnectivityManager.TYPE_ETHERNET
+-                            ) != 0
+-                        )
+-                } ?: false
+-            }
+-
+-            if (!connected) {
+-                connected = runCatching {
+-                    NetworkInterface.getNetworkInterfaces().toList().find { netInterface ->
+-                        netInterface.displayName.startsWith("rndis") or
+-                            netInterface.displayName.startsWith("wlan")
+-                    }
+-                }.getOrElse { null } != null
+-            }
+-
+-            return connected
+-        }
+-
+-        /**
+-         * Is the device connected to Wifi?
+-         */
+-        @JvmStatic
+-        fun isConnectedToWifi(context: Context): Boolean {
+-            val cm = context.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+-            return if (SDK_INT >= M) {
+-                cm.activeNetwork?.let {
+-                    cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+-                } ?: false
+-            } else {
+-                cm.activeNetworkInfo?.let {
+-                    it.isConnected && it.type == ConnectivityManager.TYPE_WIFI
+-                } ?: false
+-            }
+-        }
+-
+-        /**
+-         * Determine device's IP address
+-         */
+-        @JvmStatic
+-        fun getLocalInetAddress(context: Context): InetAddress? {
+-            if (!isConnectedToLocalNetwork(context)) {
+-                return null
+-            }
+-            if (isConnectedToWifi(context)) {
+-                val wm = context.applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+-                val ipAddress = wm.connectionInfo.ipAddress
+-                return if (ipAddress == 0) null else intToInet(ipAddress)
+-            }
+-            runCatching {
+-                NetworkInterface.getNetworkInterfaces().iterator().forEach { netinterface ->
+-                    netinterface.inetAddresses.iterator().forEach { address ->
+-                        // this is the condition that sometimes gives problems
+-                        if (!address.isLoopbackAddress &&
+-                            !address.isLinkLocalAddress
+-                        ) {
+-                            return address
+-                        }
+-                    }
+-                }
+-            }.onFailure { e ->
+-                log.warn("failed to get local inet address", e)
+-            }
+-            return null
+-        }
+-
+-        private fun intToInet(value: Int): InetAddress? {
+-            val bytes = ByteArray(4)
+-            for (i in 0..3) {
+-                bytes[i] = byteOfInt(value, i)
+-            }
+-            return try {
+-                InetAddress.getByAddress(bytes)
+-            } catch (e: UnknownHostException) {
+-                // This only happens if the byte array has a bad length
+-                null
+-            }
+-        }
+-
+-        private fun byteOfInt(value: Int, which: Int): Byte {
+-            val shift = which * 8
+-            return (value shr shift).toByte()
+-        }
+-
+         private fun getPort(preferences: SharedPreferences): Int {
+-            return preferences.getInt(PORT_PREFERENCE_KEY, DEFAULT_PORT)
++            return preferences.getInt(FtpService.PORT_PREFERENCE_KEY, FtpService.DEFAULT_PORT)
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
+index c9c44158f..01e74981b 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
+@@ -24,6 +24,7 @@ import org.greenrobot.eventbus.EventBus;
+ import org.greenrobot.eventbus.Subscribe;
+ 
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.utils.NetworkUtil;
+ 
+ import android.annotation.TargetApi;
+ import android.content.Intent;
+@@ -64,8 +65,8 @@ public class FtpTileService extends TileService {
+                 .sendBroadcast(
+                     new Intent(FtpService.ACTION_STOP_FTPSERVER).setPackage(getPackageName()));
+           } else {
+-            if (FtpService.isConnectedToWifi(getApplicationContext())
+-                || FtpService.isConnectedToLocalNetwork(getApplicationContext())) {
++            if (NetworkUtil.isConnectedToWifi(getApplicationContext())
++                || NetworkUtil.isConnectedToLocalNetwork(getApplicationContext())) {
+               Intent i = new Intent(FtpService.ACTION_START_FTPSERVER).setPackage(getPackageName());
+               i.putExtra(FtpService.TAG_STARTED_BY_TILE, true);
+               getApplicationContext().sendBroadcast(i);
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java b/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
+index cd4bdec12..3d129a9fd 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
+@@ -43,7 +43,7 @@ import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+ import com.amaze.filemanager.ui.activities.MainActivity;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.OTGUtil;
+-import com.amaze.filemanager.utils.SmbUtil;
++import com.amaze.filemanager.utils.smb.SmbUtil;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ 
+ import android.content.ContentResolver;
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+index 8f55be388..2f91894d0 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+@@ -85,8 +85,8 @@ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.Function;
+ import com.amaze.filemanager.utils.OTGUtil;
+ import com.amaze.filemanager.utils.OnFileFound;
+-import com.amaze.filemanager.utils.SmbUtil;
+ import com.amaze.filemanager.utils.Utils;
++import com.amaze.filemanager.utils.smb.SmbUtil;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ import com.cloudrail.si.types.SpaceAllocation;
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ftp/NetCopyClientUtils.kt b/app/src/main/java/com/amaze/filemanager/filesystem/ftp/NetCopyClientUtils.kt
+index 372bc5279..3fedf1b0e 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/ftp/NetCopyClientUtils.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ftp/NetCopyClientUtils.kt
+@@ -38,7 +38,7 @@ import com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.Companion.COLO
+ import com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.Companion.SLASH
+ import com.amaze.filemanager.filesystem.smb.CifsContexts.SMB_URI_PREFIX
+ import com.amaze.filemanager.filesystem.ssh.SFtpClientTemplate
+-import com.amaze.filemanager.utils.SmbUtil
++import com.amaze.filemanager.utils.smb.SmbUtil
+ import com.amaze.filemanager.utils.urlEncoded
+ import io.reactivex.Maybe
+ import io.reactivex.Scheduler
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbConnectDialog.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbConnectDialog.java
+index 50f30fd13..b05b08e25 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbConnectDialog.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbConnectDialog.java
+@@ -25,7 +25,7 @@ import static com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.AT;
+ import static com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.COLON;
+ import static com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.SLASH;
+ import static com.amaze.filemanager.filesystem.smb.CifsContexts.SMB_URI_PREFIX;
+-import static com.amaze.filemanager.utils.SmbUtil.PARAM_DISABLE_IPC_SIGNING_CHECK;
++import static com.amaze.filemanager.utils.smb.SmbUtil.PARAM_DISABLE_IPC_SIGNING_CHECK;
+ import static java.net.URLDecoder.decode;
+ import static java.net.URLEncoder.encode;
+ 
+@@ -49,8 +49,8 @@ import com.amaze.filemanager.ui.provider.UtilitiesProvider;
+ import com.amaze.filemanager.utils.EditTextColorStateUtil;
+ import com.amaze.filemanager.utils.PasswordUtil;
+ import com.amaze.filemanager.utils.SimpleTextWatcher;
+-import com.amaze.filemanager.utils.SmbUtil;
+ import com.amaze.filemanager.utils.Utils;
++import com.amaze.filemanager.utils.smb.SmbUtil;
+ import com.google.android.material.textfield.TextInputLayout;
+ 
+ import android.app.Dialog;
+@@ -227,15 +227,15 @@ public class SmbConnectDialog extends DialogFragment {
+     final AppCompatCheckBox chkSmbDisableIpcSignature = binding.chkSmbDisableIpcSignature;
+     TextView help = binding.wanthelp;
+ 
+-    EditTextColorStateUtil.setTint(context, conName, accentColor);
+-    EditTextColorStateUtil.setTint(context, user, accentColor);
+-    EditTextColorStateUtil.setTint(context, pass, accentColor);
++    EditTextColorStateUtil.setTint(getActivity(), conName, accentColor);
++    EditTextColorStateUtil.setTint(getActivity(), user, accentColor);
++    EditTextColorStateUtil.setTint(getActivity(), pass, accentColor);
+ 
+-    Utils.setTint(context, chkSmbAnonymous, accentColor);
++    Utils.setTint(getActivity(), chkSmbAnonymous, accentColor);
+     help.setOnClickListener(
+         v -> {
+           int accentColor1 = ((ThemedActivity) getActivity()).getAccent();
+-          GeneralDialogCreation.showSMBHelpDialog(context, accentColor1);
++          GeneralDialogCreation.showSMBHelpDialog(getActivity(), accentColor1);
+         });
+ 
+     chkSmbAnonymous.setOnClickListener(
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.java
+deleted file mode 100644
+index ee0626834..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.java
++++ /dev/null
+@@ -1,236 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.ui.dialogs;
+-
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-import com.afollestad.materialdialogs.MaterialDialog;
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.ui.activities.MainActivity;
+-import com.amaze.filemanager.ui.activities.superclasses.BasicActivity;
+-import com.amaze.filemanager.ui.activities.superclasses.ThemedActivity;
+-import com.amaze.filemanager.ui.provider.UtilitiesProvider;
+-import com.amaze.filemanager.ui.theme.AppTheme;
+-import com.amaze.filemanager.utils.ComputerParcelable;
+-import com.amaze.filemanager.utils.SubnetScanner;
+-
+-import android.app.Activity;
+-import android.app.Dialog;
+-import android.app.DialogFragment;
+-import android.content.Context;
+-import android.graphics.Color;
+-import android.os.Bundle;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.ImageView;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-
+-import androidx.annotation.NonNull;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-/** Created by arpitkh996 on 16-01-2016 edited by Emmanuel Messulam <emmanuelbendavid@gmail.com> */
+-public class SmbSearchDialog extends DialogFragment {
+-  private UtilitiesProvider utilsProvider;
+-
+-  private ListViewAdapter listViewAdapter;
+-  private ArrayList<ComputerParcelable> computers = new ArrayList<>();
+-  private int accentColor;
+-  private SubnetScanner subnetScanner;
+-
+-  @Override
+-  public void onCreate(Bundle bundle) {
+-    super.onCreate(bundle);
+-    utilsProvider = ((BasicActivity) getActivity()).getUtilsProvider();
+-
+-    accentColor = ((ThemedActivity) getActivity()).getAccent();
+-  }
+-
+-  @Override
+-  public void dismiss() {
+-    super.dismiss();
+-    if (subnetScanner != null) subnetScanner.cancel(true);
+-  }
+-
+-  @Override
+-  public Dialog onCreateDialog(Bundle savedInstanceState) {
+-    MaterialDialog.Builder builder = new MaterialDialog.Builder(getActivity());
+-    builder.title(R.string.searching_devices);
+-    builder.negativeColor(accentColor);
+-    builder.negativeText(R.string.cancel);
+-    builder.onNegative(
+-        (dialog, which) -> {
+-          if (subnetScanner != null) subnetScanner.cancel(true);
+-          dismiss();
+-        });
+-    builder.onPositive(
+-        (dialog, which) -> {
+-          if (subnetScanner != null) subnetScanner.cancel(true);
+-          if (getActivity() != null && getActivity() instanceof MainActivity) {
+-            dismiss();
+-            MainActivity mainActivity = (MainActivity) getActivity();
+-            mainActivity.showSMBDialog("", "", false);
+-          }
+-        });
+-    builder.positiveText(R.string.use_custom_ip);
+-    builder.positiveColor(accentColor);
+-    computers.add(new ComputerParcelable("-1", "-1"));
+-    listViewAdapter = new ListViewAdapter(getActivity(), computers);
+-    subnetScanner = new SubnetScanner(getActivity());
+-    subnetScanner.setObserver(
+-        new SubnetScanner.ScanObserver() {
+-          @Override
+-          public void computerFound(final ComputerParcelable computer) {
+-            if (getActivity() != null)
+-              getActivity()
+-                  .runOnUiThread(
+-                      () -> {
+-                        if (!computers.contains(computer)) computers.add(computer);
+-                        listViewAdapter.notifyDataSetChanged();
+-                      });
+-          }
+-
+-          @Override
+-          public void searchFinished() {
+-            if (getActivity() != null) {
+-              getActivity()
+-                  .runOnUiThread(
+-                      () -> {
+-                        if (computers.size() == 1) {
+-                          dismiss();
+-                          Toast.makeText(
+-                                  getActivity(),
+-                                  getString(R.string.no_device_found),
+-                                  Toast.LENGTH_SHORT)
+-                              .show();
+-                          MainActivity mainActivity = (MainActivity) getActivity();
+-                          mainActivity.showSMBDialog("", "", false);
+-                          return;
+-                        }
+-                        computers.remove(computers.size() - 1);
+-                        listViewAdapter.notifyDataSetChanged();
+-                      });
+-            }
+-          }
+-        });
+-    subnetScanner.execute();
+-
+-    builder.adapter(listViewAdapter, null);
+-    return builder.build();
+-  }
+-
+-  private class ListViewAdapter extends RecyclerView.Adapter<ElementViewHolder> {
+-    private static final int VIEW_PROGRESSBAR = 1;
+-    private static final int VIEW_ELEMENT = 2;
+-
+-    private ArrayList<ComputerParcelable> items;
+-    private LayoutInflater mInflater;
+-
+-    ListViewAdapter(Context context, List<ComputerParcelable> objects) {
+-      items = new ArrayList<>(objects);
+-      mInflater = (LayoutInflater) context.getSystemService(Activity.LAYOUT_INFLATER_SERVICE);
+-    }
+-
+-    @Override
+-    @NonNull
+-    public ElementViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+-      View view;
+-      switch (viewType) {
+-        case VIEW_PROGRESSBAR:
+-          view = mInflater.inflate(R.layout.smb_progress_row, parent, false);
+-          return new ElementViewHolder(view);
+-        default:
+-        case VIEW_ELEMENT:
+-          view = mInflater.inflate(R.layout.smb_computers_row, parent, false);
+-          return new ElementViewHolder(view);
+-      }
+-    }
+-
+-    @Override
+-    public void onBindViewHolder(@NonNull ElementViewHolder holder, int position) {
+-      int viewType = getItemViewType(position);
+-      if (viewType == VIEW_PROGRESSBAR) {
+-        return;
+-      }
+-
+-      ComputerParcelable f = items.get(position);
+-
+-      holder.rootView.setOnClickListener(
+-          v -> {
+-            if (subnetScanner != null) subnetScanner.cancel(true);
+-            if (getActivity() != null && getActivity() instanceof MainActivity) {
+-              dismiss();
+-              MainActivity mainActivity = (MainActivity) getActivity();
+-              mainActivity.showSMBDialog(
+-                  listViewAdapter.items.get(position).getName(),
+-                  listViewAdapter.items.get(position).getAddr(),
+-                  false);
+-            }
+-          });
+-
+-      holder.txtTitle.setText(f.getName());
+-      holder.image.setImageResource(R.drawable.ic_settings_remote_white_48dp);
+-      if (utilsProvider.getAppTheme().equals(AppTheme.LIGHT))
+-        holder.image.setColorFilter(Color.parseColor("#666666"));
+-      holder.txtDesc.setText(f.getAddr());
+-    }
+-
+-    @Override
+-    public int getItemViewType(int position) {
+-      ComputerParcelable f = items.get(position);
+-      if (f.getAddr().equals("-1")) {
+-        return VIEW_PROGRESSBAR;
+-      } else {
+-        return VIEW_ELEMENT;
+-      }
+-    }
+-
+-    @Override
+-    public long getItemId(int position) {
+-      return position;
+-    }
+-
+-    @Override
+-    public int getItemCount() {
+-      return items.size();
+-    }
+-  }
+-
+-  private static class ElementViewHolder extends RecyclerView.ViewHolder {
+-    private View rootView;
+-
+-    private ImageView image;
+-    private TextView txtTitle;
+-    private TextView txtDesc;
+-
+-    ElementViewHolder(View view) {
+-      super(view);
+-
+-      rootView = view;
+-
+-      txtTitle = view.findViewById(R.id.firstline);
+-      image = view.findViewById(R.id.icon);
+-      txtDesc = view.findViewById(R.id.secondLine);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.kt b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.kt
+new file mode 100644
+index 000000000..bd92520db
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/SmbSearchDialog.kt
+@@ -0,0 +1,256 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.ui.dialogs
++
++import android.app.Activity
++import android.app.Dialog
++import android.content.Context
++import android.graphics.Color
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.ImageView
++import android.widget.TextView
++import android.widget.Toast
++import androidx.fragment.app.DialogFragment
++import androidx.lifecycle.MutableLiveData
++import androidx.lifecycle.ViewModel
++import androidx.recyclerview.widget.RecyclerView
++import com.afollestad.materialdialogs.DialogAction
++import com.afollestad.materialdialogs.MaterialDialog
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.ui.activities.superclasses.ThemedActivity
++import com.amaze.filemanager.ui.provider.UtilitiesProvider
++import com.amaze.filemanager.ui.theme.AppTheme
++import com.amaze.filemanager.utils.ComputerParcelable
++import com.amaze.filemanager.utils.smb.SmbDeviceScannerObservable
++import io.reactivex.android.schedulers.AndroidSchedulers
++import io.reactivex.disposables.Disposable
++import io.reactivex.schedulers.Schedulers
++import org.slf4j.LoggerFactory
++
++/** Created by arpitkh996 on 16-01-2016 edited by Emmanuel Messulam <emmanuelbendavid></emmanuelbendavid>@gmail.com>  */
++class SmbSearchDialog : DialogFragment() {
++
++    private lateinit var utilsProvider: UtilitiesProvider
++    private lateinit var listViewAdapter: ListViewAdapter
++    private val viewModel = ComputerParcelableViewModel()
++    private var accentColor = 0
++    private lateinit var subnetScannerObserver: Disposable
++
++    override fun onCreate(bundle: Bundle?) {
++        super.onCreate(bundle)
++        utilsProvider = AppConfig.getInstance().utilsProvider
++        accentColor = (activity as ThemedActivity).accent
++    }
++
++    override fun dismiss() {
++        super.dismiss()
++        if (!subnetScannerObserver.isDisposed) {
++            subnetScannerObserver.dispose()
++        }
++    }
++
++    @Suppress("LongMethod", "LabeledExpression")
++    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
++        val builder = MaterialDialog.Builder(requireActivity())
++        builder.title(R.string.searching_devices)
++        builder.negativeColor(accentColor)
++        builder.negativeText(R.string.cancel)
++        builder.onNegative { _: MaterialDialog?, _: DialogAction? ->
++            if (!subnetScannerObserver.isDisposed) {
++                subnetScannerObserver.dispose()
++            }
++            dismiss()
++        }
++        builder.onPositive { _: MaterialDialog?, _: DialogAction? ->
++            if (!subnetScannerObserver.isDisposed) {
++                subnetScannerObserver.dispose()
++            }
++            if (activity != null && activity is MainActivity) {
++                dismiss()
++                val mainActivity = activity as MainActivity
++                mainActivity.showSMBDialog("", "", false)
++            }
++        }
++        builder.positiveText(R.string.use_custom_ip)
++        builder.positiveColor(accentColor)
++        viewModel.valHolder.value = (ComputerParcelable("-1", "-1"))
++        listViewAdapter = ListViewAdapter(requireActivity())
++        val observable = SmbDeviceScannerObservable()
++        subnetScannerObserver = observable
++            .subscribeOn(Schedulers.io())
++            .observeOn(AndroidSchedulers.mainThread())
++            .doOnDispose {
++                observable.stop()
++            }
++            .subscribe(
++                { computer: ComputerParcelable ->
++                    if (!listViewAdapter.contains(computer)) {
++                        viewModel.valHolder.value = computer
++                    }
++                },
++                { err: Throwable ->
++                    LOG.error("Error searching for devices", err)
++                }
++            ) {
++                subnetScannerObserver.dispose()
++                activity?.runOnUiThread {
++                    if (listViewAdapter.dummyOnly()) {
++                        dismiss()
++                        Toast.makeText(
++                            activity,
++                            getString(R.string.no_device_found),
++                            Toast.LENGTH_SHORT
++                        ).show()
++                        val mainActivity = activity as MainActivity
++                        mainActivity.showSMBDialog("", "", false)
++                        return@runOnUiThread
++                    }
++                    listViewAdapter.removeDummy()
++                }
++            }
++        builder.adapter(listViewAdapter, null)
++        viewModel.valHolder.observe(this) {
++            listViewAdapter.add(it)
++        }
++        return builder.build()
++    }
++
++    private inner class ListViewAdapter(
++        context: Context
++    ) : RecyclerView.Adapter<ViewHolder>() {
++        private val items: MutableList<ComputerParcelable> = ArrayList()
++        private val mInflater: LayoutInflater
++
++        init {
++            mInflater = context.getSystemService(Activity.LAYOUT_INFLATER_SERVICE) as LayoutInflater
++        }
++
++        /**
++         * Called by [ComputerParcelableViewModel], add found computer to list view
++         */
++        fun add(computer: ComputerParcelable) {
++            items.add(computer)
++            notifyDataSetChanged()
++        }
++
++        /**
++         * Called by Observable when finish probing. If no other computers found, remove first
++         * (dummy) host
++         */
++        fun removeDummy() {
++            items.removeFirst()
++            notifyDataSetChanged()
++        }
++
++        /**
++         * Answers if the computer list contains given instance.
++         */
++        fun contains(computer: ComputerParcelable): Boolean {
++            return items.contains(computer)
++        }
++
++        /**
++         * Answers if the list is empty = only has the dummy [ComputerParcelable] instance
++         */
++        fun dummyOnly(): Boolean {
++            return items.size == 1 && items.first().addr == "-1"
++        }
++
++        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
++            val view: View
++            return when (viewType) {
++                VIEW_PROGRESSBAR -> {
++                    view = mInflater.inflate(R.layout.smb_progress_row, parent, false)
++                    ViewHolder(view)
++                }
++                else -> {
++                    view =
++                        mInflater.inflate(R.layout.smb_computers_row, parent, false)
++                    ElementViewHolder(view)
++                }
++            }
++        }
++
++        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
++            val viewType = getItemViewType(position)
++            if (viewType == Companion.VIEW_PROGRESSBAR) {
++                return
++            }
++            val (addr, name) = items[position]
++            holder.rootView.setOnClickListener {
++                if (activity != null && activity is MainActivity) {
++                    dismiss()
++                    val mainActivity = activity as MainActivity
++                    mainActivity.showSMBDialog(
++                        listViewAdapter.items[position].name,
++                        listViewAdapter.items[position].addr,
++                        false
++                    )
++                }
++            }
++            if (holder is ElementViewHolder) {
++                holder.txtTitle.text = name
++                holder.image.setImageResource(R.drawable.ic_settings_remote_white_48dp)
++                if (utilsProvider.appTheme == AppTheme.LIGHT) {
++                    holder.image.setColorFilter(Color.parseColor("#666666"))
++                }
++                holder.txtDesc.text = addr
++            }
++        }
++
++        override fun getItemViewType(position: Int): Int {
++            val (addr) = items[position]
++            return if (addr == "-1") {
++                VIEW_PROGRESSBAR
++            } else {
++                VIEW_ELEMENT
++            }
++        }
++
++        override fun getItemId(position: Int): Long = position.toLong()
++
++        override fun getItemCount(): Int = items.size
++    }
++
++    private open class ViewHolder(val rootView: View) : RecyclerView.ViewHolder(rootView)
++
++    private class ElementViewHolder(rootView: View) :
++        ViewHolder(rootView) {
++        val image: ImageView = rootView.findViewById(R.id.icon)
++        val txtTitle: TextView = rootView.findViewById(R.id.firstline)
++        val txtDesc: TextView = rootView.findViewById(R.id.secondLine)
++    }
++
++    private class ComputerParcelableViewModel : ViewModel() {
++        val valHolder = MutableLiveData<ComputerParcelable>()
++    }
++
++    companion object {
++        private const val VIEW_PROGRESSBAR = 1
++        private const val VIEW_ELEMENT = 2
++        private val LOG = LoggerFactory.getLogger(SmbSearchDialog::class.java)
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/CloudSheetFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/CloudSheetFragment.java
+index 648abc8b3..0037e97a4 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/CloudSheetFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/CloudSheetFragment.java
+@@ -159,7 +159,7 @@ public class CloudSheetFragment extends BottomSheetDialogFragment implements Vie
+       case R.id.linear_layout_smb:
+         dismiss();
+         SmbSearchDialog smbDialog = new SmbSearchDialog();
+-        smbDialog.show(getActivity().getFragmentManager(), "tab");
++        smbDialog.show(getActivity().getSupportFragmentManager(), "tab");
+         return;
+       case R.id.linear_layout_scp:
+         dismiss();
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+index 31545e7b8..9cde4e5cc 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+@@ -68,9 +68,6 @@ import com.amaze.filemanager.application.AppConfig
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.KEY_PREFERENCE_PATH
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.KEY_PREFERENCE_ROOT_FILESYSTEM
+-import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.getLocalInetAddress
+-import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isConnectedToLocalNetwork
+-import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isConnectedToWifi
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isRunning
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService.FtpReceiverActions
+ import com.amaze.filemanager.databinding.DialogFtpLoginBinding
+@@ -80,6 +77,9 @@ import com.amaze.filemanager.ui.activities.MainActivity
+ import com.amaze.filemanager.ui.notifications.FtpNotification
+ import com.amaze.filemanager.ui.runIfDocumentsUIExists
+ import com.amaze.filemanager.ui.theme.AppTheme
++import com.amaze.filemanager.utils.NetworkUtil.getLocalInetAddress
++import com.amaze.filemanager.utils.NetworkUtil.isConnectedToLocalNetwork
++import com.amaze.filemanager.utils.NetworkUtil.isConnectedToWifi
+ import com.amaze.filemanager.utils.OneCharacterCharSequence
+ import com.amaze.filemanager.utils.PasswordUtil
+ import com.amaze.filemanager.utils.Utils
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java b/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
+index d803267ff..defb81ff2 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
+@@ -28,6 +28,7 @@ import java.net.InetAddress;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.asynchronous.services.ftp.FtpService;
+ import com.amaze.filemanager.ui.activities.MainActivity;
++import com.amaze.filemanager.utils.NetworkUtil;
+ 
+ import android.app.Notification;
+ import android.app.NotificationManager;
+@@ -104,7 +105,7 @@ public class FtpNotification {
+     boolean secureConnection =
+         sharedPreferences.getBoolean(FtpService.KEY_PREFERENCE_SECURE, FtpService.DEFAULT_SECURE);
+ 
+-    InetAddress address = FtpService.getLocalInetAddress(context);
++    InetAddress address = NetworkUtil.getLocalInetAddress(context);
+ 
+     String address_text = "Address not found";
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/ComputerParcelable.kt b/app/src/main/java/com/amaze/filemanager/utils/ComputerParcelable.kt
+index b5358507f..4b8a6eeac 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/ComputerParcelable.kt
++++ b/app/src/main/java/com/amaze/filemanager/utils/ComputerParcelable.kt
+@@ -24,6 +24,9 @@ import android.os.Parcelable
+ import kotlinx.parcelize.Parcelize
+ 
+ @Parcelize
+-data class ComputerParcelable(val addr: String?, val name: String?) : Parcelable {
+-    override fun toString(): String = String.format("%s [%s]", name, addr)
++data class ComputerParcelable(val addr: String, val name: String) : Parcelable {
++    override fun toString(): String = "$name [$addr]"
++    override fun hashCode(): Int = addr.hashCode()
++    override fun equals(other: Any?): Boolean =
++        other is ComputerParcelable && other.addr == this.addr
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+index 53a029c69..9caba5adb 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+@@ -66,6 +66,7 @@ import com.amaze.filemanager.ui.fragments.SearchWorkerFragment;
+ import com.amaze.filemanager.ui.fragments.TabFragment;
+ import com.amaze.filemanager.ui.fragments.preferencefragments.PreferencesConstants;
+ import com.amaze.filemanager.ui.views.WarnableTextInputValidator;
++import com.amaze.filemanager.utils.smb.SmbUtil;
+ import com.leinardi.android.speeddial.SpeedDialView;
+ 
+ import android.annotation.SuppressLint;
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/NetworkUtil.kt b/app/src/main/java/com/amaze/filemanager/utils/NetworkUtil.kt
+new file mode 100644
+index 000000000..8bf5b4b4d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/NetworkUtil.kt
+@@ -0,0 +1,151 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils
++
++import android.app.Service
++import android.content.Context
++import android.net.ConnectivityManager
++import android.net.NetworkCapabilities
++import android.net.wifi.WifiManager
++import android.os.Build
++import org.slf4j.Logger
++import org.slf4j.LoggerFactory
++import java.net.InetAddress
++import java.net.NetworkInterface
++import java.net.UnknownHostException
++
++object NetworkUtil {
++
++    private val log: Logger = LoggerFactory.getLogger(NetworkUtil::class.java)
++
++    private fun getConnectivityManager(context: Context) =
++        context.applicationContext.getSystemService(Service.CONNECTIVITY_SERVICE)
++            as ConnectivityManager
++
++    /**
++     * Is the device connected to local network, either Ethernet or Wifi?
++     */
++    @JvmStatic
++    fun isConnectedToLocalNetwork(context: Context): Boolean {
++        val cm = getConnectivityManager(context)
++        var connected: Boolean
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            connected = cm.activeNetwork?.let { activeNetwork ->
++                cm.getNetworkCapabilities(activeNetwork)?.let { ni ->
++                    ni.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) or
++                        ni.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
++                } ?: false
++            } ?: false
++        } else {
++            connected = cm.activeNetworkInfo?.let { ni ->
++                ni.isConnected && (
++                    ni.type and (
++                        ConnectivityManager.TYPE_WIFI
++                            or ConnectivityManager.TYPE_ETHERNET
++                        ) != 0
++                    )
++            } ?: false
++        }
++
++        if (!connected) {
++            connected = runCatching {
++                NetworkInterface.getNetworkInterfaces().toList().find { netInterface ->
++                    netInterface.displayName.startsWith("rndis") or
++                        netInterface.displayName.startsWith("wlan")
++                }
++            }.getOrElse { null } != null
++        }
++
++        return connected
++    }
++
++    /**
++     * Is the device connected to Wifi?
++     */
++    @JvmStatic
++    fun isConnectedToWifi(context: Context): Boolean {
++        val cm = getConnectivityManager(context)
++        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            cm.activeNetwork?.let {
++                cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
++            } ?: false
++        } else {
++            cm.activeNetworkInfo?.let {
++                it.isConnected && it.type == ConnectivityManager.TYPE_WIFI
++            } ?: false
++        }
++    }
++
++    /**
++     * Determine device's IP address.
++     *
++     * Caveat: doesn't handle IPv6 addresses well.
++     */
++    @JvmStatic
++    fun getLocalInetAddress(context: Context): InetAddress? {
++        if (!isConnectedToLocalNetwork(context)) {
++            return null
++        }
++        if (isConnectedToWifi(context)) {
++            val wm = context.applicationContext.getSystemService(Service.WIFI_SERVICE)
++                as WifiManager
++            val ipAddress = wm.connectionInfo.ipAddress
++            return if (ipAddress == 0) null else intToInet(ipAddress)
++        }
++        runCatching {
++            NetworkInterface.getNetworkInterfaces().iterator().forEach { netinterface ->
++                netinterface.inetAddresses.iterator().forEach { address ->
++                    // this is the condition that sometimes gives problems
++                    if (!address.isLoopbackAddress &&
++                        !address.isLinkLocalAddress
++                    ) {
++                        return address
++                    }
++                }
++            }
++        }.onFailure { e ->
++            log.warn("failed to get local inet address", e)
++        }
++        return null
++    }
++
++    /**
++     * Utility method to convert an IPv4 address in integer representation to [InetAddress].
++     */
++    @JvmStatic
++    fun intToInet(value: Int): InetAddress? {
++        val bytes = ByteArray(4)
++        for (i in 0..3) {
++            bytes[i] = byteOfInt(value, i)
++        }
++        return try {
++            InetAddress.getByAddress(bytes)
++        } catch (e: UnknownHostException) {
++            // This only happens if the byte array has a bad length
++            null
++        }
++    }
++
++    private fun byteOfInt(value: Int, which: Int): Byte {
++        val shift = which * 8
++        return (value shr shift).toByte()
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/SubnetScanner.java b/app/src/main/java/com/amaze/filemanager/utils/SubnetScanner.java
+deleted file mode 100644
+index 3f6abfbbf..000000000
+--- a/app/src/main/java/com/amaze/filemanager/utils/SubnetScanner.java
++++ /dev/null
+@@ -1,252 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.utils;
+-
+-/** Created by arpitkh996 on 16-01-2016. */
+-import static com.amaze.filemanager.filesystem.smb.CifsContexts.SMB_URI_PREFIX;
+-
+-import java.net.UnknownHostException;
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.Properties;
+-import java.util.concurrent.Callable;
+-import java.util.concurrent.ExecutionException;
+-import java.util.concurrent.ExecutorService;
+-import java.util.concurrent.Executors;
+-import java.util.concurrent.Future;
+-import java.util.concurrent.TimeUnit;
+-import java.util.concurrent.TimeoutException;
+-
+-import android.content.Context;
+-import android.net.wifi.WifiManager;
+-import android.os.AsyncTask;
+-import android.text.format.Formatter;
+-
+-import jcifs.Address;
+-import jcifs.CIFSException;
+-import jcifs.NetbiosAddress;
+-import jcifs.context.SingletonContext;
+-import jcifs.smb.SmbFile;
+-
+-public class SubnetScanner extends AsyncTask<Void, ComputerParcelable, Void> {
+-
+-  private static final String TAG = SubnetScanner.class.getSimpleName();
+-  private static final int RETRY_COUNT = 5;
+-  private static boolean initialized = false;
+-
+-  private Thread bdThread;
+-  private final Object mLock;
+-  private List<ComputerParcelable> mResults;
+-  private ScanObserver observer;
+-  private ExecutorService pool;
+-  private List<Future<ComputerParcelable>> tasks;
+-  private Context context;
+-
+-  public interface ScanObserver {
+-    void computerFound(ComputerParcelable computer);
+-
+-    void searchFinished();
+-  }
+-
+-  class Task implements Callable<ComputerParcelable> {
+-    String addr;
+-
+-    Task(String str) {
+-      this.addr = str;
+-    }
+-
+-    public ComputerParcelable call() {
+-      try {
+-        NetbiosAddress[] allByAddress =
+-            SingletonContext.getInstance().getNameServiceClient().getNbtAllByAddress(this.addr);
+-        if (allByAddress == null || allByAddress.length <= 0) {
+-          return new ComputerParcelable(null, this.addr);
+-        }
+-        return new ComputerParcelable(allByAddress[0].getHostName(), this.addr);
+-      } catch (UnknownHostException e) {
+-        return new ComputerParcelable(null, this.addr);
+-      }
+-    }
+-  }
+-
+-  public static void init() {
+-    Properties props = new Properties();
+-    props.setProperty("jcifs.resolveOrder", "BCAST");
+-    props.setProperty("jcifs.smb.client.responseTimeout", "30000");
+-    props.setProperty("jcifs.netbios.retryTimeout", "5000");
+-    props.setProperty("jcifs.netbios.cachePolicy", "-1");
+-    try {
+-      SingletonContext.init(props);
+-      initialized = true;
+-    } catch (CIFSException e) {
+-      android.util.Log.e(TAG, "Error initializing jcifs", e);
+-    }
+-  }
+-
+-  public SubnetScanner(Context context) {
+-    this.context = context;
+-    mLock = new Object();
+-    tasks = new ArrayList<>(260);
+-    pool = Executors.newFixedThreadPool(60);
+-    mResults = new ArrayList<>();
+-  }
+-
+-  @Override
+-  protected Void doInBackground(Void... voids) {
+-
+-    if (!initialized) init();
+-
+-    int ipAddress =
+-        ((WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE))
+-            .getConnectionInfo()
+-            .getIpAddress();
+-    if (ipAddress != 0) {
+-      tryWithBroadcast();
+-      String formatIpAddress = Formatter.formatIpAddress(ipAddress);
+-      String substring = formatIpAddress.substring(0, formatIpAddress.lastIndexOf(46) + 1);
+-      if (!isCancelled()) {
+-        for (ipAddress = 0; ipAddress < 100; ipAddress++) {
+-          this.tasks.add(this.pool.submit(new Task(substring + ipAddress)));
+-          this.tasks.add(this.pool.submit(new Task(substring + (ipAddress + 100))));
+-          if (ipAddress < 56) {
+-            this.tasks.add(this.pool.submit(new Task(substring + (ipAddress + 200))));
+-          }
+-        }
+-        while (!this.tasks.isEmpty()) {
+-          int size = this.tasks.size();
+-          int i = 0;
+-          while (i < size) {
+-            if (!isCancelled()) {
+-              try {
+-                ComputerParcelable computer =
+-                    (ComputerParcelable) ((Future) this.tasks.get(i)).get(1, TimeUnit.MILLISECONDS);
+-                this.tasks.remove(i);
+-                size--;
+-                if (computer.getName() != null) {
+-                  publishProgress(computer);
+-                }
+-                ipAddress = size;
+-              } catch (InterruptedException e) {
+-                return null;
+-              } catch (ExecutionException e2) {
+-                ipAddress = size;
+-              } catch (TimeoutException e3) {
+-                ipAddress = size;
+-              }
+-              i++;
+-              size = ipAddress;
+-            } else {
+-              return null;
+-            }
+-          }
+-        }
+-        try {
+-          this.bdThread.join();
+-        } catch (InterruptedException e4) {
+-        }
+-      } else {
+-        return null;
+-      }
+-    }
+-    synchronized (this.mLock) {
+-      if (this.observer != null) {
+-        this.observer.searchFinished();
+-      }
+-    }
+-
+-    return null;
+-  }
+-
+-  private void tryWithBroadcast() {
+-    this.bdThread =
+-        new Thread() {
+-          public void run() {
+-            for (int i = 0; i < SubnetScanner.RETRY_COUNT; i++) {
+-              try {
+-                SmbFile smbFile = SmbUtil.create(SMB_URI_PREFIX);
+-                smbFile.setConnectTimeout(5000);
+-                SmbFile[] listFiles = smbFile.listFiles();
+-                for (SmbFile smbFile2 : listFiles) {
+-                  SmbFile[] listFiles2 = smbFile2.listFiles();
+-                  for (SmbFile files : listFiles2) {
+-                    try {
+-                      String substring = files.getName().substring(0, files.getName().length() - 1);
+-                      Address byName =
+-                          SingletonContext.getInstance()
+-                              .getNameServiceClient()
+-                              .getByName(substring);
+-                      if (byName != null) {
+-                        publishProgress(new ComputerParcelable(substring, byName.getHostAddress()));
+-                      }
+-                    } catch (Throwable e) {
+-
+-                    }
+-                  }
+-                }
+-              } catch (Throwable e2) {
+-
+-              }
+-            }
+-          }
+-        };
+-    this.bdThread.start();
+-  }
+-
+-  @Override
+-  protected void onPreExecute() {}
+-
+-  @Override
+-  protected void onPostExecute(Void aVoid) {
+-    this.pool.shutdown();
+-  }
+-
+-  @Override
+-  protected void onProgressUpdate(ComputerParcelable... computers) {
+-    for (ComputerParcelable computer : computers) {
+-      mResults.add(computer);
+-      synchronized (this.mLock) {
+-        if (this.observer != null) {
+-          this.observer.computerFound(computer);
+-        }
+-      }
+-    }
+-  }
+-
+-  public void setObserver(ScanObserver scanObserver) {
+-    synchronized (this.mLock) {
+-      this.observer = scanObserver;
+-    }
+-  }
+-
+-  @Override
+-  protected void onCancelled(Void aVoid) {
+-    super.onCancelled(aVoid);
+-    try {
+-      this.pool.shutdownNow();
+-    } catch (Throwable th) {
+-
+-    }
+-  }
+-
+-  public List<ComputerParcelable> getResults() {
+-    return new ArrayList<>(this.mResults);
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/UUIDv5.kt b/app/src/main/java/com/amaze/filemanager/utils/UUIDv5.kt
+new file mode 100644
+index 000000000..344482d03
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/UUIDv5.kt
+@@ -0,0 +1,94 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils
++
++import java.security.MessageDigest
++import java.security.NoSuchAlgorithmException
++import java.util.*
++
++/**
++ * UUIDv5 implementation, referenced from
++ * https://gist.github.com/icedraco/00118b4d3c91d96d8c58e837a448f1b8
++ */
++object UUIDv5 {
++
++    // Constants defined in RFC4122 https://www.ietf.org/rfc/rfc4122.txt
++    @JvmStatic
++    val DNS: UUID = UUID.fromString("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
++
++    @JvmStatic
++    val URL: UUID = UUID.fromString("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
++
++    @JvmStatic
++    val OID: UUID = UUID.fromString("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
++
++    @JvmStatic
++    val X500: UUID = UUID.fromString("6ba7b814-9dad-11d1-80b4-00c04fd430c8")
++
++    /**
++     * Generate an UUIDv5 UUID from given namespace UUID and name.
++     *
++     * [namespaceUUID] must be one of [DNS], [URL], [OID], [X500].
++     */
++    @JvmStatic
++    @Suppress("TooGenericExceptionThrown")
++    fun fromString(namespaceUUID: UUID, name: String): UUID {
++        val md: MessageDigest
++        try {
++            md = MessageDigest.getInstance("SHA-1")
++        } catch (ex: NoSuchAlgorithmException) {
++            throw Exception("SHA-1 not supported", ex)
++        }
++
++        md.update(toBytes(namespaceUUID))
++        md.update(name.toByteArray())
++        val bytes = md.digest()
++        /* clear version; set to version 5 */
++        bytes[6] = ((bytes[6].toInt() and 0x0F) or 0x50).toByte()
++        /* clear variant; set to IETF variant */
++        bytes[8] = ((bytes[8].toInt() and 0x3F) or 0x80).toByte()
++        return fromBytes(bytes)
++    }
++
++    private fun fromBytes(data: ByteArray): UUID {
++        // Based on the private UUID(bytes[]) constructor
++        assert(data.size >= 16)
++        var msb = 0L
++        var lsb = 0L
++        for (i in 0..7)
++            msb = msb shl 8 or (data[i].toLong() and 0xff)
++        for (i in 8..15)
++            lsb = lsb shl 8 or (data[i].toLong() and 0xff)
++        return UUID(msb, lsb)
++    }
++
++    private fun toBytes(uuid: UUID): ByteArray {
++        // inverted logic of fromBytes()
++        val out = ByteArray(16)
++        val msb = uuid.mostSignificantBits
++        val lsb = uuid.leastSignificantBits
++        for (i in 0..7)
++            out[i] = (msb shr (7 - i) * 8 and 0xff).toByte()
++        for (i in 8..15)
++            out[i] = (lsb shr (15 - i) * 8 and 0xff).toByte()
++        return out
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDeviceStrategy.kt b/app/src/main/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDeviceStrategy.kt
+new file mode 100644
+index 000000000..277150c64
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDeviceStrategy.kt
+@@ -0,0 +1,102 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.utils.ComputerParcelable
++import com.amaze.filemanager.utils.NetworkUtil
++import com.stealthcopter.networktools.PortScan
++import io.reactivex.Flowable
++import io.reactivex.disposables.Disposable
++import io.reactivex.schedulers.Schedulers
++import java.net.Inet6Address
++import java.net.InetAddress
++
++/**
++ * [SmbDeviceScannerObservable.DiscoverDeviceStrategy] to just loop through other addresses within
++ * same subnet (/24 netmask) and knock their SMB service ports for reachability.
++ *
++ * Will bypass [Inet6Address] device addresses. They may have much bigger neighourhood host count;
++ * also for devices using IPv6, they shall be covered by [WsddDiscoverDeviceStrategy] anyway.
++ *
++ * TODO: if we can get the gateway using __legit__ API, may swarm the network in broader netmasks
++ */
++class SameSubnetDiscoverDeviceStrategy : SmbDeviceScannerObservable.DiscoverDeviceStrategy {
++
++    private lateinit var worker: Disposable
++
++    companion object {
++        private const val HOST_UP_TIMEOUT = 1000
++        private const val PARALLELISM = 10
++        private val TCP_PORTS = arrayListOf(139, 445)
++    }
++
++    /**
++     * No need to cleanup resources
++     */
++    override fun onCancel() {
++        if (!worker.isDisposed) {
++            worker.dispose()
++        }
++    }
++
++    override fun discoverDevices(callback: (ComputerParcelable) -> Unit) {
++        val neighbourhoods = getNeighbourhoodHosts()
++        worker = Flowable.fromIterable(neighbourhoods)
++            .parallel(PARALLELISM)
++            .runOn(Schedulers.io())
++            .map { addr ->
++                if (addr.isReachable(HOST_UP_TIMEOUT)) {
++                    val portsReachable = listOf(
++                        PortScan.onAddress(addr).setPorts(TCP_PORTS).setMethodTCP().doScan()
++                    ).flatten()
++                    if (portsReachable.isNotEmpty()) {
++                        addr
++                    } else {
++                        false
++                    }
++                } else {
++                    false
++                }
++            }.filter {
++                it is InetAddress
++            }.doOnNext { addr ->
++                addr as InetAddress
++                callback.invoke(ComputerParcelable(addr.hostAddress, addr.hostName))
++            }.sequential().subscribe()
++    }
++
++    private fun getNeighbourhoodHosts(): List<InetAddress> {
++        val deviceAddress = NetworkUtil.getLocalInetAddress(AppConfig.getInstance())
++        return deviceAddress?.let { addr ->
++            if (addr is Inet6Address) {
++                // IPv6 neigbourhood hosts can be very big - that should use wsdd instead; hence
++                // empty list here
++                emptyList()
++            } else {
++                val networkPrefix: String = addr.hostAddress.substringBeforeLast('.')
++                (1..254).map {
++                    InetAddress.getByName("$networkPrefix.$it")
++                }
++            }
++        } ?: emptyList()
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/smb/SmbDeviceScannerObservable.kt b/app/src/main/java/com/amaze/filemanager/utils/smb/SmbDeviceScannerObservable.kt
+new file mode 100644
+index 000000000..14dcced9d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/smb/SmbDeviceScannerObservable.kt
+@@ -0,0 +1,96 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import com.amaze.filemanager.utils.ComputerParcelable
++import com.amaze.filemanager.utils.smb.SmbDeviceScannerObservable.DiscoverDeviceStrategy
++import io.reactivex.Observable
++import io.reactivex.Observer
++import io.reactivex.disposables.Disposable
++import io.reactivex.schedulers.Schedulers
++import java.net.InetAddress
++
++/**
++ * Observable to discover reachable SMB nodes on the network.
++ *
++ * Uses a series of [DiscoverDeviceStrategy] instances to discover nodes.
++ */
++class SmbDeviceScannerObservable : Observable<ComputerParcelable>() {
++
++    /**
++     * Device discovery strategy interface.
++     */
++    interface DiscoverDeviceStrategy {
++        /**
++         * Implement this method to return list of [InetAddress] which has SMB service running.
++         */
++        fun discoverDevices(callback: (ComputerParcelable) -> Unit)
++
++        /**
++         * Implement this method to cleanup resources
++         */
++        fun onCancel()
++    }
++
++    private var discoverDeviceStrategies: Array<DiscoverDeviceStrategy> =
++        arrayOf(
++            WsddDiscoverDeviceStrategy(),
++            SameSubnetDiscoverDeviceStrategy()
++        )
++
++    private lateinit var observer: Observer<in ComputerParcelable>
++
++    private lateinit var disposable: Disposable
++
++    /**
++     * Stop discovering hosts. Notify containing strategies to stop, then stop the created
++     * [Observer] obtained at [subscribeActual].
++     */
++    fun stop() {
++        if (!disposable.isDisposed) {
++            disposable.dispose()
++        }
++        observer.onComplete()
++    }
++
++    /**
++     * Call all strategies one by one to discover nodes.
++     *
++     * Given observer must be able to drop duplicated entries (which ComputerParcelable already
++     * has implemented equals() and hashCode()).
++     */
++    override fun subscribeActual(observer: Observer<in ComputerParcelable>) {
++        this.observer = observer
++        this.disposable = merge(
++            discoverDeviceStrategies.map { strategy ->
++                fromCallable {
++                    strategy.discoverDevices { addr ->
++                        observer.onNext(ComputerParcelable(addr.addr, addr.name))
++                    }
++                }.subscribeOn(Schedulers.io())
++            }
++        ).observeOn(Schedulers.computation()).doOnComplete {
++            discoverDeviceStrategies.forEach { strategy ->
++                strategy.onCancel()
++            }
++        }.subscribe()
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/SmbUtil.kt b/app/src/main/java/com/amaze/filemanager/utils/smb/SmbUtil.kt
+similarity index 98%
+rename from app/src/main/java/com/amaze/filemanager/utils/SmbUtil.kt
+rename to app/src/main/java/com/amaze/filemanager/utils/smb/SmbUtil.kt
+index 35ae7bd5b..eca1603f9 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/SmbUtil.kt
++++ b/app/src/main/java/com/amaze/filemanager/utils/smb/SmbUtil.kt
+@@ -18,7 +18,7 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.utils
++package com.amaze.filemanager.utils.smb
+ 
+ import android.content.Context
+ import android.net.Uri
+@@ -30,6 +30,8 @@ import com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo
+ import com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.Companion.AT
+ import com.amaze.filemanager.filesystem.ftp.NetCopyConnectionInfo.Companion.COLON
+ import com.amaze.filemanager.filesystem.smb.CifsContexts.createWithDisableIpcSigningCheck
++import com.amaze.filemanager.utils.PasswordUtil
++import com.amaze.filemanager.utils.urlDecoded
+ import io.reactivex.Single
+ import io.reactivex.schedulers.Schedulers
+ import jcifs.smb.NtlmPasswordAuthenticator
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/smb/WsddDiscoverDeviceStrategy.kt b/app/src/main/java/com/amaze/filemanager/utils/smb/WsddDiscoverDeviceStrategy.kt
+new file mode 100644
+index 000000000..33e1813c6
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/utils/smb/WsddDiscoverDeviceStrategy.kt
+@@ -0,0 +1,294 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import androidx.annotation.VisibleForTesting
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.utils.ComputerParcelable
++import com.amaze.filemanager.utils.NetworkUtil
++import com.android.volley.Response.ErrorListener
++import com.android.volley.VolleyError
++import com.android.volley.toolbox.StringRequest
++import com.android.volley.toolbox.Volley
++import org.slf4j.Logger
++import org.slf4j.LoggerFactory
++import org.xmlpull.v1.XmlPullParser
++import org.xmlpull.v1.XmlPullParserException
++import org.xmlpull.v1.XmlPullParserFactory
++import java.io.StringReader
++import java.net.DatagramPacket
++import java.net.InetAddress
++import java.net.MulticastSocket
++import java.util.*
++
++/**
++ * [SmbDeviceScannerObservable.DiscoverDeviceStrategy] implementation to discover SMB devices using
++ * [Web service discovery](https://en.wikipedia.org/wiki/WS-Discovery), which is used by SMBv2 or
++ * above.
++ *
++ * Discovery method goes this way:
++ * 1. send a SOAP request to multicast address 239.255.255.250 port 3702 over UDP
++ * 2. for each reply as SOAP XML too, extract their URN and record the address the packets are from
++ * 3. if the reply indicates sender is a computer, send a HTTP POST to the address recorded in 2, port 5357
++ * 4. verify result and send [ComputerParcelable] in callback
++ *
++ * Implementation is after reference: https://fitzcarraldoblog.wordpress.com/2020/07/08/a-linux-command-line-utility-to-discover-and-list-wsd-enabled-computers-and-printers-on-a-home-network/
++ * (Python though).
++ *
++ * Original implementation calls for UUIDv5 which will use hash value of the device's MAC address;
++ * this implementation is not using, since MAC address poses privacy concern, and newer Androids are
++ * making difficult to fetch MAC addresses anyway.
++ *
++ * Manually setting [multicastSocketFactory] Allows customized method to be specified for creating [MulticastSocket]
++ * for convenience of testing.
++ *
++ * @author TranceLove <airwave209gt at gmail.com>
++ */
++class WsddDiscoverDeviceStrategy : SmbDeviceScannerObservable.DiscoverDeviceStrategy {
++
++    private val multicastRequestTemplate = AppConfig.getInstance()
++        .resources.openRawResource(R.raw.wsdd_discovery)
++        .reader(Charsets.UTF_8).readText()
++
++    private val wsdRequestTemplate = AppConfig.getInstance()
++        .resources.openRawResource(R.raw.wsd_request)
++        .reader(Charsets.UTF_8).readText()
++
++    private val wsdRequestHeaders = mutableMapOf(
++        Pair("Accept-Encoding", "Identity"),
++        Pair("Content-Type", "application/soap+xml"),
++        Pair("Connection", "Close"),
++        Pair("User-Agent", "wsd")
++    )
++
++    var multicastSocketFactory: () -> MulticastSocket = DEFAULT_MULTICAST_SOCKET_FACTORY
++        @VisibleForTesting
++        get
++
++        @VisibleForTesting
++        set
++
++    private val queue = Volley.newRequestQueue(AppConfig.getInstance())
++
++    private var cancelled = false
++
++    init {
++        queue.start()
++    }
++
++    override fun discoverDevices(callback: (ComputerParcelable) -> Unit) {
++        multicastForDevice { addr ->
++            callback.invoke(addr)
++        }
++    }
++
++    @Suppress("LabeledExpression")
++    private fun multicastForDevice(callback: (ComputerParcelable) -> Unit) {
++        NetworkUtil.getLocalInetAddress(AppConfig.getInstance())?.let { addr ->
++            val multicastAddressV4 = InetAddress.getByName(BROADCAST_IPV4)
++            val multicastAddressV6 = InetAddress.getByName(BROADCAST_IPV6_LINK_LOCAL)
++
++            while (!cancelled) {
++                val socket: MulticastSocket = multicastSocketFactory.invoke()
++                socket.timeToLive = 1
++                socket.soTimeout = SOCKET_RECEIVE_TIMEOUT
++                socket.reuseAddress = true
++                socket.joinGroup(multicastAddressV4)
++                socket.joinGroup(multicastAddressV6)
++
++                // Specification said UUIDv5 which is device dependent. But random-based UUID should
++                // also work here
++                val tempDeviceUuid = UUID.randomUUID()
++                val request = multicastRequestTemplate
++                    .replace("##MY_UUID##", tempDeviceUuid.toString())
++                    .toByteArray(Charsets.UTF_8)
++
++                val requestPacket = DatagramPacket(
++                    request,
++                    request.size,
++                    multicastAddressV4,
++                    UDP_PORT
++                )
++                socket.send(requestPacket)
++
++                runCatching {
++                    while (!socket.isClosed) {
++                        val buffer = ByteArray(4096)
++                        val replyPacket = DatagramPacket(buffer, buffer.size)
++                        socket.receive(replyPacket)
++                        if (replyPacket.data.isNotEmpty() && replyPacket.address != null) {
++                            val sentFromAddress = replyPacket.address
++                            queryWithResponseAsNecessary(
++                                sentFromAddress,
++                                tempDeviceUuid.toString(),
++                                replyPacket.data,
++                                callback
++                            )
++                        }
++                    }
++                }.onFailure {
++                    if (log.isWarnEnabled) log.warn("Error receiving reply", it)
++                    socket.close()
++                }
++            }
++        }
++    }
++
++    private fun queryWithResponseAsNecessary(
++        sourceAddress: InetAddress,
++        tempDeviceId: String,
++        response: ByteArray,
++        callback: (ComputerParcelable) -> Unit
++    ) {
++        val values = parseXmlForResponse(response, arrayOf(WSD_TYPES, WSA_ADDRESS))
++        val type = values[WSD_TYPES]
++        val urn = values[WSA_ADDRESS]
++
++        if (true == type?.isNotEmpty() && true == urn?.isNotEmpty()) {
++            queryEndpointForResponse(type, sourceAddress, urn, tempDeviceId, callback)
++        }
++    }
++
++    private fun queryEndpointForResponse(
++        type: String,
++        sourceAddress: InetAddress,
++        urn: String,
++        tempDeviceId: String,
++        callback: (ComputerParcelable) -> Unit
++    ) {
++        if (type.endsWith(PUB_COMPUTER)) {
++            val messageId = UUID.randomUUID().toString()
++
++            val endpoint = urn.substringAfter(URN_UUID)
++            val dest =
++                "http://${sourceAddress.hostAddress}:$TCP_PORT/$endpoint"
++            queue.add(
++                object : StringRequest(
++                    Method.POST,
++                    dest,
++                    { resp ->
++                        if (log.isTraceEnabled) log.trace("Response: $resp")
++                        val values = parseXmlForResponse(
++                            resp,
++                            arrayOf(WSDP_TYPES, WSA_ADDRESS, PUB_COMPUTER)
++                        )
++                        if (PUB_COMPUTER == values[WSDP_TYPES] && urn == values[WSA_ADDRESS]) {
++                            if (true == values[PUB_COMPUTER]?.isNotEmpty()) {
++                                val computerName: String = values[PUB_COMPUTER].let {
++                                    if (it!!.contains('/')) {
++                                        it.substringBefore("/")
++                                    } else {
++                                        it
++                                    }
++                                }
++                                callback(
++                                    ComputerParcelable(sourceAddress.hostAddress, computerName)
++                                )
++                            }
++                        }
++                    },
++                    object : ErrorListener {
++                        override fun onErrorResponse(error: VolleyError?) {
++                            log.error("Error querying endpoint", error)
++                        }
++                    }
++                ) {
++                    override fun getBody(): ByteArray {
++                        return wsdRequestTemplate
++                            .replace("##MESSAGE_ID##", "$URN_UUID$messageId")
++                            .replace("##DEST_UUID##", urn)
++                            .replace("##MY_UUID##", "$URN_UUID$tempDeviceId")
++                            .toByteArray(Charsets.UTF_8)
++                    }
++                    override fun getHeaders(): MutableMap<String, String> = wsdRequestHeaders
++                }
++            )
++        }
++    }
++
++    override fun onCancel() {
++        cancelled = true
++        queue.stop()
++    }
++
++    private fun parseXmlForResponse(xml: ByteArray, tags: Array<String>) =
++        parseXmlForResponse(xml.toString(Charsets.UTF_8), tags)
++
++    private fun parseXmlForResponse(xml: String, tags: Array<String>): Map<String, String> {
++        if (xml.isEmpty()) {
++            return emptyMap()
++        } else {
++            val xmlParser = XmlPullParserFactory.newInstance().also {
++                it.isNamespaceAware = false
++                it.isValidating = false
++            }.newPullParser().also {
++                it.setInput(StringReader(xml))
++            }
++            val retval = WeakHashMap<String, String>()
++            var currentTag: String = ""
++            var currentValue: String = ""
++            var event = xmlParser.eventType
++            try {
++                while (event != XmlPullParser.END_DOCUMENT) {
++                    if (event == XmlPullParser.START_TAG) {
++                        currentTag = xmlParser.name
++                    } else if (event == XmlPullParser.TEXT) {
++                        currentValue = xmlParser.text
++                    } else if (event == XmlPullParser.END_TAG) {
++                        if (tags.contains(currentTag)) {
++                            retval[currentTag] = currentValue
++                            currentTag = ""
++                            currentValue = ""
++                        }
++                    }
++                    event = xmlParser.next()
++                }
++            } catch (parseError: XmlPullParserException) {
++                log.warn("Error parsing XML", parseError)
++                // Combination of parsed result is required, hence it's all or nothing situation -
++                // if one error found, whole XML will not be valid. Clear for "no result" answer
++                retval.clear()
++            }
++            return retval
++        }
++    }
++
++    companion object {
++        private const val BROADCAST_IPV4 = "239.255.255.250"
++        private const val BROADCAST_IPV6_LINK_LOCAL = "[FF02::C]"
++        private const val UDP_PORT = 3702
++        private const val TCP_PORT = 5357
++        private const val SOCKET_RECEIVE_TIMEOUT = 60000 // 1 minute receive timeout
++
++        private const val URN_UUID = "urn:uuid:"
++        private const val WSA_ADDRESS = "wsa:Address"
++        private const val WSD_TYPES = "wsd:Types"
++        private const val WSDP_TYPES = "wsdp:Types"
++        private const val PUB_COMPUTER = "pub:Computer"
++
++        private val log: Logger = LoggerFactory.getLogger(WsddDiscoverDeviceStrategy::class.java)
++
++        private val DEFAULT_MULTICAST_SOCKET_FACTORY: () -> MulticastSocket = {
++            MulticastSocket()
++        }
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt
+index 9bd9b32b3..d440d3828 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/SmbDeleteTaskTest.kt
+@@ -22,7 +22,7 @@ package com.amaze.filemanager.asynchronous.asynctasks
+ 
+ import com.amaze.filemanager.filesystem.HybridFileParcelable
+ import com.amaze.filemanager.shadows.ShadowSmbUtil.Companion.PATH_CANNOT_DELETE_FILE
+-import com.amaze.filemanager.utils.SmbUtil
++import com.amaze.filemanager.utils.smb.SmbUtil
+ import org.junit.Test
+ 
+ class SmbDeleteTaskTest : AbstractDeleteTaskTestBase() {
+diff --git a/app/src/test/java/com/amaze/filemanager/database/UtilitiesDatabaseMigrationTest.kt b/app/src/test/java/com/amaze/filemanager/database/UtilitiesDatabaseMigrationTest.kt
+index 85fc4c54a..e790bfca0 100644
+--- a/app/src/test/java/com/amaze/filemanager/database/UtilitiesDatabaseMigrationTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/database/UtilitiesDatabaseMigrationTest.kt
+@@ -39,7 +39,7 @@ import com.amaze.filemanager.database.UtilitiesDatabase.Companion.TABLE_SMB
+ import com.amaze.filemanager.shadows.ShadowMultiDex
+ import com.amaze.filemanager.test.ShadowPasswordUtil
+ import com.amaze.filemanager.utils.PasswordUtil
+-import com.amaze.filemanager.utils.SmbUtil
++import com.amaze.filemanager.utils.smb.SmbUtil
+ import org.junit.Assert.assertEquals
+ import org.junit.Rule
+ import org.junit.Test
+diff --git a/app/src/test/java/com/amaze/filemanager/database/UtilsHandlerTest.kt b/app/src/test/java/com/amaze/filemanager/database/UtilsHandlerTest.kt
+index 9a208729f..842c7506f 100644
+--- a/app/src/test/java/com/amaze/filemanager/database/UtilsHandlerTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/database/UtilsHandlerTest.kt
+@@ -35,7 +35,7 @@ import com.amaze.filemanager.application.AppConfig
+ import com.amaze.filemanager.database.models.OperationData
+ import com.amaze.filemanager.shadows.ShadowMultiDex
+ import com.amaze.filemanager.test.ShadowPasswordUtil
+-import com.amaze.filemanager.utils.SmbUtil
++import com.amaze.filemanager.utils.smb.SmbUtil
+ import io.reactivex.android.plugins.RxAndroidPlugins
+ import io.reactivex.plugins.RxJavaPlugins
+ import io.reactivex.schedulers.Schedulers
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/ComputerParcelableTest.java b/app/src/test/java/com/amaze/filemanager/utils/ComputerParcelableTest.java
+index 1624c290a..07a1abb70 100644
+--- a/app/src/test/java/com/amaze/filemanager/utils/ComputerParcelableTest.java
++++ b/app/src/test/java/com/amaze/filemanager/utils/ComputerParcelableTest.java
+@@ -54,15 +54,15 @@ public class ComputerParcelableTest {
+ 
+   /**
+    * Purpose: when computerParcelable's address and object's address are not the same, confirm that
+-   * the two are different. Input: computerParcelable.equals(object) only ComputerParcelable.name ==
+-   * Object.name Expected: result is false
++   * the two are different. Input: computerParcelable.equals(object) only ComputerParcelable.addr ==
++   * Object.name Expected: result is true
+    */
+   @Test
+   public void testObjectNotEqualsAddr() {
+     ComputerParcelable computerParcelable = new ComputerParcelable("com1", "1");
+     Object object = new ComputerParcelable("com1", "2");
+ 
+-    assertFalse(computerParcelable.equals(object));
++    assertTrue(computerParcelable.equals(object));
+   }
+ 
+   /**
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/SmbUtilTest.kt b/app/src/test/java/com/amaze/filemanager/utils/SmbUtilTest.kt
+index 697fde2f1..352eec1d0 100644
+--- a/app/src/test/java/com/amaze/filemanager/utils/SmbUtilTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/utils/SmbUtilTest.kt
+@@ -29,10 +29,10 @@ import com.amaze.filemanager.fileoperations.filesystem.DOESNT_EXIST
+ import com.amaze.filemanager.fileoperations.filesystem.WRITABLE_ON_REMOTE
+ import com.amaze.filemanager.shadows.ShadowSmbUtil
+ import com.amaze.filemanager.test.ShadowPasswordUtil
+-import com.amaze.filemanager.utils.SmbUtil.checkFolder
+-import com.amaze.filemanager.utils.SmbUtil.createFrom
+-import com.amaze.filemanager.utils.SmbUtil.getSmbDecryptedPath
+-import com.amaze.filemanager.utils.SmbUtil.getSmbEncryptedPath
++import com.amaze.filemanager.utils.smb.SmbUtil.checkFolder
++import com.amaze.filemanager.utils.smb.SmbUtil.createFrom
++import com.amaze.filemanager.utils.smb.SmbUtil.getSmbDecryptedPath
++import com.amaze.filemanager.utils.smb.SmbUtil.getSmbEncryptedPath
+ import org.junit.Assert.assertEquals
+ import org.junit.Assert.assertNotEquals
+ import org.junit.Assert.assertTrue
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/UUIDv5Test.kt b/app/src/test/java/com/amaze/filemanager/utils/UUIDv5Test.kt
+new file mode 100644
+index 000000000..6f4261978
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/utils/UUIDv5Test.kt
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils
++
++import org.junit.Assert.assertEquals
++import org.junit.Test
++
++/**
++ * Test for [UUIDv5].
++ */
++class UUIDv5Test {
++
++    /**
++     * Test UUID generation. Value is based on SHA-1 hash, so it can be expected.
++     *
++     * Test case taken (again) from
++     * https://gist.github.com/icedraco/00118b4d3c91d96d8c58e837a448f1b8
++     */
++    @Test
++    fun testGenerateUUID() {
++        val url = "http://www.whatever.com/test/"
++        val uuid = UUIDv5.fromString(UUIDv5.URL, url)
++        assertEquals("1730930d-a36a-5efd-aa3f-561a164f87a4", uuid.toString())
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/smb/AbstractSubnetDiscoverDevicesStrategyTests.kt b/app/src/test/java/com/amaze/filemanager/utils/smb/AbstractSubnetDiscoverDevicesStrategyTests.kt
+new file mode 100644
+index 000000000..3b44ccdc1
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/utils/smb/AbstractSubnetDiscoverDevicesStrategyTests.kt
+@@ -0,0 +1,75 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import android.os.Build.VERSION_CODES
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Build.VERSION_CODES.P
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.utils.NetworkUtil
++import io.mockk.every
++import io.mockk.mockk
++import io.mockk.mockkStatic
++import io.mockk.unmockkStatic
++import org.junit.After
++import org.junit.runner.RunWith
++import org.robolectric.annotation.Config
++import java.net.InetAddress
++
++/**
++ * Base class for [SmbDeviceScannerObservable.DiscoverDeviceStrategy] tests.
++ */
++@RunWith(AndroidJUnit4::class)
++@Config(sdk = [KITKAT, P, VERSION_CODES.R])
++abstract class AbstractSubnetDiscoverDevicesStrategyTests {
++
++    /**
++     * Post test cleanup.
++     */
++    @After
++    open fun tearDown() {
++        unmockkStatic(NetworkUtil::class)
++    }
++
++    protected fun deviceOffline() {
++        mockkStatic(NetworkUtil::class)
++        every { NetworkUtil.isConnectedToWifi(any()) } returns false
++        every { NetworkUtil.isConnectedToLocalNetwork(any()) } returns false
++        every { NetworkUtil.getLocalInetAddress(any()) } returns null
++    }
++
++    protected fun deviceOnline() {
++        mockkStatic(NetworkUtil::class)
++        every { NetworkUtil.isConnectedToWifi(any()) } returns true
++        every { NetworkUtil.isConnectedToLocalNetwork(any()) } returns true
++        every { NetworkUtil.getLocalInetAddress(any()) } returns mockk<InetAddress>().also {
++            every { it.hostName } returns "192.168.233.240"
++        }
++    }
++
++    protected fun mockInetAddress(hostName: String, hostAddress: String): InetAddress {
++        val upHost = mockk<InetAddress>()
++        every { upHost.hostName } returns hostName
++        every { upHost.hostAddress } returns hostAddress
++        every { InetAddress.getByName(hostAddress) } returns upHost
++        return upHost
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDevicesStrategyTest.kt b/app/src/test/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDevicesStrategyTest.kt
+new file mode 100644
+index 000000000..1cd428f1f
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/utils/smb/SameSubnetDiscoverDevicesStrategyTest.kt
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import com.amaze.filemanager.utils.ComputerParcelable
++import org.junit.Assert.assertEquals
++import org.junit.Test
++import org.slf4j.LoggerFactory
++import java.util.concurrent.CountDownLatch
++import java.util.concurrent.TimeUnit
++
++class SameSubnetDiscoverDevicesStrategyTest : AbstractSubnetDiscoverDevicesStrategyTests() {
++
++    companion object {
++        @JvmStatic
++        private val logger = LoggerFactory.getLogger(
++            SameSubnetDiscoverDevicesStrategyTest::class.java
++        )
++    }
++
++    /**
++     * Test if device is not connected to network.
++     */
++    @Test
++    fun testDiscoverIfNotConnected() {
++        deviceOffline()
++        val latch = CountDownLatch(1)
++        val result = ArrayList<ComputerParcelable>()
++        SameSubnetDiscoverDeviceStrategy().discoverDevices {
++            result.add(it)
++            latch.countDown()
++        }
++        try {
++            latch.await(1, TimeUnit.SECONDS)
++        } catch (_: Throwable) {
++            latch.countDown()
++        }
++        assertEquals(0, result.size)
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/utils/smb/WsddSubnetDiscoverDevicesStrategyTest.kt b/app/src/test/java/com/amaze/filemanager/utils/smb/WsddSubnetDiscoverDevicesStrategyTest.kt
+new file mode 100644
+index 000000000..0212756d3
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/utils/smb/WsddSubnetDiscoverDevicesStrategyTest.kt
+@@ -0,0 +1,156 @@
++/*
++ * Copyright (C) 2014-2022 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.utils.smb
++
++import com.amaze.filemanager.test.randomBytes
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import org.robolectric.util.ReflectionHelpers
++import java.util.*
++import kotlin.text.Charsets.UTF_8
++
++/**
++ * Test [WsddDiscoverDeviceStrategy].
++ */
++@Suppress("StringLiteralDuplication")
++class WsddSubnetDiscoverDevicesStrategyTest : AbstractSubnetDiscoverDevicesStrategyTests() {
++
++    private val multicastResponseTemplate = javaClass.classLoader!!
++        .getResourceAsStream("wsdd/multicast-response.txt")
++        .reader(UTF_8).readText()
++
++    private val wsdResponseTemplate = javaClass.classLoader!!
++        .getResourceAsStream("wsdd/wsd-response.txt")
++        .reader(UTF_8).readText()
++
++    private val parseXmlForResponse:
++        (WsddDiscoverDeviceStrategy, Any, Array<String>) -> Map<String, String> =
++            { instance, xml, tags ->
++                require((xml is ByteArray) or (xml is String))
++                ReflectionHelpers.callInstanceMethod(
++                    WsddDiscoverDeviceStrategy::class.java,
++                    instance,
++                    "parseXmlForResponse",
++                    ReflectionHelpers.ClassParameter(xml.javaClass, xml),
++                    ReflectionHelpers.ClassParameter(Array<String>::class.java, tags)
++                )
++            }
++
++    private lateinit var wsdMulticastResponseMessageId: String
++    private lateinit var deviceId: String
++
++    /**
++     * Test for normal parsing of multicast response
++     */
++    @Test
++    fun testParseMulticastResponse() {
++        val instance = WsddDiscoverDeviceStrategy()
++        val result = parseXmlForResponse.invoke(
++            instance,
++            createMulticastResponse(),
++            arrayOf("wsd:Types", "wsa:Address")
++        )
++        assertTrue(result.isNotEmpty())
++        assertTrue(result.containsKey("wsd:Types"))
++        assertTrue(result.containsKey("wsa:Address"))
++        assertTrue(true == result["wsd:Types"]?.isNotBlank())
++        assertTrue(true == result["wsa:Address"]?.isNotBlank())
++    }
++
++    /**
++     * Test parsing invalid XML and/or invalid/nonexistent tags in XML.
++     */
++    @Test
++    fun testParseInvalidMulticastResponse() {
++        val instance = WsddDiscoverDeviceStrategy()
++        assertTrue(parseXmlForResponse.invoke(instance, "", emptyArray()).isEmpty())
++        assertTrue(parseXmlForResponse.invoke(instance, "foobar", emptyArray()).isEmpty())
++        assertTrue(parseXmlForResponse.invoke(instance, "<test></test>", emptyArray()).isEmpty())
++        assertTrue(
++            parseXmlForResponse.invoke(
++                instance,
++                ByteArray(0),
++                emptyArray()
++            ).isEmpty()
++        )
++        assertTrue(
++            parseXmlForResponse.invoke(
++                instance,
++                "foobar".toByteArray(),
++                emptyArray()
++            ).isEmpty()
++        )
++        assertTrue(
++            parseXmlForResponse.invoke(
++                instance,
++                randomBytes(),
++                emptyArray()
++            ).isEmpty()
++        )
++    }
++
++    /**
++     * Test parsing of valid XML but with non-matching tags in XML.
++     */
++    @Test
++    fun testParseNonMatchingMulticastResponseParams() {
++        val instance = WsddDiscoverDeviceStrategy()
++        assertEquals(
++            0,
++            parseXmlForResponse.invoke(
++                instance,
++                "<test></test>",
++                arrayOf("foobar")
++            ).size
++        )
++        assertEquals(
++            0,
++            parseXmlForResponse.invoke(
++                instance,
++                "<foo:bar></foo:bar>",
++                arrayOf("test")
++            ).size
++        )
++    }
++
++    private fun createMulticastResponse(): String {
++        return multicastResponseTemplate.replace(
++            "##DEVICE_UUID##",
++            UUID.randomUUID().toString()
++        ).replace(
++            "##MESSAGE_ID##",
++            UUID.randomUUID().toString()
++        ).replace(
++            "##SRC_MESSAGE_ID##",
++            UUID.randomUUID().toString()
++        )
++    }
++
++    private fun generateWsdResponse(deviceName: String, workgroupName: String = "WORKGROUP") =
++        wsdResponseTemplate
++            .replace("##THIS_DEVICE_ID##", deviceId)
++            .replace("##DEVICE_NAME##", deviceName)
++            .replace("##WORKGROUP_NAME##", workgroupName)
++            .replace("##PREV_MESSAGE_ID##", wsdMulticastResponseMessageId)
++            .replace("##THIS_MESSAGE_ID##", UUID.randomUUID().toString())
++            .toByteArray(UTF_8)
++}
+diff --git a/portscanner/src/main/java/com/stealthcopter/networktools/IPTools.kt b/portscanner/src/main/java/com/stealthcopter/networktools/IPTools.kt
+new file mode 100644
+index 000000000..59fac0768
+--- /dev/null
++++ b/portscanner/src/main/java/com/stealthcopter/networktools/IPTools.kt
+@@ -0,0 +1,130 @@
++/*
++ *  Licensed to the Apache Software Foundation (ASF) under one or more
++ *  contributor license agreements.  See the NOTICE file distributed with
++ *  this work for additional information regarding copyright ownership.
++ *  The ASF licenses this file to You under the Apache License, Version 2.0
++ *  (the "License"); you may not use this file except in compliance with
++ *  the License.  You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ *
++ */
++package com.stealthcopter.networktools
++
++import java.net.Inet4Address
++import java.net.InetAddress
++import java.net.NetworkInterface
++import java.net.SocketException
++import java.util.regex.Pattern
++
++/**
++ * Created by mat on 14/12/15.
++ */
++object IPTools {
++    /*
++     * Ip matching patterns from
++     * https://examples.javacodegeeks.com/core-java/util/regex/regular-expressions-for-ip-v4-and-ip-v6-addresses/
++     * note that these patterns will match most but not all valid ips
++     */
++    private val IPV4_PATTERN = Pattern.compile(
++        "^(25[0-5]|2[0-4]\\d|[0-1]?\\d?\\d)(\\.(25[0-5]|2[0-4]\\d|[0-1]?\\d?\\d)){3}$"
++    )
++    private val IPV6_STD_PATTERN = Pattern.compile(
++        "^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$"
++    )
++    private val IPV6_HEX_COMPRESSED_PATTERN = Pattern.compile(
++        "^((?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?)::((?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?)$"
++    )
++
++    /**
++     * Answers if given string is valid IPv4 address.
++     */
++    @JvmStatic
++    fun isIPv4Address(address: String?): Boolean {
++        return address != null && IPV4_PATTERN.matcher(address).matches()
++    }
++
++    /**
++     * Answers if given string is valid IPv6 address in long form.
++     */
++    @JvmStatic
++    fun isIPv6StdAddress(address: String?): Boolean {
++        return address != null && IPV6_STD_PATTERN.matcher(address).matches()
++    }
++
++    /**
++     * Answers if given string is valid IPv6 address in hex compressed form.
++     */
++    @JvmStatic
++    fun isIPv6HexCompressedAddress(address: String?): Boolean {
++        return address != null && IPV6_HEX_COMPRESSED_PATTERN.matcher(address).matches()
++    }
++
++    /**
++     * Answers if given string is a valid IPv6 address.
++     */
++    @JvmStatic
++    fun isIPv6Address(address: String?): Boolean {
++        return address != null && (isIPv6StdAddress(address) || isIPv6HexCompressedAddress(address))
++    }
++
++    /*
++     * @return The first local IPv4 address, or null
++     */
++    @JvmStatic
++    val localIPv4Address: InetAddress?
++        get() {
++            val localAddresses = localIPv4Addresses
++            return if (localAddresses.isNotEmpty()) localAddresses[0] else null
++        }
++
++    /*
++     * Return The list of all IPv4 addresses found
++     */
++    private val localIPv4Addresses: List<InetAddress>
++        get() = runCatching {
++            NetworkInterface.getNetworkInterfaces().toList().flatMap { iface ->
++                iface.inetAddresses.asSequence().filter { addr ->
++                    addr is Inet4Address && !addr.isLoopbackAddress()
++                }
++            }
++        }.getOrDefault(emptyList())
++
++    /**
++     * Check if the provided ip address refers to the localhost
++     *
++     * https://stackoverflow.com/a/2406819/315998
++     *
++     * @param addr - address to check
++     * @return - true if ip address is self
++     */
++    @JvmStatic
++    fun isIpAddressLocalhost(addr: InetAddress?): Boolean {
++        return addr?.run {
++            // Check if the address is a valid special local or loop back
++            if (addr.isAnyLocalAddress || addr.isLoopbackAddress) true else try {
++                NetworkInterface.getByInetAddress(addr) != null
++            } catch (e: SocketException) {
++                false
++            }
++        } ?: false
++    }
++
++    /**
++     * Check if the provided ip address refers to the localhost
++     *
++     * https://stackoverflow.com/a/2406819/315998
++     *
++     * @param addr - address to check
++     * @return - true if ip address is self
++     */
++    @JvmStatic
++    fun isIpAddressLocalNetwork(addr: InetAddress?): Boolean =
++        addr != null && addr.isSiteLocalAddress
++}
+diff --git a/portscanner/src/main/java/com/stealthcopter/networktools/PortScan.kt b/portscanner/src/main/java/com/stealthcopter/networktools/PortScan.kt
+new file mode 100644
+index 000000000..0f9f9812e
+--- /dev/null
++++ b/portscanner/src/main/java/com/stealthcopter/networktools/PortScan.kt
+@@ -0,0 +1,315 @@
++/*
++ *  Licensed to the Apache Software Foundation (ASF) under one or more
++ *  contributor license agreements.  See the NOTICE file distributed with
++ *  this work for additional information regarding copyright ownership.
++ *  The ASF licenses this file to You under the Apache License, Version 2.0
++ *  (the "License"); you may not use this file except in compliance with
++ *  the License.  You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ *
++ */
++package com.stealthcopter.networktools
++
++import com.stealthcopter.networktools.IPTools.isIpAddressLocalNetwork
++import com.stealthcopter.networktools.IPTools.isIpAddressLocalhost
++import com.stealthcopter.networktools.portscanning.PortScanTCP
++import com.stealthcopter.networktools.portscanning.PortScanUDP
++import io.reactivex.Flowable
++import io.reactivex.schedulers.Schedulers
++import java.net.InetAddress
++import java.net.UnknownHostException
++import java.util.*
++
++/** Created by mat on 14/12/15.  */
++class PortScan // This class is not to be instantiated
++private constructor() {
++
++    private var method = METHOD_TCP
++    private var noThreads = 50
++    private var address: InetAddress? = null
++    private var timeOutMillis = 1000
++    private var cancelled = false
++    private var ports: MutableList<Int> = ArrayList()
++    private val openPortsFound: MutableList<Int> = ArrayList()
++    private var portListener: PortListener? = null
++    private lateinit var runningFlowable: Flowable<Unit>
++
++    interface PortListener {
++        /**
++         * Callback function for port scan result
++         */
++        fun onResult(portNo: Int, open: Boolean)
++
++        /**
++         * Callback function for receiving the list of opened ports
++         */
++        fun onFinished(openPorts: List<Int>?)
++    }
++
++    /**
++     * Sets the timeout for each port scanned
++     *
++     * If you raise the timeout you may want to consider increasing the thread count [ ][.setNoThreads] to compensate. We can afford to have quite a high thread count as most of
++     * the time the thread is just sitting idle and waiting for the socket to timeout.
++     *
++     * @param timeOutMillis - the timeout for each ping in milliseconds Recommendations: Local host:
++     * 20 - 500 ms - can be very fast as request doesn't need to go over network Local network 500
++     * - 2500 ms Remote Scan 2500+ ms
++     * @return this object to allow chaining
++     */
++    fun setTimeOutMillis(timeOutMillis: Int): PortScan {
++        require(timeOutMillis >= 0) { "Timeout cannot be less than 0" }
++        this.timeOutMillis = timeOutMillis
++        return this
++    }
++
++    /**
++     * Scan the ports to scan
++     *
++     * @param port - the port to scan
++     * @return this object to allow chaining
++     */
++    fun setPort(port: Int): PortScan {
++        ports.clear()
++        validatePort(port)
++        ports.add(port)
++        return this
++    }
++
++    /**
++     * Scan the ports to scan
++     *
++     * @param ports - the ports to scan
++     * @return this object to allow chaining
++     */
++    fun setPorts(ports: MutableList<Int>): PortScan {
++        // Check all ports are valid
++        for (port in ports) {
++            validatePort(port)
++        }
++        this.ports = ports
++        return this
++    }
++
++    /**
++     * Scan the ports to scan
++     *
++     * @param portString - the ports to scan (comma separated, hyphen denotes a range). For example:
++     * "21-23,25,45,53,80"
++     * @return this object to allow chaining
++     */
++    fun setPorts(portString: String): PortScan {
++        var portString = portString
++        ports.clear()
++        val ports: MutableList<Int> = ArrayList()
++        portString = portString.substring(portString.indexOf(":") + 1, portString.length)
++        for (x in portString.split(",").toTypedArray()) {
++            if (x.contains("-")) {
++                val start = x.split("-").toTypedArray()[0].toInt()
++                val end = x.split("-").toTypedArray()[1].toInt()
++                validatePort(start)
++                validatePort(end)
++                require(end > start) { "Start port cannot be greater than or equal to the end port" }
++                for (j in start..end) {
++                    ports.add(j)
++                }
++            } else {
++                val start = x.toInt()
++                validatePort(start)
++                ports.add(start)
++            }
++        }
++        this.ports = ports
++        return this
++    }
++
++    /**
++     * Checks and throws exception if port is not valid
++     *
++     * @param port - the port to validate
++     */
++    private fun validatePort(port: Int) {
++        require(port >= 1) { "Start port cannot be less than 1" }
++        require(port <= 65535) { "Start cannot be greater than 65535" }
++    }
++
++    private fun setAddress(address: InetAddress) {
++        this.address = address
++    }
++
++    private fun setDefaultThreadsAndTimeouts() {
++        // Try and work out automatically what kind of host we are scanning
++        // local host (this device) / local network / remote
++        if (isIpAddressLocalhost(address)) {
++            // If we are scanning a the localhost set the timeout to be very short so we get faster
++            // results
++            // This will be overridden if user calls setTimeoutMillis manually.
++            timeOutMillis = TIMEOUT_LOCALHOST
++            noThreads = DEFAULT_THREADS_LOCALHOST
++        } else if (isIpAddressLocalNetwork(address)) {
++            // Assume local network (not infallible)
++            timeOutMillis = TIMEOUT_LOCALNETWORK
++            noThreads = DEFAULT_THREADS_LOCALNETWORK
++        } else {
++            // Assume remote network timeouts
++            timeOutMillis = TIMEOUT_REMOTE
++            noThreads = DEFAULT_THREADS_REMOTE
++        }
++    }
++
++    /**
++     * @param noThreads set the number of threads to work with, note we default to a large number as
++     * these requests are network heavy not cpu heavy.
++     * @return self
++     * @throws IllegalArgumentException - if no threads is less than 1
++     */
++    @Throws(IllegalArgumentException::class)
++    fun setNoThreads(noThreads: Int): PortScan {
++        require(noThreads >= 1) { "Cannot have less than 1 thread" }
++        this.noThreads = noThreads
++        return this
++    }
++
++    /**
++     * Set scan method, either TCP or UDP
++     *
++     * @param method - the transport method to use to scan, either PortScan.METHOD_UDP or
++     * PortScan.METHOD_TCP
++     * @return this object to allow chaining
++     * @throws IllegalArgumentException - if invalid method
++     */
++    private fun setMethod(method: Int): PortScan {
++        when (method) {
++            METHOD_UDP, METHOD_TCP -> this.method = method
++            else -> throw IllegalArgumentException("Invalid method type $method")
++        }
++        return this
++    }
++
++    /**
++     * Set scan method to UDP
++     *
++     * @return this object to allow chaining
++     */
++    fun setMethodUDP(): PortScan {
++        setMethod(METHOD_UDP)
++        return this
++    }
++
++    /**
++     * Set scan method to TCP
++     *
++     * @return this object to allow chaining
++     */
++    fun setMethodTCP(): PortScan {
++        setMethod(METHOD_TCP)
++        return this
++    }
++
++    /** Cancel a running ping  */
++    fun cancel() {
++        cancelled = true
++        runningFlowable.unsubscribeOn(Schedulers.computation())
++    }
++
++    /**
++     * Perform a synchronous (blocking) port scan and return a list of open ports
++     *
++     * @return - ping result
++     */
++    fun doScan(): List<Int> {
++        cancelled = false
++        openPortsFound.clear()
++        runningFlowable = createPortScanFlowable().doOnComplete {
++            openPortsFound.sort()
++        }
++        runningFlowable.blockingSubscribe()
++        return openPortsFound
++    }
++
++    private fun createPortScanFlowable(): Flowable<Unit> {
++        return Flowable.fromIterable(ports)
++            .parallel(noThreads)
++            .runOn(Schedulers.io())
++            .map { portNo ->
++                PortScanRunnable(address, portNo, timeOutMillis, method).run()
++            }.sequential()
++            .subscribeOn(Schedulers.computation())
++    }
++
++    @Synchronized
++    private fun portScanned(port: Int, open: Boolean) {
++        if (open) {
++            openPortsFound.add(port)
++        }
++        portListener?.onResult(port, open)
++    }
++
++    private inner class PortScanRunnable constructor(
++        private val address: InetAddress?,
++        private val portNo: Int,
++        private val timeOutMillis: Int,
++        private val method: Int
++    ) : Runnable {
++        override fun run() {
++            if (cancelled) return
++            when (method) {
++                METHOD_UDP -> portScanned(
++                    portNo,
++                    PortScanUDP.scanAddress(address, portNo, timeOutMillis)
++                )
++                METHOD_TCP -> portScanned(
++                    portNo,
++                    PortScanTCP.scanAddress(address, portNo, timeOutMillis)
++                )
++                else -> throw IllegalArgumentException("Invalid method")
++            }
++        }
++    }
++
++    companion object {
++        private const val TIMEOUT_LOCALHOST = 25
++        private const val TIMEOUT_LOCALNETWORK = 1000
++        private const val TIMEOUT_REMOTE = 2500
++        private const val DEFAULT_THREADS_LOCALHOST = 7
++        private const val DEFAULT_THREADS_LOCALNETWORK = 50
++        private const val DEFAULT_THREADS_REMOTE = 50
++        private const val METHOD_TCP = 0
++        private const val METHOD_UDP = 1
++
++        /**
++         * Set the address to ping
++         *
++         * @param address - Address to be pinged
++         * @return this object to allow chaining
++         * @throws UnknownHostException - if no IP address for the `host` could be found, or if a
++         * scope_id was specified for a global IPv6 address.
++         */
++        @JvmStatic
++        @Throws(UnknownHostException::class)
++        fun onAddress(address: String?): PortScan {
++            return onAddress(InetAddress.getByName(address))
++        }
++
++        /**
++         * Set the address to ping
++         *
++         * @param ia - Address to be pinged
++         * @return this object to allow chaining
++         */
++        @JvmStatic
++        fun onAddress(ia: InetAddress): PortScan {
++            val portScan = PortScan()
++            portScan.setAddress(ia)
++            portScan.setDefaultThreadsAndTimeouts()
++            return portScan
++        }
++    }
++}
+diff --git a/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanTCP.kt b/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanTCP.kt
+new file mode 100644
+index 000000000..8c816b155
+--- /dev/null
++++ b/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanTCP.kt
+@@ -0,0 +1,50 @@
++/*
++ *  Licensed to the Apache Software Foundation (ASF) under one or more
++ *  contributor license agreements.  See the NOTICE file distributed with
++ *  this work for additional information regarding copyright ownership.
++ *  The ASF licenses this file to You under the Apache License, Version 2.0
++ *  (the "License"); you may not use this file except in compliance with
++ *  the License.  You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ *
++ */
++package com.stealthcopter.networktools.portscanning
++
++import java.net.InetAddress
++import java.net.InetSocketAddress
++import java.net.Socket
++
++/**
++ * Created by mat on 13/12/15.
++ */
++object PortScanTCP {
++    /**
++     * Check if a port is open with TCP
++     *
++     * @param ia            - address to scan
++     * @param portNo        - port to scan
++     * @param timeoutMillis - timeout
++     * @return - true if port is open, false if not or unknown
++     */
++    @JvmStatic
++    @Suppress("LabeledExpression")
++    fun scanAddress(ia: InetAddress?, portNo: Int, timeoutMillis: Int): Boolean {
++        return Socket().let { s ->
++            runCatching {
++                s.connect(InetSocketAddress(ia, portNo), timeoutMillis)
++                return@let true
++            }.also {
++                runCatching {
++                    s.close()
++                }.getOrNull()
++            }.getOrDefault(false)
++        }
++    }
++}
+diff --git a/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanUDP.kt b/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanUDP.kt
+new file mode 100644
+index 000000000..286d6e7e0
+--- /dev/null
++++ b/portscanner/src/main/java/com/stealthcopter/networktools/portscanning/PortScanUDP.kt
+@@ -0,0 +1,57 @@
++/*
++ *  Licensed to the Apache Software Foundation (ASF) under one or more
++ *  contributor license agreements.  See the NOTICE file distributed with
++ *  this work for additional information regarding copyright ownership.
++ *  The ASF licenses this file to You under the Apache License, Version 2.0
++ *  (the "License"); you may not use this file except in compliance with
++ *  the License.  You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ *
++ */
++package com.stealthcopter.networktools.portscanning
++
++import java.lang.Exception
++import java.net.DatagramPacket
++import java.net.DatagramSocket
++import java.net.InetAddress
++import java.net.SocketTimeoutException
++
++/**
++ * Created by mat on 13/12/15.
++ */
++object PortScanUDP {
++    /**
++     * Check if a port is open with UDP, note that this isn't reliable
++     * as UDP will does not send ACKs
++     *
++     * @param ia            - address to scan
++     * @param portNo        - port to scan
++     * @param timeoutMillis - timeout
++     * @return - true if port is open, false if not or unknown
++     */
++    @JvmStatic
++    fun scanAddress(ia: InetAddress?, portNo: Int, timeoutMillis: Int): Boolean {
++        try {
++            val bytes = ByteArray(128)
++            val dp = DatagramPacket(bytes, bytes.size)
++            val ds = DatagramSocket()
++            ds.soTimeout = timeoutMillis
++            ds.connect(ia, portNo)
++            ds.send(dp)
++            ds.isConnected
++            ds.receive(dp)
++            ds.close()
++        } catch (e: SocketTimeoutException) {
++            return true
++        } catch (ignore: Exception) {
++        }
++        return false
++    }
++}
+diff --git a/testShared/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt b/testShared/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt
+index cdc2551c5..b141acd65 100644
+--- a/testShared/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt
++++ b/testShared/src/test/java/com/amaze/filemanager/shadows/ShadowSmbUtil.kt
+@@ -21,7 +21,7 @@
+ package com.amaze.filemanager.shadows
+ 
+ import android.content.Context
+-import com.amaze.filemanager.utils.SmbUtil
++import com.amaze.filemanager.utils.smb.SmbUtil
+ import jcifs.context.SingletonContext
+ import jcifs.smb.SmbException
+ import jcifs.smb.SmbFile
+diff --git a/testShared/src/test/java/com/amaze/filemanager/test/volley/MockHttpStack.kt b/testShared/src/test/java/com/amaze/filemanager/test/volley/MockHttpStack.kt
+new file mode 100644
+index 000000000..f859a35b4
+--- /dev/null
++++ b/testShared/src/test/java/com/amaze/filemanager/test/volley/MockHttpStack.kt
+@@ -0,0 +1,51 @@
++package com.amaze.filemanager.test.volley
++
++import com.android.volley.AuthFailureError
++import com.android.volley.Request
++import com.android.volley.toolbox.BaseHttpStack
++import com.android.volley.toolbox.HttpResponse
++import java.io.IOException
++
++/**
++ * Mock [BaseHttpStack] for test only.
++ */
++class MockHttpStack : BaseHttpStack() {
++
++    private lateinit var mResponseToReturn: HttpResponse
++    private lateinit var lastUrl: String
++    private lateinit var mLastHeaders: MutableMap<String, String>
++    private var lastPostBody: ByteArray? = null
++
++    /**
++     * get headers in last request
++     */
++    fun getLastHeaders() = mLastHeaders
++
++    /**
++     * Manually set response to return
++     */
++    fun setResponseToReturn(response: HttpResponse) {
++        mResponseToReturn = response
++    }
++
++    @Throws(IOException::class, AuthFailureError::class)
++    override fun executeRequest(
++        request: Request<*>,
++        additionalHeaders: Map<String, String>?
++    ): HttpResponse {
++        lastUrl = request.url
++        mLastHeaders = HashMap()
++        if (request.headers != null) {
++            mLastHeaders.putAll(request.headers)
++        }
++        if (additionalHeaders != null) {
++            mLastHeaders.putAll(additionalHeaders)
++        }
++        try {
++            lastPostBody = request.body
++        } catch (e: AuthFailureError) {
++            lastPostBody = null
++        }
++        return mResponseToReturn
++    }
++}

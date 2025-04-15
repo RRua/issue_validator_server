@@ -1,0 +1,427 @@
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationActivity.java b/Stately/app/src/main/java/com/lloydtorres/stately/ExploreActivity.java
+similarity index 59%
+rename from Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationActivity.java
+rename to Stately/app/src/main/java/com/lloydtorres/stately/ExploreActivity.java
+index d7473452..77dcf399 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationActivity.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/ExploreActivity.java
+@@ -1,4 +1,4 @@
+-package com.lloydtorres.stately.nation;
++package com.lloydtorres.stately;
+ 
+ import android.os.Bundle;
+ import android.support.v4.app.FragmentManager;
+@@ -19,24 +19,29 @@ import com.android.volley.TimeoutError;
+ import com.android.volley.VolleyError;
+ import com.android.volley.toolbox.StringRequest;
+ import com.android.volley.toolbox.Volley;
+-import com.lloydtorres.stately.R;
+ import com.lloydtorres.stately.dto.Nation;
++import com.lloydtorres.stately.dto.Region;
+ import com.lloydtorres.stately.helpers.PrimeActivity;
+ import com.lloydtorres.stately.helpers.SparkleHelper;
++import com.lloydtorres.stately.nation.NationFragment;
++import com.lloydtorres.stately.region.RegionFragment;
+ 
+ import org.simpleframework.xml.core.Persister;
+ 
+ /**
+  * Created by Lloyd on 2016-01-15.
+- * This activity can be invoked to load and open a nation page, either as an Intent
+- * or through this Uri: com.lloydtorres.stately.nation://
+- * Requires a nation name to be passed in; does error checking as well.
++ * This activity can be invoked to load and open a nation/region page, either as an Intent
++ * or through this Uri: com.lloydtorres.stately.explore://<name>/<mode>
++ * Requires a name to be passed in; does error checking as well.
+  */
+-public class ExploreNationActivity extends AppCompatActivity implements PrimeActivity {
+-    private String nationId;
+-    private NationFragment nFragment;
++public class ExploreActivity extends AppCompatActivity implements PrimeActivity {
++    private String id;
++    private int mode;
+     private TextView statusMessage;
+ 
++    private NationFragment nFragment;
++    private RegionFragment rFragment;
++
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+@@ -45,15 +50,17 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+         if (getIntent() != null)
+         {
+             // If name passed in as intent
+-            nationId = getIntent().getStringExtra("nationId");
+-            if (nationId == null)
++            id = getIntent().getStringExtra("id");
++            mode = getIntent().getIntExtra("mode", SparkleHelper.CLICKY_NATION_MODE);
++            if (id == null)
+             {
+                 // If ID passed in through Uri
+                 // Funny thing here is that in the link source, they have
+                 // to convert it from a proper name to an ID
+                 // But we need it as a name so we convert it back
+-                nationId = getIntent().getData().getHost();
+-                nationId = SparkleHelper.getNameFromId(nationId);
++                id = getIntent().getData().getHost();
++                id = SparkleHelper.getNameFromId(id);
++                mode = Integer.valueOf(getIntent().getData().getLastPathSegment());
+             }
+         }
+         else
+@@ -67,7 +74,7 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+ 
+         statusMessage = (TextView) findViewById(R.id.explore_status);
+ 
+-        verifyNationInput(nationId);
++        verifyInput(id);
+     }
+ 
+     @Override
+@@ -91,16 +98,32 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+         statusMessage.setText(s);
+     }
+ 
+-    private void verifyNationInput(String name)
++    private void verifyInput(String name)
+     {
+         if (SparkleHelper.isValidName(name) && name.length() > 0)
+         {
+             name = name.toLowerCase().replace(" ","_");
+-            queryNation(name);
++            switch (mode)
++            {
++                case SparkleHelper.CLICKY_NATION_MODE:
++                    queryNation(name);
++                    break;
++                default:
++                    queryRegion(name);
++                    break;
++            }
+         }
+         else
+         {
+-            setExploreStatus(getString(R.string.explore_error_404_nation));
++            switch (mode)
++            {
++                case SparkleHelper.CLICKY_NATION_MODE:
++                    setExploreStatus(getString(R.string.explore_error_404_nation));
++                    break;
++                default:
++                    setExploreStatus(getString(R.string.region_404));
++                    break;
++            }
+         }
+     }
+ 
+@@ -163,6 +186,54 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+         queue.add(stringRequest);
+     }
+ 
++    private void queryRegion(String name)
++    {
++        RequestQueue queue = Volley.newRequestQueue(this);
++        String targetURL = String.format(Region.QUERY, name);
++
++        StringRequest stringRequest = new StringRequest(Request.Method.GET, targetURL,
++                new Response.Listener<String>() {
++                    Region regionResponse = null;
++                    @Override
++                    public void onResponse(String response) {
++                        Persister serializer = new Persister();
++                        try {
++                            regionResponse = serializer.read(Region.class, response);
++
++                            // Switch flag URL to https
++                            if (regionResponse.flagURL != null)
++                            {
++                                regionResponse.flagURL = regionResponse.flagURL.replace("http://","https://");
++                            }
++
++                            initFragment(regionResponse);
++                        }
++                        catch (Exception e) {
++                            SparkleHelper.logError(e.toString());
++                            setExploreStatus(getString(R.string.login_error_parsing));
++                        }
++                    }
++                }, new Response.ErrorListener() {
++            @Override
++            public void onErrorResponse(VolleyError error) {
++                SparkleHelper.logError(error.toString());
++                if (error instanceof TimeoutError || error instanceof NoConnectionError || error instanceof NetworkError) {
++                    setExploreStatus(getString(R.string.login_error_no_internet));
++                }
++                else if (error instanceof ServerError)
++                {
++                    setExploreStatus(getString(R.string.region_404));
++                }
++                else
++                {
++                    setExploreStatus(getString(R.string.error_generic));
++                }
++            }
++        });
++
++        queue.add(stringRequest);
++    }
++
+     private void initFragment(Nation mNation)
+     {
+         // Initializes and inflates the nation fragment
+@@ -174,6 +245,17 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+                 .commit();
+     }
+ 
++    private void initFragment(Region mRegion)
++    {
++        // Initializes and inflates the region fragment
++        rFragment = new RegionFragment();
++        rFragment.setRegion(mRegion);
++        android.support.v4.app.FragmentManager fm = getSupportFragmentManager();
++        fm.beginTransaction()
++                .replace(R.id.explore_coordinator, rFragment)
++                .commit();
++    }
++
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+         switch (item.getItemId()) {
+@@ -184,8 +266,8 @@ public class ExploreNationActivity extends AppCompatActivity implements PrimeAct
+             case R.id.nav_explore:
+                 // Open an explore dialog to keep going
+                 FragmentManager fm = getSupportFragmentManager();
+-                ExploreNationDialog editNameDialog = new ExploreNationDialog();
+-                editNameDialog.show(fm, ExploreNationDialog.DIALOG_TAG);
++                ExploreDialog editNameDialog = new ExploreDialog();
++                editNameDialog.show(fm, ExploreDialog.DIALOG_TAG);
+         }
+         return super.onOptionsItemSelected(item);
+     }
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationDialog.java b/Stately/app/src/main/java/com/lloydtorres/stately/ExploreDialog.java
+similarity index 78%
+rename from Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationDialog.java
+rename to Stately/app/src/main/java/com/lloydtorres/stately/ExploreDialog.java
+index 96a6063d..1e16af7a 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/nation/ExploreNationDialog.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/ExploreDialog.java
+@@ -1,4 +1,4 @@
+-package com.lloydtorres.stately.nation;
++package com.lloydtorres.stately;
+ 
+ import android.app.AlertDialog;
+ import android.app.Dialog;
+@@ -11,7 +11,6 @@ import android.view.WindowManager;
+ import android.widget.EditText;
+ import android.widget.RadioGroup;
+ 
+-import com.lloydtorres.stately.R;
+ import com.lloydtorres.stately.helpers.SparkleHelper;
+ 
+ /**
+@@ -19,13 +18,13 @@ import com.lloydtorres.stately.helpers.SparkleHelper;
+  * A dialog that takes in a nation or region name, lets the user select the type, then launches
+  * the appropriate explore activity.
+  */
+-public class ExploreNationDialog extends DialogFragment {
++public class ExploreDialog extends DialogFragment {
+     public static final String DIALOG_TAG = "fragment_explore_dialog";
+ 
+     private EditText exploreSearch;
+     private RadioGroup exploreToggleState;
+ 
+-    public ExploreNationDialog() { }
++    public ExploreDialog() { }
+ 
+     @Override
+     public Dialog onCreateDialog(Bundle savedInstanceState)  {
+@@ -38,14 +37,7 @@ public class ExploreNationDialog extends DialogFragment {
+         DialogInterface.OnClickListener dialogListener = new DialogInterface.OnClickListener() {
+             @Override
+             public void onClick(DialogInterface dialog, int which) {
+-                switch (exploreToggleState.getCheckedRadioButtonId())
+-                {
+-                    case R.id.explore_radio_nation:
+-                        startExploreActivity();
+-                        break;
+-                    default:
+-                        break;
+-                }
++                startExploreActivity();
+             }
+         };
+ 
+@@ -65,7 +57,19 @@ public class ExploreNationDialog extends DialogFragment {
+ 
+     private void startExploreActivity()
+     {
++        int mode;
++
++        switch (exploreToggleState.getCheckedRadioButtonId())
++        {
++            case R.id.explore_radio_nation:
++                mode = SparkleHelper.CLICKY_NATION_MODE;
++                break;
++            default:
++                mode = SparkleHelper.CLICKY_REGION_MODE;
++                break;
++        }
++
+         String name = exploreSearch.getText().toString();
+-        SparkleHelper.startExploring(getContext(), name);
++        SparkleHelper.startExploring(getContext(), name, mode);
+     }
+ }
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/StatelyActivity.java b/Stately/app/src/main/java/com/lloydtorres/stately/StatelyActivity.java
+index e577c764..849bd121 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/StatelyActivity.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/StatelyActivity.java
+@@ -31,7 +31,6 @@ import com.lloydtorres.stately.dto.Nation;
+ import com.lloydtorres.stately.helpers.GenericFragment;
+ import com.lloydtorres.stately.helpers.PrimeActivity;
+ import com.lloydtorres.stately.helpers.SparkleHelper;
+-import com.lloydtorres.stately.nation.ExploreNationDialog;
+ import com.lloydtorres.stately.nation.NationFragment;
+ import com.lloydtorres.stately.region.RegionFragment;
+ import com.lloydtorres.stately.wa.AssemblyMainFragment;
+@@ -289,8 +288,8 @@ public class StatelyActivity extends AppCompatActivity implements NavigationView
+     private void explore()
+     {
+         FragmentManager fm = getSupportFragmentManager();
+-        ExploreNationDialog editNameDialog = new ExploreNationDialog();
+-        editNameDialog.show(fm, ExploreNationDialog.DIALOG_TAG);
++        ExploreDialog editNameDialog = new ExploreDialog();
++        editNameDialog.show(fm, ExploreDialog.DIALOG_TAG);
+     }
+ 
+     /**
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/helpers/NameListRecyclerAdapter.java b/Stately/app/src/main/java/com/lloydtorres/stately/helpers/NameListRecyclerAdapter.java
+index 1ab30ff6..96e3f671 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/helpers/NameListRecyclerAdapter.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/helpers/NameListRecyclerAdapter.java
+@@ -72,7 +72,7 @@ public class NameListRecyclerAdapter extends RecyclerView.Adapter<RecyclerView.V
+                 {
+                     case SparkleHelper.CLICKY_NATION_MODE:
+                         // Start exploring nation and close dialog on click.
+-                        SparkleHelper.startExploring(context, names.get(pos));
++                        SparkleHelper.startExploring(context, names.get(pos), SparkleHelper.CLICKY_NATION_MODE);
+                         selfDialog.dismiss();
+                         break;
+                 }
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/helpers/SparkleHelper.java b/Stately/app/src/main/java/com/lloydtorres/stately/helpers/SparkleHelper.java
+index 523623be..1996aacf 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/helpers/SparkleHelper.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/helpers/SparkleHelper.java
+@@ -16,8 +16,8 @@ import android.widget.TextView;
+ import com.google.common.base.CaseFormat;
+ import com.google.common.base.CharMatcher;
+ import com.google.common.base.Joiner;
++import com.lloydtorres.stately.ExploreActivity;
+ import com.lloydtorres.stately.R;
+-import com.lloydtorres.stately.nation.ExploreNationActivity;
+ 
+ import org.atteo.evo.inflector.English;
+ import org.jsoup.Jsoup;
+@@ -79,14 +79,11 @@ import java.util.regex.Pattern;
+ public class SparkleHelper {
+     // Tag used to mark system log print calls
+     public static final String APP_TAG = "com.lloydtorres.stately";
+-    // Uri to invoke the ExploreNationActivity
+-    public static final String NATION_PROTOCOL = "com.lloydtorres.stately.nation";
+-    public static final String NATION_TARGET = NATION_PROTOCOL + "://";
+-    // Uri to invoke the ExploreRegionActivity
+-    public static final String REGION_PROTOCOL = "com.lloydtorres.stately.region";
+-    public static final String REGION_TARGET = REGION_PROTOCOL + "://";
++    // Uri to invoke the ExploreActivity
++    public static final String EXPLORE_PROTOCOL = "com.lloydtorres.stately.explore";
++    public static final String EXPLORE_TARGET = EXPLORE_PROTOCOL + "://";
+     // Whitelisted protocols
+-    public static final String[] PROTOCOLS = {"http", "https", NATION_PROTOCOL, REGION_PROTOCOL};
++    public static final String[] PROTOCOLS = {"http", "https", EXPLORE_PROTOCOL};
+     // String template used to get nation banners from NationStates
+     // @param: banner_id
+     public static final String BANNER_TEMPLATE = "https://www.nationstates.net/images/banners/%s.jpg";
+@@ -348,11 +345,12 @@ public class SparkleHelper {
+      * @param c App context
+      * @param n The nation ID
+      */
+-    public static void startExploring(Context c, String n)
++    public static void startExploring(Context c, String n, int mode)
+     {
+-        Intent nationActivityLaunch = new Intent(c, ExploreNationActivity.class);
+-        nationActivityLaunch.putExtra("nationId", n);
+-        c.startActivity(nationActivityLaunch);
++        Intent exploreActivityLaunch = new Intent(c, ExploreActivity.class);
++        exploreActivityLaunch.putExtra("id", n);
++        exploreActivityLaunch.putExtra("mode", mode);
++        c.startActivity(exploreActivityLaunch);
+     }
+ 
+     public static String calculateResolutionEnd(int hoursElapsed)
+@@ -393,23 +391,13 @@ public class SparkleHelper {
+      */
+     public static String activityLinkBuilder(Context c, TextView t, String template, String oTarget, String nTarget, int mode)
+     {
+-        final String urlFormat = "<a href=\"%s\">%s</a>";
++        final String urlFormat = "<a href=\"%s/%d\">%s</a>";
+         String tempHolder = template;
+-        String targetActivity;
+-
+-        switch (mode)
+-        {
+-            case CLICKY_NATION_MODE:
+-                targetActivity = NATION_TARGET;
+-                break;
+-            default:
+-                targetActivity = REGION_TARGET;
+-                break;
+-        }
++        String targetActivity = EXPLORE_TARGET;
+ 
+         // Name needs to be formatted back to its NationStates ID first for the URL.
+         targetActivity = targetActivity + nTarget.toLowerCase().replace(" ", "_");
+-        targetActivity = String.format(urlFormat, targetActivity, nTarget);
++        targetActivity = String.format(urlFormat, targetActivity, mode, nTarget);
+ 
+         tempHolder = tempHolder.replace(oTarget, targetActivity);
+ 
+diff --git a/Stately/app/src/main/java/com/lloydtorres/stately/region/RegionFragment.java b/Stately/app/src/main/java/com/lloydtorres/stately/region/RegionFragment.java
+index 19731451..98d6ad5b 100644
+--- a/Stately/app/src/main/java/com/lloydtorres/stately/region/RegionFragment.java
++++ b/Stately/app/src/main/java/com/lloydtorres/stately/region/RegionFragment.java
+@@ -38,13 +38,12 @@ import com.nostra13.universalimageloader.core.display.FadeInBitmapDisplayer;
+ 
+ import org.atteo.evo.inflector.English;
+ import org.simpleframework.xml.core.Persister;
+-import org.w3c.dom.Text;
+ 
+ /**
+  * Created by Lloyd on 2016-01-21.
+  * The region fragment called either by StatelyActivity or ExploreRegionActivity.
+- * Displays information about a target region, takes in a region name.
+- * Does the search and refresh by itself.
++ * Displays information about a target region, takes in a region name or object.
++ * Can do the search and refresh by itself.
+  */
+ public class RegionFragment extends Fragment {
+     // Constants used to determine view pager index.
+@@ -77,6 +76,10 @@ public class RegionFragment extends Fragment {
+     {
+         mRegionName = n;
+     }
++    public void setRegion(Region r)
++    {
++        mRegion = r;
++    }
+ 
+     @Override
+     public void onAttach(Context context) {
+@@ -107,6 +110,7 @@ public class RegionFragment extends Fragment {
+ 
+         if (mRegion != null)
+         {
++            mRegionName = mRegion.name;
+             getAllRegionViews(view);
+         }
+         else

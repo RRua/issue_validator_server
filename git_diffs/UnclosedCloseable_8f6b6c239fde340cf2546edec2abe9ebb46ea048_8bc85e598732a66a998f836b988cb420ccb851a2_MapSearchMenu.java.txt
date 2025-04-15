@@ -1,0 +1,194 @@
+diff --git a/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java b/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
+index 92e5a404..f70b9857 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
+@@ -5,7 +5,6 @@ import android.widget.LinearLayout;
+ 
+ import org.mapsforge.poi.storage.PoiCategory;
+ 
+-import java.io.IOException;
+ import java.util.ArrayList;
+ 
+ import ch.bailu.aat.coordinates.BoundingBoxE6;
+@@ -30,8 +29,9 @@ public class PoiActivity extends AbsOsmApiActivity {
+         return new PoiApi(this, boundingBox) {
+ 
+             @Override
+-            protected ArrayList<PoiCategory> getCategories() {
+-                return poiView.getCategories();
++            protected ArrayList<PoiCategory> getSelectedCategories() {
++                poiView.saveSelected(getQueryFile());
++                return poiView.getSelectedCategories();
+             }
+         };
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/map/layer/control/InformationBarLayer.java b/app/src/main/java/ch/bailu/aat/map/layer/control/InformationBarLayer.java
+index 94d70fb0..1122f91f 100644
+--- a/app/src/main/java/ch/bailu/aat/map/layer/control/InformationBarLayer.java
++++ b/app/src/main/java/ch/bailu/aat/map/layer/control/InformationBarLayer.java
+@@ -11,7 +11,7 @@ import ch.bailu.aat.gpx.InfoID;
+ import ch.bailu.aat.map.MapContext;
+ import ch.bailu.aat.menus.LocationMenu;
+ import ch.bailu.aat.menus.MapMenu;
+-import ch.bailu.aat.menus.MapSearchMenu;
++import ch.bailu.aat.menus.MapQueryMenu;
+ import ch.bailu.aat.preferences.SolidIndexList;
+ import ch.bailu.aat.preferences.map.SolidLegend;
+ import ch.bailu.aat.preferences.map.SolidMapGrid;
+@@ -68,7 +68,7 @@ public final class InformationBarLayer extends ControlBarLayer {
+             new MapMenu(mcontext).showAsPopup(mcontext.getContext(),v);
+ 
+         } else if (v==search) {
+-            new MapSearchMenu(mcontext).showAsPopup(mcontext.getContext(), v);
++            new MapQueryMenu(mcontext).showAsPopup(mcontext.getContext(), v);
+ 
+         } else if (v == poi) {
+             ActivitySwitcher.start(mcontext.getContext(),
+diff --git a/app/src/main/java/ch/bailu/aat/menus/MapSearchMenu.java b/app/src/main/java/ch/bailu/aat/menus/MapQueryMenu.java
+similarity index 82%
+rename from app/src/main/java/ch/bailu/aat/menus/MapSearchMenu.java
+rename to app/src/main/java/ch/bailu/aat/menus/MapQueryMenu.java
+index 8ec94cc9..5cf2d472 100644
+--- a/app/src/main/java/ch/bailu/aat/menus/MapSearchMenu.java
++++ b/app/src/main/java/ch/bailu/aat/menus/MapQueryMenu.java
+@@ -11,9 +11,12 @@ import ch.bailu.aat.activities.NominatimActivity;
+ import ch.bailu.aat.activities.OverpassActivity;
+ import ch.bailu.aat.activities.PoiActivity;
+ import ch.bailu.aat.map.MapContext;
++import ch.bailu.aat.util.NominatimApi;
++import ch.bailu.aat.util.OverpassApi;
++import ch.bailu.aat.util.PoiApi;
+ import ch.bailu.aat.util.ToDo;
+ 
+-public class MapSearchMenu extends AbsMenu {
++public class MapQueryMenu extends AbsMenu {
+ 
+     private final MapContext mcontext;
+     private final Context context;
+@@ -22,7 +25,7 @@ public class MapSearchMenu extends AbsMenu {
+     private MenuItem nominatim, overpass, poi;
+ 
+ 
+-    public MapSearchMenu(MapContext m) {
++    public MapQueryMenu(MapContext m) {
+         mcontext = m;
+         context = m.getContext();
+     }
+@@ -33,9 +36,9 @@ public class MapSearchMenu extends AbsMenu {
+     @Override
+     public void inflate(Menu menu) {
+ 
+-        nominatim = menu.add(R.string.intro_nominatim);
+-        overpass = menu.add(R.string.query_overpass);
+-        poi = menu.add(ToDo.translate("Poi (offline)"));
++        nominatim = menu.add(NominatimApi.NAME);
++        overpass = menu.add(OverpassApi.getName(context));
++        poi = menu.add(PoiApi.NAME);
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/ch/bailu/aat/services/icons/IconCache.java b/app/src/main/java/ch/bailu/aat/services/icons/IconCache.java
+index f89c53dd..5be8f06e 100644
+--- a/app/src/main/java/ch/bailu/aat/services/icons/IconCache.java
++++ b/app/src/main/java/ch/bailu/aat/services/icons/IconCache.java
+@@ -7,6 +7,7 @@ import ch.bailu.aat.services.cache.ImageObjectAbstract;
+ import ch.bailu.aat.services.cache.LockCache;
+ import ch.bailu.aat.services.cache.ObjectHandle;
+ import ch.bailu.aat.services.cache.SVGAssetImageObject;
++import ch.bailu.util_java.util.Objects;
+ 
+ public final class IconCache implements Closeable {
+     private final LockCache<ImageObjectAbstract> icons = new LockCache<>(20);
+@@ -40,7 +41,7 @@ public final class IconCache implements Closeable {
+ 
+     private ImageObjectAbstract get(String id) {
+         for (int i = 0; i < icons.size(); i++) {
+-            if (id.equals(icons.get(i).toString())) {
++            if (Objects.equals(id, icons.get(i).toString())) {
+                 return icons.use(i);
+             }
+         }
+diff --git a/app/src/main/java/ch/bailu/aat/util/OverpassApi.java b/app/src/main/java/ch/bailu/aat/util/OverpassApi.java
+index cd646560..a7baa133 100644
+--- a/app/src/main/java/ch/bailu/aat/util/OverpassApi.java
++++ b/app/src/main/java/ch/bailu/aat/util/OverpassApi.java
+@@ -26,12 +26,17 @@ public abstract class OverpassApi extends DownloadApi {
+ 
+ 
+     public OverpassApi(Context context, BoundingBoxE6 b) {
+-        NAME=context.getString(R.string.query_overpass);
++        NAME=getName(context);
+         bounding = toString(b);
+         directory = AppDirectory.getDataDirectory(context, AppDirectory.DIR_OVERPASS);
+     }
+ 
+ 
++    public static String getName(Context context) {
++        return context.getString(R.string.query_overpass);
++    }
++
++
+     @Override
+     public String getApiName() {
+         return NAME;
+diff --git a/app/src/main/java/ch/bailu/aat/util/PoiApi.java b/app/src/main/java/ch/bailu/aat/util/PoiApi.java
+index e98af9b6..46addd7d 100644
+--- a/app/src/main/java/ch/bailu/aat/util/PoiApi.java
++++ b/app/src/main/java/ch/bailu/aat/util/PoiApi.java
+@@ -29,7 +29,7 @@ import ch.bailu.util_java.foc.Foc;
+ 
+ public abstract class PoiApi extends OsmApiConfiguration {
+ 
+-    public final static String NAME="MapsForge POI";
++    public final static String NAME = ToDo.translate("Offline POI");
+     public final static String EXT=".gpx";
+     public static final String SELECTED = "selected.txt";
+ 
+@@ -82,7 +82,7 @@ public abstract class PoiApi extends OsmApiConfiguration {
+     @Override
+     public void startTask(ServiceContext scontext) {
+ 
+-        final ArrayList<PoiCategory> categories = getCategories();
++        final ArrayList<PoiCategory> categories = getSelectedCategories();
+         final String poiDatabase = new SolidPoiDatabase(scontext.getContext()).getValueAsString();
+ 
+         new InsideContext(scontext) {
+@@ -99,7 +99,7 @@ public abstract class PoiApi extends OsmApiConfiguration {
+         };
+     }
+ 
+-    protected abstract ArrayList<PoiCategory> getCategories();
++    protected abstract ArrayList<PoiCategory> getSelectedCategories();
+ 
+ 
+     private static class PoiToGpxTask extends FileTask {
+diff --git a/app/src/main/java/ch/bailu/aat/views/osm_features/PoiView.java b/app/src/main/java/ch/bailu/aat/views/osm_features/PoiView.java
+index 6ede11c6..9e6c3deb 100644
+--- a/app/src/main/java/ch/bailu/aat/views/osm_features/PoiView.java
++++ b/app/src/main/java/ch/bailu/aat/views/osm_features/PoiView.java
+@@ -162,7 +162,7 @@ public class PoiView  extends LinearLayout implements SharedPreferences.OnShared
+     }
+ 
+ 
+-    public ArrayList<PoiCategory> getCategories() {
++    public ArrayList<PoiCategory> getSelectedCategories() {
+         ArrayList<PoiCategory> export = new ArrayList<>(10);
+ 
+         for (int i = 0; i< list.sizeVisible(); i++) {
+@@ -184,10 +184,15 @@ public class PoiView  extends LinearLayout implements SharedPreferences.OnShared
+     }
+ 
+     private void saveSelected() {
++        saveSelected(selected);
++    }
++
++    public void saveSelected(Foc file) {
+         try {
+-            new FilterListUtil(list).writeSelected(selected);
++            new FilterListUtil(list).writeSelected(file);
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+     }
++
+ }

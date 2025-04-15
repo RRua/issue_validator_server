@@ -1,0 +1,309 @@
+diff --git a/app/src/main/java/biz/binarysolutions/weatherusa/MainActivity.java b/app/src/main/java/biz/binarysolutions/weatherusa/MainActivity.java
+index 50d635d..e390ca8 100644
+--- a/app/src/main/java/biz/binarysolutions/weatherusa/MainActivity.java
++++ b/app/src/main/java/biz/binarysolutions/weatherusa/MainActivity.java
+@@ -100,6 +100,8 @@ public class MainActivity
+ 	 * 
+ 	 */
+ 	private void refreshForecast() {
++
++		setForecastButtonEnabled(false);
+ 		Location location = locationHandler.getLastKnownLocation();
+ 		forecastHandler.updateForecast(location);
+ 	}
+@@ -310,7 +312,7 @@ public class MainActivity
+ 
+ 	@Override
+ 	public void onPause() {
+-		forecastHandler.saveForecast();
++		//TODO: is saving preferences necessary?
+ 		Preferences.save(getPreferences(MODE_PRIVATE), locationHandler);
+ 		super.onPause();
+ 	}
+@@ -365,13 +367,15 @@ public class MainActivity
+ 	}
+ 
+ 	@Override
+-	public void onForecastAvailable(String forecast) {
++	public void onForecastAvailable() {
+ 		updateForecastRequestView(new Date());
++		setForecastButtonEnabled(true);
+ 	}
+ 	
+ 	@Override
+ 	public void onForecastUnavailable() {
+ 		showDialog(DialogCode.FORECAST_UNAVAILABLE);
++		setForecastButtonEnabled(true);
+ 	}
+ 
+ 	@Override
+diff --git a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandler.java b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandler.java
+index 1624630..1eac97d 100644
+--- a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandler.java
++++ b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandler.java
+@@ -1,17 +1,15 @@
+ package biz.binarysolutions.weatherusa.components.forecast;
+ 
++import android.app.Activity;
++import android.location.Location;
++
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.IOException;
+ import java.util.Date;
+ 
+-import android.app.Activity;
+-import android.app.ProgressDialog;
+-import android.location.Location;
+-import biz.binarysolutions.weatherusa.R;
+ import biz.binarysolutions.weatherusa.components.forecast.workerthreads.ForecastSaver;
+ import biz.binarysolutions.weatherusa.components.forecast.workerthreads.ForecastUpdater;
+-import biz.binarysolutions.weatherusa.components.forecast.workerthreads.listeners.ForecastUpdaterListener;
+ import biz.binarysolutions.weatherusa.components.forecast.workerthreads.parsers.ForecastJSONParser;
+ import biz.binarysolutions.weatherusa.components.forecast.workerthreads.parsers.ForecastXMLParser;
+ import biz.binarysolutions.weatherusa.util.StringUtil;
+@@ -20,9 +18,8 @@ import biz.binarysolutions.weatherusa.util.StringUtil;
+  * 
+  *
+  */
+-public class ForecastHandler implements ForecastUpdaterListener { 
++public class ForecastHandler {
+ 	
+-	private static final String FILE_NAME_XML  = "latest.xml";
+ 	private static final String FILE_NAME_JSON = "latest.json";
+ 	
+ 	private static final String FULL_PATH = "/data/data/biz.binarysolutions.weatherusa/files/";
+@@ -32,8 +29,6 @@ public class ForecastHandler implements ForecastUpdaterListener {
+ 	
+ 	private ForecastDisplay display;
+ 	
+-	private boolean isForecastUpdated = false;
+-	
+ 	/**
+ 	 * TODO: load forecast in separate thread?
+ 	 * 
+@@ -54,6 +49,26 @@ public class ForecastHandler implements ForecastUpdaterListener {
+ 		return forecast;
+ 	}
+ 
++	/**
++	 *
++	 * @param forecast
++	 */
++	private void onForecastAvailable(String forecast) {
++
++		if (forecast != null && forecast.startsWith("<?xml")) {
++
++			display.clear();
++			new ForecastXMLParser(forecast, display).start();
++
++			String json = display.toJSONObject().toString();
++			new ForecastSaver(activity, FILE_NAME_JSON, json).start();
++
++			listener.onForecastAvailable();
++		} else {
++			listener.onForecastUnavailable();
++		}
++	}
++
+ 	/**
+ 	 * 
+ 	 * @param listener
+@@ -78,7 +93,7 @@ public class ForecastHandler implements ForecastUpdaterListener {
+ 	
+ 		Date date = null;
+ 	
+-		File file = new File(FULL_PATH + FILE_NAME_XML);
++		File file = new File(FULL_PATH + FILE_NAME_JSON);
+ 		if (file.exists()) {
+ 			date = new Date(file.lastModified());
+ 		}
+@@ -103,40 +118,14 @@ public class ForecastHandler implements ForecastUpdaterListener {
+ 		if (location == null) {
+ 			return;
+ 		}
+-		
+-		ProgressDialog dialog = ProgressDialog.show(
+-			activity, "", activity.getString(R.string.GettingForecast));
+-		
+-		display.clear();
+-		new ForecastUpdater(location, dialog, this).start();
+-		isForecastUpdated = true;
+-	}
+-
+-	/**
+-	 * 
+-	 */
+-	public void saveForecast() {
+-		
+-		if (isForecastUpdated) {
+-			String json = display.toJSONObject().toString();
+-			new ForecastSaver(activity, FILE_NAME_JSON, json).start();
+-		}
+-	}
+-
+-	@Override
+-	public void onForecastAvailable(String forecast) {
+-		
+-		if (forecast != null && forecast.startsWith("<?xml")) {
+-			new ForecastSaver(activity, FILE_NAME_XML, forecast).start();
+-			new ForecastXMLParser(forecast, display).start();
+-			listener.onForecastAvailable(forecast);
+-		} else {
+-			listener.onForecastUnavailable();
+-		}
+-	}
+ 
+-	@Override
+-	public void onConnectionError() {
+-		listener.onConnectionError();
++		new ForecastUpdater(location) {
++			@Override
++			protected void onResponseReceived(String response) {
++				//TODO: once got rid of handler in ForecastXMLParser
++				//	run it on it's native thread
++				activity.runOnUiThread(() -> onForecastAvailable(response));
++			}
++		}.start();
+ 	}
+ }
+diff --git a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandlerListener.java b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandlerListener.java
+index fb1cf8d..7585177 100644
+--- a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandlerListener.java
++++ b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/ForecastHandlerListener.java
+@@ -6,7 +6,6 @@ package biz.binarysolutions.weatherusa.components.forecast;
+  */
+ public interface ForecastHandlerListener {
+ 
+-	public void onForecastAvailable(String forecast);
+-	public void onForecastUnavailable();
+-	public void onConnectionError();
++	void onForecastAvailable();
++	void onForecastUnavailable();
+ }
+diff --git a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/ForecastUpdater.java b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/ForecastUpdater.java
+index 6e0b70d..7143fd2 100644
+--- a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/ForecastUpdater.java
++++ b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/ForecastUpdater.java
+@@ -1,24 +1,19 @@
+ package biz.binarysolutions.weatherusa.components.forecast.workerthreads;
+ 
++import android.location.Location;
++
+ import java.io.UnsupportedEncodingException;
+ import java.net.URLEncoder;
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+ 
+-import android.app.ProgressDialog;
+-import android.location.Location;
+-import android.os.Handler;
+-import android.os.Message;
+-
+-import biz.binarysolutions.weatherusa.components.MessageStatus;
+-import biz.binarysolutions.weatherusa.components.forecast.workerthreads.listeners.ForecastUpdaterListener;
+ import biz.binarysolutions.weatherusa.util.InternetUtil;
+ 
+ /**
+  * 
+  *
+  */
+-public class ForecastUpdater extends Thread {
++public abstract class ForecastUpdater extends Thread {
+ 	
+ 	private static final String URI = 
+ 		"https://graphical.weather.gov/xml/SOAP_server/ndfdXMLclient.php";
+@@ -36,9 +31,6 @@ public class ForecastUpdater extends Thread {
+ 		new SimpleDateFormat("yyyy-MM-dd'T'HH:mm");
+ 
+ 	private final Location location;
+-	private final Handler  handler;
+-	
+-	private String forecast = "";
+ 
+ 	/**
+ 	 * 
+@@ -136,55 +128,27 @@ public class ForecastUpdater extends Thread {
+ 		return parameters;
+ 	}
+ 
++	/**
++	 *
++	 * @param response
++	 */
++	protected abstract void onResponseReceived(String response);
++
+ 	/**
+ 	 * 
+ 	 * @param location
+-	 * @param dialog
+-	 * @param listener 
+ 	 */
+-	public ForecastUpdater
+-		(
+-				Location location, 
+-				final ProgressDialog dialog, 
+-				final ForecastUpdaterListener listener
+-		) {
++	public ForecastUpdater(Location location) {
+ 		super();
+-
+ 		this.location = location;
+-		this.handler  = new Handler() {
+-			
+-			@Override
+-			public void handleMessage(Message message) {
+-				
+-				try {
+-					dialog.dismiss();
+-				} catch (Exception e) {
+-					// TODO: handle orientation change
+-					/*
+-					 * Currently, if orientation changes during the
+-					 * forecast update, update (seems) aborted and no
+-					 * forecast is shown.
+-					 * 
+-					 * What would happen if forecast update is started
+-					 * as new activity?
+-					 */
+-				}
+-				
+-				if (message.what == MessageStatus.OK) {
+-					listener.onForecastAvailable(forecast);
+-				} else {
+-					listener.onConnectionError();
+-				}
+-			}
+-		};
+ 	}
+ 
+ 	@Override
+ 	public void run() {
+ 		
+-		String url = URI + getParameters(location);
+-		forecast = InternetUtil.getGetResponse(url, USER_AGENT);
+-		
+-		handler.sendEmptyMessage(MessageStatus.OK);
++		String url      = URI + getParameters(location);
++		String forecast = InternetUtil.getGetResponse(url, USER_AGENT);
++
++		onResponseReceived(forecast);
+ 	}
+ }
+diff --git a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/listeners/ForecastUpdaterListener.java b/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/listeners/ForecastUpdaterListener.java
+deleted file mode 100644
+index 84703a1..0000000
+--- a/app/src/main/java/biz/binarysolutions/weatherusa/components/forecast/workerthreads/listeners/ForecastUpdaterListener.java
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package biz.binarysolutions.weatherusa.components.forecast.workerthreads.listeners;
+-
+-/**
+- * 
+- *
+- */
+-public interface ForecastUpdaterListener {
+-
+-	void onForecastAvailable(String forecast);
+-	void onConnectionError();
+-}

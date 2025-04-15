@@ -1,0 +1,254 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java
+index 144ab123c..28bc1e284 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java
+@@ -75,6 +75,7 @@ import org.apache.ftpserver.ssl.ClientAuth;
+ import org.apache.ftpserver.ssl.impl.DefaultSslConfiguration;
+ import org.apache.ftpserver.usermanager.impl.BaseUser;
+ import org.apache.ftpserver.usermanager.impl.WritePermission;
++import org.greenrobot.eventbus.EventBus;
+ 
+ public class FtpService extends Service implements Runnable {
+ 
+@@ -95,10 +96,13 @@ public class FtpService extends Service implements Runnable {
+     private static final String WIFI_AP_ADDRESS_PREFIX = "192.168.43.";
+     private static final char[] KEYSTORE_PASSWORD = "vishal007".toCharArray();
+ 
+-    // Service will (global) broadcast when server start/stop
+-    static public final String ACTION_STARTED = "com.amaze.filemanager.services.ftpservice.FTPReceiver.FTPSERVER_STARTED";
+-    static public final String ACTION_STOPPED = "com.amaze.filemanager.services.ftpservice.FTPReceiver.FTPSERVER_STOPPED";
+-    static public final String ACTION_FAILEDTOSTART = "com.amaze.filemanager.services.ftpservice.FTPReceiver.FTPSERVER_FAILEDTOSTART";
++    // Service will broadcast via event bus when server start/stop
++    public enum FtpReceiverActions {
++        STARTED,
++        STARTED_FROM_TILE,
++        STOPPED,
++        FAILED_TO_START
++    }
+ 
+     // RequestStartStopReceiver listens for these actions to start/stop this server
+     static public final String ACTION_START_FTPSERVER = "com.amaze.filemanager.services.ftpservice.FTPReceiver.ACTION_START_FTPSERVER";
+@@ -220,10 +224,9 @@ public class FtpService extends Service implements Runnable {
+         try {
+             server = serverFactory.createServer();
+             server.start();
+-
+-            sendBroadcast(new Intent(FtpService.ACTION_STARTED).setPackage(getPackageName()).putExtra(TAG_STARTED_BY_TILE, isStartedByTile));
++            EventBus.getDefault().post(isStartedByTile ? FtpReceiverActions.STARTED_FROM_TILE : FtpReceiverActions.STARTED);
+         } catch (Exception e) {
+-            sendBroadcast(new Intent(FtpService.ACTION_FAILEDTOSTART).setPackage(getPackageName()));
++            EventBus.getDefault().post(FtpReceiverActions.FAILED_TO_START);
+         }
+     }
+ 
+@@ -242,7 +245,7 @@ public class FtpService extends Service implements Runnable {
+         }
+         if (server != null) {
+             server.stop();
+-            sendBroadcast(new Intent(FtpService.ACTION_STOPPED).setPackage(getPackageName()));
++            EventBus.getDefault().post(FtpReceiverActions.STOPPED);
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
+index b6023ad23..d8a94b3e4 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpTileService.java
+@@ -13,35 +13,32 @@ import android.widget.Toast;
+ 
+ import com.amaze.filemanager.R;
+ 
++import org.greenrobot.eventbus.EventBus;
++import org.greenrobot.eventbus.Subscribe;
++
+ /**
+  * Created by vishal on 1/1/17.
+  */
+ 
+ @TargetApi(Build.VERSION_CODES.N)
+ public class FtpTileService extends TileService {
+-    private BroadcastReceiver ftpReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            updateTileState();
+-        }
+-    };
++
++    @Subscribe
++    public void onFtpReceiverActions(FtpService.FtpReceiverActions signal) {
++        updateTileState();
++    }
+ 
+     @Override
+     public void onStartListening() {
+         super.onStartListening();
+-
+-        IntentFilter f = new IntentFilter();
+-        f.addAction(FtpService.ACTION_STARTED);
+-        f.addAction(FtpService.ACTION_STOPPED);
+-        registerReceiver(ftpReceiver, f);
++        EventBus.getDefault().register(this);
+         updateTileState();
+     }
+ 
+     @Override
+     public void onStopListening() {
+         super.onStopListening();
+-
+-        unregisterReceiver(ftpReceiver);
++        EventBus.getDefault().unregister(this);
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/amaze/filemanager/fragments/FtpServerFragment.java b/app/src/main/java/com/amaze/filemanager/fragments/FtpServerFragment.java
+index 4d492609e..927676d31 100644
+--- a/app/src/main/java/com/amaze/filemanager/fragments/FtpServerFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/fragments/FtpServerFragment.java
+@@ -33,6 +33,8 @@ import android.net.NetworkInfo;
+ import android.os.Bundle;
+ import android.preference.PreferenceManager;
+ import androidx.annotation.Nullable;
++
++import com.amaze.filemanager.ui.notifications.FtpNotification;
+ import com.google.android.material.textfield.TextInputLayout;
+ import androidx.fragment.app.Fragment;
+ import androidx.appcompat.widget.AppCompatCheckBox;
+@@ -60,11 +62,17 @@ import com.amaze.filemanager.utils.OneCharacterCharSequence;
+ import com.amaze.filemanager.utils.Utils;
+ import com.amaze.filemanager.utils.files.CryptUtil;
+ 
++import org.greenrobot.eventbus.EventBus;
++import org.greenrobot.eventbus.Subscribe;
++import org.greenrobot.eventbus.ThreadMode;
++
+ import java.io.File;
+ import java.io.IOException;
+ import java.net.InetAddress;
+ import java.security.GeneralSecurityException;
+ 
++import static com.amaze.filemanager.asynchronous.services.ftp.FtpService.FtpReceiverActions.STARTED_FROM_TILE;
++
+ /**
+  * Created by yashwanthreddyg on 10-06-2016.
+  * Edited by Luca D'Amico (Luca91) on 25 Jul 2017 (Fixed FTP Server while usi
+@@ -331,37 +339,35 @@ public class FtpServerFragment extends Fragment {
+         }
+     };
+ 
+-    private BroadcastReceiver ftpReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            updateSpans();
+-            switch (intent.getAction()) {
+-                case FtpService.ACTION_STARTED:
+-                    if (getSecurePreference()) {
+-                        statusText.setText(spannedStatusSecure);
+-                    } else {
+-                        statusText.setText(spannedStatusConnected);
+-                    }
+-                    url.setText(spannedStatusUrl);
+-                    ftpBtn.setText(getResources().getString(R.string.stop_ftp).toUpperCase());
+-                    break;
+-                case FtpService.ACTION_FAILEDTOSTART:
+-                    statusText.setText(spannedStatusNotRunning);
+-
+-                    Toast.makeText(getContext(),
+-                            getResources().getString(R.string.unknown_error), Toast.LENGTH_LONG).show();
+-
+-                    ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-                    url.setText("URL: ");
+-                    break;
+-                case FtpService.ACTION_STOPPED:
+-                    statusText.setText(spannedStatusNotRunning);
+-                    url.setText("URL: ");
+-                    ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-                    break;
+-            }
++    @Subscribe(threadMode = ThreadMode.MAIN_ORDERED)
++    public void onFtpReceiveActions(FtpService.FtpReceiverActions signal) {
++        updateSpans();
++        switch (signal) {
++            case STARTED:
++            case STARTED_FROM_TILE:
++                if (getSecurePreference()) {
++                    statusText.setText(spannedStatusSecure);
++                } else {
++                    statusText.setText(spannedStatusConnected);
++                }
++                url.setText(spannedStatusUrl);
++                ftpBtn.setText(getResources().getString(R.string.stop_ftp).toUpperCase());
++                FtpNotification.updateNotification(getContext(), STARTED_FROM_TILE.equals(signal));
++                break;
++            case FAILED_TO_START:
++                statusText.setText(spannedStatusNotRunning);
++                Toast.makeText(getContext(), getResources().getString(R.string.unknown_error), Toast.LENGTH_LONG).show();
++                ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
++                url.setText("URL: ");
++                break;
++
++            case STOPPED:
++                statusText.setText(spannedStatusNotRunning);
++                url.setText("URL: ");
++                ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
++                break;
+         }
+-    };
++    }
+ 
+     /**
+      * Sends a broadcast to start ftp server
+@@ -384,18 +390,14 @@ public class FtpServerFragment extends Fragment {
+         IntentFilter wifiFilter = new IntentFilter();
+         wifiFilter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
+         getContext().registerReceiver(mWifiReceiver, wifiFilter);
+-        IntentFilter ftpFilter = new IntentFilter();
+-        ftpFilter.addAction(FtpService.ACTION_STARTED);
+-        ftpFilter.addAction(FtpService.ACTION_STOPPED);
+-        ftpFilter.addAction(FtpService.ACTION_FAILEDTOSTART);
+-        getContext().registerReceiver(ftpReceiver, ftpFilter);
++        EventBus.getDefault().register(this);
+     }
+ 
+     @Override
+     public void onPause() {
+         super.onPause();
+         getContext().unregisterReceiver(mWifiReceiver);
+-        getContext().unregisterReceiver(ftpReceiver);
++        EventBus.getDefault().unregister(this);
+     }
+ 
+     /**
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java b/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
+index de1dcc8f4..86f0b18e4 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/notifications/FtpNotification.java
+@@ -22,19 +22,7 @@ import java.net.InetAddress;
+  *
+  * Edited by zent-co on 30-07-2019
+  */
+-public class FtpNotification extends BroadcastReceiver {
+-
+-    @Override
+-    public void onReceive(Context context, Intent intent) {
+-        switch(intent.getAction()){
+-            case FtpService.ACTION_STARTED:
+-                updateNotification(context, intent.getBooleanExtra(FtpService.TAG_STARTED_BY_TILE, false));
+-                break;
+-            case FtpService.ACTION_STOPPED:
+-                removeNotification(context);
+-                break;
+-        }
+-    }
++public class FtpNotification {
+ 
+     private static NotificationCompat.Builder buildNotification(Context context,
+                                                                 @StringRes int contentTitleRes,
+@@ -78,7 +66,7 @@ public class FtpNotification extends BroadcastReceiver {
+         return builder.build();
+     }
+ 
+-    private static void updateNotification(Context context, boolean noStopButton) {
++    public static void updateNotification(Context context, boolean noStopButton) {
+         String notificationService = Context.NOTIFICATION_SERVICE;
+         NotificationManager notificationManager = (NotificationManager) context.getSystemService(notificationService);
+ 

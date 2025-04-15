@@ -1,0 +1,295 @@
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/Preferences.java b/app/src/main/java/com/beemdevelopment/aegis/Preferences.java
+index 78251446..5a113d63 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/Preferences.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/Preferences.java
+@@ -160,6 +160,14 @@ public class Preferences {
+         _prefs.edit().putInt("pref_backups_versions", versions).apply();
+     }
+ 
++    public void setBackupsError(Exception e) {
++        _prefs.edit().putString("pref_backups_error", e == null ? null : e.toString()).apply();
++    }
++
++    public String getBackupsError() {
++        return _prefs.getString("pref_backups_error", null);
++    }
++
+     public boolean isTimeSyncWarningEnabled() {
+         return _prefs.getBoolean("pref_warn_time_sync", true);
+     }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+index ffce1906..2127126e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+@@ -122,9 +122,9 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+         this.getResources().updateConfiguration(config, this.getResources().getDisplayMetrics());
+     }
+ 
+-    protected boolean saveVault() {
++    protected boolean saveVault(boolean backup) {
+         try {
+-            getApp().getVaultManager().save();
++            getApp().getVaultManager().save(backup);
+             return true;
+         } catch (VaultManagerException e) {
+             Toast.makeText(this, getString(R.string.saving_error), Toast.LENGTH_LONG).show();
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+index 5fd7c049..00bef1f0 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+@@ -36,7 +36,6 @@ import com.beemdevelopment.aegis.helpers.UiThreadExecutor;
+ import com.beemdevelopment.aegis.ui.tasks.PasswordSlotDecryptTask;
+ import com.beemdevelopment.aegis.vault.VaultFile;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+ import com.beemdevelopment.aegis.vault.VaultManagerException;
+ import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+@@ -273,10 +272,9 @@ public class AuthActivity extends AegisActivity {
+         } else {
+             try {
+                 AegisApplication app = getApp();
+-                VaultManager vault = app.initVaultManager(app.loadVaultFile(), creds);
++                app.initVaultManager(app.loadVaultFile(), creds);
+                 if (isSlotRepaired) {
+-                    vault.setCredentials(creds);
+-                    saveVault();
++                    saveVault(true);
+                 }
+             } catch (VaultManagerException e) {
+                 e.printStackTrace();
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+index 7df7576f..2fd63dd9 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+@@ -467,7 +467,7 @@ public class EditEntryActivity extends AegisActivity {
+         intent.putExtra("entryUUID", entry.getUUID());
+         intent.putExtra("delete", delete);
+ 
+-        if (saveVault()) {
++        if (saveVault(true)) {
+             setResult(RESULT_OK, intent);
+             finish();
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+index c027256d..390681b8 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+@@ -16,6 +16,8 @@ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.MotionEvent;
+ import android.view.SubMenu;
++import android.view.View;
++import android.widget.LinearLayout;
+ import android.widget.Toast;
+ 
+ import androidx.appcompat.view.ActionMode;
+@@ -81,6 +83,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     private SearchView _searchView;
+     private FloatingActionsMenu _fabMenu;
+     private EntryListView _entryListView;
++    private LinearLayout _btnBackupError;
+ 
+     private FabScrollHelper _fabScrollHelper;
+ 
+@@ -125,6 +128,11 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             startScanActivity();
+         });
+ 
++        _btnBackupError = findViewById(R.id.btn_backup_error);
++        _btnBackupError.setOnClickListener(view -> {
++            startPreferencesActivity("pref_backups");
++        });
++
+         _fabScrollHelper = new FabScrollHelper(_fabMenu);
+         _selectedEntries = new ArrayList<>();
+     }
+@@ -264,7 +272,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                 }
+             }
+ 
+-            saveVault();
++            saveVault(true);
+         }
+     }
+ 
+@@ -400,6 +408,12 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         startActivityForResult(Intent.createChooser(chooserIntent, getString(R.string.select_picture)), CODE_SCAN_IMAGE);
+     }
+ 
++    private void startPreferencesActivity(String preference) {
++        Intent intent = new Intent(this, PreferencesActivity.class);
++        intent.putExtra("pref", preference);
++        startActivityForResult(intent, CODE_PREFERENCES);
++    }
++
+     private void doShortcutActions() {
+         Intent intent = getIntent();
+         String action = intent.getStringExtra("action");
+@@ -489,6 +503,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         handleDeeplink();
+         updateLockIcon();
+         doShortcutActions();
++        updateBackupErrorBar();
+     }
+ 
+     @Override
+@@ -517,7 +532,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             _entryListView.removeEntry(oldEntry);
+         }
+ 
+-        saveVault();
++        saveVault(true);
+     }
+ 
+     @Override
+@@ -567,8 +582,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     public boolean onOptionsItemSelected(MenuItem item) {
+         switch (item.getItemId()) {
+             case R.id.action_settings: {
+-                Intent intent = new Intent(this, PreferencesActivity.class);
+-                startActivityForResult(intent, CODE_PREFERENCES);
++                startPreferencesActivity(null);
+                 return true;
+             }
+             case R.id.action_about: {
+@@ -647,6 +661,15 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         }
+     }
+ 
++    private void updateBackupErrorBar() {
++        String error = null;
++        if (_app.getPreferences().isBackupsEnabled()) {
++            error = _app.getPreferences().getBackupsError();
++        }
++
++        _btnBackupError.setVisibility(error == null ? View.GONE : View.VISIBLE);
++    }
++
+     @Override
+     public void onEntryClick(VaultEntry entry) {
+         if (_actionMode != null) {
+@@ -694,12 +717,12 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     @Override
+     public void onEntryDrop(VaultEntry entry) {
+-        saveVault();
++        saveVault(false);
+     }
+ 
+     @Override
+     public void onEntryChange(VaultEntry entry) {
+-        saveVault();
++        saveVault(true);
+     }
+ 
+     public void onEntryCopy(VaultEntry entry) {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
+index 145ab158..e97d1663 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
+@@ -1,5 +1,6 @@
+ package com.beemdevelopment.aegis.ui;
+ 
++import android.content.Intent;
+ import android.os.Bundle;
+ import android.view.MenuItem;
+ 
+@@ -24,6 +25,18 @@ public class PreferencesActivity extends AegisActivity {
+         }
+     }
+ 
++    @Override
++    public void onResume() {
++        super.onResume();
++
++        Intent intent = getIntent();
++        String preference = intent.getStringExtra("pref");
++        if (preference != null) {
++            _fragment.scrollToPreference(preference);
++            intent.removeExtra("pref");
++        }
++    }
++
+     @Override
+     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+         // pass permission request results to the fragment
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+index b5f907a4..103e0dfe 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+@@ -434,8 +434,8 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     }
+ 
+     @Override
+-    public void onActivityCreated(Bundle savedInstanceState) {
+-        super.onActivityCreated(savedInstanceState);
++    public void onResume() {
++        super.onResume();
+         updateEncryptionPreferences();
+         updateBackupPreference();
+     }
+@@ -749,13 +749,14 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+ 
+         _prefs.setBackupsLocation(uri);
+         _prefs.setIsBackupsEnabled(true);
++        _prefs.setBackupsError(null);
+         _backupsLocationPreference.setSummary(String.format("%s: %s", getString(R.string.pref_backups_location_summary), Uri.decode(uri.toString())));
+         updateBackupPreference();
+     }
+ 
+     private boolean saveVault() {
+         try {
+-            _vault.save();
++            _vault.save(true);
+         } catch (VaultManagerException e) {
+             e.printStackTrace();
+             Dialogs.showErrorDialog(getContext(), R.string.saving_error, e);
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+index 3ef2fe67..10530bb5 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+@@ -96,7 +96,7 @@ public class VaultManager {
+         }
+     }
+ 
+-    public void save() throws VaultManagerException {
++    public void save(boolean backup) throws VaultManagerException {
+         try {
+             JSONObject obj = _vault.toJson();
+ 
+@@ -108,12 +108,17 @@ public class VaultManager {
+             }
+ 
+             save(_context, file);
++        } catch (VaultFileException e) {
++            throw new VaultManagerException(e);
++        }
+ 
+-            if (_prefs.isBackupsEnabled()) {
++        if (backup && _prefs.isBackupsEnabled()) {
++            try {
+                 backup();
++                _prefs.setBackupsError(null);
++            } catch (VaultManagerException e) {
++                _prefs.setBackupsError(e);
+             }
+-        } catch (VaultFileException e) {
+-            throw new VaultManagerException(e);
+         }
+     }
+ 
+@@ -190,11 +195,11 @@ public class VaultManager {
+ 
+     public void enableEncryption(VaultFileCredentials creds) throws VaultManagerException {
+         _creds = creds;
+-        save();
++        save(true);
+     }
+ 
+     public void disableEncryption() throws VaultManagerException {
+         _creds = null;
+-        save();
++        save(true);
+     }
+ }

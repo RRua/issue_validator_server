@@ -1,0 +1,483 @@
+diff --git a/app/src/main/java/com/graph89/common/Directories.java b/app/src/main/java/com/graph89/common/Directories.java
+index 74d3a6e..90fe87c 100644
+--- a/app/src/main/java/com/graph89/common/Directories.java
++++ b/app/src/main/java/com/graph89/common/Directories.java
+@@ -43,14 +43,18 @@ public class Directories
+ 		return folder;
+ 	}
+ 
+-	public static String getScreenShotDirectory(Graph89ActivityBase activity)
+-	{
+-		return Util.GetMediaRootFolder(activity) + "graph89/screenshots/";
+-	}
++//	public static String getScreenShotDirectory(Graph89ActivityBase activity)
++//	{
++//		return Util.GetMediaRootFolder(activity) + "graph89/screenshots/";
++//	}
+ 
+ 	public static String getLicenceFile(Graph89ActivityBase activity)
+ 	{
+-		return Util.GetMediaRootFolder(activity) + "graph89/licence.lic";
++		// not sure what this file is for, but we can't access a location on the SD card anymore
++		// so instead point it to the internal storage and find some other way to get the file there
++		// should the need arise
++		return Util.GetInternalAppStorage(activity) + "graph89/licence.lic";
++		//return Util.GetMediaRootFolder(activity) + "graph89/licence.lic";
+ 	}
+ 
+ 	public static String getReceivedDirectory(Graph89ActivityBase activity)
+diff --git a/app/src/main/java/com/graph89/common/Util.java b/app/src/main/java/com/graph89/common/Util.java
+index 06afdaf..6ef818b 100644
+--- a/app/src/main/java/com/graph89/common/Util.java
++++ b/app/src/main/java/com/graph89/common/Util.java
+@@ -29,10 +29,12 @@ import java.io.FileReader;
+ import java.io.FileWriter;
+ import java.io.IOException;
+ import java.io.InputStream;
++import java.io.OutputStream;
+ import java.math.BigInteger;
+ import java.security.MessageDigest;
+ import java.security.NoSuchAlgorithmException;
+ import java.text.SimpleDateFormat;
++import java.util.ArrayList;
+ import java.util.Date;
+ import java.util.Locale;
+ 
+@@ -40,13 +42,17 @@ import android.app.AlertDialog;
+ import android.app.Dialog;
+ import android.content.Context;
+ import android.content.DialogInterface;
++import android.database.Cursor;
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+ import android.graphics.BitmapFactory.Options;
+ import android.graphics.Paint;
+ import android.graphics.Rect;
+ import android.graphics.RectF;
++import android.net.Uri;
+ import android.os.Environment;
++import android.provider.OpenableColumns;
++import android.util.Log;
+ 
+ import com.graph89.emulationcore.EmulatorActivity;
+ import com.graph89.emulationcore.Graph89ActivityBase;
+@@ -283,4 +289,86 @@ public class Util
+ 		fin.close();
+ 		fout.close();
+ 	}
++
++	public static String getFileName(Context context, Uri uri) {
++		String result = null;
++		if (uri.getScheme().equals("content")) {
++			Cursor cursor = context.getContentResolver().query(uri, null, null, null, null);
++			try {
++				if (cursor != null && cursor.moveToFirst()) {
++					int colIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
++					if (colIdx >= 0) result = cursor.getString(colIdx);
++				}
++			} finally {
++				cursor.close();
++			}
++		}
++		if (result == null) {
++			result = uri.getPath();
++			int cut = result.lastIndexOf('/');
++			if (cut != -1) {
++				result = result.substring(cut + 1);
++			}
++		}
++		return result;
++	}
++
++	public static String copyUriToLocalFile(Context context, Uri source) {
++		String retVal = null;
++
++		// get the filename from the input URI
++		String filename = getFileName(context, source);
++		// and find the output directory/file
++		String pathFilename = context.getApplicationContext().getFilesDir().toString() + "/" + filename;
++		Log.d("Graph89","Dest: "+pathFilename);
++
++		// copy the selected file into internal storage
++		InputStream is = null;
++		OutputStream os = null;
++		try {
++			// open the input & output streams
++			is = context.getContentResolver().openInputStream(source);
++			os = context.getApplicationContext().openFileOutput(filename, 0);
++
++			// copy the streams
++			byte[] buffer = new byte[1024];
++			int length;
++			while ((length = is.read(buffer)) > 0) {
++				os.write(buffer, 0, length);
++			}
++
++			// save the location of the internal copy
++			retVal = pathFilename;
++			Log.d("Graph89","Temporary file created: "+pathFilename);
++
++		} catch (Exception e) {
++			Log.d("Graph89","Caught exception copying input file to temporary file in app-specific directory: "+e.toString());
++		} finally {
++			try {
++				is.close();
++				os.close();
++			} catch (Exception e) {
++				Log.d("Graph89","Caught exception closing source file or temporary file: "+e.toString());
++			}
++		}
++
++		return retVal;
++	}
++
++
++	public static void deleteFile(String deleteFile) {
++		// delete the temporary file
++		File tmpFile = new File(deleteFile);
++		if (!tmpFile.delete()) {
++			Log.d("Graph89", "Could not delete temporary file: " + deleteFile);
++		} else {
++			Log.d("Graph89", "Temporary file deleted: " + deleteFile);
++		}
++	}
++
++	public static void deleteFile(ArrayList<String> deleteFiles) {
++		for(int i = 0; i < deleteFiles.size(); i++) {
++			deleteFile(deleteFiles.get(i));
++		}
++	}
+ }
+diff --git a/app/src/main/java/com/graph89/controls/ScreenshotTaker.java b/app/src/main/java/com/graph89/controls/ScreenshotTaker.java
+index 62ea230..843dda9 100644
+--- a/app/src/main/java/com/graph89/controls/ScreenshotTaker.java
++++ b/app/src/main/java/com/graph89/controls/ScreenshotTaker.java
+@@ -21,13 +21,19 @@ package com.graph89.controls;
+ 
+ import java.io.File;
+ import java.io.FileOutputStream;
++import java.io.OutputStream;
+ 
+ import android.app.AlertDialog;
+ import android.app.Dialog;
++import android.content.ContentResolver;
++import android.content.ContentValues;
+ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.graphics.Bitmap;
+ import android.media.MediaScannerConnection;
++import android.net.Uri;
++import android.provider.MediaStore;
++import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -42,12 +48,10 @@ import com.graph89.emulationcore.EmulatorActivity;
+ public class ScreenshotTaker
+ {
+ 	private Context		mContext			= null;
+-	private String		mScreenshotFolder	= null;
+ 
+-	public ScreenshotTaker(Context context, String screenshotFolder)
++	public ScreenshotTaker(Context context)
+ 	{
+ 		mContext = context;
+-		mScreenshotFolder = screenshotFolder;
+ 	}
+ 
+ 	public void ShowDialog()
+@@ -63,7 +67,15 @@ public class ScreenshotTaker
+ 		final TextView constantpath = (TextView) view.findViewById(R.id.take_screenshot_readonly_path);
+ 		final EditText filenameEdit = (EditText) view.findViewById(R.id.take_screenshot_path);
+ 
+-		constantpath.setText(mScreenshotFolder);
++		// retrieve media storage path
++		String pathMessage = " (Check /Pictures or /DCIM)";
++		try {
++			Uri imageCollection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
++			pathMessage = imageCollection + pathMessage;
++		} catch (Exception e) {
++			Log.d("graph89", "caught exception finding MediaStore.Images path: "+e.toString());
++		}
++		constantpath.setText(pathMessage);
+ 
+ 		String dateNow = Util.getTimestamp();
+ 		filenameEdit.setText(dateNow + ".png");
+@@ -102,21 +114,26 @@ public class ScreenshotTaker
+ 						{
+ 							if (!filename.endsWith(".png")) filename += ".png";
+ 
+-							filename = mScreenshotFolder + filename;
+-
+-							final File f = new File(filename);
+-							f.getParentFile().mkdirs();
+-
+ 							Bitmap image = EmulatorActivity.CurrentSkin.Screen.getScreenShot();
+ 							if (image != null)
+ 							{
+ 								try
+ 								{
+-									FileOutputStream out = new FileOutputStream(filename);
++									// access the images media store
++									ContentResolver resolver = mContext.getContentResolver();
++									Uri imageCollection = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
++
++									// Get a URI for the new file
++									ContentValues newImageDetails = new ContentValues();
++									newImageDetails.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
++									Uri imageUri = resolver.insert(imageCollection, newImageDetails);
++									Log.d("graph89", "imageUri="+imageUri.toString());
++
++									// open the output file
++									OutputStream out = mContext.getContentResolver().openOutputStream(imageUri);
+ 									image.compress(Bitmap.CompressFormat.PNG, 90, out);
+ 									out.close();
+ 
+-									MediaScannerConnection.scanFile(mContext, new String[] { f.getAbsolutePath() }, null, null);
+ 									Util.ShowAlert((EmulatorActivity) mContext, "Screenshot", "Successfully saved emulated screen to " + filename);
+ 								}
+ 								catch (Exception e)
+diff --git a/app/src/main/java/com/graph89/emulationcore/ActionsList.java b/app/src/main/java/com/graph89/emulationcore/ActionsList.java
+index a0947cf..dee6ea3 100644
+--- a/app/src/main/java/com/graph89/emulationcore/ActionsList.java
++++ b/app/src/main/java/com/graph89/emulationcore/ActionsList.java
+@@ -28,6 +28,7 @@ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.Intent;
+ import android.os.Environment;
++import android.provider.DocumentsContract;
+ import android.util.AttributeSet;
+ import android.view.View;
+ import android.widget.AdapterView;
+@@ -120,7 +121,7 @@ public class ActionsList extends ListView
+ 						ChooseUploadFiles();
+ 						break;
+ 					case TAKE_SCREENSHOT:
+-						ScreenshotTaker screenshot = new ScreenshotTaker(activity, Directories.getScreenShotDirectory(activity));
++						ScreenshotTaker screenshot = new ScreenshotTaker(activity);
+ 						activity.HideActions();
+ 						screenshot.ShowDialog();
+ 						break;
+@@ -228,13 +229,13 @@ public class ActionsList extends ListView
+ 
+ 	private void ChooseUploadFiles()
+ 	{
+-		Intent myIntent = new Intent(mContext, FilePickerActivity.class);
+-		myIntent.putExtra(FilePickerActivity.EXTRA_FILE_PATH, Environment.getExternalStorageDirectory().getAbsolutePath());
+-		ArrayList<String> extensions = new ArrayList<String>();
+-		AddAppExtensions(extensions);
+-		myIntent.putExtra(FilePickerActivity.EXTRA_ACCEPTED_FILE_EXTENSIONS, extensions);
+-		myIntent.putExtra(FilePickerActivity.EXTRA_FILE_TYPE, "APP");
+-		myIntent.putExtra(FilePickerActivity.EXTRA_MULTISELECT, true);
++		// create new file selection intent
++		Intent myIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++		myIntent.addCategory(Intent.CATEGORY_OPENABLE);
++		myIntent.setType("*/*");
++		myIntent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
++		myIntent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Environment.getExternalStorageDirectory().getAbsolutePath());
++		// start the intent
+ 		((EmulatorActivity) mContext).startActivityForResult(myIntent, EmulatorActivity.INSTALL_APP);
+ 	}
+ 
+diff --git a/app/src/main/java/com/graph89/emulationcore/EmulatorActivity.java b/app/src/main/java/com/graph89/emulationcore/EmulatorActivity.java
+index b43e917..296cfad 100644
+--- a/app/src/main/java/com/graph89/emulationcore/EmulatorActivity.java
++++ b/app/src/main/java/com/graph89/emulationcore/EmulatorActivity.java
+@@ -20,22 +20,27 @@
+ package com.graph89.emulationcore;
+ 
+ import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
+ import java.util.ArrayList;
+ import java.util.Date;
+ import java.util.List;
+ import java.util.UUID;
+ 
++import android.app.Activity;
+ import android.app.ProgressDialog;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.ActivityInfo;
+ import android.content.pm.PackageManager;
+ import android.media.AudioManager;
++import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Message;
+ import android.os.Vibrator;
+ import android.util.DisplayMetrics;
++import android.util.Log;
+ import android.view.Display;
+ import android.view.KeyEvent;
+ import android.view.SoundEffectConstants;
+@@ -686,11 +691,35 @@ public class EmulatorActivity extends Graph89ActivityBase
+ 			switch (requestCode)
+ 			{
+ 				case EmulatorActivity.INSTALL_APP:
+-					if (data.hasExtra(FilePickerActivity.EXTRA_FILE_PATH))
+-					{
+-						UploadFilesPath = data.getStringArrayListExtra(FilePickerActivity.EXTRA_FILE_PATH);
++					// The document selected by the user will be in "data.getData()". Copy each
++					// selected file to temporary location in the app-specific directory then append
++					// local path to UploadFilesPath (an ArrayList<String>) temporary file will then
++					// be deleted after use
++					if (data != null) {
++						if (data.getData() != null) {
++							// initialize the list
++							UploadFilesPath = new ArrayList<String>();
++							// process the single file and add it to the list
++							String localPath = Util.copyUriToLocalFile(this, data.getData());
++							UploadFilesPath.add(localPath);
++
++						} else if (data.getClipData() != null) {
++							// initialize the list
++							UploadFilesPath = new ArrayList<String>();
++							// loop through the files, get the local path and add it to the list
++							for(int i = 0; i < data.getClipData().getItemCount(); i++) {
++								String localPath = Util.copyUriToLocalFile(this, data.getClipData().getItemAt(i).getUri());
++								UploadFilesPath.add(localPath);
++							}
++						}
++
++					} else {
++						// data is null
++						Log.d("Graph89","File URI not found");
+ 					}
++
+ 					break;
++
+ 			}
+ 		}
+ 	}
+diff --git a/app/src/main/java/com/graph89/emulationcore/RomManagerActivity.java b/app/src/main/java/com/graph89/emulationcore/RomManagerActivity.java
+index de9ffb7..ef56d4f 100644
+--- a/app/src/main/java/com/graph89/emulationcore/RomManagerActivity.java
++++ b/app/src/main/java/com/graph89/emulationcore/RomManagerActivity.java
+@@ -29,6 +29,7 @@ import java.util.Locale;
+ import android.app.Activity;
+ import android.app.AlertDialog;
+ import android.app.Dialog;
++import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.Intent;
+ import android.database.Cursor;
+@@ -298,12 +299,7 @@ public class RomManagerActivity extends Graph89ActivityBase
+ 									// attempt to copy the temporary file
+ 									error = EmulatorActivity.nativeInstallROM(mBrowseText, newInstance.ImageFilePath, calculatorType, Util.Bool2Int(isRom));
+ 									// delete the temporary file
+-									File tmpFile = new File(mBrowseText);
+-									if (!tmpFile.delete()) {
+-										Log.d("Graph89", "Could not delete temporary file: " + mBrowseText);
+-									} else {
+-										Log.d("Graph89", "Temporary file deleted: " + mBrowseText);
+-									}
++									Util.deleteFile(mBrowseText);
+ 								}
+ 
+ 								if (error != 0 || rom_mismatch!=null)
+@@ -448,29 +444,6 @@ public class RomManagerActivity extends Graph89ActivityBase
+ 		startActivityForResult(myIntent, ROM_BROWSE);
+ 	}
+ 
+-	public String getFileName(Uri uri) {
+-		String result = null;
+-		if (uri.getScheme().equals("content")) {
+-			Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+-			try {
+-				if (cursor != null && cursor.moveToFirst()) {
+-					int colIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+-					if (colIdx >= 0) result = cursor.getString(colIdx);
+-				}
+-			} finally {
+-				cursor.close();
+-			}
+-		}
+-		if (result == null) {
+-			result = uri.getPath();
+-			int cut = result.lastIndexOf('/');
+-			if (cut != -1) {
+-				result = result.substring(cut + 1);
+-			}
+-		}
+-		return result;
+-	}
+-
+ 	@Override
+ 	protected void onActivityResult(int requestCode, int resultCode, Intent data)
+ 	{
+@@ -491,10 +464,7 @@ public class RomManagerActivity extends Graph89ActivityBase
+ 							Log.d("Graph89", "Source: "+data.getData().toString());
+ 
+ 							// get the filename from the input URI
+-							String filename = getFileName(data.getData());
+-							// and find the output directory/file
+-							String pathFilename = getApplicationContext().getFilesDir().toString() + "/" + filename;
+-							Log.d("Graph89","Dest: "+pathFilename);
++							String filename = Util.getFileName(this, data.getData());
+ 
+ 							//check if file extension is correct
+ 							String[] split = filename.split("\\.");
+@@ -506,35 +476,7 @@ public class RomManagerActivity extends Graph89ActivityBase
+ 								ext.equalsIgnoreCase("9xu") ||
+ 								ext.equalsIgnoreCase("tib")
+ 							) {
+-								// copy the selected file into internal storage
+-								InputStream is = null;
+-								OutputStream os = null;
+-								try {
+-									// open the input & output streams
+-									is = getContentResolver().openInputStream(data.getData());
+-									os = getApplicationContext().openFileOutput(filename, 0);
+-
+-									// copy the streams
+-									byte[] buffer = new byte[1024];
+-									int length;
+-									while ((length = is.read(buffer)) > 0) {
+-										os.write(buffer, 0, length);
+-									}
+-
+-									// save the location of the internal copy
+-									mBrowseText = pathFilename;
+-
+-								} catch (Exception e) {
+-									Log.d("Graph89","Caught exception copying input file to temporary file in app-specific directory: "+e.toString());
+-								} finally {
+-									try {
+-										is.close();
+-										os.close();
+-									} catch (Exception e) {
+-										Log.d("Graph89","Caught exception closing source file or temporary file: "+e.toString());
+-									}
+-								}
+-
++								mBrowseText = Util.copyUriToLocalFile(this, data.getData());
+ 							} else {
+ 								// bad file extension
+ 								String errorMsg = "Bad file extension: '"+ext+"'. Extension must be one of: .rom, .8Xu, .89u, .v2u, .9xu, .tib";
+diff --git a/app/src/main/java/com/graph89/emulationcore/TIEmuThread.java b/app/src/main/java/com/graph89/emulationcore/TIEmuThread.java
+index 53eec09..294a4a8 100644
+--- a/app/src/main/java/com/graph89/emulationcore/TIEmuThread.java
++++ b/app/src/main/java/com/graph89/emulationcore/TIEmuThread.java
+@@ -201,7 +201,8 @@ public class TIEmuThread extends EmulatorThread implements Runnable
+ 							
+ 							if (ret != 0) break;
+ 						}
+-						
++
++						Util.deleteFile(EmulatorActivity.UploadFilesPath);
+ 						EmulatorActivity.UploadFilesPath = null;
+ 						Activity.HandlerHideProgressDialog();
+ 					}
+diff --git a/app/src/main/java/com/graph89/emulationcore/TilEmThread.java b/app/src/main/java/com/graph89/emulationcore/TilEmThread.java
+index 1445ab3..49398ec 100644
+--- a/app/src/main/java/com/graph89/emulationcore/TilEmThread.java
++++ b/app/src/main/java/com/graph89/emulationcore/TilEmThread.java
+@@ -197,6 +197,7 @@ public class TilEmThread extends EmulatorThread implements Runnable
+ 							}
+ 						}
+ 
++						Util.deleteFile(EmulatorActivity.UploadFilesPath);
+ 						EmulatorActivity.UploadFilesPath = null;
+ 						Activity.HandlerHideProgressDialog();
+ 					}

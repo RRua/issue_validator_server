@@ -1,0 +1,762 @@
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java b/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
+index 7c19a3b..92251c2 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
+@@ -3,6 +3,7 @@ package com.atelieryl.wonderdroid;
+ 
+ import java.nio.ByteBuffer;
+ import java.nio.IntBuffer;
++import java.util.concurrent.ExecutorService;
+ 
+ import android.annotation.SuppressLint;
+ import android.graphics.Bitmap;
+@@ -10,21 +11,18 @@ import android.graphics.Bitmap;
+ //import android.graphics.Color;
+ import android.graphics.Matrix;
+ import android.graphics.Paint;
++import android.media.AudioFormat;
+ import android.media.AudioManager;
+ import android.media.AudioTrack;
+ import android.view.SurfaceHolder;
+ 
+ import com.atelieryl.wonderdroid.utils.DrawThread;
+ import com.atelieryl.wonderdroid.utils.EmuThread;
+-import com.atelieryl.wonderdroid.utils.AudioRunnable;
+ 
+ @SuppressLint("NewApi")
+ public class GameRenderer implements EmuThread.Renderer {
+ 
+-    private AudioTrack audio = new AudioTrack(AudioManager.STREAM_MUSIC, WonderSwan.audiofreq,
+-            WonderSwan.channelconf, WonderSwan.encoding, AudioTrack.getMinBufferSize(
+-                    WonderSwan.audiofreq, WonderSwan.channelconf, WonderSwan.encoding) * 4,
+-            AudioTrack.MODE_STREAM);
++    private AudioTrack audio;
+ 
+     private Button[] buttons;
+ 
+@@ -41,28 +39,59 @@ public class GameRenderer implements EmuThread.Renderer {
+     private final Paint textPaint = new Paint();
+     
+     private DrawThread drawThread;
+-    
+-    private AudioRunnable audioRunnable;
+-    
++
+     private boolean surfaceHolderIsSet = false;
+ 
+     private boolean clearBeforeDraw = true;
+ 
+-    public GameRenderer() {
++    private static final int BYTES_PER_PX = 4;
++
++    private int mSoundChan;
++
++    private boolean scaleGenerated;
++
++    private int mNominalWidth;
++    private int mNominalHeight;
++
++    private double mScaling;
++    private int mSharpness;
++
++    private int mSurfaceWidth;
++    private int mSurfaceHeight;
++
++    public GameRenderer(int[] gameInfo, int sharpness) {
++
++        mNominalWidth = gameInfo[1];
++        mNominalHeight = gameInfo[2];
++
++        int fbWidth = gameInfo[3];
++        int fbHeight = gameInfo[4];
++
++        int soundChan = gameInfo[5];
++
++        mSharpness = sharpness;
+ 
+         textPaint.setColor(0xFFFFFFFF);
+         textPaint.setTextSize(35);
+         textPaint.setShadowLayer(3, 1, 1, 0x99000000);
+         textPaint.setAntiAlias(true);
+ 
+-        frameone = ByteBuffer.allocateDirect(WonderSwan.FRAMEBUFFERSIZE).asIntBuffer();
+-        framebuffer = Bitmap.createBitmap(WonderSwan.SCREEN_WIDTH, WonderSwan.SCREEN_HEIGHT,
+-                Bitmap.Config.ARGB_8888);
++        frameone = ByteBuffer.allocateDirect(fbWidth * fbHeight * BYTES_PER_PX).asIntBuffer();
++        framebuffer = Bitmap.createBitmap(fbWidth, fbHeight, Bitmap.Config.ARGB_8888);
+         
+         drawThread = new DrawThread(framebuffer, scale);
+         drawThread.start();
+ 
+-        audioRunnable = new AudioRunnable(audio);
++        int channelConf = AudioFormat.CHANNEL_CONFIGURATION_STEREO;
++        if (soundChan == 1) {
++            channelConf = AudioFormat.CHANNEL_CONFIGURATION_MONO;
++        }
++        mSoundChan = soundChan;
++
++        audio = new AudioTrack(AudioManager.STREAM_MUSIC, WonderSwan.audiofreq,
++                channelConf, WonderSwan.encoding, AudioTrack.getMinBufferSize(
++                WonderSwan.audiofreq, channelConf, WonderSwan.encoding) * 4,
++                AudioTrack.MODE_STREAM);
+ 
+     }
+ 
+@@ -109,9 +138,19 @@ public class GameRenderer implements EmuThread.Renderer {
+ 
+     @Override
+     public void update(boolean skip) {
+-        WonderSwan.execute_frame(frameone, skip);
+-        audioRunnable.run();
+-
++        short[] frameInfo = WonderSwan.execute_frame(frameone, skip);
++        audio.write(WonderSwan.audiobuffer, 0, WonderSwan.samples * mSoundChan);
++        if (!scaleGenerated) {
++            scale.reset();
++            if (frameInfo[4] > 0) {
++                scale.postScale((float) mNominalWidth / frameInfo[3], (float) mNominalHeight / frameInfo[4]);
++            }
++            scale.postTranslate(-frameInfo[1], -frameInfo[2]);
++            scale.postScale(mSharpness * (float) mScaling, mSharpness * (float) mScaling);
++            scale.postTranslate((mSurfaceWidth - mNominalWidth * mSharpness * (float) mScaling) / 2,
++                    (mSurfaceHeight - mNominalHeight * mSharpness * (float) mScaling) / 2);
++            scaleGenerated = true;
++        }
+         if (!skip) {
+             frameone.rewind();
+             framebuffer.copyPixelsFromBuffer(frameone);
+@@ -148,6 +187,16 @@ public class GameRenderer implements EmuThread.Renderer {
+         drawThread.clearRunning();
+     }
+ 
++    public void setScaling(double scaling) {
++        mScaling = scaling;
++        scaleGenerated = false;
++    }
++
++    public void updateSurfaceDimens(int surfaceWidth, int surfaceHeight) {
++        mSurfaceWidth = surfaceWidth;
++        mSurfaceHeight = surfaceHeight;
++    }
++
+     public void setVolume(int volume) {
+         float volumeFloat = (float) volume / 100;
+         if (volumeFloat > 1) {
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java b/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
+index fdb58ea..350f4a6 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
+@@ -41,7 +41,7 @@ public class MainActivity extends BaseActivity {
+ 
+     private ProgressBar mPB;
+ 
+-    private EmuView view;
++    private EmuView view = null;
+ 
+     private Rom mRom;
+ 
+@@ -61,6 +61,8 @@ public class MainActivity extends BaseActivity {
+ 
+     private final int maxBackupNo = 4;
+ 
++    SharedPreferences prefs;
++
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+@@ -71,17 +73,11 @@ public class MainActivity extends BaseActivity {
+             throw new IllegalArgumentException();
+         }
+ 
+-        view = new EmuView(this);
+-        setContentView(view);
+-        view.setFocusable(true);
+-        view.setFocusableInTouchMode(true);
+-
+         mContext = this.getBaseContext();
+ 
+-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
++        prefs = PreferenceManager.getDefaultSharedPreferences(this);
+         parseEmuOptions(prefs);
+-        parseKeys(prefs);
+-        
++
+         dirPath = prefs.getString("storage_path", "");
+ 
+         mPB = (ProgressBar)this.findViewById(R.id.romloadprogressbar);
+@@ -92,10 +88,10 @@ public class MainActivity extends BaseActivity {
+         showStateWarning = !prefs.getBoolean("hidestatewarning", false);
+     }
+ 
+-    public class GameLoader extends AsyncTask<Void, Void, short[]> {
++    public class GameLoader extends AsyncTask<Void, Void, int[]> {
+ 
+         @Override
+-        protected short[] doInBackground(Void... params) {
++        protected int[] doInBackground(Void... params) {
+ //                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(MainActivity.this);
+ //                String name = prefs.getString("ws_name", "");
+ //                String sex = prefs.getString("ws_sex", "1");
+@@ -107,7 +103,7 @@ public class MainActivity extends BaseActivity {
+         }
+ 
+         @Override
+-        protected void onPostExecute(short[] gameInfo) {
++        protected void onPostExecute(int[] gameInfo) {
+             if (mPB != null) {
+                 mPB.setVisibility(ProgressBar.GONE);
+             }
+@@ -117,12 +113,25 @@ public class MainActivity extends BaseActivity {
+                 WonderSwan.exit();
+                 finish();
+                 return;
++            } else if (gameInfo[0] == 0) {
++                Toast.makeText(mContext, R.string.no_sms, Toast.LENGTH_SHORT).show();
++                WonderSwan.exit();
++                finish();
++                return;
+             }
+ 
+             WonderSwan.reset();
+             //WonderSwan.loadbackup(mCartMem.getAbsolutePath());
+ 
++            view = new EmuView(mContext, gameInfo);
++            setContentView(view);
++            view.setFocusable(true);
++            view.setFocusableInTouchMode(true);
+             view.start();
++            view.onResume();
++            parseKeys(prefs);
++            view.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LOW_PROFILE);
++
+             // Show controls automatically
+             if (showControls) {
+                 mControlsVisible = true;
+@@ -293,11 +302,12 @@ public class MainActivity extends BaseActivity {
+     protected void onResume() {
+     	// Called second when switching/waking to emulator
+         super.onResume();
+-        view.onResume();
+-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+         parseEmuOptions(prefs);
+-        parseKeys(prefs);
+-        view.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LOW_PROFILE);
++        if (view != null) {
++            view.onResume();
++            parseKeys(prefs);
++            view.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LOW_PROFILE);
++        }
+         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
+ //        if (mRomHeader.isVertical || !prefs.getBoolean("reversehorizontalorientation", false)) {
+@@ -311,8 +321,10 @@ public class MainActivity extends BaseActivity {
+     public void onPause() {
+     	// Called first when switching away or sleeping
+         super.onPause();
+-        view.stop();
+-        saveState(-1);
++        if (view != null) {
++            view.stop();
++            saveState(-1);
++        }
+         //WonderSwan.savebackup(mCartMem.getAbsolutePath());
+     }
+     
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
+index 47713be..0346364 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
+@@ -21,7 +21,7 @@ public class WonderDroid extends Application {
+     @Override
+     public void onCreate() {
+         super.onCreate();
+-        WonderSwan.outputDebugShizzle();
++        //WonderSwan.outputDebugShizzle();
+         ZipCache.dumpInfo(this.getBaseContext());
+         ZipCache.clean(this.getBaseContext());
+         PRDownloader.initialize(getApplicationContext());
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+index 952e24b..2465e72 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+@@ -13,12 +13,6 @@ public class WonderSwan {
+ 
+     private static final String TAG = WonderSwan.class.getSimpleName();
+ 
+-    static public final int SCREEN_WIDTH = 224;
+-
+-    static public final int SCREEN_HEIGHT = 144;
+-
+-    static public final int FRAMEBUFFERSIZE = (SCREEN_WIDTH * SCREEN_HEIGHT) * 4;
+-
+     static public boolean audioEnabled = true;
+ 
+     static public int samples;
+@@ -32,8 +26,15 @@ public class WonderSwan {
+     static public short[] workingaudiobuffer = new short[audiobufferlen];
+ 
+     public static enum WonderSwanButton {
+-        Y1, Y4, Y2, Y3, X3, X4, X2, X1, A, B, START; // FIXME the is screen
+-                                                     // rendering order
++        Y1, Y4, Y2, Y3, X3, X4, X2, X1, A, B, START;
++
++        // 1 up
++        // 2 right
++        // 3 down
++        // 4 left
++        // B refers to the left action button, regardless of system
++        // A refers to the right action button, regardless of system
++
+         public boolean hardwareKeyDown = false;
+         
+         public boolean touchDown = false;
+@@ -45,8 +46,6 @@ public class WonderSwan {
+ 
+     public static boolean buttonsDirty = false;
+ 
+-    public static final int channelconf = AudioFormat.CHANNEL_CONFIGURATION_STEREO;
+-
+     public static final int encoding = AudioFormat.ENCODING_PCM_16BIT;
+ 
+     public static final int audiofreq = 24000;
+@@ -59,7 +58,7 @@ public class WonderSwan {
+         System.loadLibrary("mednafen");
+     }
+ 
+-    static public native short[] load(String rom_path, String dir_path);
++    static public native int[] load(String rom_path, String dir_path);
+ 
+     static public native void reset();
+ 
+@@ -106,9 +105,9 @@ public class WonderSwan {
+ 
+         short[] frameInfo = _execute_frame(skipframe, audioEnabled, framebuffer, audioEnabled ? audiobuffer : null);
+         samples = frameInfo[0];
+-        synchronized (audiobuffer) {
+-            audiobuffer.notify();
+-        }
++//        synchronized (audiobuffer) {
++//            audiobuffer.notify();
++//        }
+         return frameInfo;
+     }
+ 
+@@ -118,10 +117,10 @@ public class WonderSwan {
+     static public native void updatebuttons(boolean y1, boolean y2, boolean y3, boolean y4,
+             boolean x1, boolean x2, boolean x3, boolean x4, boolean a, boolean b, boolean start);
+ 
+-    static public void outputDebugShizzle() {
+-        Log.d(TAG,
+-                "Audio buffer min " + AudioTrack.getMinBufferSize(audiofreq, channelconf, encoding));
+-    }
++//    static public void outputDebugShizzle() {
++//        Log.d(TAG,
++//                "Audio buffer min " + AudioTrack.getMinBufferSize(audiofreq, channelconf, encoding));
++//    }
+ 
+     public static native void savebackup(String filename);
+ 
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java
+deleted file mode 100755
+index 799f2fb..0000000
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-
+-package com.atelieryl.wonderdroid.utils;
+-
+-import com.atelieryl.wonderdroid.WonderSwan;
+-
+-import android.media.AudioTrack;
+-
+-public class AudioRunnable implements Runnable {
+-
+-	private AudioTrack audio;
+-	
+-	public AudioRunnable(AudioTrack audio) {
+-		this.audio = audio;
+-	}
+-
+-	@Override
+-	public void run() {
+-		audio.write(WonderSwan.audiobuffer, 0, /*WonderSwan.prevSamples * 2 + */WonderSwan.samples * 2);
+-	}
+-	
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
+index f38a5e4..d9a4ce1 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
+@@ -70,7 +70,8 @@ public class DrawThread extends Thread {
+ 					c.drawBitmap(framebuffer, scale, null);
+ 					if (showButtons && buttons != null) {
+ 						for (Button button : buttons) {
+-							c.drawBitmap(button.normal, button.drawrect, button.rect, null);
++							if (button != null)
++								c.drawBitmap(button.normal, button.drawrect, button.rect, null);
+ 						}
+ 					}
+ 				} catch (Exception e) {
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
+index 86983cd..c64d8ef 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
+@@ -2,10 +2,10 @@
+ package com.atelieryl.wonderdroid.utils;
+ 
+ import com.atelieryl.wonderdroid.Button;
++
+ import android.graphics.Canvas;
+ import android.graphics.PixelFormat;
+ import android.os.SystemClock;
+-import android.util.Log;
+ import android.view.SurfaceHolder;
+ 
+ public class EmuThread extends Thread {
+@@ -27,8 +27,7 @@ public class EmuThread extends Thread {
+ 
+     private Renderer renderer;
+ 
+-    private static final long[] TARGETFRAMETIME = {12, 13};
+-    private static int frameTimeIndex = 0;
++    private static long targetFrameTime;
+ 
+     private boolean mIsRunning = false;
+     private boolean isPaused = false;
+@@ -48,8 +47,9 @@ public class EmuThread extends Thread {
+ 
+     private int frameskip = 0;
+ 
+-    public EmuThread (Renderer renderer) {
++    public EmuThread (Renderer renderer, int fps) {
+         this.renderer = renderer;
++        targetFrameTime = (long) (1000000000. / (fps / 65536. / 256.));
+     }
+ 
+     public void setSurfaceHolder (SurfaceHolder sh) {
+@@ -83,29 +83,26 @@ public class EmuThread extends Thread {
+ 
+             if (isPaused) {
+                 //Log.d(TAG, "Paused!!!");
+-                SystemClock.sleep(TARGETFRAMETIME[0]);
++                SystemClock.sleep(targetFrameTime);
+             } else {
+ 
+-                frameStart = System.currentTimeMillis();
++                frameStart = System.nanoTime();
+ 
+-                renderer.update(frame % 2 != 0);
++                renderer.update(false/*frame % 2 != 0*/);
+ 
+                 if (frameskip == 0 || frame % frameskip != 0) {
+                     renderer.render(mSurfaceHolder);
+                 }
+ 
+-                frameEnd = System.currentTimeMillis();
+-                frametime = (int)(frameEnd - frameStart);
++                frametime = 0;
+ 
+-                if (frametime < TARGETFRAMETIME[frameTimeIndex]) {
+-                    SystemClock.sleep(TARGETFRAMETIME[frameTimeIndex] - frametime);
+-                } else if (frametime > TARGETFRAMETIME[frameTimeIndex]) {
+-                    //Log.d(TAG, "Overtime " + frametime);
+-                }
++                //targetFrameTime = 1000000000 * WonderSwan.samples / WonderSwan.audiofreq;
+ 
+-                frameTimeIndex++;
+-                if (frameTimeIndex >= TARGETFRAMETIME.length) {
+-                    frameTimeIndex = 0;
++                while (frametime < targetFrameTime) {
++                    frametime = (int)(System.nanoTime() - frameStart);
++//                    if (frametime > targetFrameTime) {
++//                        Log.d(TAG, "Overtime " + frametime + " -- " + targetFrameTime);
++//                    }
+                 }
+ 
+                 frame++;
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
+index 369bcd1..5adb5d8 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
+@@ -45,7 +45,7 @@ public class RomAdapter extends BaseAdapter {
+         private static final long serialVersionUID = 1L;
+ 
+         public static String[] allRomExtensions = new String[] {
+-                "ws", "wsc", "gg", "sms", "pce", "ngp", "ngc"
++                "ws", "wsc", "gg", "pce", "ngp", "ngc"
+         };
+ 
+         public static String[] wsRomExtensions = new String[] {
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+index 5e1f472..cc8b065 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+@@ -61,6 +61,11 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 	private int width = 0;
+ 	private int height = 0;
+ 
++	private int mNominalWidth = 0;
++	private int mNominalHeight = 0;
++	private int mFps;
++	private char mSystem;
++
+ 	private float postscale;
+ 
+ 	private static final float[] NEGATIVE = {
+@@ -86,15 +91,16 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		WonderSwanButton.Y4.keyCode = y4;
+ 	}
+ 
+-	public EmuView (Context context) {
+-		this(context, null);
+-	}
++	public EmuView (Context context, int[] gameInfo) {
++		super(context);
+ 
+-	public EmuView (Context context, AttributeSet attrs) {
+-		super(context, attrs);
++		mFps = gameInfo[0];
++		mNominalWidth = gameInfo[1];
++		mNominalHeight = gameInfo[2];
++		mSystem = (char) gameInfo[7];
+ 
+ 		this.mContext = context;
+-		
++
+ 		inputHandler = new TouchInputHandler(context);
+ 
+ 		setZOrderOnTop(true); // FIXME any advantage to this?
+@@ -102,16 +108,18 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		SurfaceHolder holder = this.getHolder();
+ 		holder.addCallback(this);
+ 
+-		renderer = new GameRenderer();
+-		mThread = new EmuThread(renderer);
+-		
++		renderer = new GameRenderer(gameInfo, sharpness);
++		renderer.setScaling(scaling);
++		mThread = new EmuThread(renderer, mFps);
++
+ 		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+ 		sharpness = Integer.parseInt(prefs.getString("sharpness", "3"));
+ 		mThread.setFrameskip(Integer.parseInt(prefs.getString("frameskip", "0")));
+ 		stretchToFill = prefs.getBoolean("stretchtofill", false);
+ 		scaling = (prefs.getInt("scaling", 95) + 5) / 100.;
++
+ 		renderer.setClearBeforeDraw(!stretchToFill);
+-		
++
+ 		vibratedown = Integer.parseInt(prefs.getString("vibratedown", "5"));
+ 		vibrateup = Integer.parseInt(prefs.getString("vibrateup", "1"));
+ 	}
+@@ -121,26 +129,34 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		if (actualHeightToDrawnHeightRatio == 0 || actualHeightToDrawnHeightRatio == 1) {
+ 			if (widthToHeightRatio == 0)
+ 				widthToHeightRatio = (float) this.getWidth() / (float) this.getHeight();
+-			int newWidth = WonderSwan.SCREEN_WIDTH * sharpness;
+-			int newHeight = WonderSwan.SCREEN_HEIGHT * sharpness;
+-			if (!stretchToFill) {
+-				while ((float) newWidth / (float) newHeight < widthToHeightRatio) newWidth++;
++			int newWidth = mNominalWidth * sharpness;
++			int newHeight = mNominalHeight * sharpness;
++			if (this.getWidth() > this.getHeight()) {
++				// Device in landscape
++				newWidth = (int) (newHeight * widthToHeightRatio);
++			} else {
++				// Device in portrait
++				newHeight = (int) (newWidth / widthToHeightRatio);
+ 			}
++//			if (!stretchToFill) {
++//				while ((float) newWidth / (float) newHeight < widthToHeightRatio) newWidth++;
++//			}
+ 			actualWidthToDrawnWidthRatio = (float) w / (float) newWidth;
+ 			actualHeightToDrawnHeightRatio = (float) h / (float) newHeight;
+ 			width = newWidth;
+ 			height = newHeight;
++			renderer.updateSurfaceDimens(width, height);
+ 			
+ 			makeButtons(PreferenceManager.getDefaultSharedPreferences(mContext));
+ 
+-			postscale = (float)width / (float)WonderSwan.SCREEN_WIDTH;
++			postscale = (float)width / (float)mNominalWidth;
+ 
+-			if (WonderSwan.SCREEN_HEIGHT * postscale > height) {
+-				postscale = (float)height / (float)WonderSwan.SCREEN_HEIGHT;
++			if (mNominalHeight * postscale > height) {
++				postscale = (float)height / (float)mNominalHeight;
+ 
+ 			}
+ 
+-			rescale();
++//			rescale();
+ 		}
+ 		mHolder = holder;
+ 	}
+@@ -150,11 +166,18 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		holder.setFormat(PixelFormat.RGB_565);
+ 		if (widthToHeightRatio == 0)
+ 			widthToHeightRatio = (float) this.getWidth() / (float) this.getHeight();
+-		int holderWidth = WonderSwan.SCREEN_WIDTH * sharpness;
+-		int holderHeight = WonderSwan.SCREEN_HEIGHT * sharpness;
+-		if (!stretchToFill) {
+-			while ((float) holderWidth / (float) holderHeight < widthToHeightRatio) holderWidth++;
++		int holderWidth = mNominalWidth * sharpness;
++		int holderHeight = mNominalHeight * sharpness;
++		if (this.getWidth() > this.getHeight()) {
++			// Device in landscape
++			holderWidth = (int) (holderHeight * widthToHeightRatio);
++		} else {
++			// Device in portrait
++			holderHeight = (int) (holderWidth / widthToHeightRatio);
+ 		}
++//		if (!stretchToFill) {
++//			while ((float) holderWidth / (float) holderHeight < widthToHeightRatio) holderWidth++;
++//		}
+ 		holder.setFixedSize(holderWidth, holderHeight);
+ 		mHolder = holder;
+ 		mThread.setSurfaceHolder(holder);
+@@ -166,14 +189,14 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		//mThread.clearRunning();
+ 	}
+ 
+-	public void rescale () {
+-		Matrix scale = renderer.getMatrix();
+-
+-		scale.reset();
+-		scale.postScale(sharpness * (float) scaling, sharpness * (float) scaling);
+-		scale.postTranslate((width - WonderSwan.SCREEN_WIDTH * sharpness * (float) scaling) / 2,
+-				(height - WonderSwan.SCREEN_HEIGHT * sharpness * (float) scaling) / 2);
+-	}
++//	public void rescale () {
++//		Matrix scale = renderer.getMatrix();
++//
++//		scale.reset();
++//		scale.postScale(sharpness * (float) scaling, sharpness * (float) scaling);
++//		scale.postTranslate((width - mNominalWidth * sharpness * (float) scaling) / 2,
++//				(height - mNominalHeight * sharpness * (float) scaling) / 2);
++//	}
+ 
+ 	public void start () {
+ 		Log.d(TAG, "emulation started");
+@@ -205,7 +228,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 	public void onResume () {
+ 		if (started) {
+ 			renderer.restartDrawThread();
+-			mThread = new EmuThread(renderer);
++			mThread = new EmuThread(renderer, mFps);
+ 			start();
+ 		}
+ 		mThread.setSurfaceHolder(mHolder);
+@@ -217,8 +240,9 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		if (width > 0 && height > 0) {
+ 			makeButtons(prefs);
+ 		}
++		renderer.setScaling(scaling);
+ 		renderer.setVolume(prefs.getInt("volume", 100));
+-		rescale();
++//		rescale();
+ 	}
+ 
+ 	public void stop () {
+@@ -397,7 +421,47 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 
+ 
+ 			for (int i = 0; i < buttons.length; i++) {
+-				buts[i] = new Button(buttons[i], textPaint, WonderSwanButton.values()[i].name());
++				// Skip button if system lacks it
++				if (mSystem != 'w' && i <= 3) {
++					// Y buttons are only on WonderSwan
++					buttons[i] = null;
++					continue;
++				}
++				String buttonLabel = WonderSwanButton.values()[i].name();
++				if (i == 8) {
++					if (mSystem == 'g') {
++						buttonLabel = "2";
++					} else if (mSystem == 'n') {
++						buttonLabel = "B";
++					} else if (mSystem == 'p') {
++						buttonLabel = "I";
++					}
++				} else if (i == 9) {
++					if (mSystem == 'g') {
++						buttonLabel = "1";
++					} else if (mSystem == 'n') {
++						buttonLabel = "A";
++					} else if (mSystem == 'p') {
++						buttonLabel = "II";
++					}
++				} else if (i == 4) {
++					if (mSystem != 'w') {
++						buttonLabel = "▽";
++					}
++				} else if (i == 5) {
++					if (mSystem != 'w') {
++						buttonLabel = "◁";
++					}
++				} else if (i == 6) {
++					if (mSystem != 'w') {
++						buttonLabel = "▷";
++					}
++				} else if (i == 7) {
++					if (mSystem != 'w') {
++						buttonLabel = "△";
++					}
++				}
++				buts[i] = new Button(buttons[i], textPaint, buttonLabel);
+ 			}
+ 		}
+ 
+@@ -405,19 +469,23 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 	}
+ 
+ 	public static void changeButton (WonderSwanButton button, boolean newState, boolean touch) {
+-		if (newState && !button.touchDown && touch && vibratedown > 0) {
+-			new VibrateTask(mContext).execute(vibratedown);
+-		}
+-		if (!newState && button.touchDown && touch && vibrateup > 0) {
+-			new VibrateTask(mContext).execute(vibrateup);
+-		}
+ 		if (touch) {
+-			button.touchDown = newState;
++			if (newState && !button.touchDown) {
++				if (vibratedown > 0) new VibrateTask(mContext).execute(vibratedown);
++				button.touchDown = newState;
++				WonderSwan.buttonsDirty = true;
++			}
++			if (!newState && button.touchDown) {
++				if (vibrateup > 0) new VibrateTask(mContext).execute(vibrateup);
++				button.touchDown = newState;
++				WonderSwan.buttonsDirty = true;
++			}
+ 		} else {
++			// This function is called only when any key state has changed, so no need to check
+ 			button.hardwareKeyDown = newState;
++			WonderSwan.buttonsDirty = true;
+ 		}
+ 		button.down = (button.touchDown || button.hardwareKeyDown);
+-		WonderSwan.buttonsDirty = true;
+ 	}
+ 
+ 	public EmuThread getThread () {
+@@ -440,8 +508,10 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		boolean[] buttonStates = new boolean[buttons.length];
+ 		for (Pointer pointer : inputHandler.pointers) {
+ 			for (int i = 0; i < buttons.length; i++) {
++				if (buttons[i] == null) continue;
+ 				Rect bounds = buttons[i].getBounds();
+-				bounds = new Rect((int) (bounds.left * actualWidthToDrawnWidthRatio), (int) (bounds.top * actualHeightToDrawnHeightRatio), (int) (bounds.right * actualWidthToDrawnWidthRatio), (int) (bounds.bottom * actualHeightToDrawnHeightRatio));
++				float length = bounds.top - bounds.bottom;
++				bounds = new Rect((int) ((bounds.left + length / 5) * actualWidthToDrawnWidthRatio), (int) ((bounds.top + length / 5) * actualHeightToDrawnHeightRatio), (int) ((bounds.right - length / 5) * actualWidthToDrawnWidthRatio), (int) ((bounds.bottom - length / 5) * actualHeightToDrawnHeightRatio));
+ 				if (bounds.contains((int)pointer.x, (int)pointer.y) && pointer.down) {
+ 					buttonStates[i] = true;
+ 				} else if (!buttonStates[i] && (bounds.contains((int)pointer.x, (int)pointer.y) || pointer.down)) {
+@@ -450,6 +520,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 			}
+ 		}
+ 		for (int i = 0; i < buttons.length; i++) {
++			if (buttons[i] == null) continue;
+ 			if (buttonStates[i]) {
+ 				changeButton(WonderSwanButton.values()[i], true, true);
+ 			} else {

@@ -1,0 +1,591 @@
+diff --git a/app/src/main/java/com/graph89/common/Directories.java b/app/src/main/java/com/graph89/common/Directories.java
+index 90fe87c..e9a171a 100644
+--- a/app/src/main/java/com/graph89/common/Directories.java
++++ b/app/src/main/java/com/graph89/common/Directories.java
+@@ -62,10 +62,10 @@ public class Directories
+ 		return Util.GetMediaRootFolder(activity) + "graph89/received/";
+ 	}
+ 
+-	public static String getBackupDirectory(Graph89ActivityBase activity)
+-	{
+-		return Util.GetMediaRootFolder(activity) + "graph89/backup/";
+-	}
++//	public static String getBackupDirectory(Graph89ActivityBase activity)
++//	{
++//		return Util.GetMediaRootFolder(activity) + "graph89/backup/";
++//	}
+ 
+ 	public static String getRestoreDirectory(Graph89ActivityBase activity)
+ 	{
+diff --git a/app/src/main/java/com/graph89/emulationcore/BackupManager.java b/app/src/main/java/com/graph89/emulationcore/BackupManager.java
+index 600bd20..1de872a 100644
+--- a/app/src/main/java/com/graph89/emulationcore/BackupManager.java
++++ b/app/src/main/java/com/graph89/emulationcore/BackupManager.java
+@@ -21,44 +21,44 @@ package com.graph89.emulationcore;
+ 
+ import java.io.BufferedOutputStream;
+ import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.FileOutputStream;
+ import java.io.IOException;
++import java.io.InputStream;
+ import java.io.ObjectInputStream;
+ import java.io.ObjectOutput;
+ import java.io.ObjectOutputStream;
+ import java.io.OutputStream;
+ import java.io.Serializable;
+ import java.io.StreamCorruptedException;
+-import java.text.DateFormat;
+ import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.Comparator;
+ import java.util.Date;
+ import java.util.List;
+ 
++import android.app.Activity;
+ import android.app.AlertDialog;
+ import android.app.Dialog;
+ import android.app.ProgressDialog;
+ import android.content.Context;
+ import android.content.DialogInterface;
++import android.content.Intent;
++import android.net.Uri;
+ import android.os.Bundle;
++import android.os.Environment;
+ import android.os.Message;
++import android.provider.DocumentsContract;
++import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.View.OnClickListener;
+ import android.view.ViewGroup;
+-import android.widget.AdapterView;
+ import android.widget.ArrayAdapter;
+ import android.widget.Button;
+ import android.widget.CheckBox;
+ import android.widget.CompoundButton;
+ import android.widget.CompoundButton.OnCheckedChangeListener;
+-import android.widget.EditText;
+-import android.widget.ImageButton;
+ import android.widget.ListView;
+ import android.widget.Spinner;
+ import android.widget.TextView;
++import android.widget.Toast;
+ 
+ import com.Bisha.TI89EmuDonation.R;
+ import com.google.gson.Gson;
+@@ -76,21 +76,19 @@ public class BackupManager extends Graph89ActivityBase
+ 	public static final int					HANDLER_SHOWPROGRESSDIALOG		= Graph89ActivityBase.MAX_HANDLER_ID + 1;
+ 	public static final int					HANDLER_UPDATEPROGRESSDIALOG	= Graph89ActivityBase.MAX_HANDLER_ID + 2;
+ 	public static final int					HANDLER_HIDEPROGRESSDIALOG		= Graph89ActivityBase.MAX_HANDLER_ID + 3;
+-	public static final int					HANDLER_REFRESHUI				= Graph89ActivityBase.MAX_HANDLER_ID + 4;
+ 
++	public static final int					CREATE_BACKUP_CODE				= 12;
++	public static final int					READ_BACKUP_CODE				= 13;
+ 	public static final String				BACKUP_EXTENSION				= ".g89.bak";
+ 
+ 	private ControlBar						mControlBar						= null;
+-	private ListView						mBackupList						= null;
+-	private TextView						mNoBackupsTextView				= null;
+-	private Button							mAddBackup						= null;
+-	private List<Backup>					mBackups						= null;
++	private TextView						mExtensionMsgTextView			= null;
++	private Button							mCreateBackup					= null;
++	private Button 							mRestoreBackup					= null;
+ 	private List<SelectedInstance>			mSelectedInstances				= null;
+-	private String							mBackupDirectory				= null;
+ 	private String							mRestoreDirectory				= null;
+ 	private String 							mInstanceDirectory				= null;
+ 
+-	private AlertDialog						mAddEditdialog					= null;
+ 	private static CalculatorInstanceHelper	mCalculatorInstances			= null;
+ 
+ 	public static ProgressDialogControl		ProgressDialogObj				= new ProgressDialogControl();
+@@ -103,7 +101,6 @@ public class BackupManager extends Graph89ActivityBase
+ 		setContentView(R.layout.backup_manager_main);
+ 		this.setRequestedOrientation(EmulatorActivity.Orientation);
+ 
+-		mBackupDirectory = Directories.getBackupDirectory(this);
+ 		mRestoreDirectory = Directories.getRestoreDirectory(this);
+ 		mInstanceDirectory = Directories.getInstanceDirectory(this);
+ 
+@@ -112,149 +109,131 @@ public class BackupManager extends Graph89ActivityBase
+ 		mControlBar = new ControlBar(this);
+ 		mControlBar.HideCalculatorTypeSpinner();
+ 
+-		mBackupList = (ListView) this.findViewById(R.id.backup_manager_backup_list);
+-		mBackupList.setClickable(true);
+-
+-		mBackupList.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+-			public void onItemClick(AdapterView<?> parent, View v, int position, long id)
+-			{
+-				try
+-				{
+-					RestoreBackup(position);
+-				}
+-				catch (StreamCorruptedException e)
+-				{
+-				}
+-				catch (IOException e)
+-				{
+-				}
+-				catch (ClassNotFoundException e)
+-				{
+-				}
+-			}
+-		});
+-
+-		mBackupList.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
++		mExtensionMsgTextView = (TextView) this.findViewById(R.id.backup_manager_extension_message_textview);
++		mExtensionMsgTextView.setText("File extension used by backup manager is: " + BACKUP_EXTENSION);
+ 
++		mCreateBackup = (Button) this.findViewById(R.id.backup_manager_backup_button);
++		mCreateBackup.setOnClickListener(new OnClickListener() {
+ 			@Override
+-			public boolean onItemLongClick(AdapterView<?> arg0, View arg1, int position, long id)
+-			{
+-				AddBackup(position);
+-				return true;
++			public void onClick(View v) {
++				// create new file selection intent
++				Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
++				intent.addCategory(Intent.CATEGORY_OPENABLE);
++				intent.setType("*/*");
++				intent.putExtra(Intent.EXTRA_TITLE, Util.getTimestamp() + BACKUP_EXTENSION);
++				intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Environment.getExternalStorageDirectory().getAbsolutePath());
++				// start the intent
++				startActivityForResult(intent, CREATE_BACKUP_CODE);
++
+ 			}
+ 		});
+ 
+-		mNoBackupsTextView = (TextView) this.findViewById(R.id.backup_manager_nobackups_textview);
+-
+-		mAddBackup = (Button) this.findViewById(R.id.backup_manager_backup_button);
+-
+-		mAddBackup.setOnClickListener(new OnClickListener() {
++		mRestoreBackup = (Button) this.findViewById(R.id.backup_manager_restore_button);
++		mRestoreBackup.setOnClickListener(new OnClickListener() {
+ 			@Override
+-			public void onClick(View v)
+-			{
+-				AddBackup(-1);
++			public void onClick(View v) {
++				// create new file selection intent
++				Intent myIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++				myIntent.addCategory(Intent.CATEGORY_OPENABLE);
++				myIntent.setType("*/*");
++				myIntent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, Environment.getExternalStorageDirectory().getAbsolutePath());
++				// start the intent
++				startActivityForResult(myIntent, READ_BACKUP_CODE);
+ 			}
+ 		});
+-	}
+ 
+-	@Override
+-	protected void onResume()
+-	{
+-		super.onResume();
+-
+-		RefreshUI();
+ 	}
+ 
+ 	@Override
+-	protected void onPause()
+-	{
+-		super.onPause();
+-	}
+-
+-	private void RefreshUI()
+-	{
+-		try
+-		{
+-			getBackups();
+-
+-			mAddBackup.setEnabled(mCalculatorInstances.size() > 0);
+-
+-			if (mBackups.size() > 0)
+-			{
+-				mBackupList.setVisibility(View.VISIBLE);
+-				mNoBackupsTextView.setVisibility(View.GONE);
+-
+-				PopulateBackupList();
+-			}
+-			else
+-			{
+-				mBackupList.setVisibility(View.GONE);
+-				mNoBackupsTextView.setVisibility(View.VISIBLE);
+-			}
+-		}
+-		catch (StreamCorruptedException e)
+-		{
+-		}
+-		catch (IOException e)
+-		{
+-		}
+-		catch (ClassNotFoundException e)
+-		{
+-		}
+-	}
+-
+-	private void getBackups() throws StreamCorruptedException, IOException, ClassNotFoundException
+-	{
+-		mBackups = new ArrayList<Backup>();
+-
+-		File backupDir = new File(mBackupDirectory);
+-
+-		File[] files = backupDir.listFiles();
+-
+-		if (files == null) return;
+-		
+-		for (int i = 0; i < files.length; ++i)
+-		{
+-			File f = files[i];
+-
+-			if (!f.isFile()) continue;
+-
+-			if (f.getName().endsWith(BACKUP_EXTENSION))
+-			{
+-				Backup backup = getBackupFromFile(f);
+-				backup.BackupData = null;
+-				mBackups.add(backup);
++	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++		if (resultCode == RESULT_OK) {
++			switch (requestCode) {
++				case READ_BACKUP_CODE:
++					if (resultCode == Activity.RESULT_OK) {
++						if (data != null && data.getData() != null) {
++							// get the filename from the input URI
++							String filename = Util.getFileName(this, data.getData());
++
++							//check if file extension is correct
++							if (filename.toUpperCase().endsWith(BACKUP_EXTENSION.toUpperCase())) {
++								try {
++									RestoreBackup(data.getData());
++								} catch (Exception e) {
++									String errorMsg = "Caught exception restoring backup";
++									Log.d("Graph89", errorMsg);
++									Log.d("Graph89", e.getStackTrace().toString());
++									Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show();
++								}
++							} else {
++								// bad file extension
++								String errorMsg = "Bad file extension. Extension must be: " + BACKUP_EXTENSION;
++								Log.d("Graph89", errorMsg);
++								Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show();
++							}
++						} else {
++							// data is null
++							Log.d("Graph89","File URI not found");
++						}
++					} else {
++						// result code is RESULT_OK
++						Log.d("Graph89", "User cancelled file browsing");
++					}
++					break;
++
++				case CREATE_BACKUP_CODE:
++					if (resultCode == Activity.RESULT_OK) {
++						if (data != null && data.getData() != null) {
++							// get the filename from the input URI
++							String filename = Util.getFileName(this, data.getData());
++
++							//check if file extension is correct
++							if (filename.toUpperCase().endsWith(BACKUP_EXTENSION.toUpperCase())) {
++								try {
++									CreateNewBackup(data.getData());
++								} catch (Exception e) {
++									String errorMsg = "Caught exception creating backup";
++									Log.d("Graph89", errorMsg);
++									Log.d("Graph89", e.getStackTrace().toString());
++									Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show();
++								}
++							} else {
++								// bad file extension
++								String errorMsg = "Bad file extension. Extension must be: " + BACKUP_EXTENSION;
++								Log.d("Graph89", errorMsg);
++								Toast.makeText(this, errorMsg, Toast.LENGTH_LONG).show();
++							}
++						} else {
++							// data is null
++							Log.d("Graph89","File URI not found");
++						}
++					} else {
++						// result code is RESULT_OK
++						Log.d("Graph89", "User cancelled file browsing");
++					}
++					break;
+ 			}
+ 		}
+-
+-		Collections.sort(mBackups, new BackupDateComparator());
+ 	}
+ 
+-	private void CreateNewBackup(String name) throws Exception
++	private void CreateNewBackup(Uri outFile) throws Exception
+ 	{
+ 		ProgressDialogObj.Message = "Backing up ...";
+ 		HandlerShowProgressDialog();
+ 
+-		String backupFile = mBackupDirectory + Util.getTimestamp() + BACKUP_EXTENSION;
+-
+-		Util.CreateDirectory(mBackupDirectory);
+-
+ 		Backup bk = new Backup();
+-		bk.BackupDescription = name;
++		bk.BackupDescription = Util.getFileName(this, outFile);
+ 		bk.BackupDate = new Date();
+ 		bk.ConfigJson = mCalculatorInstances.toJson();
+ 		bk.BackupData = ZipHelper.zipDir(mInstanceDirectory);
+ 
+-		WriteBackupToFile(bk, backupFile);
++		WriteBackupToFile(this, bk, outFile);
+ 
+ 		HandlerHideProgressDialog();
+-
+-		HandlerRefreshUI();
+ 	}
+ 
+-	private static void WriteBackupToFile(Backup bk, String filaname) throws IOException
++	private static void WriteBackupToFile(Context context, Backup bk, Uri outFile) throws IOException
+ 	{
+-		OutputStream file = new FileOutputStream(filaname);
++		OutputStream file = context.getContentResolver().openOutputStream(outFile);
+ 		OutputStream buffer = new BufferedOutputStream(file);
+ 		ObjectOutput output = new ObjectOutputStream(buffer);
+ 		try
+@@ -267,140 +246,17 @@ public class BackupManager extends Graph89ActivityBase
+ 		}
+ 	}
+ 
+-	private static Backup getBackupFromFile(File f) throws StreamCorruptedException, IOException, ClassNotFoundException
+-	{
+-		FileInputStream fis = new FileInputStream(f);
+-		ObjectInputStream ois = new ObjectInputStream(fis);
++	private static Backup getBackupFromFile(Context context, Uri inFile) throws StreamCorruptedException, IOException, ClassNotFoundException {
++		// open the input streams
++		InputStream is = context.getContentResolver().openInputStream(inFile);
++		ObjectInputStream ois = new ObjectInputStream(is);
+ 		Backup b = (Backup) ois.readObject();
+-		b.FileName = f.getAbsolutePath();
++		b.FileName = Util.getFileName(context, inFile);
+ 		ois.close();
+ 		return b;
+ 	}
+ 
+-	private void PopulateBackupList()
+-	{
+-		ArrayList<String> backupList = new ArrayList<String>();
+-
+-		for (int i = 0; i < mBackups.size(); ++i)
+-		{
+-			backupList.add(mBackups.get(i).BackupDescription);
+-		}
+-
+-		ArrayAdapter<String> listAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, backupList);
+-
+-		mBackupList.setAdapter(listAdapter);
+-	}
+-
+-	private void AddBackup(final int ID)
+-	{
+-		final View view = LayoutInflater.from(this).inflate(R.layout.backup_manager_add_backup, (ViewGroup) this.findViewById(R.id.backup_manager_add_backup_layout));
+-		final EditText desciptionEditText = (EditText) view.findViewById(R.id.backup_manager_add_backup_title);
+-		final ImageButton deleteIcon = (ImageButton) view.findViewById(R.id.backup_manager_add_backup_delete);
+-
+-		String windowTitle = null;
+-
+-		final boolean isEdit = ID >= 0;
+-
+-		if (isEdit)
+-		{
+-			deleteIcon.setVisibility(View.VISIBLE);
+-			windowTitle = "Edit Backup";
+-
+-			String name = mBackups.get(ID).BackupDescription;
+-			desciptionEditText.setText(name);
+-			desciptionEditText.setSelection(name.length());
+-
+-			deleteIcon.setOnClickListener(new OnClickListener() {
+-				@Override
+-				public void onClick(View v)
+-				{
+-					DeleteBackup(ID);
+-				}
+-			});
+-		}
+-		else
+-		{
+-			deleteIcon.setVisibility(View.GONE);
+-			windowTitle = "Add Backup";
+-			String date = DateFormat.getDateTimeInstance().format(new Date());
+-			desciptionEditText.setText(date);
+-			desciptionEditText.setSelection(date.length());
+-		}
+-
+-		final AlertDialog addEditdialog = new AlertDialog.Builder(this).setView(view).setTitle(windowTitle).setPositiveButton(android.R.string.ok, null).setNegativeButton(android.R.string.cancel, new Dialog.OnClickListener() {
+-			@Override
+-			public void onClick(DialogInterface d, int which)
+-			{
+-				d.dismiss();
+-			}
+-		}).create();
+-
+-		addEditdialog.setOnShowListener(new DialogInterface.OnShowListener() {
+-			@Override
+-			public void onShow(DialogInterface dialog)
+-			{
+-				Button b = addEditdialog.getButton(AlertDialog.BUTTON_POSITIVE);
+-				b.setOnClickListener(new View.OnClickListener() {
+-					@Override
+-					public void onClick(View view)
+-					{
+-						if (!isEdit)
+-						{
+-							new Thread(new Runnable() {
+-
+-								public void run()
+-								{
+-									try
+-									{
+-										CreateNewBackup(desciptionEditText.getText().toString().trim());
+-									}
+-									catch (Exception e)
+-									{
+-									}
+-								}
+-							}).start();
+-
+-							DismissAddEditDialog();
+-						}
+-						else
+-						{
+-							try
+-							{
+-								Backup b = mBackups.get(ID);
+-								File backupFile = new File(b.FileName);
+-								File backupFileTmp = new File(b.FileName + ".tmp");
+-								b = getBackupFromFile(backupFile);
+-								b.BackupDescription = desciptionEditText.getText().toString().trim();
+-								backupFile.renameTo(backupFileTmp);
+-								WriteBackupToFile(b, b.FileName);
+-								backupFileTmp.delete();
+-							}
+-							catch (StreamCorruptedException e)
+-							{
+-							}
+-							catch (IOException e)
+-							{
+-							}
+-							catch (ClassNotFoundException e)
+-							{
+-							}
+-
+-							RefreshUI();
+-							DismissAddEditDialog();
+-						}
+-					}
+-				});
+-			}
+-		});
+-
+-		mAddEditdialog = addEditdialog;
+-
+-		addEditdialog.setCanceledOnTouchOutside(false);
+-
+-		addEditdialog.show();
+-	}
+-
+-	private void RestoreBackup(final int ID) throws StreamCorruptedException, IOException, ClassNotFoundException
++	private void RestoreBackup(Uri inFile) throws StreamCorruptedException, IOException, ClassNotFoundException
+ 	{
+ 		final View view = LayoutInflater.from(this).inflate(R.layout.backup_manager_restore_backup, (ViewGroup) this.findViewById(R.id.backup_manager_restore_backup_layout));
+ 		final ListView restoreList = (ListView) view.findViewById(R.id.backup_manager_restore_list);
+@@ -408,8 +264,7 @@ public class BackupManager extends Graph89ActivityBase
+ 
+ 		mSelectedInstances = new ArrayList<SelectedInstance>();
+ 
+-		Backup b = mBackups.get(ID);
+-		final Backup backupToRestore = getBackupFromFile(new File(b.FileName));
++		final Backup backupToRestore = getBackupFromFile(this, inFile);
+ 
+ 		ArrayList<CalculatorInstance> instances = new ArrayList<CalculatorInstance>();
+ 
+@@ -472,31 +327,6 @@ public class BackupManager extends Graph89ActivityBase
+ 		addEditdialog.show();
+ 	}
+ 
+-	private void DismissAddEditDialog()
+-	{
+-		if (mAddEditdialog != null)
+-		{
+-			mAddEditdialog.dismiss();
+-			mAddEditdialog = null;
+-		}
+-	}
+-
+-	private void DeleteBackup(final int ID)
+-	{
+-		AlertDialog alert = new AlertDialog.Builder(this).setTitle("Warning").setMessage("Are you sure you want to delete this backup?").setPositiveButton(android.R.string.ok, new Dialog.OnClickListener() {
+-			@Override
+-			public void onClick(DialogInterface d, int which)
+-			{
+-				Backup b = mBackups.get(ID);
+-				File f = new File(b.FileName);
+-				f.delete();
+-				HandlerRefreshUI();
+-				DismissAddEditDialog();
+-			}
+-		}).setNegativeButton(android.R.string.cancel, null).create();
+-		alert.show();
+-	}
+-
+ 	private void RestoreBackup(Backup backupToRestore, String restoreType) throws Exception
+ 	{
+ 		ProgressDialogObj.Message = "Restoring ...";
+@@ -645,21 +475,11 @@ public class BackupManager extends Graph89ActivityBase
+ 		mHandler.sendEmptyMessage(BackupManager.HANDLER_SHOWPROGRESSDIALOG);
+ 	}
+ 
+-	public void HandlerUpdateProgressDialog()
+-	{
+-		mHandler.sendEmptyMessage(BackupManager.HANDLER_UPDATEPROGRESSDIALOG);
+-	}
+-
+ 	public void HandlerHideProgressDialog()
+ 	{
+ 		mHandler.sendEmptyMessage(BackupManager.HANDLER_HIDEPROGRESSDIALOG);
+ 	}
+ 
+-	public void HandlerRefreshUI()
+-	{
+-		mHandler.sendEmptyMessage(BackupManager.HANDLER_REFRESHUI);
+-	}
+-
+ 	private void ShowProgressDialog()
+ 	{
+ 		if (ProgressDialogObj.Dialog != null) ProgressDialogObj.Dialog.dismiss();
+@@ -700,9 +520,6 @@ public class BackupManager extends Graph89ActivityBase
+ 			case BackupManager.HANDLER_HIDEPROGRESSDIALOG:
+ 				HideProgressDialog();
+ 				break;
+-			case BackupManager.HANDLER_REFRESHUI:
+-				RefreshUI();
+-				break;
+ 		}
+ 	}
+ 
+@@ -785,12 +602,3 @@ class Backup implements Serializable
+ 	public String	ReservedString		= null;
+ 	public int		ReservedInt			= 0;
+ }
+-
+-class BackupDateComparator implements Comparator<Backup>
+-{
+-	@Override
+-	public int compare(Backup o1, Backup o2)
+-	{
+-		return o2.BackupDate.compareTo(o1.BackupDate);
+-	}
+-}
+\ No newline at end of file

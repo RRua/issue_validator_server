@@ -1,0 +1,659 @@
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
+index 5af11fb..4aa7c9c 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2016 Oleg Chernovskiy <adonai@xaker.ru>
++ * Copyright (C) 2016-2018 Oleg Chernovskiy <adonai@xaker.ru>
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -22,11 +22,13 @@ import android.content.Intent;
+ import android.util.Log;
+ 
+ import com.kanedias.vanilla.plugins.PluginConstants;
++
++import static com.kanedias.vanilla.plugins.PluginConstants.*;
++
+ /**
+  * Broadcast receiver used for retrieving query intents
+  *
+  * @see PluginConstants
+- * @see PluginService
+  */
+ public class PluginQueryBroadcastReceiver extends BroadcastReceiver {
+ 
+@@ -40,13 +42,29 @@ public class PluginQueryBroadcastReceiver extends BroadcastReceiver {
+     @Override
+     public void onReceive(Context context, Intent intent) {
+         Log.i(PluginConstants.LOG_TAG, "Received query intent!");
++        if (intent.getAction() == null)
++            return;
++
+         switch (intent.getAction()) {
+             case PluginConstants.ACTION_REQUEST_PLUGIN_PARAMS:
+-                intent.setClass(context, PluginService.class);
+-                context.startService(intent);
++                handleRequestPluginParams(context, intent);
+                 return;
+             default:
+                 Log.e(PluginConstants.LOG_TAG, "Unknown intent received by receiver! Action" + intent.getAction());
+         }
+     }
++
++    /**
++     * Sends plugin info back to Vanilla Music service.
++     * @param ctx context to get info from
++     * @param intent intent from player
++     */
++    public static void handleRequestPluginParams(Context ctx, Intent intent) {
++        Intent answer = new Intent(ACTION_HANDLE_PLUGIN_PARAMS);
++        answer.setPackage(intent.getPackage());
++        answer.putExtra(EXTRA_PARAM_PLUGIN_NAME, ctx.getString(R.string.tag_editor));
++        answer.putExtra(EXTRA_PARAM_PLUGIN_APP, ctx.getApplicationInfo());
++        answer.putExtra(EXTRA_PARAM_PLUGIN_DESC, ctx.getString(R.string.plugin_desc));
++        ctx.sendBroadcast(answer);
++    }
+ }
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginTagWrapper.java
+similarity index 69%
+rename from app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java
+rename to app/src/main/java/com/kanedias/vanilla/audiotag/PluginTagWrapper.java
+index 39c8940..bf8dd9c 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginTagWrapper.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2016 Oleg Chernovskiy <adonai@xaker.ru>
++ * Copyright (C) 2016-2018 Oleg Chernovskiy <adonai@xaker.ru>
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -16,14 +16,12 @@
+  */
+ package com.kanedias.vanilla.audiotag;
+ 
+-import android.app.Service;
++import android.content.Context;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.content.pm.ApplicationInfo;
+ import android.media.MediaScannerConnection;
+ import android.net.Uri;
+-import android.os.Binder;
+-import android.os.IBinder;
+ import android.os.ParcelFileDescriptor;
+ import android.preference.PreferenceManager;
+ import android.support.annotation.Nullable;
+@@ -33,7 +31,6 @@ import android.util.Log;
+ import android.widget.Toast;
+ 
+ import com.kanedias.vanilla.plugins.PluginConstants;
+-import com.kanedias.vanilla.plugins.PluginUtils;
+ import com.kanedias.vanilla.plugins.saf.SafRequestActivity;
+ import com.kanedias.vanilla.plugins.saf.SafUtils;
+ 
+@@ -64,19 +61,12 @@ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+ import java.util.UUID;
+-import java.util.concurrent.atomic.AtomicInteger;
+ 
+-import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+-import static com.kanedias.vanilla.plugins.PluginConstants.ACTION_HANDLE_PLUGIN_PARAMS;
+ import static com.kanedias.vanilla.plugins.PluginConstants.ACTION_LAUNCH_PLUGIN;
+-import static com.kanedias.vanilla.plugins.PluginConstants.ACTION_REQUEST_PLUGIN_PARAMS;
+-import static com.kanedias.vanilla.plugins.PluginConstants.ACTION_WAKE_PLUGIN;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_P2P;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_P2P_KEY;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_P2P_VAL;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_PLUGIN_APP;
+-import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_PLUGIN_DESC;
+-import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_PLUGIN_NAME;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_SAF_P2P;
+ import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_URI;
+ import static com.kanedias.vanilla.plugins.PluginConstants.LOG_TAG;
+@@ -113,126 +103,21 @@ import static com.kanedias.vanilla.plugins.PluginConstants.PREF_SDCARD_URI;
+  *
+  * @author Oleg Chernovskiy
+  */
+-public class PluginService extends Service {
+-
+-    private AtomicInteger mBindCounter = new AtomicInteger(0);
++public class PluginTagWrapper {
+ 
+     private SharedPreferences mPrefs;
+ 
++    private Context context;
+     private Intent mLaunchIntent;
+     private AudioFile mAudioFile;
+     private Tag mTag;
+ 
+-    public class PluginBinder extends Binder {
+-        public PluginService getService() {
+-            return PluginService.this;
+-        }
+-    }
+-
+-    /**
+-     * If this is called, then tag edit activity requested bind procedure for this service
+-     * Usually service is already started and has file field initialized.
+-     *
+-     * @param intent intent passed to start this service
+-     * @return null if file load failed, plugin binder object otherwise
+-     */
+-    @Override
+-    public IBinder onBind(Intent intent) {
+-        mBindCounter.incrementAndGet();
+-        if (loadFile(false)) {
+-            return new PluginBinder();
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     * If this is called, then tag edit activity is finished with its user interaction and
+-     * service is safe to be stopped too.
+-     */
+-    @Override
+-    public boolean onUnbind(Intent intent) {
+-        // we need to stop this service or ServiceConnection will remain active and onBind won't be called again
+-        // activity will see old file loaded in such case!
+-        if(mBindCounter.decrementAndGet() == 0) {
+-            stopSelf();
+-        }
+-        return false;
+-    }
+-
+-    @Override
+-    public void onCreate() {
+-        super.onCreate();
++    public PluginTagWrapper(Intent intent, Context ctx) {
++        context = ctx;
++        mLaunchIntent = intent;
+ 
+         TagOptionSingleton.getInstance().setAndroid(true);
+-        mPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+-    }
+-
+-    /**
+-     * Main plugin service operation entry point. This is called each time plugins are quieried
+-     * and requested by main Vanilla Music app and also when plugins communicate with each other through P2P-intents.
+-     * @param intent intent provided by broadcast or request
+-     * @param flags - not used
+-     * @param startId - not used
+-     * @return always constant {@link #START_NOT_STICKY}
+-     */
+-    @Override
+-    public int onStartCommand(Intent intent, int flags, int startId) {
+-        if (intent != null) {
+-            final String action = intent.getAction();
+-            switch (action) {
+-                case ACTION_WAKE_PLUGIN:
+-                    Log.i(LOG_TAG, "Plugin enabled!");
+-                    break;
+-                case ACTION_REQUEST_PLUGIN_PARAMS:
+-                    handleRequestPluginParams(intent);
+-                    break;
+-                case ACTION_LAUNCH_PLUGIN:
+-                    mLaunchIntent = intent;
+-                    handleLaunchPlugin();
+-                    break;
+-                default:
+-                    Log.e(LOG_TAG, "Unknown intent action received!" + action);
+-            }
+-        }
+-        return START_NOT_STICKY;
+-    }
+-
+-    /**
+-     * Sends plugin info back to Vanilla Music service.
+-     * @param intent intent from player
+-     */
+-    private void handleRequestPluginParams(Intent intent) {
+-        Intent answer = new Intent(ACTION_HANDLE_PLUGIN_PARAMS);
+-        answer.setPackage(intent.getPackage());
+-        answer.putExtra(EXTRA_PARAM_PLUGIN_NAME, getString(R.string.tag_editor));
+-        answer.putExtra(EXTRA_PARAM_PLUGIN_APP, getApplicationInfo());
+-        answer.putExtra(EXTRA_PARAM_PLUGIN_DESC, getString(R.string.plugin_desc));
+-        sendBroadcast(answer);
+-    }
+-
+-    private void handleLaunchPlugin() {
+-        if (mLaunchIntent.hasExtra(EXTRA_PARAM_SAF_P2P)) {
+-            // it's SAF intent that is returned from SAF activity, should have URI inside
+-            persistThroughSaf(mLaunchIntent);
+-            return;
+-        }
+-
+-        // if it's P2P intent, just try to read/write file as requested
+-        if (PluginUtils.havePermissions(this, WRITE_EXTERNAL_STORAGE) && mLaunchIntent.hasExtra(EXTRA_PARAM_P2P)) {
+-            if(loadFile(false)) {
+-                handleP2pIntent();
+-            }
+-            stopSelf();
+-            return;
+-        }
+-
+-        // either we have no permissions to write to SD and activity is requested
+-        // or this is normal user-requested operation (non-P2P)
+-        // start activity!
+-        Intent dialogIntent = new Intent(this, TagEditActivity.class);
+-        dialogIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-        dialogIntent.putExtras(mLaunchIntent);
+-        startActivity(dialogIntent);
++        mPrefs = PreferenceManager.getDefaultSharedPreferences(ctx);
+     }
+ 
+     public Tag getTag() {
+@@ -265,9 +150,9 @@ public class PluginService extends Service {
+             mTag = mAudioFile.getTagOrCreateAndSetDefault();
+         } catch (CannotReadException | IOException | TagException | ReadOnlyFileException | InvalidAudioFrameException e) {
+             Log.e(LOG_TAG,
+-                    String.format(getString(R.string.error_audio_file), file.getAbsolutePath()), e);
+-            Toast.makeText(this,
+-                    String.format(getString(R.string.error_audio_file) + ", %s",
++                    String.format(context.getString(R.string.error_audio_file), file.getAbsolutePath()), e);
++            Toast.makeText(context,
++                    String.format(context.getString(R.string.error_audio_file) + ", %s",
+                             file.getAbsolutePath(),
+                             e.getLocalizedMessage()),
+                     Toast.LENGTH_SHORT).show();
+@@ -291,7 +176,7 @@ public class PluginService extends Service {
+      * Writes file to backing filesystem provider, this may be either SAF-managed sdcard or internal storage.
+      */
+     public void writeFile() {
+-        if (SafUtils.isSafNeeded(mAudioFile.getFile(), this)) {
++        if (SafUtils.isSafNeeded(mAudioFile.getFile(), context)) {
+             if (mPrefs.contains(PREF_SDCARD_URI)) {
+                 // we already got the permission!
+                 persistThroughSaf(null);
+@@ -299,11 +184,11 @@ public class PluginService extends Service {
+             }
+ 
+             // request SAF permissions in SAF activity
+-            Intent safIntent = new Intent(this, SafRequestActivity.class);
++            Intent safIntent = new Intent(context, SafRequestActivity.class);
+             safIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-            safIntent.putExtra(PluginConstants.EXTRA_PARAM_PLUGIN_APP, getApplicationInfo());
++            safIntent.putExtra(PluginConstants.EXTRA_PARAM_PLUGIN_APP, context.getApplicationInfo());
+             safIntent.putExtras(mLaunchIntent);
+-            startActivity(safIntent);
++            context.startActivity(safIntent);
+             // it will pass us URI back after the work is done
+         } else {
+             persistThroughFile();
+@@ -317,16 +202,16 @@ public class PluginService extends Service {
+     private void persistThroughFile() {
+         try {
+             AudioFileIO.write(mAudioFile);
+-            Toast.makeText(this, R.string.file_written_successfully, Toast.LENGTH_SHORT).show();
++            Toast.makeText(context, R.string.file_written_successfully, Toast.LENGTH_SHORT).show();
+ 
+             // update media database
+             File persisted = mAudioFile.getFile();
+-            MediaScannerConnection.scanFile(this, new String[]{persisted.getAbsolutePath()}, null, null);
++            MediaScannerConnection.scanFile(context, new String[]{persisted.getAbsolutePath()}, null, null);
+         } catch (CannotWriteException e) {
+             Log.e(LOG_TAG,
+-                    String.format(getString(R.string.error_audio_file), mAudioFile.getFile().getPath()), e);
+-            Toast.makeText(this,
+-                    String.format(getString(R.string.error_audio_file) + ", %s",
++                    String.format(context.getString(R.string.error_audio_file), mAudioFile.getFile().getPath()), e);
++            Toast.makeText(context,
++                    String.format(context.getString(R.string.error_audio_file) + ", %s",
+                             mAudioFile.getFile().getPath(),
+                             e.getLocalizedMessage()),
+                     Toast.LENGTH_LONG).show();
+@@ -337,7 +222,7 @@ public class PluginService extends Service {
+      * Write changes through SAF framework - the only way to do it in Android > 4.4 when working with SD card
+      * @param activityResponse response with URI contained in. Can be null if tree permission is already given.
+      */
+-    private void persistThroughSaf(Intent activityResponse) {
++    public void persistThroughSaf(Intent activityResponse) {
+         Uri safUri;
+         if (mPrefs.contains(PREF_SDCARD_URI)) {
+             // no sorcery can allow you to gain URI to the document representing file you've been provided with
+@@ -346,7 +231,7 @@ public class PluginService extends Service {
+             // /storage/volume/Music/some.mp3 will become [storage, volume, music, some.mp3]
+             List<String> pathSegments = new ArrayList<>(Arrays.asList(mAudioFile.getFile().getAbsolutePath().split("/")));
+             Uri allowedSdRoot = Uri.parse(mPrefs.getString(PREF_SDCARD_URI, ""));
+-            safUri = findInDocumentTree(DocumentFile.fromTreeUri(this, allowedSdRoot), pathSegments);
++            safUri = findInDocumentTree(DocumentFile.fromTreeUri(context, allowedSdRoot), pathSegments);
+         } else {
+             Intent originalSafResponse = activityResponse.getParcelableExtra(EXTRA_PARAM_SAF_P2P);
+             safUri = originalSafResponse.getData();
+@@ -354,7 +239,7 @@ public class PluginService extends Service {
+ 
+         if (safUri == null) {
+             // nothing selected or invalid file?
+-            Toast.makeText(this, R.string.saf_nothing_selected, Toast.LENGTH_LONG).show();
++            Toast.makeText(context, R.string.saf_nothing_selected, Toast.LENGTH_LONG).show();
+             return;
+         }
+ 
+@@ -370,7 +255,7 @@ public class PluginService extends Service {
+             AudioFileIO.write(mAudioFile);
+ 
+             // retrieve FD from SAF URI
+-            ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(safUri, "rw");
++            ParcelFileDescriptor pfd = context.getContentResolver().openFileDescriptor(safUri, "rw");
+             if (pfd == null) {
+                 // should not happen
+                 Log.e(LOG_TAG, "SAF provided incorrect URI!" + safUri);
+@@ -388,10 +273,10 @@ public class PluginService extends Service {
+             temp.delete();
+ 
+             // rescan original file
+-            MediaScannerConnection.scanFile(this, new String[]{original.getAbsolutePath()}, null, null);
+-            Toast.makeText(this, R.string.file_written_successfully, Toast.LENGTH_SHORT).show();
++            MediaScannerConnection.scanFile(context, new String[]{original.getAbsolutePath()}, null, null);
++            Toast.makeText(context, R.string.file_written_successfully, Toast.LENGTH_SHORT).show();
+         } catch (Exception e) {
+-            Toast.makeText(this, getString(R.string.saf_write_error) + e.getLocalizedMessage(), Toast.LENGTH_LONG).show();
++            Toast.makeText(context, context.getString(R.string.saf_write_error) + e.getLocalizedMessage(), Toast.LENGTH_LONG).show();
+             Log.e(LOG_TAG, "Failed to write to file descriptor provided by SAF!", e);
+         }
+     }
+@@ -438,7 +323,7 @@ public class PluginService extends Service {
+      * the same order.
+      *
+      */
+-    private void handleP2pIntent() {
++    public void handleP2pIntent() {
+         String request = mLaunchIntent.getStringExtra(EXTRA_PARAM_P2P);
+         switch (request) {
+             case P2P_WRITE_TAG: {
+@@ -450,7 +335,7 @@ public class PluginService extends Service {
+                         mTag.setField(key, values[i]);
+                     } catch (IllegalArgumentException iae) {
+                         Log.e(LOG_TAG, "Invalid tag requested: " + fields[i], iae);
+-                        Toast.makeText(this, R.string.invalid_tag_requested, Toast.LENGTH_SHORT).show();
++                        Toast.makeText(context, R.string.invalid_tag_requested, Toast.LENGTH_SHORT).show();
+                     } catch (FieldDataInvalidException e) {
+                         // should not happen
+                         Log.e(LOG_TAG, "Error writing tag", e);
+@@ -470,7 +355,7 @@ public class PluginService extends Service {
+                         values[i] = mTag.getFirst(key);
+                     } catch (IllegalArgumentException iae) {
+                         Log.e(LOG_TAG, "Invalid tag requested: " + fields[i], iae);
+-                        Toast.makeText(this, R.string.invalid_tag_requested, Toast.LENGTH_SHORT).show();
++                        Toast.makeText(context, R.string.invalid_tag_requested, Toast.LENGTH_SHORT).show();
+                     }
+                 }
+ 
+@@ -478,7 +363,7 @@ public class PluginService extends Service {
+                 response.putExtra(EXTRA_PARAM_P2P, P2P_READ_TAG);
+                 response.setPackage(responseApp.packageName);
+                 response.putExtra(EXTRA_PARAM_P2P_VAL, values);
+-                startService(response);
++                context.startActivity(response);
+                 break;
+             }
+             case P2P_READ_ART: {
+@@ -491,9 +376,9 @@ public class PluginService extends Service {
+                         break;
+                     }
+ 
+-                    File coversDir = new File(getCacheDir(), "covers");
++                    File coversDir = new File(context.getCacheDir(), "covers");
+                     if (!coversDir.exists() && !coversDir.mkdir()) {
+-                        Log.e(LOG_TAG, "Couldn't create dir for covers! Path " + getCacheDir());
++                        Log.e(LOG_TAG, "Couldn't create dir for covers! Path " + context.getCacheDir());
+                         break;
+                     }
+ 
+@@ -511,20 +396,20 @@ public class PluginService extends Service {
+                     fos.close();
+ 
+                     // create sharable uri
+-                    uri = FileProvider.getUriForFile(this, "com.kanedias.vanilla.audiotag.fileprovider", coverTmpFile);
++                    uri = FileProvider.getUriForFile(context, "com.kanedias.vanilla.audiotag.fileprovider", coverTmpFile);
+                 } catch (IOException e) {
+                     Log.e(LOG_TAG, "Couldn't write to cache file", e);
+-                    Toast.makeText(this, e.getLocalizedMessage(), Toast.LENGTH_SHORT).show();
++                    Toast.makeText(context, e.getLocalizedMessage(), Toast.LENGTH_SHORT).show();
+                 } finally {
+                     // share uri if created successfully
+                     Intent response = new Intent(ACTION_LAUNCH_PLUGIN);
+                     response.putExtra(EXTRA_PARAM_P2P, P2P_READ_ART);
+                     response.setPackage(responseApp.packageName);
+                     if (uri != null) {
+-                        grantUriPermission(responseApp.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
++                        context.grantUriPermission(responseApp.packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                         response.putExtra(EXTRA_PARAM_P2P_VAL, uri);
+                     }
+-                    startService(response);
++                    context.startActivity(response);
+                 }
+                 break;
+             }
+@@ -532,7 +417,7 @@ public class PluginService extends Service {
+                 Uri imgLink = mLaunchIntent.getParcelableExtra(EXTRA_PARAM_P2P_VAL);
+ 
+                 try {
+-                    ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(imgLink, "r");
++                    ParcelFileDescriptor pfd = context.getContentResolver().openFileDescriptor(imgLink, "r");
+                     if (pfd == null) {
+                         return;
+                     }
+@@ -550,7 +435,7 @@ public class PluginService extends Service {
+                     mTag.setField(cover);
+                 } catch (IOException | IllegalArgumentException | FieldDataInvalidException e) {
+                     Log.e(LOG_TAG, "Invalid artwork!", e);
+-                    Toast.makeText(this, R.string.invalid_artwork_provided, Toast.LENGTH_SHORT).show();
++                    Toast.makeText(context, R.string.invalid_artwork_provided, Toast.LENGTH_SHORT).show();
+                 }
+ 
+                 writeFile();
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
+index 6cfe8e6..5765f05 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2016 Oleg Chernovskiy <adonai@xaker.ru>
++ * Copyright (C) 2016-2018 Oleg Chernovskiy <adonai@xaker.ru>
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -18,12 +18,8 @@ package com.kanedias.vanilla.audiotag;
+ 
+ import android.app.Activity;
+ import android.app.AlertDialog;
+-import android.content.ComponentName;
+-import android.content.Intent;
+-import android.content.ServiceConnection;
+ import android.content.pm.PackageManager;
+ import android.os.Bundle;
+-import android.os.IBinder;
+ import android.support.annotation.NonNull;
+ import android.text.Editable;
+ import android.text.TextUtils;
+@@ -51,9 +47,7 @@ import org.jaudiotagger.tag.Tag;
+ import org.jaudiotagger.tag.id3.ID3v22Tag;
+ 
+ import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+-import static com.kanedias.vanilla.plugins.PluginConstants.ACTION_LAUNCH_PLUGIN;
+-import static com.kanedias.vanilla.plugins.PluginConstants.EXTRA_PARAM_P2P;
+-import static com.kanedias.vanilla.plugins.PluginConstants.LOG_TAG;
++import static com.kanedias.vanilla.plugins.PluginConstants.*;
+ 
+ /**
+  * Main activity of Tag Editor plugin. This will be presented as a dialog to the user
+@@ -61,8 +55,6 @@ import static com.kanedias.vanilla.plugins.PluginConstants.LOG_TAG;
+  * <p/>
+  * After tag editing is done, this activity updates media info of this file and exits.
+  *
+- * @see PluginService service that launches this
+- *
+  * @author Oleg Chernovskiy
+  */
+ public class TagEditActivity extends DialogActivity {
+@@ -76,28 +68,7 @@ public class TagEditActivity extends DialogActivity {
+     private EditText mCustomTagEdit;
+     private Button mConfirm, mCancel;
+ 
+-    private PluginService mService;
+-    private Tag mTag;
+-
+-    private ServiceConnection mServiceConn = new ServiceConnection() {
+-        @Override
+-        public void onServiceConnected(ComponentName name, IBinder service) {
+-            if (service == null) { // couldn't load file
+-                finish();
+-                return;
+-            }
+-
+-            mService = ((PluginService.PluginBinder) service).getService();
+-            mTag = mService.getTag();
+-            fillInitialValues();
+-            miscellaneousChecks();
+-        }
+-
+-        @Override
+-        public void onServiceDisconnected(ComponentName name) {
+-            mService = null;
+-        }
+-    };
++    private PluginTagWrapper mWrapper;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -112,15 +83,10 @@ public class TagEditActivity extends DialogActivity {
+         mConfirm = findViewById(R.id.confirm_tags_button);
+         mCancel = findViewById(R.id.cancel_tags_button);
+ 
+-        setupUI();
+-    }
++        mWrapper = new PluginTagWrapper(getIntent(), this);
+ 
+-    @Override
+-    protected void onDestroy() {
+-        super.onDestroy();
+-        if (mService != null) {
+-            unbindService(mServiceConn);
+-        }
++        handleLaunchPlugin();
++        setupUI();
+     }
+ 
+     @Override
+@@ -134,8 +100,7 @@ public class TagEditActivity extends DialogActivity {
+     public boolean onOptionsItemSelected(MenuItem item) {
+         switch (item.getItemId()) {
+             case R.id.reload_option:
+-                mService.loadFile(true);
+-                mTag = mService.getTag();
++                mWrapper.loadFile(true);
+                 fillInitialValues();
+                 return true;
+         }
+@@ -148,7 +113,7 @@ public class TagEditActivity extends DialogActivity {
+     private void setupUI() {
+         mCancel.setOnClickListener(v -> finish());
+         mConfirm.setOnClickListener(v -> {
+-            mService.writeFile();
++            mWrapper.writeFile();
+             finish();
+         });
+ 
+@@ -167,7 +132,7 @@ public class TagEditActivity extends DialogActivity {
+                 }
+ 
+                 mCustomTagEdit.removeTextChangedListener(mCustomFieldListener); // don't trigger old field rewrite
+-                mCustomTagEdit.setText(mTag.getFirst(key));
++                mCustomTagEdit.setText(mWrapper.getTag().getFirst(key));
+                 mCustomFieldListener = new FieldKeyListener(key);
+                 mCustomTagEdit.addTextChangedListener(mCustomFieldListener); // re-register with new field
+             }
+@@ -199,28 +164,47 @@ public class TagEditActivity extends DialogActivity {
+ 
+         if (getIntent().hasExtra(EXTRA_PARAM_P2P)) {
+             // if we're here, then user didn't grant tag editor "write to SD" permission before
+-            // and service passed P2P intent to activity in hope that it will sort it out.
+-            // We need to pass this intent back to service as user had approved permission request
+-            Intent serviceStart = new Intent(this, PluginService.class);
+-            serviceStart.setAction(ACTION_LAUNCH_PLUGIN);
+-            serviceStart.putExtras(getIntent());
+-            startService(serviceStart); // pass intent back to the service
++            // We need to handle this intent again
++            handleLaunchPlugin();
++            return;
++        }
++
++        // if we're here the user requested the tag editor directly
++        mWrapper.loadFile(true);
++        fillInitialValues();
++        miscellaneousChecks();
++    }
++
++    private void handleLaunchPlugin() {
++        if (TextUtils.equals(getIntent().getAction(), ACTION_WAKE_PLUGIN)) {
++            // just show that we're okay
++            Log.i(LOG_TAG, "Plugin enabled!");
++            finish();
++        }
++
++        if (getIntent().hasExtra(EXTRA_PARAM_SAF_P2P)) {
++            // it's SAF intent that is returned from SAF activity, should have URI inside
++            mWrapper.persistThroughSaf(getIntent());
++            finish();
++            return;
++        }
++
++        // if it's P2P intent, just try to read/write file as requested
++        if (PluginUtils.havePermissions(this, WRITE_EXTERNAL_STORAGE) && getIntent().hasExtra(EXTRA_PARAM_P2P)) {
++            if(mWrapper.loadFile(false)) {
++                mWrapper.handleP2pIntent();
++            }
+             finish();
+-        } else {
+-            // it's non-P2P intent, prepare interaction and fire full-blown activity window
+-            // we'll need service at hand while editing
+-            Intent bind = new Intent(this, PluginService.class);
+-            bindService(bind, mServiceConn, 0);
+         }
+     }
+ 
+     /**
+-     * Fills UI with initial values from loaded file. At this point {@link #mTag} must be initialized.
++     * Fills UI with initial values from loaded file.
+      */
+     private void fillInitialValues() {
+-        mTitleEdit.setText(mTag.getFirst(FieldKey.TITLE));
+-        mArtistEdit.setText(mTag.getFirst(FieldKey.ARTIST));
+-        mAlbumEdit.setText(mTag.getFirst(FieldKey.ALBUM));
++        mTitleEdit.setText(mWrapper.getTag().getFirst(FieldKey.TITLE));
++        mArtistEdit.setText(mWrapper.getTag().getFirst(FieldKey.ARTIST));
++        mAlbumEdit.setText(mWrapper.getTag().getFirst(FieldKey.ALBUM));
+         mCustomTagSelector.setSelection(0);
+         mCustomTagEdit.setText("");
+     }
+@@ -230,14 +214,11 @@ public class TagEditActivity extends DialogActivity {
+      */
+     private void miscellaneousChecks() {
+         // check we need a re-tag
+-        if (mTag instanceof ID3v22Tag) {
++        if (mWrapper.getTag() instanceof ID3v22Tag) {
+             new AlertDialog.Builder(this)
+                     .setTitle(R.string.re_tag)
+                     .setMessage(R.string.id3_v22_to_v24)
+-                    .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+-                        mService.upgradeID3v2();
+-                        mTag = mService.getTag(); // tag was updated, refresh it from service
+-                    })
++                    .setPositiveButton(android.R.string.ok, (dialog, which) -> mWrapper.upgradeID3v2())
+                     .setNegativeButton(android.R.string.cancel, null)
+                     .show();
+         }
+@@ -285,7 +266,7 @@ public class TagEditActivity extends DialogActivity {
+         @Override
+         public void afterTextChanged(Editable s) {
+             try {
+-                mTag.setField(key, s.toString());
++                mWrapper.getTag().setField(key, s.toString());
+             } catch (FieldDataInvalidException e) {
+                 // should not happen
+                 Log.e(LOG_TAG, "Error writing tag", e);

@@ -1,0 +1,1155 @@
+diff --git a/app/src/main/java/ch/bailu/aat/activities/TestActivity.java b/app/src/main/java/ch/bailu/aat/activities/TestActivity.java
+index b2ffd937..e2d4b5be 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/TestActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/TestActivity.java
+@@ -133,17 +133,27 @@ public class TestActivity extends AbsDispatcher {
+         testsView.add(new TestEntryView(new PreferencesToSdcard(this)));
+         testsView.add(new TestEntryView(new PreferencesFromSdcard(this)));
+ 
++        VerticalScrollView speedView = new VerticalScrollView(this);
++
++        speedView.add(this, new CurrentSpeedDescription(this), InfoID.LOCATION);
++        speedView.add(this, new CurrentSpeedDescription(this), InfoID.TRACKER);
++
+ 
+         statusTextView = new StatusTextView(this);
+ 
+         MultiView mv = new MultiView(this, SOLID_KEY);
+ 
++
+         mv.add(map,getString(R.string.intro_map));
+         mv.add(locationView, getString(R.string.gps));
+ 
+         mv.add(trackerView, getString(R.string.tracker));
++        mv.add(speedView, "GPS vs Tracker*");
++
+         mv.add(testsView, "Tests*");
+         mv.add(statusTextView, getString(R.string.intro_status));
++
++
+         return mv;
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/description/CurrentSpeedDescription.java b/app/src/main/java/ch/bailu/aat/description/CurrentSpeedDescription.java
+index f83f0544..0d06f6d5 100644
+--- a/app/src/main/java/ch/bailu/aat/description/CurrentSpeedDescription.java
++++ b/app/src/main/java/ch/bailu/aat/description/CurrentSpeedDescription.java
+@@ -19,17 +19,25 @@ public class CurrentSpeedDescription extends SpeedDescription {
+ 
+     @Override
+     public void onContentUpdated(GpxInformation info) {
++        if (setSpeedFromLastPoint(info) == false) {
++            setCache(info.getSpeed());
++        }
++    }
+ 
+-        GpxList track=info.getGpxList();
++    private boolean setSpeedFromLastPoint(GpxInformation info) {
++        final GpxList track = info.getGpxList();
+ 
+         if (track != null) {
+-            GpxDeltaInterface delta = ((GpxDeltaInterface)info.getGpxList().getPointList().getLast());
+-            if (delta != null) {
+-                setCache(delta.getSpeed());
++            if (track.getPointList().size() > 0) {
++                final GpxDeltaInterface delta = ((GpxDeltaInterface) info.getGpxList().getPointList().getLast());
++                if (delta != null) {
++                    setCache(delta.getSpeed());
++                    return true;
++                }
+             }
+-        } else {
+-            setCache(info.getSpeed());  
++
+         }
++        return false;
+     }
+ 
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/ch/bailu/aat/dispatcher/CurrentLocationSource.java b/app/src/main/java/ch/bailu/aat/dispatcher/CurrentLocationSource.java
+index 6cbc9176..edda13d9 100644
+--- a/app/src/main/java/ch/bailu/aat/dispatcher/CurrentLocationSource.java
++++ b/app/src/main/java/ch/bailu/aat/dispatcher/CurrentLocationSource.java
+@@ -13,7 +13,7 @@ public class CurrentLocationSource extends ContentSource {
+     private final BroadcastReceiver onLocationChange = new BroadcastReceiver () {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            sendUpdate(scontext.getTrackerService().getLocation());
++            sendUpdate(scontext.getLocationService().getLocationInformation());
+         }
+ 
+     };
+@@ -30,7 +30,7 @@ public class CurrentLocationSource extends ContentSource {
+ 
+     @Override
+     public void requestUpdate() {
+-        sendUpdate(scontext.getTrackerService().getLocation());
++        sendUpdate(scontext.getLocationService().getLocationInformation());
+     }
+ 
+     @Override
+@@ -40,6 +40,7 @@ public class CurrentLocationSource extends ContentSource {
+ 
+     @Override
+     public void onResume() {
+-        AppBroadcaster.register(scontext.getContext(), onLocationChange, AppBroadcaster.LOCATION_CHANGED);
++        AppBroadcaster.register(scontext.getContext(), onLocationChange,
++                AppBroadcaster.LOCATION_CHANGED);
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilder.java b/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilder.java
+index 9afdf5be..950b2b8d 100644
+--- a/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilder.java
++++ b/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilder.java
+@@ -10,20 +10,7 @@ public class HtmlBuilder {
+     }
+ 
+ 
+-    public void appendH1(String s) {
+-        append("<h1>");
+-        append(s);
+-        append("</h1>");
+-    }
+-
+-
+-    public void appendH2(String s) {
+-        append("<h2>");
+-        append(s);
+-        append("</h2>");
+-    }
+-
+-    public void appendH3(String s) {
++    public void appendHeader(String s) {
+         append("<h3>");
+         append(s);
+         append("</h3>");
+diff --git a/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilderGpx.java b/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilderGpx.java
+index 3295292a..93a0129d 100644
+--- a/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilderGpx.java
++++ b/app/src/main/java/ch/bailu/aat/helpers/HtmlBuilderGpx.java
+@@ -8,7 +8,6 @@ import ch.bailu.aat.description.ContentDescription;
+ import ch.bailu.aat.description.CurrentSpeedDescription;
+ import ch.bailu.aat.description.DistanceDescription;
+ import ch.bailu.aat.description.SpeedDescription;
+-import ch.bailu.aat.description.TrackSizeDescription;
+ import ch.bailu.aat.gpx.GpxAttributes;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.gpx.GpxPointNode;
+@@ -28,8 +27,10 @@ public class HtmlBuilderGpx extends HtmlBuilder {
+     }
+ 
+     public void appendInfo(GpxInformation info, int index) {
+-        appendH3(info.getName());
+-        append("<b>" + index + "</b>/" + info.getGpxList().getPointList().size() + "<br>");
++        final int count=index+1, total = info.getGpxList().getPointList().size();
++
++        appendHeader(info.getName());
++        append("<b>" + count + "</b>/" + total + "<br>");
+     }
+ 
+     public void appendNode(GpxPointNode n, GpxInformation i) {
+diff --git a/app/src/main/java/ch/bailu/aat/helpers/Timer.java b/app/src/main/java/ch/bailu/aat/helpers/Timer.java
+index 615b0632..7a134221 100644
+--- a/app/src/main/java/ch/bailu/aat/helpers/Timer.java
++++ b/app/src/main/java/ch/bailu/aat/helpers/Timer.java
+@@ -5,28 +5,29 @@ import android.os.Handler;
+ import java.io.Closeable;
+ 
+ public class Timer implements Closeable {
+-    private Handler handler;
++    private final Handler handler;
+     private final Runnable listener;
+-    private final long interval;
++    private final long defaultInterval;
+ 
+ 
+     public Timer(Runnable l, long i) {
+         listener=l;
+-        interval=i;
++        defaultInterval =i;
++        handler = new Handler();
+     }
+ 
+     public void kick() {
+-        if (handler == null) {
+-            handler = new Handler();
+-        }
++        kick(defaultInterval);
++    }
++
++    public void kick(long interval) {
++        handler.removeCallbacks(listener);
+         handler.postDelayed(listener, interval);
+     }
+ 
+     public void close () {
+-        if (handler != null) {
+-            handler.removeCallbacks(listener);
+-            handler=null;
+-        }
++        handler.removeCallbacks(listener);
+     }
++
+ }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidAccuracyFilter.java b/app/src/main/java/ch/bailu/aat/preferences/SolidAccuracyFilter.java
+index dc0c27a4..648729ec 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidAccuracyFilter.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidAccuracyFilter.java
+@@ -7,33 +7,33 @@ import java.util.Locale;
+ import ch.bailu.aat.R;
+ 
+ public class SolidAccuracyFilter extends SolidIndexList {
+-    private static final String KEY="accuracy_filter_";
+-    
++    private static final String KEY = "accuracy_filter_";
++
+     private static final float[] VALUE_LIST = {
+-    999f,
+-    1f,
+-    2f,
+-    3f,
+-    4f,
+-    5f,
+-    10f,
+-    15f,
+-    20f,
+-    25f,
+-    30f,
+-    40f,
+-    50f,
+-    100f,
+-    200f,
++            999f,
++            1f,
++            2f,
++            3f,
++            4f,
++            5f,
++            10f,
++            15f,
++            20f,
++            25f,
++            30f,
++            40f,
++            50f,
++            100f,
++            200f,
+     };
+-    
++
+     private final SolidUnit sunit;
+-    
++
+     public SolidAccuracyFilter(Context c, int i) {
+-        super(Storage.preset(c), KEY+i);
++        super(Storage.preset(c), KEY + i);
+         sunit = new SolidUnit(c);
+     }
+-    
++
+     public float getMinAccuracy() {
+         return VALUE_LIST[getIndex()];
+     }
+@@ -50,13 +50,7 @@ public class SolidAccuracyFilter extends SolidIndexList {
+ 
+     @Override
+     public String getValueAsString(int i) {
+-        if (i==0) return getContext().getString(R.string.off);
+-        return String.format((Locale)null,"%.3f%s", VALUE_LIST[i] * sunit.getAltitudeFactor(), sunit.getAltitudeUnit());
++        if (i == 0) return getContext().getString(R.string.off);
++        return String.format((Locale) null, "%.3f%s", VALUE_LIST[i] * sunit.getAltitudeFactor(), sunit.getAltitudeUnit());
+     }
+-    
+-
+-
+-
+-    
+-
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/OneService.java b/app/src/main/java/ch/bailu/aat/services/OneService.java
+index d56ed99a..165f3e31 100644
+--- a/app/src/main/java/ch/bailu/aat/services/OneService.java
++++ b/app/src/main/java/ch/bailu/aat/services/OneService.java
+@@ -7,6 +7,7 @@ import ch.bailu.aat.services.cache.CacheService;
+ import ch.bailu.aat.services.dem.ElevationService;
+ import ch.bailu.aat.services.directory.DirectoryService;
+ import ch.bailu.aat.services.icons.IconMapService;
++import ch.bailu.aat.services.location.LocationService;
+ import ch.bailu.aat.services.tileremover.TileRemoverService;
+ import ch.bailu.aat.services.tracker.TrackerService;
+ 
+@@ -14,6 +15,7 @@ import static ch.bailu.aat.services.ServiceLink.ServiceNotUpError;
+ 
+ public class OneService extends AbsService  implements ServiceContext {
+ 
++    private LocationService location;
+     private TrackerService tracker;
+     private BackgroundService background;
+     private IconMapService iconMap;
+@@ -39,6 +41,11 @@ public class OneService extends AbsService  implements ServiceContext {
+             tracker = null;
+         }
+ 
++        if (location != null) {
++            location.close();
++            location = null;
++        }
++
+         if (background != null) {
+             background.close();
+             background = null;
+@@ -81,6 +88,14 @@ public class OneService extends AbsService  implements ServiceContext {
+     }
+ 
+ 
++    @Override
++    public LocationService getLocationService() {
++        if (forceUp() && location == null) {
++            location = new LocationService(this);
++        }
++        return location;
++    }
++
+     @Override
+     public BackgroundService getBackgroundService() {
+         if (forceUp() && background == null) {
+@@ -138,6 +153,7 @@ public class OneService extends AbsService  implements ServiceContext {
+     public void appendStatusText(StringBuilder builder) {
+         if (forceUp()) {
+             super.appendStatusText(builder);
++            appendStatusText(location, builder);
+             appendStatusText(tracker, builder);
+             appendStatusText(background, builder);
+             appendStatusText(cache, builder);
+diff --git a/app/src/main/java/ch/bailu/aat/services/ServiceContext.java b/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
+index 8306c012..d75b5d64 100644
+--- a/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
++++ b/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
+@@ -8,6 +8,7 @@ import ch.bailu.aat.services.cache.CacheService;
+ import ch.bailu.aat.services.dem.ElevationService;
+ import ch.bailu.aat.services.directory.DirectoryService;
+ import ch.bailu.aat.services.icons.IconMapService;
++import ch.bailu.aat.services.location.LocationService;
+ import ch.bailu.aat.services.tileremover.TileRemoverService;
+ import ch.bailu.aat.services.tracker.TrackerService;
+ 
+@@ -18,12 +19,13 @@ public interface ServiceContext extends ContextWrapperInterface {
+ 
+     boolean isUp();
+ 
++    LocationService getLocationService();
++    TrackerService getTrackerService();
+     BackgroundService getBackgroundService();
+     CacheService getCacheService();
+     ElevationService getElevationService();
+     IconMapService getIconMapService();
+     DirectoryService getDirectoryService();
+-    TrackerService getTrackerService();
+     TileRemoverService getTileRemoverService();
+ 
+     void startForeground(int id, Notification notification);
+diff --git a/app/src/main/java/ch/bailu/aat/services/ServiceLink.java b/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
+index 41b822d5..c39fea10 100644
+--- a/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
++++ b/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
+@@ -14,6 +14,7 @@ import ch.bailu.aat.services.cache.CacheService;
+ import ch.bailu.aat.services.dem.ElevationService;
+ import ch.bailu.aat.services.directory.DirectoryService;
+ import ch.bailu.aat.services.icons.IconMapService;
++import ch.bailu.aat.services.location.LocationService;
+ import ch.bailu.aat.services.tileremover.TileRemoverService;
+ import ch.bailu.aat.services.tracker.TrackerService;
+ 
+@@ -141,6 +142,13 @@ public abstract class ServiceLink implements
+     }
+ 
+ 
++    @Override
++    public TrackerService getTrackerService() {
++        return getService().getTrackerService();
++    }
++
++    @Override
++    public LocationService getLocationService() {return getService().getLocationService(); }
+ 
+     @Override
+     public BackgroundService getBackgroundService() {
+@@ -167,10 +175,6 @@ public abstract class ServiceLink implements
+         return getService().getDirectoryService();
+     }
+ 
+-    @Override
+-    public TrackerService getTrackerService() {
+-        return getService().getTrackerService();
+-    }
+ 
+     @Override
+     public TileRemoverService getTileRemoverService() {
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/AccelerationFilter.java b/app/src/main/java/ch/bailu/aat/services/location/AccelerationFilter.java
+similarity index 95%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/AccelerationFilter.java
+rename to app/src/main/java/ch/bailu/aat/services/location/AccelerationFilter.java
+index 7d1e2670..5dd58960 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/AccelerationFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/AccelerationFilter.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/AccuracyFilter.java b/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
+similarity index 75%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/AccuracyFilter.java
+rename to app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
+index b157ed2f..c743fc2d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/AccuracyFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+@@ -7,7 +7,7 @@ import ch.bailu.aat.preferences.SolidAccuracyFilter;
+ 
+ public class AccuracyFilter extends LocationStackChainedItem {
+     private float minAccuracy=99f;
+-    
++
+     public AccuracyFilter(LocationStackItem n) {
+         super(n);
+     }
+@@ -17,8 +17,7 @@ public class AccuracyFilter extends LocationStackChainedItem {
+ 
+     @Override
+     public void newLocation(LocationInformation location) {
+-        if (//location.getAccuracy()>0f &&
+-                location.getAccuracy() < minAccuracy) sendLocation(location);
++        if (location.getAccuracy() < minAccuracy) sendLocation(location);
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/AutopauseTrigger.java b/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
+similarity index 95%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/AutopauseTrigger.java
+rename to app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
+index 460aad8a..8dbcd46b 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/AutopauseTrigger.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/CleanLocation.java b/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
+similarity index 95%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/CleanLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
+index 01f52a40..e8977f6b 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/CleanLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/DirtyLocation.java b/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
+similarity index 98%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/DirtyLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
+index 8a686c45..e20562a8 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/DirtyLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+@@ -42,8 +42,8 @@ public class DirtyLocation extends LocationStackChainedItem {
+     @Override
+     public void newLocation(LocationInformation location) {
+         locationInformation=location;
+-        AppBroadcaster.broadcast(storage.getContext(), AppBroadcaster.LOCATION_CHANGED);
+         sendLocation(location);
++        AppBroadcaster.broadcast(storage.getContext(), AppBroadcaster.LOCATION_CHANGED);
+     }
+     
+     @Override
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/DistanceFilter.java b/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
+similarity index 95%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/DistanceFilter.java
+rename to app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
+index f8191ef8..d52f519e 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/DistanceFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/InformationFilter.java b/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
+similarity index 91%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/InformationFilter.java
+rename to app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
+index 90133ed2..e0a20469 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/InformationFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationInformation.java b/app/src/main/java/ch/bailu/aat/services/location/LocationInformation.java
+similarity index 85%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/LocationInformation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/LocationInformation.java
+index fa762cb6..a643af84 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationInformation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationInformation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import ch.bailu.aat.gpx.GpxInformation;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStack.java b/app/src/main/java/ch/bailu/aat/services/location/LocationService.java
+similarity index 87%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStack.java
+rename to app/src/main/java/ch/bailu/aat/services/location/LocationService.java
+index 222b509a..4bb8ba3e 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStack.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationService.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ import android.content.SharedPreferences;
+@@ -12,8 +12,11 @@ import ch.bailu.aat.gpx.interfaces.GpxPointInterface;
+ import ch.bailu.aat.preferences.PresetDependent;
+ import ch.bailu.aat.preferences.SolidLocationProvider;
+ import ch.bailu.aat.services.ServiceContext;
++import ch.bailu.aat.services.VirtualService;
++
++public class LocationService extends VirtualService
++        implements Closeable,  OnSharedPreferenceChangeListener, PresetDependent {
+ 
+-public class LocationStack implements Closeable,  OnSharedPreferenceChangeListener, PresetDependent{
+     private final SolidLocationProvider sprovider;
+ 
+     private final ArrayList<LocationStackItem> itemList= new ArrayList<>();
+@@ -24,10 +27,9 @@ public class LocationStack implements Closeable,  OnSharedPreferenceChangeListen
+     private MissingTrigger missing;
+     private AutopauseTrigger autopause;
+ 
+-    private final ServiceContext scontext;
+ 
+-    public LocationStack(ServiceContext c) {
+-        scontext=c;
++    public LocationService(ServiceContext c) {
++        super(c);
+ 
+         sprovider = new SolidLocationProvider(c.getContext());
+         sprovider.register(this);
+@@ -54,7 +56,7 @@ public class LocationStack implements Closeable,  OnSharedPreferenceChangeListen
+         itemList.add(new AccuracyFilter(lastItem()));
+         itemList.add(new InformationFilter(lastItem()));
+ 
+-        dirty = new DirtyLocation(lastItem(),scontext.getContext()); 
++        dirty = new DirtyLocation(lastItem(), getContext());
+         itemList.add(dirty);
+     }
+ 
+@@ -67,10 +69,10 @@ public class LocationStack implements Closeable,  OnSharedPreferenceChangeListen
+             provider.close();
+         }
+ 
+-        if      (sprovider.getIndex()==0) provider = new SystemLocation(lastItem(), scontext);
+-        else if (sprovider.getIndex()==1) provider = new SystemLocation(lastItem(), scontext, 2000);
+-        else if (sprovider.getIndex()==2) provider = new SystemLocation(lastItem(), scontext, 3000);
+-        else                              provider = new MockLocation(scontext.getContext(), lastItem());
++        if      (sprovider.getIndex()==0) provider = new SystemLocation(lastItem(), getSContext());
++        else if (sprovider.getIndex()==1) provider = new SystemLocation(lastItem(), getSContext(), 2000);
++        else if (sprovider.getIndex()==2) provider = new SystemLocation(lastItem(), getSContext(), 3000);
++        else                              provider = new MockLocation(getContext(), lastItem());
+ 
+         itemList.add(provider);
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackChainedItem.java b/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
+similarity index 91%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackChainedItem.java
+rename to app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
+index e119945a..85dafbca 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackChainedItem.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ 
+ public abstract class LocationStackChainedItem extends LocationStackItem {
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackItem.java b/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
+similarity index 92%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackItem.java
+rename to app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
+index ffec7d06..911e5273 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/LocationStackItem.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import java.io.Closeable;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/MissingTrigger.java b/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
+similarity index 93%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/MissingTrigger.java
+rename to app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
+index b065441c..80ea61bf 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/MissingTrigger.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/MockLocation.java b/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
+similarity index 90%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/MockLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
+index f133d679..aa751850 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/MockLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ 
+@@ -26,7 +26,10 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+     private GpxPointNode node;
+     private final Timer timer;
+     private int state;
+-    
++
++    private long nextInterval = INTERVAL;
++
++
+     public MockLocation(Context c, LocationStackItem i) {
+         super(i);
+         
+@@ -55,12 +58,12 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+     @Override
+     public void run() {
+         if (sendLocation()) {
+-            timer.kick();
++            kickTimer();
+         } else {
+             node = (GpxPointNode) mockData.getPointList().getFirst(); 
+             if (sendLocation()) {
+                 sendState(StateID.ON);
+-                timer.kick();
++                kickTimer();
+             } else {
+                 sendState(StateID.OFF);
+             }
+@@ -69,16 +72,30 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+ 
+     private boolean sendLocation() {
+         if (node != null) {
+-            
+-            //AppLog. d(this, "sendLocation");
+             sendLocation(new MockLocationInformation(node));
+             
+             node = (GpxPointNode)node.getNext();
++            if (node != null) {
++                nextInterval=node.getTimeDelta();
++            }
+             return true;
+         }
++
+         return false;
+     }
+-    
++
++    private void kickTimer() {
++        if (nextInterval <= 0 || nextInterval > 10*INTERVAL) {
++            timer.kick();
++
++        } else {
++            timer.kick(nextInterval);
++
++        }
++
++        nextInterval = INTERVAL;
++    }
++
+ 
+     private class MockLocationInformation extends LocationInformation {
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/NetworkLocation.java b/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
+similarity index 89%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/NetworkLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
+index 9908f45c..aed1f1f5 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/NetworkLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.Context;
+ import android.location.LocationManager;
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/RealLocation.java b/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
+similarity index 98%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/RealLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
+index 18a5c782..35cb971b 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/RealLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
+@@ -1,14 +1,11 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.annotation.SuppressLint;
+-import android.annotation.TargetApi;
+ import android.content.Context;
+-import android.content.pm.PackageManager;
+ import android.location.Location;
+ import android.location.LocationListener;
+ import android.location.LocationManager;
+ import android.location.LocationProvider;
+-import android.os.Build;
+ import android.os.Bundle;
+ 
+ import java.util.List;
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/ServiceLocker.java b/app/src/main/java/ch/bailu/aat/services/location/ServiceLocker.java
+similarity index 96%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/ServiceLocker.java
+rename to app/src/main/java/ch/bailu/aat/services/location/ServiceLocker.java
+index c63ee874..b5564e9f 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/ServiceLocker.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/ServiceLocker.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.content.SharedPreferences;
+ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/SystemLocation.java b/app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java
+similarity index 97%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/SystemLocation.java
+rename to app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java
+index d1a76037..82d245fa 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/SystemLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ import android.location.LocationManager;
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/location/Trigger.java b/app/src/main/java/ch/bailu/aat/services/location/Trigger.java
+similarity index 94%
+rename from app/src/main/java/ch/bailu/aat/services/tracker/location/Trigger.java
+rename to app/src/main/java/ch/bailu/aat/services/location/Trigger.java
+index 069a7cdb..677e1fe9 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/location/Trigger.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/Trigger.java
+@@ -1,4 +1,4 @@
+-package ch.bailu.aat.services.tracker.location;
++package ch.bailu.aat.services.location;
+ 
+ public class Trigger {
+     private static final int LOW =-1;
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/AutoPauseState.java b/app/src/main/java/ch/bailu/aat/services/tracker/AutoPauseState.java
+index 4ade7eb6..3744ce8d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/AutoPauseState.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/AutoPauseState.java
+@@ -34,7 +34,7 @@ public class AutoPauseState extends State {
+     }
+ 
+     @Override
+-    public void onTimer() {
++    public void updateTrack() {
+         if (! internal.isReadyForAutoPause() ) {
+             internal.state = new OnState(internal);
+         }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/OnState.java b/app/src/main/java/ch/bailu/aat/services/tracker/OnState.java
+index ea8a03be..0cb0c7c1 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/OnState.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/OnState.java
+@@ -5,6 +5,7 @@ import java.io.IOException;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.gpx.StateID;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.services.location.LocationService;
+ 
+ public class OnState extends State {
+ 
+@@ -34,14 +35,16 @@ public class OnState extends State {
+ 
+     
+     @Override
+-    public void onTimer() {
++    public void updateTrack() {
+         if (internal.isReadyForAutoPause()) {
+             internal.state = new AutoPauseState(internal);
+ 
+         } else  {
+-            if (internal.location.hasLoggableLocation()) {
++            final LocationService l = internal.scontext.getLocationService();
++
++            if (l.hasLoggableLocation()) {
+                 try {
+-                    internal.logger.log(internal.location.getCleanLocation());
++                    internal.logger.log(l.getCleanLocation());
+                 } catch (IOException e) {
+                     internal.emergencyOff(e);
+                 }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/State.java b/app/src/main/java/ch/bailu/aat/services/tracker/State.java
+index 004b742f..6257947c 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/State.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/State.java
+@@ -20,7 +20,7 @@ public abstract class State  {
+     }
+     
+     
+-    public void onTimer() {}
++    public void updateTrack() {}
+     public void preferencesChanged() {}
+ 
+     
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/TrackLogger.java b/app/src/main/java/ch/bailu/aat/services/tracker/TrackLogger.java
+index c44b6ebd..db75d5ce 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/TrackLogger.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/TrackLogger.java
+@@ -28,11 +28,6 @@ public class TrackLogger extends Logger {
+     final private Context context;
+ 
+ 
+-/*    public static File getLogFile() throws IOException {
+-        return new File(AppDirectory.getLogFile(context));
+-    }
+-*/
+-    
+     public TrackLogger(Context c, int preset) throws IOException {
+         context=c;
+         presetIndex=preset;
+@@ -80,8 +75,6 @@ public class TrackLogger extends Logger {
+ 
+     public void logPause() throws IOException {
+         if (track.getPointList().size()>0) {
+-            //requestSegment=false; FIXME ?????
+-            //log(new LastTrackPoint());
+             requestSegment=true;
+         }
+     }
+@@ -125,20 +118,4 @@ public class TrackLogger extends Logger {
+                 AppDirectory.generateDatePrefix(),
+                 AppDirectory.GPX_EXTENSION);
+     }
+-
+-/*
+-    private class LastTrackPoint implements GpxPointInterface {
+-        @Override
+-        public int getLatitudeE6()   {return TrackLogger.this.getLatitudeE6();}
+-        @Override
+-        public int getLongitudeE6()  {return TrackLogger.this.getLongitudeE6();}
+-        @Override
+-        public short getAltitude()   {return TrackLogger.this.getAltitude();}
+-        @Override
+-        public double getLongitude() {return TrackLogger.this.getLongitude();}
+-        @Override
+-        public double getLatitude()  {return TrackLogger.this.getLatitude();}
+-        @Override
+-        public long getTimeStamp()   {return System.currentTimeMillis();}
+-    }*/
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
+index c4b0e3e6..15ac47dc 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
+@@ -13,22 +13,17 @@ import ch.bailu.aat.preferences.SolidBacklight;
+ import ch.bailu.aat.preferences.SolidPreset;
+ import ch.bailu.aat.preferences.Storage;
+ import ch.bailu.aat.services.ServiceContext;
+-import ch.bailu.aat.services.tracker.location.LocationStack;
++import ch.bailu.aat.services.location.LocationService;
+ 
+ public class TrackerInternals 
+-implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
++implements OnSharedPreferenceChangeListener, Closeable {
++
+ 
+-    private final static int TIMEOUT = 1000;
+-    private final Timer timer;
+-    
+     
+     public final ServiceContext scontext;
+     public State state=null;
+ 
+-    
+-    
+     public Logger logger;
+-    public final LocationStack location;
+ 
+     public final StatusIcon statusIcon;
+     public final Backlight backlight;
+@@ -40,39 +35,18 @@ implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
+         
+     public int presetIndex;
+ 
+-    
+-    public void rereadPreferences() {
+-        presetIndex = new SolidPreset(scontext.getContext()).getIndex();
+-        sbacklight = new SolidBacklight(scontext.getContext(), presetIndex);
+-        sautopause = new SolidAutopause(scontext.getContext(), presetIndex);
+-    }
+-
+-        
+-    @Override
+-    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences,
+-            String key) {
+ 
+-        location.preferencesChanged(scontext.getContext(), presetIndex);
+-        state.preferencesChanged();
+-    }
+-
+-
+-        
+-    
+-    
+-    
+     public TrackerInternals(ServiceContext sc) {
+         scontext=sc;
+-        
++
+         backlight = new Backlight(scontext.getContext());
+-        location = new LocationStack(scontext);
+ 
+         storage = Storage.preset(scontext.getContext());
+         storage.register(this);
+         rereadPreferences();
+ 
+         statusIcon = new StatusIcon(scontext);
+-      
++
+         try {
+             logger = createLogger();
+             logger.close();
+@@ -80,29 +54,39 @@ implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
+         logger = Logger.createNullLogger();
+ 
+         state = new OffState(this);
+-        timer = new Timer(this, TIMEOUT);
+-        run();
+     }
++
++
++    public void rereadPreferences() {
++        presetIndex = new SolidPreset(scontext.getContext()).getIndex();
++        sbacklight = new SolidBacklight(scontext.getContext(), presetIndex);
++        sautopause = new SolidAutopause(scontext.getContext(), presetIndex);
++    }
++
++        
++    @Override
++    public void onSharedPreferenceChanged(SharedPreferences sharedPreferences,
++            String key) {
++        state.preferencesChanged();
++    }
++
++
++        
++    
+     
+     
++
++    
+     public void lockService() {
+         scontext.lock(this.getClass().getSimpleName());
+-        //scontext.getContext().startService(new Intent(scontext.getContext(), OneService.class));
+     }
+ 
+     public void unlockService() {
+         scontext.free(this.getClass().getSimpleName());
+-
+-        /*try {
+-            scontext.getService().stopSelf();
+-        } catch (ServiceNotUpError e) {
+-            // TODO Auto-generated catch block
+-            e.printStackTrace();
+-        }*/
+-    }    
+-    
++    }
+     
+     
++
+  
+     
+     public  TrackLogger createLogger() throws IOException {
+@@ -113,8 +97,10 @@ implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
+  
+     
+     public boolean isReadyForAutoPause() {
+-        return (   (location.isMissingUpdates() || location.isAutopaused())
+-                && sautopause.isEnabled() ); 
++        return ((
++                scontext.getLocationService().isMissingUpdates() ||
++                scontext.getLocationService().isAutopaused())    &&
++                sautopause.isEnabled());
+     }
+ 
+     
+@@ -129,18 +115,9 @@ implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
+     @Override
+     public void close() {
+         logger.close();
+-        timer.close();
+ 
+         storage.unregister(this);            
+-
+-        location.close();
+-        
+-    }
+-    
+-    
+-    @Override
+-    public void run() {
+-        timer.kick();
+-        state.onTimer();
+     }
++
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
+index f7ddc263..df0a1f6d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
+@@ -1,6 +1,13 @@
+ package ch.bailu.aat.services.tracker;
+ 
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++
+ import ch.bailu.aat.gpx.GpxInformation;
++import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppLog;
++import ch.bailu.aat.helpers.Timer;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+@@ -8,9 +15,12 @@ public class TrackerService extends VirtualService {
+ 
+     private final TrackerInternals internal;
+ 
++
+     public TrackerService(ServiceContext sc) {
+         super(sc);
+         internal = new TrackerInternals(getSContext());
++
++        AppBroadcaster.register(getContext(), onLocation, AppBroadcaster.LOCATION_CHANGED);
+     }
+ 
+ 
+@@ -19,31 +29,37 @@ public class TrackerService extends VirtualService {
+     }
+ 
+ 
++    /**
++     *
++     * @return Unfiltered track infromation. Exactly the way it is logged.
++     */
+     public GpxInformation getTrackerInformation() {
+         return internal.logger;
+     }
+ 
+ 
+-    public GpxInformation getLocation() {
+-        return internal.location.getLocationInformation();
+-    }
+ 
+-    @Override
+-    public void appendStatusText(StringBuilder builder) {
++    private final BroadcastReceiver onLocation = new BroadcastReceiver() {
+ 
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            internal.state.updateTrack();
++        }
++    };
+ 
+ 
+ 
++    @Override
++    public void appendStatusText(StringBuilder builder) {
+         builder.append("<p>Log to: ");
+         builder.append(internal.logger.getPath());
+         builder.append("</p>");
+-
+-        internal.location.appendStatusText(builder);
+     }
+ 
+     @Override
+     public void close() {
+         internal.close();
++        getContext().unregisterReceiver(onLocation);
+     }
+ 
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/views/map/overlay/control/FileControlBar.java b/app/src/main/java/ch/bailu/aat/views/map/overlay/control/FileControlBar.java
+index 427b7069..72b5f18c 100644
+--- a/app/src/main/java/ch/bailu/aat/views/map/overlay/control/FileControlBar.java
++++ b/app/src/main/java/ch/bailu/aat/views/map/overlay/control/FileControlBar.java
+@@ -115,7 +115,7 @@ public class FileControlBar extends ControlBarOverlay{
+             preview.setFilePath(selectedFile);
+ 
+             builder.clear();
+-            builder.appendH3(iterator.getInfo().getName());
++            builder.appendHeader(iterator.getInfo().getName());
+             for (ContentDescription d: summaryData) {
+                 d.onContentUpdated(iterator.getInfo());
+                 builder.append(d);
+diff --git a/app/src/main/java/ch/bailu/aat/views/preferences/VerticalScrollView.java b/app/src/main/java/ch/bailu/aat/views/preferences/VerticalScrollView.java
+index 9f6edf3e..b5f9de73 100644
+--- a/app/src/main/java/ch/bailu/aat/views/preferences/VerticalScrollView.java
++++ b/app/src/main/java/ch/bailu/aat/views/preferences/VerticalScrollView.java
+@@ -29,16 +29,20 @@ public class VerticalScrollView extends ScrollView {
+         layout.addView(view);
+     }
+ 
++    public void add(DispatcherInterface di, ContentDescription d, int iid) {
++        final LabelTextView v = new LabelTextView(getContext(), d);
++
++        add(v);
++        di.addTarget(v, iid);
++
++    }
++
+ 
+     public void addAllContent(DispatcherInterface di,
+                               ContentDescription[] descriptions,
+                               int iid) {
+-        final LabelTextView views[] = new LabelTextView[descriptions.length];
+         for (int i=0; i< descriptions.length; i++) {
+-            views[i] = new LabelTextView(getContext(),descriptions[i]);
+-            add(views[i]);
+-
+-            di.addTarget(views[i], iid);
++            add(di, descriptions[i], iid);
+         }
+     }
+ 

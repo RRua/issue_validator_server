@@ -1,0 +1,4042 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.java
+deleted file mode 100644
+index 29d8af7a4..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.java
++++ /dev/null
+@@ -1,49 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.services.ftp;
+-
+-/** Created by yashwanthreddyg on 09-06-2016. */
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.util.Log;
+-
+-public class FtpReceiver extends BroadcastReceiver {
+-
+-  static final String TAG = FtpReceiver.class.getSimpleName();
+-
+-  @Override
+-  public void onReceive(Context context, Intent intent) {
+-    Log.v(TAG, "Received: " + intent.getAction());
+-
+-    try {
+-      Intent service = new Intent(context, FtpService.class);
+-      service.putExtras(intent);
+-      if (intent.getAction().equals(FtpService.ACTION_START_FTPSERVER) && !FtpService.isRunning()) {
+-        context.startService(service);
+-      } else if (intent.getAction().equals(FtpService.ACTION_STOP_FTPSERVER)) {
+-        context.stopService(service);
+-      }
+-    } catch (Exception e) {
+-      Log.e(TAG, "Failed to start/stop on intent " + e.getMessage());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.kt
+new file mode 100644
+index 000000000..bee098569
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpReceiver.kt
+@@ -0,0 +1,51 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.services.ftp
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import android.util.Log
++import com.amaze.filemanager.BuildConfig.DEBUG
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isRunning
++
++/** Created by yashwanthreddyg on 09-06-2016.  */
++class FtpReceiver : BroadcastReceiver() {
++
++    private val TAG = FtpReceiver::class.java.simpleName
++
++    override fun onReceive(context: Context, intent: Intent) {
++        if (DEBUG) {
++            Log.v(TAG, "Received: ${intent.action}")
++        }
++        val service = Intent(context, FtpService::class.java)
++        service.putExtras(intent)
++        runCatching {
++            if (intent.action == FtpService.ACTION_START_FTPSERVER && !isRunning()) {
++                context.startService(service)
++            } else if (intent.action == FtpService.ACTION_STOP_FTPSERVER) {
++                context.stopService(service)
++            } else Unit
++        }.onFailure {
++            Log.e(TAG, "Failed to start/stop on intent ${it.message}")
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java
+deleted file mode 100644
+index f0da431db..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.java
++++ /dev/null
+@@ -1,405 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.services.ftp;
+-
+-/**
+- * Created by yashwanthreddyg on 09-06-2016.
+- *
+- * <p>Edited by zent-co on 30-07-2019 Edited by bowiechen on 2019-10-19.
+- */
+-import java.io.IOException;
+-import java.lang.reflect.InvocationTargetException;
+-import java.lang.reflect.Method;
+-import java.net.InetAddress;
+-import java.net.NetworkInterface;
+-import java.net.SocketException;
+-import java.net.UnknownHostException;
+-import java.security.GeneralSecurityException;
+-import java.security.KeyStore;
+-import java.util.Collections;
+-import java.util.Enumeration;
+-
+-import javax.net.ssl.KeyManagerFactory;
+-import javax.net.ssl.TrustManagerFactory;
+-
+-import org.apache.ftpserver.ConnectionConfigFactory;
+-import org.apache.ftpserver.FtpServer;
+-import org.apache.ftpserver.FtpServerFactory;
+-import org.apache.ftpserver.ftplet.FtpException;
+-import org.apache.ftpserver.listener.ListenerFactory;
+-import org.apache.ftpserver.ssl.ClientAuth;
+-import org.apache.ftpserver.ssl.impl.DefaultSslConfiguration;
+-import org.apache.ftpserver.usermanager.impl.BaseUser;
+-import org.apache.ftpserver.usermanager.impl.WritePermission;
+-import org.greenrobot.eventbus.EventBus;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.filesystem.files.CryptUtil;
+-import com.amaze.filemanager.ui.notifications.FtpNotification;
+-import com.amaze.filemanager.ui.notifications.NotificationConstants;
+-import com.amaze.filemanager.utils.ObtainableServiceBinder;
+-
+-import android.app.AlarmManager;
+-import android.app.Notification;
+-import android.app.PendingIntent;
+-import android.app.Service;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.SharedPreferences;
+-import android.net.ConnectivityManager;
+-import android.net.NetworkInfo;
+-import android.net.wifi.WifiManager;
+-import android.os.Environment;
+-import android.os.IBinder;
+-import android.os.SystemClock;
+-import android.preference.PreferenceManager;
+-import android.widget.Toast;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-
+-public class FtpService extends Service implements Runnable {
+-
+-  public static final int DEFAULT_PORT = 2211;
+-  public static final String DEFAULT_USERNAME = "";
+-  public static final int DEFAULT_TIMEOUT = 600; // default timeout, in sec
+-  public static final boolean DEFAULT_SECURE = true;
+-  public static final String PORT_PREFERENCE_KEY = "ftpPort";
+-  public static final String KEY_PREFERENCE_PATH = "ftp_path";
+-  public static final String KEY_PREFERENCE_USERNAME = "ftp_username";
+-  public static final String KEY_PREFERENCE_PASSWORD = "ftp_password_encrypted";
+-  public static final String KEY_PREFERENCE_TIMEOUT = "ftp_timeout";
+-  public static final String KEY_PREFERENCE_SECURE = "ftp_secure";
+-  public static final String KEY_PREFERENCE_READONLY = "ftp_readonly";
+-  public static final String DEFAULT_PATH =
+-      Environment.getExternalStorageDirectory().getAbsolutePath();
+-  public static final String INITIALS_HOST_FTP = "ftp://";
+-  public static final String INITIALS_HOST_SFTP = "ftps://";
+-
+-  private final IBinder binder = new ObtainableServiceBinder<>(this);
+-
+-  private static final String WIFI_AP_ADDRESS_PREFIX = "192.168.43.";
+-  private static final char[] KEYSTORE_PASSWORD = "vishal007".toCharArray();
+-
+-  // Service will broadcast via event bus when server start/stop
+-  public enum FtpReceiverActions {
+-    STARTED,
+-    STARTED_FROM_TILE,
+-    STOPPED,
+-    FAILED_TO_START
+-  }
+-
+-  // RequestStartStopReceiver listens for these actions to start/stop this server
+-  public static final String ACTION_START_FTPSERVER =
+-      "com.amaze.filemanager.services.ftpservice.FTPReceiver.ACTION_START_FTPSERVER";
+-  public static final String ACTION_STOP_FTPSERVER =
+-      "com.amaze.filemanager.services.ftpservice.FTPReceiver.ACTION_STOP_FTPSERVER";
+-
+-  public static final String TAG_STARTED_BY_TILE =
+-      "started_by_tile"; // attribute of action_started, used by notification
+-
+-  private String username, password;
+-  private boolean isPasswordProtected = false;
+-
+-  private FtpServer server;
+-  protected static Thread serverThread = null;
+-
+-  private boolean isStartedByTile = false;
+-
+-  @Override
+-  public int onStartCommand(Intent intent, int flags, int startId) {
+-    isStartedByTile = intent.getBooleanExtra(TAG_STARTED_BY_TILE, false);
+-    int attempts = 10;
+-    while (serverThread != null) {
+-      if (attempts > 0) {
+-        attempts--;
+-        try {
+-          Thread.sleep(1000);
+-        } catch (InterruptedException ignored) {
+-        }
+-      } else {
+-        return START_STICKY;
+-      }
+-    }
+-
+-    serverThread = new Thread(this);
+-    serverThread.start();
+-
+-    Notification notification =
+-        FtpNotification.startNotification(getApplicationContext(), isStartedByTile);
+-
+-    startForeground(NotificationConstants.FTP_ID, notification);
+-
+-    return START_NOT_STICKY;
+-  }
+-
+-  @Override
+-  public IBinder onBind(Intent intent) {
+-    return binder;
+-  }
+-
+-  @Override
+-  public void run() {
+-    SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+-
+-    FtpServerFactory serverFactory = new FtpServerFactory();
+-    ConnectionConfigFactory connectionConfigFactory = new ConnectionConfigFactory();
+-    connectionConfigFactory.setAnonymousLoginEnabled(true);
+-
+-    serverFactory.setConnectionConfig(connectionConfigFactory.createConnectionConfig());
+-
+-    String usernamePreference = preferences.getString(KEY_PREFERENCE_USERNAME, DEFAULT_USERNAME);
+-    if (!usernamePreference.equals(DEFAULT_USERNAME)) {
+-      username = usernamePreference;
+-      try {
+-        password =
+-            CryptUtil.decryptPassword(
+-                getApplicationContext(), preferences.getString(KEY_PREFERENCE_PASSWORD, ""));
+-        isPasswordProtected = true;
+-      } catch (GeneralSecurityException | IOException e) {
+-        e.printStackTrace();
+-
+-        Toast.makeText(
+-                getApplicationContext(),
+-                getResources().getString(R.string.error),
+-                Toast.LENGTH_SHORT)
+-            .show();
+-        // can't decrypt the password saved in preferences, remove the preference altogether
+-        // and start an anonymous connection instead
+-        preferences.edit().putString(FtpService.KEY_PREFERENCE_PASSWORD, "").apply();
+-        isPasswordProtected = false;
+-      }
+-    }
+-
+-    BaseUser user = new BaseUser();
+-    if (!isPasswordProtected) {
+-      user.setName("anonymous");
+-    } else {
+-      user.setName(username);
+-      user.setPassword(password);
+-    }
+-
+-    user.setHomeDirectory(preferences.getString(KEY_PREFERENCE_PATH, DEFAULT_PATH));
+-    if (!preferences.getBoolean(KEY_PREFERENCE_READONLY, false)) {
+-      user.setAuthorities(Collections.singletonList(new WritePermission()));
+-    }
+-    try {
+-      serverFactory.getUserManager().save(user);
+-    } catch (FtpException e) {
+-      e.printStackTrace();
+-    }
+-    ListenerFactory fac = new ListenerFactory();
+-
+-    if (preferences.getBoolean(KEY_PREFERENCE_SECURE, DEFAULT_SECURE)) {
+-
+-      try {
+-        KeyStore keyStore = KeyStore.getInstance("BKS");
+-        keyStore.load(getResources().openRawResource(R.raw.key), KEYSTORE_PASSWORD);
+-
+-        KeyManagerFactory keyManagerFactory =
+-            KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+-        keyManagerFactory.init(keyStore, KEYSTORE_PASSWORD);
+-
+-        TrustManagerFactory trustManagerFactory =
+-            TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+-        trustManagerFactory.init(keyStore);
+-
+-        fac.setSslConfiguration(
+-            new DefaultSslConfiguration(
+-                keyManagerFactory, trustManagerFactory, ClientAuth.WANT, "TLS", null, "ftpserver"));
+-        fac.setImplicitSsl(true);
+-      } catch (GeneralSecurityException | IOException e) {
+-        preferences.edit().putBoolean(KEY_PREFERENCE_SECURE, false).apply();
+-      }
+-    }
+-
+-    fac.setPort(getPort(preferences));
+-    fac.setIdleTimeout(preferences.getInt(KEY_PREFERENCE_TIMEOUT, DEFAULT_TIMEOUT));
+-
+-    serverFactory.addListener("default", fac.createListener());
+-    try {
+-      server = serverFactory.createServer();
+-      server.start();
+-      EventBus.getDefault()
+-          .post(
+-              isStartedByTile ? FtpReceiverActions.STARTED_FROM_TILE : FtpReceiverActions.STARTED);
+-    } catch (Exception e) {
+-      EventBus.getDefault().post(FtpReceiverActions.FAILED_TO_START);
+-    }
+-  }
+-
+-  @Override
+-  public void onDestroy() {
+-    if (serverThread == null) {
+-      return;
+-    }
+-    serverThread.interrupt();
+-    try {
+-      serverThread.join(10000); // wait 10 sec for server thread to finish
+-    } catch (InterruptedException e) {
+-    }
+-    if (!serverThread.isAlive()) {
+-      serverThread = null;
+-    }
+-    if (server != null) {
+-      server.stop();
+-      EventBus.getDefault().post(FtpReceiverActions.STOPPED);
+-    }
+-  }
+-
+-  // Restart the service if the app is closed from the recent list
+-  @Override
+-  public void onTaskRemoved(Intent rootIntent) {
+-    super.onTaskRemoved(rootIntent);
+-
+-    Intent restartService = new Intent(getApplicationContext(), this.getClass());
+-    restartService.setPackage(getPackageName());
+-    PendingIntent restartServicePI =
+-        PendingIntent.getService(
+-            getApplicationContext(), 1, restartService, PendingIntent.FLAG_ONE_SHOT);
+-    AlarmManager alarmService =
+-        (AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE);
+-    alarmService.set(
+-        AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 2000, restartServicePI);
+-  }
+-
+-  public static boolean isRunning() {
+-    return serverThread != null;
+-  }
+-
+-  public static boolean isConnectedToLocalNetwork(Context context) {
+-    ConnectivityManager cm =
+-        (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+-    boolean connected = false;
+-    NetworkInfo ni = cm.getActiveNetworkInfo();
+-    connected =
+-        ni != null
+-            && ni.isConnected()
+-            && (ni.getType() & (ConnectivityManager.TYPE_WIFI | ConnectivityManager.TYPE_ETHERNET))
+-                != 0;
+-    if (!connected) {
+-      try {
+-        for (NetworkInterface netInterface :
+-            Collections.list(NetworkInterface.getNetworkInterfaces())) {
+-          if (netInterface.getDisplayName().startsWith("rndis")) {
+-            connected = true;
+-          }
+-        }
+-      } catch (SocketException e) {
+-        e.printStackTrace();
+-      }
+-    }
+-    return connected;
+-  }
+-
+-  public static boolean isConnectedToWifi(Context context) {
+-    ConnectivityManager cm =
+-        (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+-    @Nullable NetworkInfo ni = cm.getActiveNetworkInfo();
+-    return ni != null && ni.isConnected() && ni.getType() == ConnectivityManager.TYPE_WIFI;
+-  }
+-
+-  public static boolean isEnabledWifiHotspot(Context context) {
+-    WifiManager wm =
+-        (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+-    Boolean enabled = callIsWifiApEnabled(wm);
+-    return enabled != null ? enabled : false;
+-  }
+-
+-  @Nullable
+-  public static InetAddress getLocalInetAddress(Context context) {
+-    if (!isConnectedToLocalNetwork(context) && !isEnabledWifiHotspot(context)) {
+-      return null;
+-    }
+-
+-    if (isConnectedToWifi(context)) {
+-      WifiManager wm =
+-          (WifiManager) context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+-      int ipAddress = wm.getConnectionInfo().getIpAddress();
+-      if (ipAddress == 0) return null;
+-      return intToInet(ipAddress);
+-    }
+-
+-    try {
+-      Enumeration<NetworkInterface> netinterfaces = NetworkInterface.getNetworkInterfaces();
+-      while (netinterfaces.hasMoreElements()) {
+-        NetworkInterface netinterface = netinterfaces.nextElement();
+-        Enumeration<InetAddress> addresses = netinterface.getInetAddresses();
+-        while (addresses.hasMoreElements()) {
+-          InetAddress address = addresses.nextElement();
+-          if (address == null) {
+-            continue;
+-          }
+-
+-          if (address.getHostAddress().startsWith(WIFI_AP_ADDRESS_PREFIX)
+-              && isEnabledWifiHotspot(context)) return address;
+-
+-          // this is the condition that sometimes gives problems
+-          if (!address.isLoopbackAddress()
+-              && !address.isLinkLocalAddress()
+-              && !isEnabledWifiHotspot(context)) return address;
+-        }
+-      }
+-    } catch (SocketException e) {
+-      e.printStackTrace();
+-    }
+-    return null;
+-  }
+-
+-  private static InetAddress intToInet(int value) {
+-    byte[] bytes = new byte[4];
+-    for (int i = 0; i < 4; i++) {
+-      bytes[i] = byteOfInt(value, i);
+-    }
+-    try {
+-      return InetAddress.getByAddress(bytes);
+-    } catch (UnknownHostException e) {
+-      // This only happens if the byte array has a bad length
+-      return null;
+-    }
+-  }
+-
+-  private static byte byteOfInt(int value, int which) {
+-    int shift = which * 8;
+-    return (byte) (value >> shift);
+-  }
+-
+-  private static int getPort(SharedPreferences preferences) {
+-    return preferences.getInt(PORT_PREFERENCE_KEY, DEFAULT_PORT);
+-  }
+-
+-  @Nullable
+-  private static Boolean callIsWifiApEnabled(@NonNull WifiManager wifiManager) {
+-    Boolean r = null;
+-    try {
+-      Method method = wifiManager.getClass().getDeclaredMethod("isWifiApEnabled");
+-      r = (Boolean) method.invoke(wifiManager);
+-    } catch (NoSuchMethodException e) {
+-      e.printStackTrace();
+-    } catch (IllegalAccessException e) {
+-      e.printStackTrace();
+-    } catch (InvocationTargetException e) {
+-      e.printStackTrace();
+-    }
+-
+-    return r;
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt
+new file mode 100644
+index 000000000..40d87fa9b
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ftp/FtpService.kt
+@@ -0,0 +1,392 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.services.ftp
++
++import android.app.AlarmManager
++import android.app.PendingIntent
++import android.app.Service
++import android.content.Context
++import android.content.Intent
++import android.content.SharedPreferences
++import android.net.ConnectivityManager
++import android.net.NetworkCapabilities
++import android.net.wifi.WifiManager
++import android.os.Build
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Build.VERSION_CODES.M
++import android.os.Environment
++import android.os.IBinder
++import android.os.SystemClock
++import android.preference.PreferenceManager
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.filesystem.files.CryptUtil
++import com.amaze.filemanager.filesystem.ftpserver.AndroidFileSystemFactory
++import com.amaze.filemanager.ui.notifications.FtpNotification
++import com.amaze.filemanager.ui.notifications.NotificationConstants
++import com.amaze.filemanager.utils.ObtainableServiceBinder
++import org.apache.ftpserver.ConnectionConfigFactory
++import org.apache.ftpserver.FtpServer
++import org.apache.ftpserver.FtpServerFactory
++import org.apache.ftpserver.listener.ListenerFactory
++import org.apache.ftpserver.ssl.ClientAuth
++import org.apache.ftpserver.ssl.impl.DefaultSslConfiguration
++import org.apache.ftpserver.usermanager.impl.BaseUser
++import org.apache.ftpserver.usermanager.impl.WritePermission
++import org.greenrobot.eventbus.EventBus
++import java.io.IOException
++import java.net.InetAddress
++import java.net.NetworkInterface
++import java.net.UnknownHostException
++import java.security.GeneralSecurityException
++import java.security.KeyStore
++import java.util.*
++import javax.net.ssl.KeyManagerFactory
++import javax.net.ssl.TrustManagerFactory
++
++/**
++ * Created by yashwanthreddyg on 09-06-2016.
++ *
++ *
++ * Edited by zent-co on 30-07-2019 Edited by bowiechen on 2019-10-19.
++ */
++class FtpService : Service(), Runnable {
++    private val binder: IBinder = ObtainableServiceBinder(this)
++
++    // Service will broadcast via event bus when server start/stop
++    enum class FtpReceiverActions {
++        STARTED, STARTED_FROM_TILE, STOPPED, FAILED_TO_START
++    }
++
++    private var username: String? = null
++    private var password: String? = null
++    private var isPasswordProtected = false
++    private var server: FtpServer? = null
++    private var isStartedByTile = false
++
++    override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
++        isStartedByTile = intent.getBooleanExtra(TAG_STARTED_BY_TILE, false)
++        var attempts = 10
++        while (serverThread != null) {
++            if (attempts > 0) {
++                attempts--
++                try {
++                    Thread.sleep(1000)
++                } catch (ignored: InterruptedException) {
++                }
++            } else {
++                return START_STICKY
++            }
++        }
++        serverThread = Thread(this)
++        serverThread!!.start()
++        val notification = FtpNotification.startNotification(applicationContext, isStartedByTile)
++        startForeground(NotificationConstants.FTP_ID, notification)
++        return START_NOT_STICKY
++    }
++
++    override fun onBind(intent: Intent): IBinder {
++        return binder
++    }
++
++    @Suppress("LongMethod")
++    override fun run() {
++        val preferences = PreferenceManager.getDefaultSharedPreferences(this)
++        FtpServerFactory().run {
++            val connectionConfigFactory = ConnectionConfigFactory()
++            if (Build.VERSION.SDK_INT >= KITKAT) {
++                fileSystem = AndroidFileSystemFactory(applicationContext)
++            }
++
++            val usernamePreference = preferences.getString(
++                KEY_PREFERENCE_USERNAME,
++                DEFAULT_USERNAME
++            )
++            if (usernamePreference != DEFAULT_USERNAME) {
++                username = usernamePreference
++                runCatching {
++                    password = CryptUtil.decryptPassword(
++                        applicationContext, preferences.getString(KEY_PREFERENCE_PASSWORD, "")
++                    )
++                    isPasswordProtected = true
++                }.onFailure {
++                    it.printStackTrace()
++                    AppConfig.toast(applicationContext, R.string.error)
++                    preferences.edit().putString(KEY_PREFERENCE_PASSWORD, "").apply()
++                    isPasswordProtected = false
++                }
++            }
++            val user = BaseUser()
++            if (!isPasswordProtected) {
++                user.name = "anonymous"
++                connectionConfigFactory.isAnonymousLoginEnabled = true
++            } else {
++                user.name = username
++                user.password = password
++            }
++            user.homeDirectory = preferences.getString(KEY_PREFERENCE_PATH, DEFAULT_PATH)
++            if (!preferences.getBoolean(KEY_PREFERENCE_READONLY, false)) {
++                user.authorities = listOf(WritePermission())
++            }
++
++            connectionConfig = connectionConfigFactory.createConnectionConfig()
++            userManager.save(user)
++
++            val fac = ListenerFactory()
++            if (preferences.getBoolean(KEY_PREFERENCE_SECURE, DEFAULT_SECURE)) {
++                try {
++                    val keyStore = KeyStore.getInstance("BKS")
++                    keyStore.load(resources.openRawResource(R.raw.key), KEYSTORE_PASSWORD)
++                    val keyManagerFactory = KeyManagerFactory
++                        .getInstance(KeyManagerFactory.getDefaultAlgorithm())
++                    keyManagerFactory.init(keyStore, KEYSTORE_PASSWORD)
++                    val trustManagerFactory = TrustManagerFactory
++                        .getInstance(TrustManagerFactory.getDefaultAlgorithm())
++                    trustManagerFactory.init(keyStore)
++                    fac.sslConfiguration = DefaultSslConfiguration(
++                        keyManagerFactory,
++                        trustManagerFactory,
++                        ClientAuth.WANT,
++                        "TLS",
++                        null,
++                        "ftpserver"
++                    )
++                    fac.isImplicitSsl = true
++                } catch (e: GeneralSecurityException) {
++                    preferences.edit().putBoolean(KEY_PREFERENCE_SECURE, false).apply()
++                } catch (e: IOException) {
++                    preferences.edit().putBoolean(KEY_PREFERENCE_SECURE, false).apply()
++                }
++            }
++            fac.port = getPort(preferences)
++            fac.idleTimeout = preferences.getInt(KEY_PREFERENCE_TIMEOUT, DEFAULT_TIMEOUT)
++
++            addListener("default", fac.createListener())
++            runCatching {
++                server = createServer().apply {
++                    start()
++                    EventBus.getDefault()
++                        .post(
++                            if (isStartedByTile)
++                                FtpReceiverActions.STARTED_FROM_TILE
++                            else
++                                FtpReceiverActions.STARTED
++                        )
++                }
++            }.onFailure {
++                EventBus.getDefault().post(FtpReceiverActions.FAILED_TO_START)
++            }
++        }
++    }
++
++    override fun onDestroy() {
++        serverThread?.interrupt().also {
++            // wait 10 sec for server thread to finish
++            serverThread!!.join(10000)
++
++            if (!serverThread!!.isAlive) {
++                serverThread = null
++            }
++            server?.stop().also {
++                EventBus.getDefault().post(FtpReceiverActions.STOPPED)
++            }
++        }
++    }
++
++    // Restart the service if the app is closed from the recent list
++    override fun onTaskRemoved(rootIntent: Intent) {
++        super.onTaskRemoved(rootIntent)
++        val restartService = Intent(applicationContext, this.javaClass).setPackage(packageName)
++        val restartServicePI = PendingIntent.getService(
++            applicationContext, 1, restartService, PendingIntent.FLAG_ONE_SHOT
++        )
++        val alarmService = applicationContext.getSystemService(ALARM_SERVICE) as AlarmManager
++        alarmService[AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 2000] =
++            restartServicePI
++    }
++
++    companion object {
++        const val DEFAULT_PORT = 2211
++        const val DEFAULT_USERNAME = ""
++        const val DEFAULT_TIMEOUT = 600 // default timeout, in sec
++        const val DEFAULT_SECURE = true
++        const val PORT_PREFERENCE_KEY = "ftpPort"
++        const val KEY_PREFERENCE_PATH = "ftp_path"
++        const val KEY_PREFERENCE_USERNAME = "ftp_username"
++        const val KEY_PREFERENCE_PASSWORD = "ftp_password_encrypted"
++        const val KEY_PREFERENCE_TIMEOUT = "ftp_timeout"
++        const val KEY_PREFERENCE_SECURE = "ftp_secure"
++        const val KEY_PREFERENCE_READONLY = "ftp_readonly"
++        const val INITIALS_HOST_FTP = "ftp://"
++        const val INITIALS_HOST_SFTP = "ftps://"
++        private const val WIFI_AP_ADDRESS_PREFIX = "192.168.43."
++        private val KEYSTORE_PASSWORD = "vishal007".toCharArray()
++
++        val DEFAULT_PATH: String = if (Build.VERSION.SDK_INT < M) {
++            Environment.getExternalStorageDirectory().absolutePath
++        } else {
++            "content://com.android.externalstorage.documents/tree/primary%3A"
++        }
++
++        // RequestStartStopReceiver listens for these actions to start/stop this server
++        const val ACTION_START_FTPSERVER =
++            "com.amaze.filemanager.services.ftpservice.FTPReceiver.ACTION_START_FTPSERVER"
++        const val ACTION_STOP_FTPSERVER =
++            "com.amaze.filemanager.services.ftpservice.FTPReceiver.ACTION_STOP_FTPSERVER"
++        const val TAG_STARTED_BY_TILE = "started_by_tile"
++        // attribute of action_started, used by notification
++
++        var serverThread: Thread? = null
++
++        /**
++         * Indicator whether FTP service is running
++         */
++        @JvmStatic
++        fun isRunning(): Boolean = serverThread != null
++
++        /**
++         * Is the device connected to local network, either Ethernet or Wifi?
++         */
++        @JvmStatic
++        fun isConnectedToLocalNetwork(context: Context): Boolean {
++            val cm = context.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
++            var connected: Boolean
++            if (Build.VERSION.SDK_INT >= M) {
++                return cm.activeNetwork?.let { activeNetwork ->
++                    cm.getNetworkCapabilities(activeNetwork)?.let { ni ->
++                        ni.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) or
++                            ni.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
++                    } ?: false
++                } ?: false
++            } else {
++                connected = cm.activeNetworkInfo?.let { ni ->
++                    ni.isConnected && (
++                        ni.type and (
++                            ConnectivityManager.TYPE_WIFI
++                                or ConnectivityManager.TYPE_ETHERNET
++                            ) != 0
++                        )
++                } ?: false
++                if (!connected) {
++                    connected = runCatching {
++                        NetworkInterface.getNetworkInterfaces().toList().find { netInterface ->
++                            netInterface.displayName.startsWith("rndis")
++                        }
++                    }.getOrElse { null } != null
++                }
++            }
++
++            return connected
++        }
++
++        /**
++         * Is the device connected to Wifi?
++         */
++        @JvmStatic
++        fun isConnectedToWifi(context: Context): Boolean {
++            val cm = context.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
++            return if (Build.VERSION.SDK_INT >= M) {
++                cm.activeNetwork?.let {
++                    cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
++                } ?: false
++            } else {
++                cm.activeNetworkInfo?.let {
++                    it.isConnected && it.type == ConnectivityManager.TYPE_WIFI
++                } ?: false
++            }
++        }
++
++        /**
++         * Is the device's wifi hotspot enabled?
++         */
++        @JvmStatic
++        fun isEnabledWifiHotspot(context: Context): Boolean {
++            val wm = context.applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
++            return callIsWifiApEnabled(wm)
++        }
++
++        /**
++         * Determine device's IP address
++         */
++        @JvmStatic
++        fun getLocalInetAddress(context: Context): InetAddress? {
++            if (!isConnectedToLocalNetwork(context) && !isEnabledWifiHotspot(context)) {
++                return null
++            }
++            if (isConnectedToWifi(context)) {
++                val wm = context.applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
++                val ipAddress = wm.connectionInfo.ipAddress
++                return if (ipAddress == 0) null else intToInet(ipAddress)
++            }
++            runCatching {
++                NetworkInterface.getNetworkInterfaces().iterator().forEach { netinterface ->
++                    netinterface.inetAddresses.iterator().forEach { address ->
++                        if (address.hostAddress.startsWith(WIFI_AP_ADDRESS_PREFIX) &&
++                            isEnabledWifiHotspot(context)
++                        ) {
++                            return address
++                        }
++
++                        // this is the condition that sometimes gives problems
++                        if (!address.isLoopbackAddress &&
++                            !address.isLinkLocalAddress &&
++                            !isEnabledWifiHotspot(context)
++                        ) {
++                            return address
++                        }
++                    }
++                }
++            }.onFailure { e ->
++                e.printStackTrace()
++            }
++            return null
++        }
++
++        private fun intToInet(value: Int): InetAddress? {
++            val bytes = ByteArray(4)
++            for (i in 0..3) {
++                bytes[i] = byteOfInt(value, i)
++            }
++            return try {
++                InetAddress.getByAddress(bytes)
++            } catch (e: UnknownHostException) {
++                // This only happens if the byte array has a bad length
++                null
++            }
++        }
++
++        private fun byteOfInt(value: Int, which: Int): Byte {
++            val shift = which * 8
++            return (value shr shift).toByte()
++        }
++
++        private fun getPort(preferences: SharedPreferences): Int {
++            return preferences.getInt(PORT_PREFERENCE_KEY, DEFAULT_PORT)
++        }
++
++        private fun callIsWifiApEnabled(wifiManager: WifiManager): Boolean = runCatching {
++            val method = wifiManager.javaClass.getDeclaredMethod("isWifiApEnabled")
++            method.invoke(wifiManager) as Boolean
++        }.getOrElse {
++            false
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/crashreport/ErrorActivity.java b/app/src/main/java/com/amaze/filemanager/crashreport/ErrorActivity.java
+index 6298c15e2..7cafd5ac4 100644
+--- a/app/src/main/java/com/amaze/filemanager/crashreport/ErrorActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/crashreport/ErrorActivity.java
+@@ -361,12 +361,16 @@ public class ErrorActivity extends ThemedActivity {
+           .append(
+               String.format("## Issue explanation (write below this line)\n\n%s\n\n", userComment))
+           .append("## Exception")
++          .append("\n* __App Name:__ ")
++          .append(getString(R.string.app_name))
++          .append("\n* __Package:__ ")
++          .append(BuildConfig.APPLICATION_ID)
++          .append("\n* __Version:__ ")
++          .append(BuildConfig.VERSION_NAME)
+           .append("\n* __User Action:__ ")
+           .append(errorInfo.userAction)
+           .append("\n* __Request:__ ")
+           .append(errorInfo.request)
+-          .append("\n* __Version:__ ")
+-          .append(BuildConfig.VERSION_NAME)
+           .append("\n* __OS:__ ")
+           .append(getOsString())
+           .append("\n* __Device:__ ")
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFileSystemFactory.kt b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFileSystemFactory.kt
+new file mode 100644
+index 000000000..f7cdb433f
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFileSystemFactory.kt
+@@ -0,0 +1,36 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.ftpserver
++
++import android.content.Context
++import android.os.Build.VERSION_CODES.KITKAT
++import androidx.annotation.RequiresApi
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService
++import org.apache.ftpserver.ftplet.FileSystemFactory
++import org.apache.ftpserver.ftplet.FileSystemView
++import org.apache.ftpserver.ftplet.User
++
++@RequiresApi(KITKAT)
++class AndroidFileSystemFactory(private val context: Context) : FileSystemFactory {
++
++    override fun createFileSystemView(user: User?): FileSystemView =
++        AndroidFtpFileSystemView(context, user?.homeDirectory ?: FtpService.DEFAULT_PATH)
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFile.kt b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFile.kt
+new file mode 100644
+index 000000000..3bc7621c2
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFile.kt
+@@ -0,0 +1,215 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.ftpserver
++
++import android.content.ContentResolver
++import android.content.ContentValues
++import android.content.Context
++import android.net.Uri
++import android.os.Build.VERSION_CODES.KITKAT
++import android.provider.DocumentsContract
++import androidx.annotation.RequiresApi
++import androidx.documentfile.provider.DocumentFile
++import org.apache.ftpserver.ftplet.FtpFile
++import java.io.FileNotFoundException
++import java.io.IOException
++import java.io.InputStream
++import java.io.OutputStream
++import java.lang.ref.WeakReference
++
++@RequiresApi(KITKAT)
++@Suppress("TooManyFunctions") // Don't ask me. Ask Apache why.
++class AndroidFtpFile(
++    context: Context,
++    private val parentDocument: DocumentFile,
++    private val backingDocument: DocumentFile?,
++    private val path: String
++) : FtpFile {
++
++    private val _context: WeakReference<Context> = WeakReference(context)
++    private val context: Context
++        get() = _context.get()!!
++
++    override fun getAbsolutePath(): String {
++        return path
++    }
++
++    /**
++     * @see FtpFile.getName
++     * @see DocumentFile.getName
++     */
++    override fun getName(): String = backingDocument?.name ?: path.substringAfterLast('/')
++
++    /**
++     * @see FtpFile.isHidden
++     */
++    override fun isHidden(): Boolean = name.startsWith(".") && name != "."
++
++    /**
++     * @see FtpFile.isDirectory
++     * @see DocumentFile.isDirectory
++     */
++    override fun isDirectory(): Boolean = backingDocument?.isDirectory ?: false
++
++    /**
++     * @see FtpFile.isFile
++     * @see DocumentFile.isFile
++     */
++    override fun isFile(): Boolean = backingDocument?.isFile ?: false
++
++    /**
++     * @see FtpFile.doesExist
++     * @see DocumentFile.exists
++     */
++    override fun doesExist(): Boolean = backingDocument?.exists() ?: false
++
++    /**
++     * @see FtpFile.isReadable
++     * @see DocumentFile.canRead
++     */
++    override fun isReadable(): Boolean = backingDocument?.canRead() ?: false
++
++    /**
++     * @see FtpFile.isWritable
++     * @see DocumentFile.canWrite
++     */
++    override fun isWritable(): Boolean = backingDocument?.canWrite() ?: true
++
++    /**
++     * @see FtpFile.isRemovable
++     * @see DocumentFile.canWrite
++     */
++    override fun isRemovable(): Boolean = backingDocument?.canWrite() ?: true
++
++    /**
++     * @see FtpFile.getOwnerName
++     */
++    override fun getOwnerName(): String = "user"
++
++    /**
++     * @see FtpFile.getGroupName
++     */
++    override fun getGroupName(): String = "user"
++
++    /**
++     * @see FtpFile.getLinkCount
++     */
++    override fun getLinkCount(): Int = 0
++
++    /**
++     * @see FtpFile.getLastModified
++     * @see DocumentFile.lastModified
++     */
++    override fun getLastModified(): Long = backingDocument?.lastModified() ?: 0L
++
++    /**
++     * @see FtpFile.setLastModified
++     * @see DocumentsContract.Document.COLUMN_LAST_MODIFIED
++     * @see ContentResolver.update
++     */
++    override fun setLastModified(time: Long): Boolean {
++        return if (doesExist()) {
++            val updateValues = ContentValues().also {
++                it.put(DocumentsContract.Document.COLUMN_LAST_MODIFIED, time)
++            }
++            val docUri: Uri = backingDocument!!.uri
++            val updated: Int = context.contentResolver.update(
++                docUri,
++                updateValues,
++                null,
++                null
++            )
++            return updated == 1
++        } else {
++            false
++        }
++    }
++
++    /**
++     * @see FtpFile.getSize
++     * @see DocumentFile.length
++     */
++    override fun getSize(): Long = backingDocument?.length() ?: 0L
++
++    /**
++     * @see FtpFile.getPhysicalFile
++     */
++    override fun getPhysicalFile(): Any = backingDocument!!
++
++    /**
++     * @see FtpFile.mkdir
++     * @see DocumentFile.createDirectory
++     */
++    override fun mkdir(): Boolean = parentDocument.createDirectory(name) != null
++
++    /**
++     * @see FtpFile.delete
++     * @see DocumentFile.delete
++     */
++    override fun delete(): Boolean = backingDocument?.delete() ?: false
++
++    /**
++     * @see FtpFile.move
++     * @see DocumentFile.renameTo
++     */
++    override fun move(destination: FtpFile): Boolean =
++        backingDocument?.renameTo(destination.name) ?: false
++
++    /**
++     * @see FtpFile.listFiles
++     * @see DocumentFile.listFiles
++     */
++    override fun listFiles(): MutableList<out FtpFile> = if (doesExist()) {
++        backingDocument!!.listFiles().map {
++            AndroidFtpFile(context, backingDocument, it, it.name!!)
++        }.toMutableList()
++    } else {
++        mutableListOf()
++    }
++
++    /**
++     * @see FtpFile.createOutputStream
++     * @see ContentResolver.openOutputStream
++     */
++    override fun createOutputStream(offset: Long): OutputStream? = runCatching {
++        val uri = if (doesExist()) {
++            backingDocument!!.uri
++        } else {
++            val newFile = parentDocument.createFile("", name)
++            newFile?.uri ?: throw IOException("Cannot create file at $path")
++        }
++        context.contentResolver.openOutputStream(uri)
++    }.getOrThrow()
++
++    /**
++     * @see FtpFile.createInputStream
++     * @see ContentResolver.openInputStream
++     */
++    override fun createInputStream(offset: Long): InputStream? = runCatching {
++        if (doesExist()) {
++            context.contentResolver.openInputStream(backingDocument!!.uri).also {
++                it?.skip(offset)
++            }
++        } else {
++            throw FileNotFoundException(path)
++        }
++    }.getOrThrow()
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFileSystemView.kt b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFileSystemView.kt
+new file mode 100644
+index 000000000..39d0354dd
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/ftpserver/AndroidFtpFileSystemView.kt
+@@ -0,0 +1,152 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.ftpserver
++
++import android.content.Context
++import android.net.Uri
++import android.os.Build
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Build.VERSION_CODES.M
++import androidx.annotation.RequiresApi
++import androidx.documentfile.provider.DocumentFile
++import org.apache.ftpserver.ftplet.FileSystemView
++import org.apache.ftpserver.ftplet.FtpFile
++import java.io.File
++import java.net.URI
++
++@RequiresApi(KITKAT)
++class AndroidFtpFileSystemView(private var context: Context, root: String) : FileSystemView {
++
++    private val rootPath = root
++    private val rootDocumentFile = createDocumentFileFrom(rootPath)
++    private var currentPath: String? = "/"
++
++    override fun getHomeDirectory(): FtpFile =
++        AndroidFtpFile(context, rootDocumentFile, resolveDocumentFileFromRoot("/"), "/")
++
++    override fun getWorkingDirectory(): FtpFile {
++        return AndroidFtpFile(
++            context, rootDocumentFile,
++            resolveDocumentFileFromRoot(currentPath!!), currentPath!!
++        )
++    }
++
++    override fun changeWorkingDirectory(dir: String?): Boolean {
++        return when {
++            dir.isNullOrBlank() -> false
++            dir == "/" -> {
++                currentPath = "/"
++                true
++            }
++            dir.startsWith("..") -> {
++                if (currentPath.isNullOrEmpty() || currentPath == "/")
++                    false
++                else {
++                    currentPath = normalizePath("$currentPath/$dir")
++                    resolveDocumentFileFromRoot(currentPath) != null
++                }
++            }
++            else -> {
++                currentPath = when {
++                    currentPath.isNullOrEmpty() || currentPath == "/" -> dir
++                    !dir.startsWith("/") -> normalizePath("$currentPath/$dir")
++                    else -> normalizePath(dir)
++                }
++                resolveDocumentFileFromRoot(currentPath) != null
++            }
++        }
++    }
++
++    override fun getFile(file: String): FtpFile {
++        val path = if (currentPath.isNullOrEmpty() || currentPath == "/") {
++            "/$file"
++        } else if (file.startsWith('/')) {
++            file
++        } else {
++            "$currentPath/$file"
++        }
++        return normalizePath(path).let { normalizedPath ->
++            AndroidFtpFile(
++                context,
++                resolveDocumentFileFromRoot(getParentFrom(normalizedPath))!!, // rootDocumentFile,
++                resolveDocumentFileFromRoot(normalizedPath), normalizedPath
++            )
++        }
++    }
++
++    override fun isRandomAccessible(): Boolean = false
++
++    override fun dispose() {
++        // context = null!!
++    }
++
++    private fun normalizePath(path: String): String {
++        return when {
++            path == "\\" || path == "/" -> {
++                "/"
++            }
++            path.length <= 1 -> {
++                path
++            }
++            else -> {
++                Uri.decode(
++                    URI(Uri.encode(path, "/"))
++                        .normalize()
++                        .toString()
++                ).replace("//", "/")
++            }
++        }
++    }
++
++    private fun getParentFrom(normalizedPath: String): String {
++        return if (normalizedPath.length <= 1) {
++            normalizedPath
++        } else {
++            normalizedPath.substringBeforeLast('/')
++        }
++    }
++
++    private fun createDocumentFileFrom(path: String): DocumentFile {
++        return if (Build.VERSION.SDK_INT in KITKAT until M) {
++            DocumentFile.fromFile(File(path))
++        } else {
++            DocumentFile.fromTreeUri(context, Uri.parse(path))!!
++        }
++    }
++
++    private fun resolveDocumentFileFromRoot(path: String?): DocumentFile? {
++        return if (path.isNullOrBlank() or ("/" == path) or ("./" == path))
++            rootDocumentFile
++        else {
++            val pathElements = path!!.split('/')
++            if (pathElements.isEmpty()) {
++                rootDocumentFile
++            } else {
++                var retval: DocumentFile? = rootDocumentFile
++                pathElements.forEach { pathElement ->
++                    if (pathElement.isNotBlank())
++                        retval = retval?.findFile(pathElement)
++                }
++                retval
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+index f07624e0b..d80f76ccd 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+@@ -21,6 +21,13 @@
+ package com.amaze.filemanager.ui.activities;
+ 
+ import static android.os.Build.VERSION.SDK_INT;
++import static android.os.Build.VERSION_CODES.JELLY_BEAN_MR1;
++import static android.os.Build.VERSION_CODES.JELLY_BEAN_MR2;
++import static android.os.Build.VERSION_CODES.KITKAT;
++import static android.os.Build.VERSION_CODES.KITKAT_WATCH;
++import static android.os.Build.VERSION_CODES.LOLLIPOP;
++import static android.os.Build.VERSION_CODES.M;
++import static android.os.Build.VERSION_CODES.N;
+ import static com.amaze.filemanager.filesystem.FolderStateKt.WRITABLE_OR_ON_SDCARD;
+ import static com.amaze.filemanager.filesystem.OperationTypeKt.COMPRESS;
+ import static com.amaze.filemanager.filesystem.OperationTypeKt.COPY;
+@@ -32,6 +39,7 @@ import static com.amaze.filemanager.filesystem.OperationTypeKt.NEW_FOLDER;
+ import static com.amaze.filemanager.filesystem.OperationTypeKt.RENAME;
+ import static com.amaze.filemanager.filesystem.OperationTypeKt.SAVE_FILE;
+ import static com.amaze.filemanager.filesystem.OperationTypeKt.UNDEFINED;
++import static com.amaze.filemanager.ui.fragments.FtpServerFragment.REQUEST_CODE_SAF_FTP;
+ import static com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants.PREFERENCE_BOOKMARKS_ADDED;
+ import static com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants.PREFERENCE_COLORED_NAVIGATION;
+ import static com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants.PREFERENCE_NEED_TO_SET_HOME;
+@@ -42,7 +50,6 @@ import java.lang.ref.WeakReference;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+-import java.util.Objects;
+ import java.util.regex.Pattern;
+ 
+ import com.afollestad.materialdialogs.DialogAction;
+@@ -139,6 +146,7 @@ import android.os.storage.StorageManager;
+ import android.os.storage.StorageVolume;
+ import android.service.quicksettings.TileService;
+ import android.text.TextUtils;
++import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -153,6 +161,7 @@ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+ import androidx.annotation.RequiresApi;
+ import androidx.annotation.StringRes;
++import androidx.arch.core.util.Function;
+ import androidx.fragment.app.Fragment;
+ import androidx.fragment.app.FragmentTransaction;
+ import androidx.loader.app.LoaderManager;
+@@ -539,54 +548,60 @@ public class MainActivity extends PermissionsActivity
+   }
+ 
+   private void saveExternalIntent(final ArrayList<Uri> uris) {
+-    final MainFragment mainFragment = getCurrentMainFragment();
+-    Objects.requireNonNull(mainActivity);
+-
+-    if (uris != null && uris.size() > 0) {
+-      if (SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+-        File folder = new File(mainFragment.getCurrentPath());
+-        int result = mainActivityHelper.checkFolder(folder, MainActivity.this);
+-        if (result == WRITABLE_OR_ON_SDCARD) {
+-          FileUtil.writeUriToStorage(
+-              MainActivity.this, uris, getContentResolver(), mainFragment.getCurrentPath());
++    executeWithMainFragment(
++        mainFragment -> {
++          if (uris != null && uris.size() > 0) {
++            if (SDK_INT >= LOLLIPOP) {
++              File folder = new File(mainFragment.getCurrentPath());
++              int result = mainActivityHelper.checkFolder(folder, MainActivity.this);
++              if (result == WRITABLE_OR_ON_SDCARD) {
++                FileUtil.writeUriToStorage(
++                    MainActivity.this, uris, getContentResolver(), mainFragment.getCurrentPath());
++                finish();
++              } else {
++                // Trigger SAF intent, keep uri until finish
++                operation = SAVE_FILE;
++                urisToBeSaved = uris;
++                mainActivityHelper.checkFolder(folder, MainActivity.this);
++              }
++            } else {
++              FileUtil.writeUriToStorage(
++                  MainActivity.this, uris, getContentResolver(), mainFragment.getCurrentPath());
++            }
++          } else {
++            saveExternalIntentExtras();
++          }
++          Toast.makeText(
++                  MainActivity.this,
++                  getResources().getString(R.string.saving)
++                      + " to "
++                      + mainFragment.getCurrentPath(),
++                  Toast.LENGTH_LONG)
++              .show();
+           finish();
+-        } else {
+-          // Trigger SAF intent, keep uri until finish
+-          operation = SAVE_FILE;
+-          urisToBeSaved = uris;
+-          mainActivityHelper.checkFolder(folder, MainActivity.this);
+-        }
+-      } else {
+-        FileUtil.writeUriToStorage(
+-            MainActivity.this, uris, getContentResolver(), mainFragment.getCurrentPath());
+-      }
+-    } else {
+-      saveExternalIntentExtras();
+-    }
+-    Toast.makeText(
+-            MainActivity.this,
+-            getResources().getString(R.string.saving) + " to " + mainFragment.getCurrentPath(),
+-            Toast.LENGTH_LONG)
+-        .show();
+-    finish();
++          return null;
++        });
+   }
+ 
+   private void saveExternalIntentExtras() {
+-    final MainFragment mainFragment = getCurrentMainFragment();
+-    Objects.requireNonNull(mainFragment);
+-
+-    Bundle extras = intent.getExtras();
+-    StringBuilder data = new StringBuilder();
+-    if (!Utils.isNullOrEmpty(extras.getString(Intent.EXTRA_SUBJECT))) {
+-      data.append(extras.getString(Intent.EXTRA_SUBJECT));
+-    }
+-    if (!Utils.isNullOrEmpty(extras.getString(Intent.EXTRA_TEXT))) {
+-      data.append(AppConstants.NEW_LINE).append(extras.getString(Intent.EXTRA_TEXT));
+-    }
+-    String fileName = Long.toString(System.currentTimeMillis());
+-    AppConfig.getInstance()
+-        .runInBackground(
+-            () -> FileUtil.mktextfile(data.toString(), mainFragment.getCurrentPath(), fileName));
++    executeWithMainFragment(
++        mainFragment -> {
++          Bundle extras = intent.getExtras();
++          StringBuilder data = new StringBuilder();
++          if (!Utils.isNullOrEmpty(extras.getString(Intent.EXTRA_SUBJECT))) {
++            data.append(extras.getString(Intent.EXTRA_SUBJECT));
++          }
++          if (!Utils.isNullOrEmpty(extras.getString(Intent.EXTRA_TEXT))) {
++            data.append(AppConstants.NEW_LINE).append(extras.getString(Intent.EXTRA_TEXT));
++          }
++          String fileName = Long.toString(System.currentTimeMillis());
++          AppConfig.getInstance()
++              .runInBackground(
++                  () ->
++                      FileUtil.mktextfile(
++                          data.toString(), mainFragment.getCurrentPath(), fileName));
++          return null;
++        });
+   }
+ 
+   public void clearFabActionItems() {
+@@ -615,7 +630,7 @@ public class MainActivity extends PermissionsActivity
+   /** @return paths to all available volumes in the system (include emulated) */
+   public synchronized ArrayList<StorageDirectoryParcelable> getStorageDirectories() {
+     ArrayList<StorageDirectoryParcelable> volumes;
+-    if (SDK_INT >= Build.VERSION_CODES.N) {
++    if (SDK_INT >= N) {
+       volumes = getStorageDirectoriesNew();
+     } else {
+       volumes = getStorageDirectoriesLegacy();
+@@ -633,7 +648,7 @@ public class MainActivity extends PermissionsActivity
+   /**
+    * @return All available storage volumes (including internal storage, SD-Cards and USB devices)
+    */
+-  @TargetApi(Build.VERSION_CODES.N)
++  @TargetApi(N)
+   public synchronized ArrayList<StorageDirectoryParcelable> getStorageDirectoriesNew() {
+     // Final set of paths
+     ArrayList<StorageDirectoryParcelable> volumes = new ArrayList<>();
+@@ -700,7 +715,7 @@ public class MainActivity extends PermissionsActivity
+       // Device has emulated storage; external storage paths should have
+       // userId burned into them.
+       final String rawUserId;
+-      if (SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
++      if (SDK_INT < JELLY_BEAN_MR1) {
+         rawUserId = "";
+       } else {
+         final String path = Environment.getExternalStorageDirectory().getAbsolutePath();
+@@ -727,8 +742,8 @@ public class MainActivity extends PermissionsActivity
+       final String[] rawSecondaryStorages = rawSecondaryStoragesStr.split(File.pathSeparator);
+       Collections.addAll(rv, rawSecondaryStorages);
+     }
+-    if (SDK_INT >= Build.VERSION_CODES.M && checkStoragePermission()) rv.clear();
+-    if (SDK_INT >= Build.VERSION_CODES.KITKAT) {
++    if (SDK_INT >= M && checkStoragePermission()) rv.clear();
++    if (SDK_INT >= KITKAT) {
+       String strings[] = FileUtil.getExtSdCardPathsForActivity(this);
+       for (String s : strings) {
+         File f = new File(s);
+@@ -738,7 +753,7 @@ public class MainActivity extends PermissionsActivity
+     File usb = getUsbDrive();
+     if (usb != null && !rv.contains(usb.getPath())) rv.add(usb.getPath());
+ 
+-    if (SDK_INT >= Build.VERSION_CODES.KITKAT) {
++    if (SDK_INT >= KITKAT) {
+       if (SingletonUsbOtg.getInstance().isDeviceConnected()) {
+         rv.add(OTGUtil.PREFIX_OTG + "/");
+       }
+@@ -787,9 +802,11 @@ public class MainActivity extends PermissionsActivity
+       if (floatingActionButton.isOpen()) {
+         floatingActionButton.close(true);
+       } else {
+-        final MainFragment mainFragment = getCurrentMainFragment();
+-        Objects.requireNonNull(mainFragment);
+-        mainFragment.goBack();
++        executeWithMainFragment(
++            mainFragment -> {
++              mainFragment.goBack();
++              return null;
++            });
+       }
+     } else if (fragment instanceof CompressedExplorerFragment) {
+       CompressedExplorerFragment compressedExplorerFragment =
+@@ -920,20 +937,22 @@ public class MainActivity extends PermissionsActivity
+         s.setTitle(getResources().getString(R.string.listview));
+       }
+       try {
+-        final MainFragment mainFragment = getCurrentMainFragment();
+-        Objects.requireNonNull(mainFragment);
+-        if (mainFragment.IS_LIST) s.setTitle(R.string.gridview);
+-        else s.setTitle(R.string.listview);
+-        appbar
+-            .getBottomBar()
+-            .updatePath(
+-                mainFragment.getCurrentPath(),
+-                mainFragment.results,
+-                MainActivityHelper.SEARCH_TEXT,
+-                mainFragment.openMode,
+-                mainFragment.folder_count,
+-                mainFragment.file_count,
+-                mainFragment);
++        executeWithMainFragment(
++            mainFragment -> {
++              if (mainFragment.IS_LIST) s.setTitle(R.string.gridview);
++              else s.setTitle(R.string.listview);
++              appbar
++                  .getBottomBar()
++                  .updatePath(
++                      mainFragment.getCurrentPath(),
++                      mainFragment.results,
++                      MainActivityHelper.SEARCH_TEXT,
++                      mainFragment.openMode,
++                      mainFragment.folder_count,
++                      mainFragment.file_count,
++                      mainFragment);
++              return null;
++            });
+       } catch (Exception e) {
+       }
+ 
+@@ -996,125 +1015,132 @@ public class MainActivity extends PermissionsActivity
+     if (drawer.onOptionsItemSelected(item)) return true;
+ 
+     // Handle action buttons
+-    final MainFragment mainFragment = getCurrentMainFragment();
+-    Objects.requireNonNull(mainFragment);
+-
+-    switch (item.getItemId()) {
+-      case R.id.home:
+-        mainFragment.home();
+-        break;
+-      case R.id.history:
+-        GeneralDialogCreation.showHistoryDialog(dataUtils, getPrefs(), mainFragment, getAppTheme());
+-        break;
+-      case R.id.sethome:
+-        if (mainFragment.openMode != OpenMode.FILE && mainFragment.openMode != OpenMode.ROOT) {
+-          Toast.makeText(mainActivity, R.string.not_allowed, Toast.LENGTH_SHORT).show();
+-          break;
+-        }
+-        final MaterialDialog dialog =
+-            GeneralDialogCreation.showBasicDialog(
+-                mainActivity,
+-                R.string.question_set_path_as_home,
+-                R.string.set_as_home,
+-                R.string.yes,
+-                R.string.no);
+-        dialog
+-            .getActionButton(DialogAction.POSITIVE)
+-            .setOnClickListener(
+-                (v) -> {
+-                  mainFragment.home = mainFragment.getCurrentPath();
+-                  updatePaths(mainFragment.no);
+-                  dialog.dismiss();
+-                });
+-        dialog.show();
+-        break;
+-      case R.id.exit:
+-        finish();
+-        break;
+-      case R.id.sort:
+-        Fragment fragment = getFragmentAtFrame();
+-        if (fragment instanceof AppsListFragment) {
+-          GeneralDialogCreation.showSortDialog((AppsListFragment) fragment, getAppTheme());
+-        }
+-        break;
+-      case R.id.sortby:
+-        GeneralDialogCreation.showSortDialog(mainFragment, getAppTheme(), getPrefs());
+-        break;
+-      case R.id.dsort:
+-        String[] sort = getResources().getStringArray(R.array.directorysortmode);
+-        MaterialDialog.Builder builder = new MaterialDialog.Builder(mainActivity);
+-        builder.theme(getAppTheme().getMaterialDialogTheme());
+-        builder.title(R.string.directorysort);
+-        int current =
+-            Integer.parseInt(
+-                getPrefs().getString(PreferencesConstants.PREFERENCE_DIRECTORY_SORT_MODE, "0"));
+-
+-        final MainFragment mainFrag = mainFragment;
+-
+-        builder
+-            .items(sort)
+-            .itemsCallbackSingleChoice(
+-                current,
+-                (dialog1, view, which, text) -> {
+-                  getPrefs()
+-                      .edit()
+-                      .putString(PreferencesConstants.PREFERENCE_DIRECTORY_SORT_MODE, "" + which)
+-                      .commit();
+-                  mainFrag.getSortModes();
+-                  mainFrag.updateList();
+-                  dialog1.dismiss();
+-                  return true;
+-                });
+-        builder.build().show();
+-        break;
+-      case R.id.hiddenitems:
+-        GeneralDialogCreation.showHiddenDialog(dataUtils, getPrefs(), mainFragment, getAppTheme());
+-        break;
+-      case R.id.view:
+-        int pathLayout =
+-            dataUtils.getListOrGridForPath(mainFragment.getCurrentPath(), DataUtils.LIST);
+-        if (mainFragment.IS_LIST) {
+-          if (pathLayout == DataUtils.LIST) {
+-            AppConfig.getInstance()
+-                .runInBackground(
+-                    () -> {
+-                      utilsHandler.removeFromDatabase(
+-                          new OperationData(
+-                              UtilsHandler.Operation.LIST, mainFragment.getCurrentPath()));
+-                    });
+-          }
+-          utilsHandler.saveToDatabase(
+-              new OperationData(UtilsHandler.Operation.GRID, mainFragment.getCurrentPath()));
+-
+-          dataUtils.setPathAsGridOrList(mainFragment.getCurrentPath(), DataUtils.GRID);
+-        } else {
+-          if (pathLayout == DataUtils.GRID) {
+-            AppConfig.getInstance()
+-                .runInBackground(
+-                    () -> {
+-                      utilsHandler.removeFromDatabase(
+-                          new OperationData(
+-                              UtilsHandler.Operation.GRID, mainFragment.getCurrentPath()));
+-                    });
++    executeWithMainFragment(
++        mainFragment -> {
++          switch (item.getItemId()) {
++            case R.id.home:
++              mainFragment.home();
++              break;
++            case R.id.history:
++              GeneralDialogCreation.showHistoryDialog(
++                  dataUtils, getPrefs(), mainFragment, getAppTheme());
++              break;
++            case R.id.sethome:
++              if (mainFragment.openMode != OpenMode.FILE
++                  && mainFragment.openMode != OpenMode.ROOT) {
++                Toast.makeText(mainActivity, R.string.not_allowed, Toast.LENGTH_SHORT).show();
++                break;
++              }
++              final MaterialDialog dialog =
++                  GeneralDialogCreation.showBasicDialog(
++                      mainActivity,
++                      R.string.question_set_path_as_home,
++                      R.string.set_as_home,
++                      R.string.yes,
++                      R.string.no);
++              dialog
++                  .getActionButton(DialogAction.POSITIVE)
++                  .setOnClickListener(
++                      (v) -> {
++                        mainFragment.home = mainFragment.getCurrentPath();
++                        updatePaths(mainFragment.no);
++                        dialog.dismiss();
++                      });
++              dialog.show();
++              break;
++            case R.id.exit:
++              finish();
++              break;
++            case R.id.sort:
++              Fragment fragment = getFragmentAtFrame();
++              if (fragment instanceof AppsListFragment) {
++                GeneralDialogCreation.showSortDialog((AppsListFragment) fragment, getAppTheme());
++              }
++              break;
++            case R.id.sortby:
++              GeneralDialogCreation.showSortDialog(mainFragment, getAppTheme(), getPrefs());
++              break;
++            case R.id.dsort:
++              String[] sort = getResources().getStringArray(R.array.directorysortmode);
++              MaterialDialog.Builder builder = new MaterialDialog.Builder(mainActivity);
++              builder.theme(getAppTheme().getMaterialDialogTheme());
++              builder.title(R.string.directorysort);
++              int current =
++                  Integer.parseInt(
++                      getPrefs()
++                          .getString(PreferencesConstants.PREFERENCE_DIRECTORY_SORT_MODE, "0"));
++
++              builder
++                  .items(sort)
++                  .itemsCallbackSingleChoice(
++                      current,
++                      (dialog1, view, which, text) -> {
++                        getPrefs()
++                            .edit()
++                            .putString(
++                                PreferencesConstants.PREFERENCE_DIRECTORY_SORT_MODE, "" + which)
++                            .commit();
++                        mainFragment.getSortModes();
++                        mainFragment.updateList();
++                        dialog1.dismiss();
++                        return true;
++                      });
++              builder.build().show();
++              break;
++            case R.id.hiddenitems:
++              GeneralDialogCreation.showHiddenDialog(
++                  dataUtils, getPrefs(), mainFragment, getAppTheme());
++              break;
++            case R.id.view:
++              int pathLayout =
++                  dataUtils.getListOrGridForPath(mainFragment.getCurrentPath(), DataUtils.LIST);
++              if (mainFragment.IS_LIST) {
++                if (pathLayout == DataUtils.LIST) {
++                  AppConfig.getInstance()
++                      .runInBackground(
++                          () -> {
++                            utilsHandler.removeFromDatabase(
++                                new OperationData(
++                                    UtilsHandler.Operation.LIST, mainFragment.getCurrentPath()));
++                          });
++                }
++                utilsHandler.saveToDatabase(
++                    new OperationData(UtilsHandler.Operation.GRID, mainFragment.getCurrentPath()));
++
++                dataUtils.setPathAsGridOrList(mainFragment.getCurrentPath(), DataUtils.GRID);
++              } else {
++                if (pathLayout == DataUtils.GRID) {
++                  AppConfig.getInstance()
++                      .runInBackground(
++                          () -> {
++                            utilsHandler.removeFromDatabase(
++                                new OperationData(
++                                    UtilsHandler.Operation.GRID, mainFragment.getCurrentPath()));
++                          });
++                }
++
++                utilsHandler.saveToDatabase(
++                    new OperationData(UtilsHandler.Operation.LIST, mainFragment.getCurrentPath()));
++
++                dataUtils.setPathAsGridOrList(mainFragment.getCurrentPath(), DataUtils.LIST);
++              }
++              mainFragment.switchView();
++              break;
++            case R.id.extract:
++              Fragment fragment1 = getFragmentAtFrame();
++              if (fragment1 instanceof CompressedExplorerFragment) {
++                mainActivityHelper.extractFile(
++                    ((CompressedExplorerFragment) fragment1).compressedFile);
++              }
++              break;
++            case R.id.search:
++              getAppbar().getSearchView().revealSearchView();
++              break;
+           }
++          return null;
++        },
++        false);
+ 
+-          utilsHandler.saveToDatabase(
+-              new OperationData(UtilsHandler.Operation.LIST, mainFragment.getCurrentPath()));
+-
+-          dataUtils.setPathAsGridOrList(mainFragment.getCurrentPath(), DataUtils.LIST);
+-        }
+-        mainFragment.switchView();
+-        break;
+-      case R.id.extract:
+-        Fragment fragment1 = getFragmentAtFrame();
+-        if (fragment1 instanceof CompressedExplorerFragment) {
+-          mainActivityHelper.extractFile(((CompressedExplorerFragment) fragment1).compressedFile);
+-        }
+-        break;
+-      case R.id.search:
+-        getAppbar().getSearchView().revealSearchView();
+-        break;
+-    }
+     return super.onOptionsItemSelected(item);
+   }
+ 
+@@ -1166,7 +1192,7 @@ public class MainActivity extends PermissionsActivity
+     unregisterReceiver(mainActivityHelper.mNotificationReceiver);
+     unregisterReceiver(receiver2);
+ 
+-    if (SDK_INT >= Build.VERSION_CODES.KITKAT) {
++    if (SDK_INT >= KITKAT) {
+       unregisterReceiver(mOtgReceiver);
+     }
+ 
+@@ -1290,7 +1316,7 @@ public class MainActivity extends PermissionsActivity
+   private void closeInteractiveShell() {
+     if (isRootExplorer()) {
+       // close interactive shell and handler thread associated with it
+-      if (SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
++      if (SDK_INT >= JELLY_BEAN_MR2) {
+         // let it finish up first with what it's doing
+         handlerThread.quitSafely();
+       } else handlerThread.quit();
+@@ -1381,7 +1407,7 @@ public class MainActivity extends PermissionsActivity
+           getPrefs()
+               .edit()
+               .putString(PreferencesConstants.PREFERENCE_URI, treeUri.toString())
+-              .commit();
++              .apply();
+       } else {
+         // If not confirmed SAF, or if still not writable, then revert settings.
+         /* DialogUtil.displayError(getActivity(), R.string.message_dialog_cannot_write_to_folder_saf, false, currentFolder);
+@@ -1392,96 +1418,106 @@ public class MainActivity extends PermissionsActivity
+       // After confirmation, update stored value of folder.
+       // Persist access permissions.
+ 
+-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
++      if (SDK_INT >= KITKAT) {
+         getContentResolver()
+             .takePersistableUriPermission(
+                 treeUri,
+                 Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+       }
+ 
+-      final MainFragment mainFragment = getCurrentMainFragment();
+-      Objects.requireNonNull(mainFragment);
+-
+-      switch (operation) {
+-        case DELETE: // deletion
+-          new DeleteTask(mainActivity).execute((oparrayList));
+-          break;
+-        case COPY: // copying
+-          // legacy compatibility
+-          if (oparrayList != null && oparrayList.size() != 0) {
+-            oparrayListList = new ArrayList<>();
+-            oparrayListList.add(oparrayList);
+-            oparrayList = null;
+-            oppatheList = new ArrayList<>();
+-            oppatheList.add(oppathe);
+-            oppathe = "";
+-          }
+-          for (int i = 0; i < oparrayListList.size(); i++) {
+-            ArrayList<HybridFileParcelable> sourceList = oparrayListList.get(i);
+-            Intent intent1 = new Intent(this, CopyService.class);
+-            intent1.putExtra(CopyService.TAG_COPY_SOURCES, sourceList);
+-            intent1.putExtra(CopyService.TAG_COPY_TARGET, oppatheList.get(i));
+-            ServiceWatcherUtil.runService(this, intent1);
+-          }
+-          break;
+-        case MOVE: // moving
+-          // legacy compatibility
+-          if (oparrayList != null && oparrayList.size() != 0) {
+-            oparrayListList = new ArrayList<>();
+-            oparrayListList.add(oparrayList);
+-            oparrayList = null;
+-            oppatheList = new ArrayList<>();
+-            oppatheList.add(oppathe);
+-            oppathe = "";
+-          }
+-
+-          new MoveFiles(oparrayListList, mainFragment, mainFragment.getActivity(), OpenMode.FILE)
+-              .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, oppatheList);
+-          break;
+-        case NEW_FOLDER: // mkdir
+-          mainActivityHelper.mkDir(
+-              RootHelper.generateBaseFile(new File(oppathe), true), mainFragment);
+-          break;
+-        case RENAME:
+-          mainActivityHelper.rename(
+-              mainFragment.openMode, (oppathe), (oppathe1), mainActivity, isRootExplorer());
+-          mainFragment.updateList();
+-          break;
+-        case NEW_FILE:
+-          mainActivityHelper.mkFile(new HybridFile(OpenMode.FILE, oppathe), mainFragment);
+-          break;
+-        case EXTRACT:
+-          mainActivityHelper.extractFile(new File(oppathe));
+-          break;
+-        case COMPRESS:
+-          mainActivityHelper.compressFiles(new File(oppathe), oparrayList);
+-          break;
+-        case SAVE_FILE:
+-          FileUtil.writeUriToStorage(
+-              this, urisToBeSaved, getContentResolver(), mainFragment.getCurrentPath());
+-          urisToBeSaved = null;
+-          finish();
+-          break;
+-        default:
+-          LogHelper.logOnProductionOrCrash(TAG, "Incorrect value for switch");
+-      }
++      executeWithMainFragment(
++          mainFragment -> {
++            switch (operation) {
++              case DELETE: // deletion
++                new DeleteTask(mainActivity).execute((oparrayList));
++                break;
++              case COPY: // copying
++                // legacy compatibility
++                if (oparrayList != null && oparrayList.size() != 0) {
++                  oparrayListList = new ArrayList<>();
++                  oparrayListList.add(oparrayList);
++                  oparrayList = null;
++                  oppatheList = new ArrayList<>();
++                  oppatheList.add(oppathe);
++                  oppathe = "";
++                }
++                for (int i = 0; i < oparrayListList.size(); i++) {
++                  ArrayList<HybridFileParcelable> sourceList = oparrayListList.get(i);
++                  Intent intent1 = new Intent(this, CopyService.class);
++                  intent1.putExtra(CopyService.TAG_COPY_SOURCES, sourceList);
++                  intent1.putExtra(CopyService.TAG_COPY_TARGET, oppatheList.get(i));
++                  ServiceWatcherUtil.runService(this, intent1);
++                }
++                break;
++              case MOVE: // moving
++                // legacy compatibility
++                if (oparrayList != null && oparrayList.size() != 0) {
++                  oparrayListList = new ArrayList<>();
++                  oparrayListList.add(oparrayList);
++                  oparrayList = null;
++                  oppatheList = new ArrayList<>();
++                  oppatheList.add(oppathe);
++                  oppathe = "";
++                }
++
++                new MoveFiles(
++                        oparrayListList, mainFragment, mainFragment.getActivity(), OpenMode.FILE)
++                    .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, oppatheList);
++                break;
++              case NEW_FOLDER: // mkdir
++                mainActivityHelper.mkDir(
++                    RootHelper.generateBaseFile(new File(oppathe), true), mainFragment);
++                break;
++              case RENAME:
++                mainActivityHelper.rename(
++                    mainFragment.openMode, (oppathe), (oppathe1), mainActivity, isRootExplorer());
++                mainFragment.updateList();
++                break;
++              case NEW_FILE:
++                mainActivityHelper.mkFile(new HybridFile(OpenMode.FILE, oppathe), mainFragment);
++                break;
++              case EXTRACT:
++                mainActivityHelper.extractFile(new File(oppathe));
++                break;
++              case COMPRESS:
++                mainActivityHelper.compressFiles(new File(oppathe), oparrayList);
++                break;
++              case SAVE_FILE:
++                FileUtil.writeUriToStorage(
++                    this, urisToBeSaved, getContentResolver(), mainFragment.getCurrentPath());
++                urisToBeSaved = null;
++                finish();
++                break;
++              default:
++                LogHelper.logOnProductionOrCrash(TAG, "Incorrect value for switch");
++            }
++            return null;
++          },
++          true);
+       operation = UNDEFINED;
+     } else if (requestCode == REQUEST_CODE_SAF) {
+-      final MainFragment mainFragment = getCurrentMainFragment();
+-      Objects.requireNonNull(mainFragment);
+-
+-      if (responseCode == Activity.RESULT_OK && intent.getData() != null) {
+-        // otg access
+-        Uri usbOtgRoot = intent.getData();
+-        SingletonUsbOtg.getInstance().setUsbOtgRoot(usbOtgRoot);
+-        mainFragment.loadlist(OTGUtil.PREFIX_OTG, false, OpenMode.OTG);
+-        drawer.closeIfNotLocked();
+-        if (drawer.isLocked()) drawer.onDrawerClosed();
+-      } else {
+-        Toast.makeText(this, R.string.error, Toast.LENGTH_SHORT).show();
+-        // otg access not provided
+-        drawer.resetPendingPath();
+-      }
++      executeWithMainFragment(
++          mainFragment -> {
++            if (responseCode == Activity.RESULT_OK && intent.getData() != null) {
++              // otg access
++              Uri usbOtgRoot = intent.getData();
++              SingletonUsbOtg.getInstance().setUsbOtgRoot(usbOtgRoot);
++              mainFragment.loadlist(OTGUtil.PREFIX_OTG, false, OpenMode.OTG);
++              drawer.closeIfNotLocked();
++              if (drawer.isLocked()) drawer.onDrawerClosed();
++            } else if (requestCode == REQUEST_CODE_SAF_FTP) {
++              FtpServerFragment ftpServerFragment = (FtpServerFragment) getFragmentAtFrame();
++              ftpServerFragment.changeFTPServerPath(intent.getData().toString());
++              Toast.makeText(this, R.string.ftp_path_change_success, Toast.LENGTH_SHORT).show();
++
++            } else {
++              Toast.makeText(this, R.string.error, Toast.LENGTH_SHORT).show();
++              // otg access not provided
++              drawer.resetPendingPath();
++            }
++            return null;
++          },
++          true);
+     }
+   }
+ 
+@@ -1541,15 +1577,14 @@ public class MainActivity extends PermissionsActivity
+ 
+     drawer.setBackgroundColor(colorDrawable.getColor());
+ 
+-    if (SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++    if (SDK_INT >= LOLLIPOP) {
+       // for lollipop devices, the status bar color
+       mainActivity.getWindow().setStatusBarColor(colorDrawable.getColor());
+       if (getBoolean(PREFERENCE_COLORED_NAVIGATION))
+         mainActivity
+             .getWindow()
+             .setNavigationBarColor(PreferenceUtils.getStatusColor(colorDrawable.getColor()));
+-    } else if (SDK_INT == Build.VERSION_CODES.KITKAT_WATCH
+-        || SDK_INT == Build.VERSION_CODES.KITKAT) {
++    } else if (SDK_INT == KITKAT_WATCH || SDK_INT == KITKAT) {
+ 
+       // for kitkat devices, the status bar color
+       SystemBarTintManager tintManager = new SystemBarTintManager(this);
+@@ -1671,7 +1706,7 @@ public class MainActivity extends PermissionsActivity
+     } else if (intent.getAction() != null) {
+       checkForExternalIntent(intent);
+ 
+-      if (SDK_INT >= Build.VERSION_CODES.KITKAT) {
++      if (SDK_INT >= KITKAT) {
+         if (intent.getAction().equals(UsbManager.ACTION_USB_DEVICE_DETACHED)) {
+           SingletonUsbOtg.getInstance().resetUsbOtgRoot();
+           drawer.refreshDrawer();
+@@ -1767,9 +1802,12 @@ public class MainActivity extends PermissionsActivity
+             new OperationData(UtilsHandler.Operation.SMB, name, encryptedPath));
+ 
+         // grid.addPath(name, encryptedPath, DataUtils.SMB, 1);
+-        final MainFragment mainFragment = getCurrentMainFragment();
+-        Objects.requireNonNull(mainFragment);
+-        mainFragment.loadlist(path, false, OpenMode.UNKNOWN);
++        executeWithMainFragment(
++            mainFragment -> {
++              mainFragment.loadlist(path, false, OpenMode.UNKNOWN);
++              return null;
++            },
++            true);
+       } else {
+         Snackbar.make(
+                 findViewById(R.id.navigation),
+@@ -1856,14 +1894,12 @@ public class MainActivity extends PermissionsActivity
+ 
+   @Override
+   public void onPreExecute(String query) {
+-    final MainFragment mainFragment = getCurrentMainFragment();
+-    if (mainFragment == null) {
+-      AppConfig.toast(this, R.string.operation_unsuccesful);
+-      return;
+-    }
+-
+-    mainFragment.mSwipeRefreshLayout.setRefreshing(true);
+-    mainFragment.onSearchPreExecute(query);
++    executeWithMainFragment(
++        mainFragment -> {
++          mainFragment.mSwipeRefreshLayout.setRefreshing(true);
++          mainFragment.onSearchPreExecute(query);
++          return null;
++        });
+   }
+ 
+   @Override
+@@ -2135,4 +2171,22 @@ public class MainActivity extends PermissionsActivity
+   public void onFolderChooserDismissed(@NonNull FolderChooserDialog dialog) {
+     dialog.dismiss();
+   }
++
++  private void executeWithMainFragment(@NonNull Function<MainFragment, Void> lambda) {
++    executeWithMainFragment(lambda, false);
++  }
++
++  @Nullable
++  private void executeWithMainFragment(
++      @NonNull Function<MainFragment, Void> lambda, boolean showToastIfMainFragmentIsNull) {
++    final MainFragment mainFragment = getCurrentMainFragment();
++    if (mainFragment != null) {
++      lambda.apply(mainFragment);
++    } else {
++      Log.w(TAG, "MainFragment is null");
++      if (showToastIfMainFragmentIsNull) {
++        AppConfig.toast(this, R.string.operation_unsuccesful);
++      }
++    }
++  }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+index d5f3f986d..a7e9b884d 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+@@ -163,6 +163,16 @@ public class GeneralDialogCreation {
+     WarnableTextInputLayout tilTextfield =
+         dialogView.findViewById(R.id.singleedittext_warnabletextinputlayout);
+ 
++    tilTextfield.requestFocus();
++
++    textfield.postDelayed(
++        () -> {
++          InputMethodManager inputMethodManager =
++              (InputMethodManager) m.getSystemService(Context.INPUT_METHOD_SERVICE);
++          inputMethodManager.showSoftInput(textfield, InputMethodManager.SHOW_IMPLICIT);
++        },
++        100);
++
+     builder
+         .customView(dialogView, false)
+         .widgetColor(accentColor)
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.java
+deleted file mode 100644
+index 7a9144593..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.java
++++ /dev/null
+@@ -1,728 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.ui.fragments;
+-
+-import static android.provider.Settings.ACTION_WIFI_SETTINGS;
+-import static com.amaze.filemanager.asynchronous.services.ftp.FtpService.FtpReceiverActions.STARTED_FROM_TILE;
+-
+-import java.io.IOException;
+-import java.net.InetAddress;
+-import java.security.GeneralSecurityException;
+-
+-import org.greenrobot.eventbus.EventBus;
+-import org.greenrobot.eventbus.Subscribe;
+-import org.greenrobot.eventbus.ThreadMode;
+-
+-import com.afollestad.materialdialogs.MaterialDialog;
+-import com.afollestad.materialdialogs.folderselector.FolderChooserDialog;
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.application.AppConfig;
+-import com.amaze.filemanager.asynchronous.services.ftp.FtpService;
+-import com.amaze.filemanager.filesystem.files.CryptUtil;
+-import com.amaze.filemanager.ui.activities.MainActivity;
+-import com.amaze.filemanager.ui.notifications.FtpNotification;
+-import com.amaze.filemanager.utils.OneCharacterCharSequence;
+-import com.amaze.filemanager.utils.Utils;
+-import com.google.android.material.snackbar.BaseTransientBottomBar;
+-import com.google.android.material.snackbar.Snackbar;
+-import com.google.android.material.textfield.TextInputLayout;
+-
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.SharedPreferences;
+-import android.graphics.drawable.ColorDrawable;
+-import android.net.ConnectivityManager;
+-import android.net.NetworkInfo;
+-import android.os.Bundle;
+-import android.preference.PreferenceManager;
+-import android.text.Html;
+-import android.text.InputType;
+-import android.text.Spanned;
+-import android.view.LayoutInflater;
+-import android.view.Menu;
+-import android.view.MenuInflater;
+-import android.view.MenuItem;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.Button;
+-import android.widget.EditText;
+-import android.widget.ImageButton;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-
+-import androidx.annotation.Nullable;
+-import androidx.appcompat.widget.AppCompatCheckBox;
+-import androidx.appcompat.widget.AppCompatEditText;
+-import androidx.fragment.app.Fragment;
+-
+-/**
+- * Created by yashwanthreddyg on 10-06-2016. Edited by Luca D'Amico (Luca91) on 25 Jul 2017 (Fixed
+- * FTP Server while usi
+- */
+-public class FtpServerFragment extends Fragment {
+-
+-  private TextView statusText, url, username, password, port, sharedPath;
+-  public static final String TAG = "FTPServerFragment";
+-
+-  private AppCompatEditText usernameEditText, passwordEditText;
+-  private TextInputLayout usernameTextInput, passwordTextInput;
+-  private AppCompatCheckBox anonymousCheckBox;
+-  private Button ftpBtn;
+-  private int accentColor;
+-  private Spanned spannedStatusNoConnection, spannedStatusConnected, spannedStatusUrl;
+-  private Spanned spannedStatusSecure, spannedStatusNotRunning;
+-  private ImageButton ftpPasswordVisibleButton;
+-  private Snackbar snackbar;
+-
+-  @Override
+-  public void onCreate(Bundle savedInstanceState) {
+-    super.onCreate(savedInstanceState);
+-    setHasOptionsMenu(true);
+-  }
+-
+-  @Override
+-  public View onCreateView(
+-      LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-    View rootView = inflater.inflate(R.layout.fragment_ftp, container, false);
+-    statusText = rootView.findViewById(R.id.text_view_ftp_status);
+-    url = rootView.findViewById(R.id.text_view_ftp_url);
+-    username = rootView.findViewById(R.id.text_view_ftp_username);
+-    password = rootView.findViewById(R.id.text_view_ftp_password);
+-    port = rootView.findViewById(R.id.text_view_ftp_port);
+-    sharedPath = rootView.findViewById(R.id.text_view_ftp_path);
+-    ftpBtn = rootView.findViewById(R.id.startStopButton);
+-    View startDividerView = rootView.findViewById(R.id.divider_ftp_start);
+-    View statusDividerView = rootView.findViewById(R.id.divider_ftp_status);
+-    ftpPasswordVisibleButton = rootView.findViewById(R.id.ftp_password_visible);
+-    accentColor = getMainActivity().getAccent();
+-
+-    updateSpans();
+-    updateStatus();
+-
+-    switch (getMainActivity().getAppTheme().getSimpleTheme()) {
+-      case LIGHT:
+-        startDividerView.setBackgroundColor(Utils.getColor(getContext(), R.color.divider));
+-        statusDividerView.setBackgroundColor(Utils.getColor(getContext(), R.color.divider));
+-        break;
+-      case DARK:
+-      case BLACK:
+-        startDividerView.setBackgroundColor(
+-            Utils.getColor(getContext(), R.color.divider_dark_card));
+-        statusDividerView.setBackgroundColor(
+-            Utils.getColor(getContext(), R.color.divider_dark_card));
+-        break;
+-      default:
+-        break;
+-    }
+-
+-    ftpBtn.setOnClickListener(
+-        v -> {
+-          if (!FtpService.isRunning()) {
+-            if (FtpService.isConnectedToWifi(getContext())
+-                || FtpService.isConnectedToLocalNetwork(getContext())
+-                || FtpService.isEnabledWifiHotspot(getContext())) startServer();
+-            else {
+-              // no Wi-Fi and no eth, we shouldn't be here in the first place, because of broadcast
+-              // receiver, but just to be sure
+-              statusText.setText(spannedStatusNoConnection);
+-            }
+-          } else {
+-            stopServer();
+-          }
+-        });
+-
+-    return rootView;
+-  }
+-
+-  @Override
+-  public void onActivityCreated(Bundle savedInstanceState) {
+-    super.onActivityCreated(savedInstanceState);
+-    setRetainInstance(true);
+-    getMainActivity().getAppbar().setTitle(R.string.ftp);
+-    getMainActivity().getFAB().hide();
+-    getMainActivity().getAppbar().getBottomBar().setVisibility(View.GONE);
+-    getMainActivity().supportInvalidateOptionsMenu();
+-
+-    int skin_color = getMainActivity().getCurrentColorPreference().primaryFirstTab;
+-    int skinTwoColor = getMainActivity().getCurrentColorPreference().primarySecondTab;
+-
+-    getMainActivity()
+-        .updateViews(
+-            new ColorDrawable(getMainActivity().currentTab == 1 ? skinTwoColor : skin_color));
+-  }
+-
+-  @Override
+-  public boolean onOptionsItemSelected(MenuItem item) {
+-
+-    switch (item.getItemId()) {
+-      case R.id.choose_ftp_port:
+-        int currentFtpPort = getDefaultPortFromPreferences();
+-
+-        new MaterialDialog.Builder(getContext())
+-            .input(
+-                getString(R.string.ftp_port_edit_menu_title),
+-                Integer.toString(currentFtpPort),
+-                true,
+-                (dialog, input) -> {})
+-            .inputType(InputType.TYPE_CLASS_NUMBER)
+-            .onPositive(
+-                (dialog, which) -> {
+-                  EditText editText = dialog.getInputEditText();
+-                  if (editText != null) {
+-                    String name = editText.getText().toString();
+-
+-                    int portNumber = Integer.parseInt(name);
+-                    if (portNumber < 1024) {
+-                      Toast.makeText(
+-                              getActivity(),
+-                              R.string.ftp_port_change_error_invalid,
+-                              Toast.LENGTH_SHORT)
+-                          .show();
+-                    } else {
+-                      changeFTPServerPort(portNumber);
+-                      Toast.makeText(
+-                              getActivity(), R.string.ftp_port_change_success, Toast.LENGTH_SHORT)
+-                          .show();
+-                    }
+-                  }
+-                })
+-            .positiveText(getString(R.string.change).toUpperCase())
+-            .negativeText(R.string.cancel)
+-            .build()
+-            .show();
+-        return true;
+-      case R.id.ftp_path:
+-        FolderChooserDialog.Builder dialogBuilder = new FolderChooserDialog.Builder(getActivity());
+-        dialogBuilder
+-            .chooseButton(R.string.choose_folder)
+-            .initialPath(getDefaultPathFromPreferences())
+-            .goUpLabel(getString(R.string.folder_go_up_one_level))
+-            .cancelButton(R.string.cancel)
+-            .tag(TAG)
+-            .build()
+-            .show(getActivity());
+-        return true;
+-      case R.id.ftp_login:
+-        MaterialDialog.Builder loginDialogBuilder = new MaterialDialog.Builder(getContext());
+-
+-        LayoutInflater inflater = getActivity().getLayoutInflater();
+-        View rootView = inflater.inflate(R.layout.dialog_ftp_login, null);
+-        initLoginDialogViews(rootView);
+-
+-        loginDialogBuilder.customView(rootView, true);
+-
+-        loginDialogBuilder.title(getString(R.string.ftp_login));
+-
+-        loginDialogBuilder.onPositive(
+-            (dialog, which) -> {
+-              if (anonymousCheckBox.isChecked()) {
+-
+-                // remove preferences
+-                setFTPUsername("");
+-                setFTPPassword("");
+-              } else {
+-
+-                if (passwordEditText.getText().toString().equals("")) {
+-                  passwordTextInput.setError(getString(R.string.field_empty));
+-                } else if (usernameEditText.getText().toString().equals("")) {
+-                  usernameTextInput.setError(getString(R.string.field_empty));
+-                } else {
+-
+-                  // password and username field not empty, let's set them to preferences
+-                  setFTPUsername(usernameEditText.getText().toString());
+-                  setFTPPassword(passwordEditText.getText().toString());
+-                }
+-              }
+-            });
+-
+-        loginDialogBuilder
+-            .positiveText(getString(R.string.set).toUpperCase())
+-            .negativeText(getString(R.string.cancel))
+-            .build()
+-            .show();
+-
+-        return true;
+-      case R.id.checkbox_ftp_readonly:
+-        boolean shouldReadonly = !item.isChecked();
+-        item.setChecked(shouldReadonly);
+-        setReadonlyPreference(shouldReadonly);
+-        updatePathText();
+-        promptUserToRestartServer();
+-        return true;
+-      case R.id.checkbox_ftp_secure:
+-        boolean shouldSecure = !item.isChecked();
+-        item.setChecked(shouldSecure);
+-        setSecurePreference(shouldSecure);
+-        promptUserToRestartServer();
+-        return true;
+-      case R.id.ftp_timeout:
+-        MaterialDialog.Builder timeoutBuilder = new MaterialDialog.Builder(getActivity());
+-
+-        timeoutBuilder.title(
+-            getString(R.string.ftp_timeout)
+-                + " ("
+-                + getResources().getString(R.string.ftp_seconds)
+-                + ")");
+-        timeoutBuilder.input(
+-            String.valueOf(
+-                FtpService.DEFAULT_TIMEOUT + " " + getResources().getString(R.string.ftp_seconds)),
+-            String.valueOf(getFTPTimeout()),
+-            true,
+-            (dialog, input) -> {
+-              boolean isInputInteger;
+-              try {
+-                // try parsing for integer check
+-                Integer.parseInt(input.toString());
+-                isInputInteger = true;
+-              } catch (NumberFormatException e) {
+-                isInputInteger = false;
+-              }
+-
+-              if (input.length() == 0 || !isInputInteger) setFTPTimeout(FtpService.DEFAULT_TIMEOUT);
+-              else setFTPTimeout(Integer.valueOf(input.toString()));
+-            });
+-        timeoutBuilder
+-            .positiveText(getResources().getString(R.string.set).toUpperCase())
+-            .negativeText(getResources().getString(R.string.cancel))
+-            .build()
+-            .show();
+-        return true;
+-    }
+-
+-    return false;
+-  }
+-
+-  @Override
+-  public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+-    getMainActivity().getMenuInflater().inflate(R.menu.ftp_server_menu, menu);
+-    menu.findItem(R.id.checkbox_ftp_readonly).setChecked(getReadonlyPreference());
+-    menu.findItem(R.id.checkbox_ftp_secure).setChecked(getSecurePreference());
+-  }
+-
+-  private BroadcastReceiver mWifiReceiver =
+-      new BroadcastReceiver() {
+-
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-          ConnectivityManager conMan =
+-              (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+-          NetworkInfo netInfo = conMan.getActiveNetworkInfo();
+-          if ((netInfo != null
+-                  && (netInfo.getType() == ConnectivityManager.TYPE_WIFI
+-                      || netInfo.getType() == ConnectivityManager.TYPE_ETHERNET))
+-              || FtpService.isEnabledWifiHotspot(getContext())) {
+-            // connected to Wi-Fi or eth
+-            ftpBtn.setEnabled(true);
+-            dismissSnackbar();
+-          } else {
+-            // Wi-Fi or eth connection lost
+-            stopServer();
+-            statusText.setText(spannedStatusNoConnection);
+-            ftpBtn.setEnabled(true);
+-            ftpBtn.setEnabled(false);
+-            ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-            promptUserToEnableWireless(netInfo);
+-          }
+-        }
+-      };
+-
+-  @Subscribe(threadMode = ThreadMode.MAIN_ORDERED)
+-  public void onFtpReceiveActions(FtpService.FtpReceiverActions signal) {
+-    updateSpans();
+-    switch (signal) {
+-      case STARTED:
+-      case STARTED_FROM_TILE:
+-        if (getSecurePreference()) {
+-          statusText.setText(spannedStatusSecure);
+-        } else {
+-          statusText.setText(spannedStatusConnected);
+-        }
+-        url.setText(spannedStatusUrl);
+-        ftpBtn.setText(getResources().getString(R.string.stop_ftp).toUpperCase());
+-        FtpNotification.updateNotification(getContext(), STARTED_FROM_TILE.equals(signal));
+-        break;
+-      case FAILED_TO_START:
+-        statusText.setText(spannedStatusNotRunning);
+-        Toast.makeText(
+-                getContext(), getResources().getString(R.string.unknown_error), Toast.LENGTH_LONG)
+-            .show();
+-        ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-        url.setText("URL: ");
+-        break;
+-
+-      case STOPPED:
+-        statusText.setText(spannedStatusNotRunning);
+-        url.setText("URL: ");
+-        ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-        break;
+-    }
+-  }
+-
+-  /** Sends a broadcast to start ftp server */
+-  private void startServer() {
+-    getContext()
+-        .sendBroadcast(
+-            new Intent(FtpService.ACTION_START_FTPSERVER)
+-                .setPackage(getContext().getPackageName()));
+-  }
+-
+-  /** Sends a broadcast to stop ftp server */
+-  private void stopServer() {
+-    getContext()
+-        .sendBroadcast(
+-            new Intent(FtpService.ACTION_STOP_FTPSERVER).setPackage(getContext().getPackageName()));
+-  }
+-
+-  @Override
+-  public void onResume() {
+-    super.onResume();
+-
+-    IntentFilter wifiFilter = new IntentFilter();
+-    wifiFilter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
+-    getContext().registerReceiver(mWifiReceiver, wifiFilter);
+-    EventBus.getDefault().register(this);
+-  }
+-
+-  @Override
+-  public void onPause() {
+-    super.onPause();
+-    getContext().unregisterReceiver(mWifiReceiver);
+-    EventBus.getDefault().unregister(this);
+-    dismissSnackbar();
+-  }
+-
+-  private MainActivity getMainActivity() {
+-    return (MainActivity) getActivity();
+-  }
+-
+-  /** Update UI widgets after change in shared preferences */
+-  private void updateStatus() {
+-
+-    if (!FtpService.isRunning()) {
+-      if (!FtpService.isConnectedToWifi(getContext())
+-          && !FtpService.isConnectedToLocalNetwork(getContext())
+-          && !FtpService.isEnabledWifiHotspot(getContext())) {
+-        statusText.setText(spannedStatusNoConnection);
+-        ftpBtn.setEnabled(false);
+-      } else {
+-        statusText.setText(spannedStatusNotRunning);
+-        ftpBtn.setEnabled(true);
+-      }
+-      url.setText("URL: ");
+-      ftpBtn.setText(getResources().getString(R.string.start_ftp).toUpperCase());
+-
+-    } else {
+-      accentColor = getMainActivity().getAccent();
+-      url.setText(spannedStatusUrl);
+-      statusText.setText(spannedStatusConnected);
+-      ftpBtn.setEnabled(true);
+-      ftpBtn.setText(getResources().getString(R.string.stop_ftp).toUpperCase());
+-    }
+-
+-    final String passwordDecrypted = getPasswordFromPreferences();
+-    final CharSequence passwordBulleted =
+-        new OneCharacterCharSequence('\u25CF', passwordDecrypted.length());
+-
+-    username.setText(
+-        getResources().getString(R.string.username) + ": " + getUsernameFromPreferences());
+-    password.setText(getResources().getString(R.string.password) + ": " + passwordBulleted);
+-
+-    ftpPasswordVisibleButton.setImageDrawable(
+-        getResources().getDrawable(R.drawable.ic_eye_grey600_24dp));
+-
+-    if (passwordDecrypted.equals("")) {
+-      ftpPasswordVisibleButton.setVisibility(View.GONE);
+-    } else {
+-      ftpPasswordVisibleButton.setVisibility(View.VISIBLE);
+-    }
+-
+-    ftpPasswordVisibleButton.setOnClickListener(
+-        v -> {
+-          if (password.getText().toString().contains("\u25CF")) {
+-            // password was not visible, let's make it visible
+-            password.setText(
+-                getResources().getString(R.string.password) + ": " + passwordDecrypted);
+-            ftpPasswordVisibleButton.setImageDrawable(
+-                getResources().getDrawable(R.drawable.ic_eye_off_grey600_24dp));
+-          } else {
+-            // password was visible, let's hide it
+-            password.setText(getResources().getString(R.string.password) + ": " + passwordBulleted);
+-            ftpPasswordVisibleButton.setImageDrawable(
+-                getResources().getDrawable(R.drawable.ic_eye_grey600_24dp));
+-          }
+-        });
+-
+-    port.setText(
+-        getResources().getString(R.string.ftp_port) + ": " + getDefaultPortFromPreferences());
+-    updatePathText();
+-  }
+-
+-  private void updatePathText() {
+-    StringBuilder sb =
+-        new StringBuilder(getResources().getString(R.string.ftp_path))
+-            .append(": ")
+-            .append(getDefaultPathFromPreferences());
+-    if (getReadonlyPreference()) sb.append(" \uD83D\uDD12");
+-    sharedPath.setText(sb.toString());
+-  }
+-
+-  /** Updates the status spans */
+-  private void updateSpans() {
+-
+-    String ftpAddress = getFTPAddressString();
+-
+-    if (ftpAddress == null) {
+-      ftpAddress = "";
+-      Toast.makeText(
+-              getContext(),
+-              getResources().getString(R.string.local_inet_addr_error),
+-              Toast.LENGTH_SHORT)
+-          .show();
+-    }
+-
+-    String statusHead = getResources().getString(R.string.ftp_status_title) + ": ";
+-
+-    spannedStatusConnected =
+-        Html.fromHtml(
+-            statusHead
+-                + "<b>&nbsp;&nbsp;"
+-                + "<font color='"
+-                + accentColor
+-                + "'>"
+-                + getResources().getString(R.string.ftp_status_running)
+-                + "</font></b>");
+-    spannedStatusUrl = Html.fromHtml("URL:&nbsp;" + ftpAddress);
+-    spannedStatusNoConnection =
+-        Html.fromHtml(
+-            statusHead
+-                + "<b>&nbsp;&nbsp;&nbsp;&nbsp;"
+-                + "<font color='"
+-                + Utils.getColor(getContext(), android.R.color.holo_red_light)
+-                + "'>"
+-                + getResources().getString(R.string.ftp_status_no_connection)
+-                + "</font></b>");
+-
+-    spannedStatusNotRunning =
+-        Html.fromHtml(
+-            statusHead
+-                + "<b>&nbsp;&nbsp;&nbsp;&nbsp;"
+-                + getResources().getString(R.string.ftp_status_not_running)
+-                + "</b>");
+-    spannedStatusSecure =
+-        Html.fromHtml(
+-            statusHead
+-                + "<b>&nbsp;&nbsp;&nbsp;&nbsp;"
+-                + "<font color='"
+-                + Utils.getColor(getContext(), android.R.color.holo_green_light)
+-                + "'>"
+-                + getResources().getString(R.string.ftp_status_secure_connection)
+-                + "</font></b>");
+-    spannedStatusUrl = Html.fromHtml("URL:&nbsp;" + ftpAddress);
+-  }
+-
+-  private void initLoginDialogViews(View loginDialogView) {
+-
+-    usernameEditText = loginDialogView.findViewById(R.id.edit_text_dialog_ftp_username);
+-    passwordEditText = loginDialogView.findViewById(R.id.edit_text_dialog_ftp_password);
+-    usernameTextInput = loginDialogView.findViewById(R.id.text_input_dialog_ftp_username);
+-    passwordTextInput = loginDialogView.findViewById(R.id.text_input_dialog_ftp_password);
+-    anonymousCheckBox = loginDialogView.findViewById(R.id.checkbox_ftp_anonymous);
+-
+-    anonymousCheckBox.setOnCheckedChangeListener(
+-        (buttonView, isChecked) -> {
+-          if (isChecked) {
+-            usernameEditText.setEnabled(false);
+-            passwordEditText.setEnabled(false);
+-          } else {
+-            usernameEditText.setEnabled(true);
+-            passwordEditText.setEnabled(true);
+-          }
+-        });
+-
+-    // init dialog views as per preferences
+-    if (getUsernameFromPreferences().equals(FtpService.DEFAULT_USERNAME)) {
+-      anonymousCheckBox.setChecked(true);
+-    } else {
+-
+-      usernameEditText.setText(getUsernameFromPreferences());
+-      passwordEditText.setText(getPasswordFromPreferences());
+-    }
+-  }
+-
+-  /** @return address at which server is running */
+-  @Nullable
+-  private String getFTPAddressString() {
+-    InetAddress ia = FtpService.getLocalInetAddress(getContext());
+-    if (ia == null) return null;
+-
+-    return (getSecurePreference() ? FtpService.INITIALS_HOST_SFTP : FtpService.INITIALS_HOST_FTP)
+-        + ia.getHostAddress()
+-        + ":"
+-        + getDefaultPortFromPreferences();
+-  }
+-
+-  private int getDefaultPortFromPreferences() {
+-    return getMainActivity()
+-        .getPrefs()
+-        .getInt(FtpService.PORT_PREFERENCE_KEY, FtpService.DEFAULT_PORT);
+-  }
+-
+-  private String getUsernameFromPreferences() {
+-    return getMainActivity()
+-        .getPrefs()
+-        .getString(FtpService.KEY_PREFERENCE_USERNAME, FtpService.DEFAULT_USERNAME);
+-  }
+-
+-  private String getPasswordFromPreferences() {
+-    try {
+-      String encryptedPassword =
+-          getMainActivity().getPrefs().getString(FtpService.KEY_PREFERENCE_PASSWORD, "");
+-
+-      if (encryptedPassword.equals("")) {
+-        return "";
+-      } else {
+-        return CryptUtil.decryptPassword(getContext(), encryptedPassword);
+-      }
+-    } catch (GeneralSecurityException | IOException e) {
+-      e.printStackTrace();
+-
+-      Toast.makeText(getContext(), getResources().getString(R.string.error), Toast.LENGTH_SHORT)
+-          .show();
+-      // can't decrypt the password saved in preferences, remove the preference altogether
+-      getMainActivity().getPrefs().edit().putString(FtpService.KEY_PREFERENCE_PASSWORD, "").apply();
+-      return "";
+-    }
+-  }
+-
+-  private String getDefaultPathFromPreferences() {
+-    SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
+-
+-    return preferences.getString(FtpService.KEY_PREFERENCE_PATH, FtpService.DEFAULT_PATH);
+-  }
+-
+-  private void changeFTPServerPort(int port) {
+-    getMainActivity().getPrefs().edit().putInt(FtpService.PORT_PREFERENCE_KEY, port).apply();
+-
+-    // first update spans which will point to an updated status
+-    updateSpans();
+-    updateStatus();
+-  }
+-
+-  public void changeFTPServerPath(String path) {
+-    SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
+-    preferences.edit().putString(FtpService.KEY_PREFERENCE_PATH, path).apply();
+-
+-    updateStatus();
+-  }
+-
+-  private void setFTPUsername(String username) {
+-    getMainActivity()
+-        .getPrefs()
+-        .edit()
+-        .putString(FtpService.KEY_PREFERENCE_USERNAME, username)
+-        .apply();
+-    updateStatus();
+-  }
+-
+-  private void setFTPPassword(String password) {
+-    try {
+-      getMainActivity()
+-          .getPrefs()
+-          .edit()
+-          .putString(
+-              FtpService.KEY_PREFERENCE_PASSWORD, CryptUtil.encryptPassword(getContext(), password))
+-          .apply();
+-    } catch (GeneralSecurityException | IOException e) {
+-      e.printStackTrace();
+-      Toast.makeText(getContext(), getResources().getString(R.string.error), Toast.LENGTH_LONG)
+-          .show();
+-    }
+-    updateStatus();
+-  }
+-
+-  /**
+-   * Returns timeout from preferences
+-   *
+-   * @return timeout in seconds
+-   */
+-  private int getFTPTimeout() {
+-    return getMainActivity()
+-        .getPrefs()
+-        .getInt(FtpService.KEY_PREFERENCE_TIMEOUT, FtpService.DEFAULT_TIMEOUT);
+-  }
+-
+-  private void setFTPTimeout(int seconds) {
+-    getMainActivity().getPrefs().edit().putInt(FtpService.KEY_PREFERENCE_TIMEOUT, seconds).apply();
+-  }
+-
+-  private boolean getSecurePreference() {
+-    return getMainActivity()
+-        .getPrefs()
+-        .getBoolean(FtpService.KEY_PREFERENCE_SECURE, FtpService.DEFAULT_SECURE);
+-  }
+-
+-  private void setSecurePreference(boolean isSecureEnabled) {
+-    getMainActivity()
+-        .getPrefs()
+-        .edit()
+-        .putBoolean(FtpService.KEY_PREFERENCE_SECURE, isSecureEnabled)
+-        .apply();
+-  }
+-
+-  private boolean getReadonlyPreference() {
+-    return getMainActivity().getPrefs().getBoolean(FtpService.KEY_PREFERENCE_READONLY, false);
+-  }
+-
+-  private void setReadonlyPreference(boolean isReadonly) {
+-    getMainActivity()
+-        .getPrefs()
+-        .edit()
+-        .putBoolean(FtpService.KEY_PREFERENCE_READONLY, isReadonly)
+-        .apply();
+-  }
+-
+-  private void promptUserToRestartServer() {
+-    if (FtpService.isRunning()) AppConfig.toast(getContext(), R.string.ftp_prompt_restart_server);
+-  }
+-
+-  private void promptUserToEnableWireless(@Nullable NetworkInfo ni) {
+-    // No wifi, no data, no connection at all
+-    if (ni == null || !ni.isConnected()) {
+-      snackbar =
+-          Utils.showThemedSnackbar(
+-              (MainActivity) getActivity(),
+-              getString(R.string.ftp_server_prompt_connect_to_network),
+-              BaseTransientBottomBar.LENGTH_INDEFINITE,
+-              R.string.ftp_server_open_settings,
+-              () -> startActivity(new Intent(ACTION_WIFI_SETTINGS)));
+-      snackbar.show();
+-    }
+-  }
+-
+-  private void dismissSnackbar() {
+-    if (snackbar != null) {
+-      snackbar.dismiss();
+-      snackbar = null;
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+new file mode 100644
+index 000000000..1c0474161
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+@@ -0,0 +1,721 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.ui.fragments
++
++import android.app.Activity.RESULT_OK
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import android.content.IntentFilter
++import android.graphics.drawable.ColorDrawable
++import android.net.ConnectivityManager
++import android.net.Uri
++import android.os.Build
++import android.os.Build.VERSION_CODES.LOLLIPOP
++import android.os.Build.VERSION_CODES.M
++import android.os.Bundle
++import android.os.Environment
++import android.preference.PreferenceManager
++import android.provider.Settings
++import android.text.InputType
++import android.text.Spanned
++import android.view.*
++import android.widget.*
++import androidx.activity.result.contract.ActivityResultContracts
++import androidx.core.text.HtmlCompat
++import androidx.core.text.HtmlCompat.FROM_HTML_MODE_COMPACT
++import androidx.fragment.app.Fragment
++import com.afollestad.materialdialogs.DialogAction
++import com.afollestad.materialdialogs.MaterialDialog
++import com.afollestad.materialdialogs.folderselector.FolderChooserDialog
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.getLocalInetAddress
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isConnectedToLocalNetwork
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isConnectedToWifi
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isEnabledWifiHotspot
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.Companion.isRunning
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService.FtpReceiverActions
++import com.amaze.filemanager.databinding.DialogFtpLoginBinding
++import com.amaze.filemanager.databinding.FragmentFtpBinding
++import com.amaze.filemanager.filesystem.files.CryptUtil
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.ui.notifications.FtpNotification
++import com.amaze.filemanager.ui.theme.AppTheme
++import com.amaze.filemanager.utils.OneCharacterCharSequence
++import com.amaze.filemanager.utils.Utils
++import com.google.android.material.snackbar.BaseTransientBottomBar
++import com.google.android.material.snackbar.Snackbar
++import org.greenrobot.eventbus.EventBus
++import org.greenrobot.eventbus.Subscribe
++import org.greenrobot.eventbus.ThreadMode
++import java.io.IOException
++import java.security.GeneralSecurityException
++import java.util.*
++
++/**
++ * Created by yashwanthreddyg on 10-06-2016. Edited by Luca D'Amico (Luca91) on 25 Jul 2017 (Fixed
++ * FTP Server while usi
++ */
++@Suppress("TooManyFunctions")
++class FtpServerFragment : Fragment(R.layout.fragment_ftp) {
++
++    private val statusText: TextView get() = binding.textViewFtpStatus
++    private val url: TextView get() = binding.textViewFtpUrl
++    private val username: TextView get() = binding.textViewFtpUsername
++    private val password: TextView get() = binding.textViewFtpPassword
++    private val port: TextView get() = binding.textViewFtpPort
++    private val sharedPath: TextView get() = binding.textViewFtpPath
++    private val ftpBtn: Button get() = binding.startStopButton
++    private val ftpPasswordVisibleButton: ImageButton get() = binding.ftpPasswordVisible
++    private var accentColor = 0
++    private var spannedStatusNoConnection: Spanned? = null
++    private var spannedStatusConnected: Spanned? = null
++    private var spannedStatusUrl: Spanned? = null
++    private var spannedStatusSecure: Spanned? = null
++    private var spannedStatusNotRunning: Spanned? = null
++    private var snackbar: Snackbar? = null
++
++    private var _binding: FragmentFtpBinding? = null
++    private val binding get() = _binding!!
++
++    private val mainActivity: MainActivity get() = requireActivity() as MainActivity
++
++    @Suppress("LabeledExpression")
++    private val activityResultHandler = registerForActivityResult(
++        ActivityResultContracts.StartActivityForResult()
++    ) {
++        if (it.resultCode == RESULT_OK && Build.VERSION.SDK_INT >= LOLLIPOP) {
++            val directoryUri = it.data?.data ?: return@registerForActivityResult
++            requireContext().contentResolver.takePersistableUriPermission(
++                directoryUri,
++                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
++            )
++            changeFTPServerPath(directoryUri.toString())
++            updatePathText()
++        }
++    }
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        setHasOptionsMenu(true)
++        retainInstance = true
++        mainActivity.appbar.setTitle(R.string.ftp)
++        mainActivity.fab.hide()
++        mainActivity.appbar.bottomBar.setVisibility(View.GONE)
++        mainActivity.invalidateOptionsMenu()
++        val skin_color = mainActivity.currentColorPreference.primaryFirstTab
++        val skinTwoColor = mainActivity.currentColorPreference.primarySecondTab
++        mainActivity.updateViews(
++            ColorDrawable(
++                if (MainActivity.currentTab == 1) {
++                    skinTwoColor
++                } else {
++                    skin_color
++                }
++            )
++        )
++    }
++
++    override fun onDestroyView() {
++        super.onDestroyView()
++        _binding = null
++    }
++
++    override fun onCreateView(
++        inflater: LayoutInflater,
++        container: ViewGroup?,
++        savedInstanceState: Bundle?
++    ): View {
++        _binding = FragmentFtpBinding.inflate(inflater)
++        val startDividerView = binding.dividerFtpStart
++        val statusDividerView = binding.dividerFtpStatus
++        accentColor = mainActivity.accent
++        updateSpans()
++        updateStatus()
++        when (mainActivity.appTheme.simpleTheme) {
++            AppTheme.LIGHT -> {
++                startDividerView.setBackgroundColor(Utils.getColor(context, R.color.divider))
++                statusDividerView.setBackgroundColor(Utils.getColor(context, R.color.divider))
++            }
++            AppTheme.DARK, AppTheme.BLACK -> {
++                startDividerView.setBackgroundColor(
++                    Utils.getColor(context, R.color.divider_dark_card)
++                )
++                statusDividerView.setBackgroundColor(
++                    Utils.getColor(context, R.color.divider_dark_card)
++                )
++            }
++            else -> {}
++        }
++        ftpBtn.setOnClickListener {
++            if (!isRunning()) {
++                if (isConnectedToWifi(requireContext()) ||
++                    isConnectedToLocalNetwork(requireContext()) ||
++                    isEnabledWifiHotspot(requireContext())
++                ) {
++                    startServer()
++                } else {
++                    // no Wi-Fi and no eth, we shouldn't be here in the first place,
++                    // because of broadcast receiver, but just to be sure
++                    statusText.text = spannedStatusNoConnection
++                }
++            } else {
++                stopServer()
++            }
++        }
++        return binding.root
++    }
++
++    // Pending upgrading material-dialogs to simplify the logic here.
++    @Suppress("ComplexMethod", "LongMethod")
++    override fun onOptionsItemSelected(item: MenuItem): Boolean {
++        when (item.itemId) {
++            R.id.choose_ftp_port -> {
++                val currentFtpPort = defaultPortFromPreferences
++                MaterialDialog.Builder(requireContext())
++                    .input(
++                        getString(R.string.ftp_port_edit_menu_title),
++                        currentFtpPort.toString(),
++                        true
++                    ) { _: MaterialDialog?, _: CharSequence? -> }
++                    .inputType(InputType.TYPE_CLASS_NUMBER)
++                    .onPositive { dialog: MaterialDialog, which: DialogAction? ->
++                        val editText = dialog.inputEditText
++                        if (editText != null) {
++                            val name = editText.text.toString()
++                            val portNumber = name.toInt()
++                            if (portNumber < 1024) {
++                                Toast.makeText(
++                                    activity,
++                                    R.string.ftp_port_change_error_invalid,
++                                    Toast.LENGTH_SHORT
++                                )
++                                    .show()
++                            } else {
++                                changeFTPServerPort(portNumber)
++                                Toast.makeText(
++                                    activity, R.string.ftp_port_change_success, Toast.LENGTH_SHORT
++                                )
++                                    .show()
++                            }
++                        }
++                    }
++                    .positiveText(getString(R.string.change).toUpperCase())
++                    .negativeText(R.string.cancel)
++                    .build()
++                    .show()
++                return true
++            }
++            R.id.ftp_path -> {
++                if (Build.VERSION.SDK_INT >= M) {
++                    activityResultHandler.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE))
++                } else {
++                    val dialogBuilder = FolderChooserDialog.Builder(requireActivity())
++                    dialogBuilder
++                        .chooseButton(R.string.choose_folder)
++                        .initialPath(defaultPathFromPreferences)
++                        .goUpLabel(getString(R.string.folder_go_up_one_level))
++                        .cancelButton(R.string.cancel)
++                        .tag(TAG)
++                        .build()
++                        .show(activity)
++                }
++
++                return true
++            }
++            R.id.ftp_login -> {
++                val loginDialogBuilder = MaterialDialog.Builder(requireContext())
++                val loginDialogView =
++                    DialogFtpLoginBinding.inflate(LayoutInflater.from(requireContext())).apply {
++                        initLoginDialogViews(this)
++                        loginDialogBuilder.onPositive { dialog: MaterialDialog, _: DialogAction ->
++                            if (checkboxFtpAnonymous.isChecked) {
++                                // remove preferences
++                                setFTPUsername("")
++                                setFTPPassword("")
++                            } else {
++                                // password and username field not empty, let's set them to preferences
++                                setFTPUsername(editTextDialogFtpUsername.text.toString())
++                                setFTPPassword(editTextDialogFtpPassword.text.toString())
++                            }
++                        }
++                    }
++                val dialog = loginDialogBuilder.customView(loginDialogView.root, true)
++                    .title(getString(R.string.ftp_login))
++                    .positiveText(getString(R.string.set).toUpperCase())
++                    .negativeText(getString(R.string.cancel))
++                    .build()
++
++                // TextWatcher for port number was deliberately removed. It didn't work anyway, so
++                // no reason to keep here. Pending reimplementation when material-dialogs lib is
++                // upgraded.
++
++                dialog.show()
++                return true
++            }
++            R.id.checkbox_ftp_readonly -> {
++                val shouldReadonly = !item.isChecked
++                item.isChecked = shouldReadonly
++                readonlyPreference = shouldReadonly
++                updatePathText()
++                promptUserToRestartServer()
++                return true
++            }
++            R.id.checkbox_ftp_secure -> {
++                val shouldSecure = !item.isChecked
++                item.isChecked = shouldSecure
++                securePreference = shouldSecure
++                promptUserToRestartServer()
++                return true
++            }
++            R.id.ftp_timeout -> {
++                val timeoutBuilder = MaterialDialog.Builder(requireActivity())
++                timeoutBuilder.title(
++                    getString(R.string.ftp_timeout) +
++                        " (" +
++                        resources.getString(R.string.ftp_seconds) +
++                        ")"
++                )
++                timeoutBuilder.input(
++                    (
++                        FtpService.DEFAULT_TIMEOUT.toString() +
++                            " " +
++                            resources.getString(R.string.ftp_seconds)
++                        ),
++                    ftpTimeout.toString(),
++                    true
++                ) { _: MaterialDialog?, input: CharSequence ->
++                    val isInputInteger: Boolean = try {
++                        // try parsing for integer check
++                        input.toString().toInt()
++                        true
++                    } catch (e: NumberFormatException) {
++                        false
++                    }
++                    ftpTimeout = if (input.isEmpty() || !isInputInteger) {
++                        FtpService.DEFAULT_TIMEOUT
++                    } else {
++                        Integer.valueOf(input.toString())
++                    }
++                }
++                timeoutBuilder
++                    .positiveText(resources.getString(R.string.set).toUpperCase())
++                    .negativeText(resources.getString(R.string.cancel))
++                    .build()
++                    .show()
++                return true
++            }
++        }
++        return false
++    }
++
++    override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
++        mainActivity.menuInflater.inflate(R.menu.ftp_server_menu, menu)
++        menu.findItem(R.id.checkbox_ftp_readonly).isChecked = readonlyPreference
++        menu.findItem(R.id.checkbox_ftp_secure).isChecked = securePreference
++    }
++
++    private val mWifiReceiver: BroadcastReceiver = object : BroadcastReceiver() {
++        override fun onReceive(context: Context, intent: Intent) {
++            // connected to Wi-Fi or eth
++            if (isConnectedToLocalNetwork(context)) {
++                ftpBtn.isEnabled = true
++                dismissSnackbar()
++            } else {
++                // Wi-Fi or eth connection lost
++                stopServer()
++                statusText.text = spannedStatusNoConnection
++                ftpBtn.isEnabled = false
++                ftpBtn.text = resources.getString(R.string.start_ftp).toUpperCase()
++                promptUserToEnableWireless()
++            }
++        }
++    }
++
++    /**
++     * Handles messages sent from [EventBus].
++     *
++     * @param signal as [FtpReceiverActions]
++     */
++    @Subscribe(threadMode = ThreadMode.MAIN_ORDERED)
++    @Suppress("StringLiteralDuplication")
++    fun onFtpReceiveActions(signal: FtpReceiverActions) {
++        updateSpans()
++        when (signal) {
++            FtpReceiverActions.STARTED, FtpReceiverActions.STARTED_FROM_TILE -> {
++                statusText.text = if (securePreference) spannedStatusSecure
++                else spannedStatusConnected
++
++                url.text = spannedStatusUrl
++                ftpBtn.text = resources.getString(R.string.stop_ftp).toUpperCase()
++                FtpNotification.updateNotification(
++                    context,
++                    FtpReceiverActions.STARTED_FROM_TILE == signal
++                )
++            }
++            FtpReceiverActions.FAILED_TO_START -> {
++                statusText.text = spannedStatusNotRunning
++                Toast.makeText(context, R.string.unknown_error, Toast.LENGTH_LONG).show()
++                ftpBtn.text = resources.getString(R.string.start_ftp).toUpperCase()
++                url.text = "URL: "
++            }
++            FtpReceiverActions.STOPPED -> {
++                statusText.text = spannedStatusNotRunning
++                url.text = "URL: "
++                ftpBtn.text = resources.getString(R.string.start_ftp).toUpperCase()
++            }
++        }
++    }
++
++    /** Sends a broadcast to start ftp server  */
++    private fun startServer() {
++        requireContext().sendBroadcast(
++            Intent(FtpService.ACTION_START_FTPSERVER)
++                .setPackage(requireContext().packageName)
++        )
++    }
++
++    /** Sends a broadcast to stop ftp server  */
++    private fun stopServer() {
++        requireContext().sendBroadcast(
++            Intent(FtpService.ACTION_STOP_FTPSERVER)
++                .setPackage(requireContext().packageName)
++        )
++    }
++
++    override fun onResume() {
++        super.onResume()
++        val wifiFilter = IntentFilter()
++        wifiFilter.addAction(ConnectivityManager.CONNECTIVITY_ACTION)
++        requireContext().registerReceiver(mWifiReceiver, wifiFilter)
++        EventBus.getDefault().register(this)
++    }
++
++    override fun onPause() {
++        super.onPause()
++        requireContext().unregisterReceiver(mWifiReceiver)
++        EventBus.getDefault().unregister(this)
++        dismissSnackbar()
++    }
++
++    /** Update UI widgets after change in shared preferences  */
++    private fun updateStatus() {
++        if (!isRunning()) {
++            if (!isConnectedToWifi(requireContext()) &&
++                !isConnectedToLocalNetwork(requireContext()) &&
++                !isEnabledWifiHotspot(requireContext())
++            ) {
++                statusText.text = spannedStatusNoConnection
++                ftpBtn.isEnabled = false
++            } else {
++                statusText.text = spannedStatusNotRunning
++                ftpBtn.isEnabled = true
++            }
++            url.text = "URL: "
++            ftpBtn.text = resources.getString(R.string.start_ftp).toUpperCase()
++        } else {
++            accentColor = mainActivity.accent
++            url.text = spannedStatusUrl
++            statusText.text = spannedStatusConnected
++            ftpBtn.isEnabled = true
++            ftpBtn.text = resources.getString(R.string.stop_ftp).toUpperCase()
++        }
++        val passwordDecrypted = passwordFromPreferences
++        val passwordBulleted: CharSequence = OneCharacterCharSequence(
++            '\u25CF',
++            passwordDecrypted!!.length
++        )
++        username.text = "${resources.getString(R.string.username)}: $usernameFromPreferences"
++        password.text = "${resources.getString(R.string.password)}: $passwordBulleted"
++        ftpPasswordVisibleButton.setImageDrawable(
++            resources.getDrawable(R.drawable.ic_eye_grey600_24dp)
++        )
++        ftpPasswordVisibleButton.visibility = if (passwordDecrypted.isEmpty()) {
++            View.GONE
++        } else {
++            View.VISIBLE
++        }
++        ftpPasswordVisibleButton.setOnClickListener { v: View? ->
++            if (password.text.toString().contains("\u25CF")) {
++                // password was not visible, let's make it visible
++                password.text = resources.getString(R.string.password) + ": " + passwordDecrypted
++                ftpPasswordVisibleButton.setImageDrawable(
++                    resources.getDrawable(R.drawable.ic_eye_off_grey600_24dp)
++                )
++            } else {
++                // password was visible, let's hide it
++                password.text = resources.getString(R.string.password) + ": " + passwordBulleted
++                ftpPasswordVisibleButton.setImageDrawable(
++                    resources.getDrawable(R.drawable.ic_eye_grey600_24dp)
++                )
++            }
++        }
++        port.text = "${resources.getString(R.string.ftp_port)}: $defaultPortFromPreferences"
++        updatePathText()
++    }
++
++    private fun updatePathText() {
++        val sb = StringBuilder(resources.getString(R.string.ftp_path))
++            .append(": ")
++            .append(defaultPathFromPreferences)
++        if (readonlyPreference) sb.append(" \uD83D\uDD12")
++        sharedPath.text = sb.toString()
++    }
++
++    /** Updates the status spans  */
++    private fun updateSpans() {
++        var ftpAddress = ftpAddressString
++        if (ftpAddress == null) {
++            ftpAddress = ""
++            Toast.makeText(
++                context,
++                resources.getString(R.string.local_inet_addr_error),
++                Toast.LENGTH_SHORT
++            )
++                .show()
++        }
++        val statusHead = "${resources.getString(R.string.ftp_status_title)}: "
++        spannedStatusConnected = HtmlCompat.fromHtml(
++            "$statusHead<b>&nbsp;&nbsp;<font color='$accentColor'>" +
++                "${resources.getString(R.string.ftp_status_running)}</font></b>",
++            FROM_HTML_MODE_COMPACT
++        )
++        spannedStatusUrl = HtmlCompat.fromHtml(
++            "URL:&nbsp;$ftpAddress",
++            FROM_HTML_MODE_COMPACT
++        )
++        spannedStatusNoConnection = HtmlCompat.fromHtml(
++            "$statusHead<b>&nbsp;&nbsp;&nbsp;&nbsp;" +
++                "<font color='${Utils.getColor(context, android.R.color.holo_red_light)}'>" +
++                "${resources.getString(R.string.ftp_status_no_connection)}</font></b>",
++            FROM_HTML_MODE_COMPACT
++        )
++        spannedStatusNotRunning = HtmlCompat.fromHtml(
++            "$statusHead<b>&nbsp;&nbsp;&nbsp;&nbsp;" +
++                "${resources.getString(R.string.ftp_status_not_running)}</b>",
++            FROM_HTML_MODE_COMPACT
++        )
++        spannedStatusSecure = HtmlCompat.fromHtml(
++            "$statusHead<b>&nbsp;&nbsp;&nbsp;&nbsp;<font color='${Utils.getColor(
++                context,
++                android.R.color.holo_green_light
++            )}'>" +
++                "${resources.getString(R.string.ftp_status_secure_connection)}</font></b>",
++            FROM_HTML_MODE_COMPACT
++        )
++        spannedStatusUrl = HtmlCompat.fromHtml(
++            "URL:&nbsp;$ftpAddress",
++            FROM_HTML_MODE_COMPACT
++        )
++    }
++
++    private fun initLoginDialogViews(loginDialogView: DialogFtpLoginBinding) {
++        val usernameEditText = loginDialogView.editTextDialogFtpUsername
++        val passwordEditText = loginDialogView.editTextDialogFtpPassword
++        val anonymousCheckBox = loginDialogView.checkboxFtpAnonymous
++        anonymousCheckBox.setOnCheckedChangeListener { _: CompoundButton?, isChecked: Boolean ->
++            usernameEditText.isEnabled = !isChecked
++            passwordEditText.isEnabled = !isChecked
++        }
++
++        // init dialog views as per preferences
++        if (usernameFromPreferences == FtpService.DEFAULT_USERNAME) {
++            anonymousCheckBox.isChecked = true
++        } else {
++            usernameEditText.setText(usernameFromPreferences)
++            passwordEditText.setText(passwordFromPreferences)
++        }
++    }
++
++    // return address the FTP server is running
++    private val ftpAddressString: String?
++        get() {
++            val ia = getLocalInetAddress(requireContext()) ?: return null
++            return (
++                (
++                    if (securePreference) {
++                        FtpService.INITIALS_HOST_SFTP
++                    } else {
++                        FtpService.INITIALS_HOST_FTP
++                    }
++                    ) +
++                    ia.hostAddress +
++                    ":" +
++                    defaultPortFromPreferences
++                )
++        }
++
++    private val defaultPortFromPreferences: Int
++        get() = mainActivity.prefs
++            .getInt(FtpService.PORT_PREFERENCE_KEY, FtpService.DEFAULT_PORT)
++    private val usernameFromPreferences: String
++        get() = mainActivity.prefs
++            .getString(FtpService.KEY_PREFERENCE_USERNAME, FtpService.DEFAULT_USERNAME)!!
++
++    // can't decrypt the password saved in preferences, remove the preference altogether
++    private val passwordFromPreferences: String?
++        get() = runCatching {
++            val encryptedPassword = mainActivity.prefs.getString(
++                FtpService.KEY_PREFERENCE_PASSWORD, ""
++            )
++            if (encryptedPassword == "") {
++                ""
++            } else {
++                CryptUtil.decryptPassword(requireContext(), encryptedPassword)
++            }
++        }.onFailure {
++            it.printStackTrace()
++            Toast.makeText(requireContext(), R.string.error, Toast.LENGTH_SHORT).show()
++            mainActivity.prefs.edit().putString(FtpService.KEY_PREFERENCE_PASSWORD, "").apply()
++        }.getOrNull()
++
++    private val defaultPathFromPreferences: String
++        get() {
++            return pathToDisplayString(
++                PreferenceManager.getDefaultSharedPreferences(activity)
++                    .getString(FtpService.KEY_PREFERENCE_PATH, FtpService.DEFAULT_PATH)!!
++            )
++        }
++
++    private fun pathToDisplayString(path: String): String {
++        return when {
++            path == FtpService.DEFAULT_PATH -> {
++                Environment.getExternalStorageDirectory().absolutePath
++            }
++            path.startsWith("file:///") -> {
++                path.substringAfter("file://")
++            }
++            path.startsWith("content://") -> {
++                return Uri.parse(path).let {
++                    "/storage${it.path?.replace(':', '/')}"
++                }
++            }
++            else -> {
++                path
++            }
++        }
++    }
++
++    private fun changeFTPServerPort(port: Int) {
++        mainActivity.prefs.edit().putInt(FtpService.PORT_PREFERENCE_KEY, port).apply()
++
++        // first update spans which will point to an updated status
++        updateSpans()
++        updateStatus()
++    }
++
++    /**
++     * Update FTP server shared path in [android.content.SharedPreferences].
++     *
++     * @param path new shared path. Can be either absolute path (pre 4.4) or URI, which can be
++     * <code>file:///</code> or <code>content://</code> as prefix
++     */
++    fun changeFTPServerPath(path: String) {
++        val preferences = PreferenceManager.getDefaultSharedPreferences(activity)
++        preferences.edit().putString(FtpService.KEY_PREFERENCE_PATH, path).apply()
++        updateStatus()
++    }
++
++    private fun setFTPUsername(username: String) {
++        mainActivity
++            .prefs
++            .edit()
++            .putString(FtpService.KEY_PREFERENCE_USERNAME, username)
++            .apply()
++        updateStatus()
++    }
++
++    private fun setFTPPassword(password: String) {
++        try {
++            mainActivity
++                .prefs
++                .edit()
++                .putString(
++                    FtpService.KEY_PREFERENCE_PASSWORD, CryptUtil.encryptPassword(context, password)
++                )
++                .apply()
++        } catch (e: GeneralSecurityException) {
++            e.printStackTrace()
++            Toast.makeText(context, resources.getString(R.string.error), Toast.LENGTH_LONG)
++                .show()
++        } catch (e: IOException) {
++            e.printStackTrace()
++            Toast.makeText(context, resources.getString(R.string.error), Toast.LENGTH_LONG)
++                .show()
++        }
++        updateStatus()
++    }
++
++    // Returns timeout from preferences, in seconds
++    private var ftpTimeout: Int
++        get() = mainActivity
++            .prefs
++            .getInt(FtpService.KEY_PREFERENCE_TIMEOUT, FtpService.DEFAULT_TIMEOUT)
++        private set(seconds) {
++            mainActivity.prefs.edit().putInt(FtpService.KEY_PREFERENCE_TIMEOUT, seconds).apply()
++        }
++
++    private var securePreference: Boolean
++        get() = mainActivity
++            .prefs
++            .getBoolean(FtpService.KEY_PREFERENCE_SECURE, FtpService.DEFAULT_SECURE)
++        private set(isSecureEnabled) {
++            mainActivity
++                .prefs
++                .edit()
++                .putBoolean(FtpService.KEY_PREFERENCE_SECURE, isSecureEnabled)
++                .apply()
++        }
++
++    private var readonlyPreference: Boolean
++        get() = mainActivity.prefs.getBoolean(FtpService.KEY_PREFERENCE_READONLY, false)
++        private set(isReadonly) {
++            mainActivity
++                .prefs
++                .edit()
++                .putBoolean(FtpService.KEY_PREFERENCE_READONLY, isReadonly)
++                .apply()
++        }
++
++    private fun promptUserToRestartServer() {
++        if (isRunning()) AppConfig.toast(context, R.string.ftp_prompt_restart_server)
++    }
++
++    private fun promptUserToEnableWireless() {
++        // No wifi, no data, no connection at all
++        snackbar = Utils.showThemedSnackbar(
++            activity as MainActivity?,
++            getString(R.string.ftp_server_prompt_connect_to_network),
++            BaseTransientBottomBar.LENGTH_INDEFINITE,
++            R.string.ftp_server_open_settings
++        ) { startActivity(Intent(Settings.ACTION_WIFI_SETTINGS)) }
++        snackbar!!.show()
++    }
++
++    private fun dismissSnackbar() = snackbar?.dismiss()
++
++    companion object {
++        const val TAG = "FtpServerFragment"
++        const val REQUEST_CODE_SAF_FTP = 225
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+index 6c70d7100..feca31c71 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+@@ -241,7 +241,8 @@ public class MainActivityHelper {
+       String prefill,
+       final MaterialDialog.SingleButtonCallback onPositiveAction,
+       final WarnableTextInputValidator.OnTextValidate validator) {
+-    GeneralDialogCreation.showNameDialog(
++    MaterialDialog dialog =
++        GeneralDialogCreation.showNameDialog(
+             mainActivity,
+             mainActivity.getResources().getString(R.string.entername),
+             prefill,
+@@ -250,8 +251,15 @@ public class MainActivityHelper {
+             mainActivity.getResources().getString(R.string.cancel),
+             null,
+             onPositiveAction,
+-            validator)
+-        .show();
++            validator);
++    dialog.show();
++
++    // place cursor at the beginning
++    EditText textfield = dialog.getCustomView().findViewById(R.id.singleedittext_input);
++    textfield.post(
++        () -> {
++          textfield.setSelection(0);
++        });
+   }
+ 
+   public String getIntegralNames(String path) {
+@@ -283,6 +291,10 @@ public class MainActivityHelper {
+   }
+ 
+   public void guideDialogForLEXA(String path) {
++    guideDialogForLEXA(path, 3);
++  }
++
++  public void guideDialogForLEXA(String path, int requestCode) {
+     final MaterialDialog.Builder x = new MaterialDialog.Builder(mainActivity);
+     x.theme(mainActivity.getAppTheme().getMaterialDialogTheme());
+     x.title(R.string.needs_access);
+@@ -301,7 +313,7 @@ public class MainActivityHelper {
+         .negativeText(R.string.cancel)
+         .positiveColor(accentColor)
+         .negativeColor(accentColor)
+-        .onPositive((dialog, which) -> triggerStorageAccessFramework())
++        .onPositive((dialog, which) -> triggerStorageAccessFramework(requestCode))
+         .onNegative(
+             (dialog, which) ->
+                 Toast.makeText(mainActivity, R.string.error, Toast.LENGTH_SHORT).show());
+@@ -309,9 +321,9 @@ public class MainActivityHelper {
+     y.show();
+   }
+ 
+-  private void triggerStorageAccessFramework() {
++  private void triggerStorageAccessFramework(int requestCode) {
+     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+-    mainActivity.startActivityForResult(intent, 3);
++    mainActivity.startActivityForResult(intent, requestCode);
+   }
+ 
+   public void rename(
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt
+index a4e942283..709da9706 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/AbstractDeleteTaskTestBase.kt
+@@ -128,7 +128,7 @@ abstract class AbstractDeleteTaskTestBase {
+                     )
+                         .run {
+                             assertTrue(size > 0)
+-                            assertEquals(file.path, this[0].path)
++                            assertEquals(file.path, this!![0].path)
+                         }
+                 }
+             }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/services/FtpServiceTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/services/FtpServiceTest.kt
+new file mode 100644
+index 000000000..130bc3c05
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/services/FtpServiceTest.kt
+@@ -0,0 +1,305 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.services
++
++import android.content.Context
++import android.net.ConnectivityManager
++import android.net.NetworkInfo
++import android.net.Uri
++import android.net.wifi.WifiInfo
++import android.net.wifi.WifiManager
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Environment
++import android.preference.PreferenceManager
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.asynchronous.services.ftp.FtpService
++import com.amaze.filemanager.filesystem.ftpserver.AndroidFileSystemFactory
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import org.apache.commons.net.ftp.FTPClient
++import org.apache.ftpserver.ConnectionConfigFactory
++import org.apache.ftpserver.FtpServer
++import org.apache.ftpserver.FtpServerFactory
++import org.apache.ftpserver.listener.ListenerFactory
++import org.apache.ftpserver.usermanager.impl.BaseUser
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.LooperMode
++import org.robolectric.shadows.ShadowNetworkInfo
++import org.robolectric.util.ReflectionHelpers
++import java.io.ByteArrayInputStream
++import java.io.File
++import java.io.FileInputStream
++import java.io.FileOutputStream
++import java.net.InetAddress
++import kotlin.random.Random
++
++@RunWith(AndroidJUnit4::class)
++@Config(sdk = [KITKAT], shadows = [ShadowMultiDex::class])
++@LooperMode(LooperMode.Mode.PAUSED)
++@Suppress("StringLiteralDuplication")
++class FtpServiceTest {
++
++    private val FTP_PORT = 62222
++
++    private var server: FtpServer? = null
++
++    private val randomContent = Random.nextBytes(16)
++
++    private var ftpClient: FTPClient? = null
++
++    companion object {
++
++        val directories = arrayOf(
++            Environment.DIRECTORY_MUSIC,
++            Environment.DIRECTORY_PODCASTS,
++            Environment.DIRECTORY_RINGTONES,
++            Environment.DIRECTORY_ALARMS,
++            Environment.DIRECTORY_NOTIFICATIONS,
++            Environment.DIRECTORY_PICTURES,
++            Environment.DIRECTORY_MOVIES,
++            Environment.DIRECTORY_DOWNLOADS,
++            Environment.DIRECTORY_DCIM,
++            Environment.DIRECTORY_DOCUMENTS,
++            "1/2/3/4/5/6/7"
++        )
++    }
++
++    /**
++     * Test setup
++     */
++    @Before
++    fun setUp() {
++        Environment.getExternalStorageDirectory().run {
++            directories.forEach { dir ->
++                File(this, dir).mkdirs()
++            }
++        }
++
++        setupNetwork()
++        PreferenceManager.getDefaultSharedPreferences(ApplicationProvider.getApplicationContext())
++            .run {
++                edit().putString(
++                    FtpService.KEY_PREFERENCE_PATH,
++                    Environment.getExternalStorageDirectory().absolutePath
++                )
++                    .apply()
++            }
++
++        File(Environment.getExternalStorageDirectory(), "test.bin").let { file ->
++            file.writeBytes(randomContent)
++            shadowOf(ApplicationProvider.getApplicationContext<Context>().contentResolver)
++                .registerInputStream(Uri.fromFile(file), FileInputStream(file))
++        }
++
++        FtpServerFactory().run {
++            val connectionConfigFactory = ConnectionConfigFactory()
++            val user = BaseUser()
++            user.name = "anonymous"
++            user.homeDirectory = Environment.getExternalStorageDirectory().absolutePath
++            connectionConfigFactory.isAnonymousLoginEnabled = true
++            connectionConfig = connectionConfigFactory.createConnectionConfig()
++            userManager.save(user)
++
++            fileSystem = AndroidFileSystemFactory(
++                ApplicationProvider.getApplicationContext()
++            )
++            addListener(
++                "default",
++                ListenerFactory().also {
++                    it.port = FTP_PORT
++                }.createListener()
++            )
++
++            server = createServer().apply {
++                start()
++            }
++        }
++
++        ftpClient = FTPClient().also {
++            it.connect("127.0.0.1", FTP_PORT)
++            it.login("anonymous", "no@e.mail")
++            it.enterLocalPassiveMode()
++        }
++    }
++
++    private fun setupNetwork() {
++        val cm = shadowOf(
++            ApplicationProvider.getApplicationContext<Context>()
++                .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
++        )
++        val wifiManager = shadowOf(
++            ApplicationProvider.getApplicationContext<Context>()
++                .getSystemService(Context.WIFI_SERVICE) as WifiManager
++        )
++        cm.setActiveNetworkInfo(
++            ShadowNetworkInfo.newInstance(
++                NetworkInfo.DetailedState.CONNECTED,
++                ConnectivityManager.TYPE_WIFI,
++                -1,
++                true,
++                NetworkInfo.State.CONNECTED
++            )
++        )
++        ReflectionHelpers.callInstanceMethod<Any>(
++            wifiManager,
++            "setWifiEnabled",
++            ReflectionHelpers.ClassParameter.from(Boolean::class.java, true)
++        )
++        ReflectionHelpers.callInstanceMethod<WifiInfo>(
++            wifiManager,
++            "getConnectionInfo"
++        ).run {
++            ReflectionHelpers.callInstanceMethod<Any>(
++                this,
++                "setInetAddress",
++                ReflectionHelpers.ClassParameter.from(
++                    InetAddress::class.java,
++                    InetAddress.getLoopbackAddress()
++                )
++            )
++        }
++    }
++
++    /**
++     * Kill FTP server if there is one running
++     */
++    @After
++    fun tearDown() {
++        ftpClient?.logout()
++        server?.stop()
++    }
++
++    /**
++     * Test on change directory functions
++     */
++    @Test
++    fun testChdir() {
++        ftpClient!!.run {
++            assertEquals(directories.size + 1, listFiles().size)
++            assertTrue(changeWorkingDirectory("Download"))
++            assertEquals(0, listFiles().size)
++            assertTrue(changeWorkingDirectory(".."))
++            assertEquals(directories.size + 1, listFiles().size)
++            assertTrue(changeWorkingDirectory("/1/2/3/4/5/6/7"))
++            assertEquals(0, listFiles().size)
++            assertTrue(changeWorkingDirectory("../"))
++            assertTrue(printWorkingDirectory().startsWith("/1/2/3/4/5/6"))
++            assertTrue(changeToParentDirectory())
++            assertTrue(printWorkingDirectory().startsWith("/1/2/3/4/5"))
++            assertTrue(changeWorkingDirectory("../../.."))
++            assertTrue(printWorkingDirectory().startsWith("/1/2"))
++        }
++    }
++
++    /**
++     * Test remove directory function
++     */
++    @Test
++    fun testRmDir() {
++        ftpClient!!.run {
++            assertTrue(changeWorkingDirectory("/"))
++            assertTrue(makeDirectory("foobar"))
++            assertEquals(directories.size + 2, listFiles().size)
++            assertTrue(removeDirectory("foobar"))
++            assertEquals(directories.size + 1, listFiles().size)
++            assertFalse(changeWorkingDirectory("foobar"))
++            assertTrue(listFiles("/foobar").isNullOrEmpty())
++        }
++    }
++
++    /**
++     * Test download file
++     */
++    @Test
++    fun testDownloadFile() {
++        ftpClient!!.run {
++            assertFalse(deleteFile("/nonexist.file.txt"))
++            assertNull(retrieveFileStream("/not/existing/file"))
++            assertFalse(
++                retrieveFile(
++                    "/barrier/nonexist.file.jpg",
++                    FileOutputStream(File.createTempFile("notused", "output"))
++                )
++            )
++            assertTrue(changeWorkingDirectory("/"))
++            retrieveFileStream("test.bin").let {
++                assertNotNull(it)
++                it.close()
++            }
++            completePendingCommand()
++            assertTrue(printWorkingDirectory() == "/")
++        }
++    }
++
++    /**
++     * Test upload file
++     */
++    @Test
++    fun testUploadFile() {
++        ftpClient!!.run {
++            storeFileStream("/test2.bin").let {
++                ByteArrayInputStream(Random.nextBytes(24)).copyTo(it)
++                it.flush()
++                it.close()
++            }
++            completePendingCommand()
++            assertTrue(rename("/test2.bin", "/test2.arc.bin"))
++        }
++    }
++
++    /**
++     * Test working with files and folders at subfolders
++     */
++    @Test
++    fun testUploadFileToSubDir() {
++        ftpClient!!.run {
++            assertTrue(makeDirectory("/CROSS OVER"))
++            storeFileStream("/CROSS OVER/test3.bin").let {
++                ByteArrayInputStream(Random.nextBytes(24)).copyTo(it)
++                it.flush()
++                it.close()
++            }
++            completePendingCommand()
++            assertTrue(changeWorkingDirectory("/CROSS OVER"))
++            listFiles().let {
++                assertEquals(1, it.size)
++                assertEquals("test3.bin", it[0].name)
++            }
++            assertTrue(makeDirectory("/CROSS OVER/multiple"))
++            assertTrue(makeDirectory("/CROSS OVER/multiple/levels down"))
++            assertTrue(changeWorkingDirectory("/CROSS OVER/multiple"))
++            assertTrue(changeWorkingDirectory("levels down"))
++            assertEquals("/CROSS OVER/multiple/levels down", printWorkingDirectory())
++            assertTrue(deleteFile("/CROSS OVER/test3.bin"))
++            assertTrue(changeWorkingDirectory("/CROSS OVER"))
++            listFiles().let {
++                assertEquals(1, it.size)
++                assertEquals("multiple", it[0].name)
++            }
++        }
++    }
++}

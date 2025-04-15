@@ -1,0 +1,676 @@
+diff --git a/app/src/main/java/com/apps/adrcotfas/goodtime/TimeLabelUpdateHandler.java b/app/src/main/java/com/apps/adrcotfas/goodtime/TimeLabelUpdateHandler.java
+new file mode 100644
+index 00000000..555184e8
+--- /dev/null
++++ b/app/src/main/java/com/apps/adrcotfas/goodtime/TimeLabelUpdateHandler.java
+@@ -0,0 +1,23 @@
++package com.apps.adrcotfas.goodtime;
++
++import android.os.Handler;
++import android.os.Message;
++import java.lang.ref.WeakReference;
++
++class TimeLabelUpdateHandler extends Handler {
++
++    private final static int UPDATE_RATE_MS = 1000;
++    private final WeakReference<TimerActivity> activity;
++
++    TimeLabelUpdateHandler(TimerActivity activity) {
++        this.activity = new WeakReference<>(activity);
++    }
++
++    @Override
++    public void handleMessage(Message message) {
++        if (TimerActivity.MSG_UPDATE_TIME == message.what) {
++            activity.get().updateTimerLabel();
++            sendEmptyMessageDelayed(TimerActivity.MSG_UPDATE_TIME, UPDATE_RATE_MS);
++        }
++    }
++}
+diff --git a/app/src/main/java/com/apps/adrcotfas/goodtime/TimerActivity.java b/app/src/main/java/com/apps/adrcotfas/goodtime/TimerActivity.java
+index dbe0b2b1..0b4bf34e 100644
+--- a/app/src/main/java/com/apps/adrcotfas/goodtime/TimerActivity.java
++++ b/app/src/main/java/com/apps/adrcotfas/goodtime/TimerActivity.java
+@@ -12,6 +12,7 @@ import android.content.SharedPreferences;
+ import android.graphics.Color;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.PowerManager;
+ import android.preference.PreferenceManager;
+@@ -62,6 +63,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+ 
+     private static final int MAXIMUM_MILLISECONDS_BETWEEN_BACK_PRESSES = 2000;
+     private static final String TAG = "TimerActivity";
++    protected final static int MSG_UPDATE_TIME = 0;
+     public static final int NOTIFICATION_TAG = 2;
+ 
+     private long mBackPressedAt;
+@@ -78,6 +80,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     private TimerService mTimerService;
+     private BroadcastReceiver mBroadcastReceiver;
+     private boolean mIsBoundToTimerService = false;
++    private final Handler mUpdateTimeHandler = new TimeLabelUpdateHandler(this);
+     private ServiceConnection mTimerServiceConnection = new ServiceConnection() {
+ 
+         @Override
+@@ -85,7 +88,6 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+             TimerService.TimerBinder binder = (TimerService.TimerBinder) iBinder;
+             mTimerService = binder.getService();
+             mIsBoundToTimerService = true;
+-            mTimerService.sendToBackground();
+         }
+ 
+         @Override
+@@ -156,11 +158,12 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     @Override
+     protected void onResume() {
+         super.onResume();
+-        if (mIsBoundToTimerService) {
++        if (mIsBoundToTimerService && mTimerService.getTimerState() != INACTIVE &&
++                mTimerService.isTimerRunning()) {
+             mTimerService.sendToBackground();
++            mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_TIME);
+         }
+-
+-        removeCompletionNotification();
++            removeCompletionNotification();
+ 
+         if (mPrivatePref.getBoolean(FIRST_RUN, true)) {
+             Intent introIntent = new Intent(this, ProductTourActivity.class);
+@@ -172,7 +175,8 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     @Override
+     protected void onStop() {
+         if (mIsBoundToTimerService && mTimerService.getTimerState() != INACTIVE) {
+-            mTimerService.bringToForegroundAndUpdateNotification();
++            mTimerService.bringToForeground();
++            mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+         }
+         if (mPref.getRotateTimeLabel()) {
+             mOrientationListener.disable();
+@@ -183,7 +187,6 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     @Override
+     protected void onDestroy() {
+         if (mIsBoundToTimerService) {
+-            mTimerService.removeTimer();
+             stopService(new Intent(this, TimerService.class));
+             unbindService(mTimerServiceConnection);
+             mIsBoundToTimerService = false;
+@@ -200,16 +203,9 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+         mBroadcastReceiver = new BroadcastReceiver() {
+             @Override
+             public void onReceive(Context context, Intent intent) {
+-                if (mIsBoundToTimerService) {
+-                    int remainingTime = intent.getIntExtra(TimerService.REMAINING_TIME, 0);
+-
+-                    Log.d(TAG, "Updating timer, " + remainingTime + " remaining");
+-
+-                    updateTimerLabel(remainingTime);
+-
+-                    if (remainingTime == 0) {
+-                        onCountdownFinished();
+-                    }
++                if (mIsBoundToTimerService
++                        && intent.getBooleanExtra(TimerService.COUNTDOWN_FINISHED, true)) {
++                    onCountdownFinished();
+                 }
+             }
+         };
+@@ -298,7 +294,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+                     buttons.startAnimation(loadAnimation(getApplicationContext(), R.anim.fade));
+                 }
+ 
+-                startTimer(300, WORK);
++                startTimer(WORK);
+                 enablePauseButton();
+                 mStartButton.setEnabled(false);
+                 mStartButton.postDelayed(new Runnable() {
+@@ -341,7 +337,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     private void setUpTimerLabel() {
+         if (mTimeLabel != null) {
+             mTimeLabel.setTypeface(createFromAsset(getAssets(), "fonts/Roboto-Thin.ttf"));
+-            updateTimerLabel(mPref.getSessionDuration() * 60);
++            updateTimerLabel();
+         }
+     }
+ 
+@@ -390,7 +386,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+             }
+         } else if (key.equals(SESSION_DURATION)) {
+             if (mTimerService.getTimerState() == INACTIVE) {
+-                updateTimerLabel(mPref.getSessionDuration() * 60);
++                updateTimerLabel();
+             }
+         }
+     }
+@@ -419,9 +415,10 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     private void loadInitialState() {
+         Log.d(TAG, "Loading initial state");
+ 
++        mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
++
+         if (mIsBoundToTimerService) {
+-            updateTimerLabel(mPref.getSessionDuration() * 60);
+-            mTimerService.removeTimer();
++            updateTimerLabel();
+             shutScreenOffIfPreferred();
+         }
+         mTimeLabel.setTextColor(getResources().getColor(R.color.lightGray));
+@@ -439,18 +436,16 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+         }
+     }
+ 
+-    private void startTimer(
+-            long delay,
+-            SessionType sessionType
+-    ) {
++    private void startTimer(SessionType sessionType) {
+         Log.i(TAG, "Timer has been started");
+ 
++        mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_TIME);
+         mTimeLabel.setTextColor(Color.WHITE);
+         loadRunningTimerUiState();
+ 
+         keepScreenOnIfPreferred();
+ 
+-        mTimerService.startSession(delay, sessionType);
++        mTimerService.startSession(sessionType);
+     }
+ 
+     private void loadRunningTimerUiState() {
+@@ -467,23 +462,20 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     }
+ 
+     private void pauseTimer() {
+-        Log.i(TAG, "Timer has been paused");
+-
+         mTimeLabel.setTextColor(getResources().getColor(R.color.lightGray));
+-        long timeOfButtonPress = System.currentTimeMillis();
+         switch (mTimerService.getTimerState()) {
+             case ACTIVE:
+-                mTimerService.pauseTimer();
++                Log.i(TAG, "Timer has been paused");
++                mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
++                mTimerService.pauseSession();
+ 
+                 mPauseButton.setText(getString(R.string.resume));
+                 mPauseButton.startAnimation(loadAnimation(getApplicationContext(), R.anim.blink));
+                 break;
+             case PAUSED:
+-                mTimerService.unpauseTimer(
+-                        System.currentTimeMillis() - timeOfButtonPress > 1000
+-                        ? 0
+-                        : 1000 - (System.currentTimeMillis() - timeOfButtonPress)
+-                );
++                Log.i(TAG, "Timer has been resumed");
++                mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_TIME);
++                mTimerService.unPauseSession();
+ 
+                 mPauseButton.setText(getString(R.string.pause));
+                 mPauseButton.clearAnimation();
+@@ -497,6 +489,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+         acquireScreenWakelock();
+         shutScreenOffIfPreferred();
+ 
++        mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+         increaseTotalSessions();
+ 
+         if (mPref.getContinuousMode()) {
+@@ -560,12 +553,14 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+                 .setPositiveButton(getString(R.string.dialog_break_session), new DialogInterface.OnClickListener() {
+                     @Override
+                     public void onClick(DialogInterface dialog, int which) {
+-                        startTimer(0, WORK);
++                        removeCompletionNotification();
++                        startTimer(WORK);
+                     }
+                 })
+                 .setNegativeButton(getString(R.string.dialog_session_cancel), new DialogInterface.OnClickListener() {
+                     @Override
+                     public void onClick(DialogInterface dialog, int which) {
++                        removeCompletionNotification();
+                         mTimerService.sendToBackground();
+                     }
+                 })
+@@ -583,6 +578,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+                                     DialogInterface dialog,
+                                     int which
+                             ) {
++                                removeCompletionNotification();
+                                 startBreak();
+                             }
+                         }
+@@ -595,13 +591,15 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+                                     DialogInterface dialog,
+                                     int which
+                             ) {
+-                                startTimer(0, WORK);
++                                removeCompletionNotification();
++                                startTimer(WORK);
+                             }
+                         }
+                 )
+                 .setNeutralButton(getString(R.string.dialog_session_close), new DialogInterface.OnClickListener() {
+                     @Override
+                     public void onClick(DialogInterface dialog, int which) {
++                        removeCompletionNotification();
+                         mTimerService.sendToBackground();
+                     }
+                 })
+@@ -611,9 +609,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+     private void startBreak() {
+         disablePauseButton();
+ 
+-        startTimer(
+-                0,
+-                mTimerService.getCurrentSessionStreak() >= mPref.getSessionsBeforeLongBreak()
++        startTimer(mTimerService.getCurrentSessionStreak() >= mPref.getSessionsBeforeLongBreak()
+                 ? LONG_BREAK
+                 : BREAK
+         );
+@@ -642,8 +638,7 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+                 if (mTimerService.getCurrentSessionStreak() >= mPref.getSessionsBeforeLongBreak()) {
+                     mTimerService.resetCurrentSessionStreak();
+                 }
+-
+-                startTimer(0, WORK);
++                startTimer(WORK);
+         }
+     }
+ 
+@@ -652,12 +647,17 @@ public class TimerActivity extends AppCompatActivity implements SharedPreference
+         mPauseButton.setTextColor(getResources().getColor(R.color.yellow));
+     }
+ 
+-    private void updateTimerLabel(
+-            final int remainingTime
+-    ) {
+-        int minutes = remainingTime / 60;
+-        int seconds = remainingTime % 60;
++    protected void updateTimerLabel() {
++        int minutes = mPref.getSessionDuration();
++        int seconds = 0;
++
++        if (mIsBoundToTimerService && mTimerService.isTimerRunning()) {
++            int remainingTime = mTimerService.getRemainingTime();
++            minutes = remainingTime / 60;
++            seconds = remainingTime % 60;
++        }
+ 
++        Log.i(TAG, "Updating time label: " + minutes + ":" + seconds);
+         String currentTick = (minutes > 0 ? minutes : "") +
+                 "." +
+                 format(Locale.US, "%02d", seconds);
+diff --git a/app/src/main/java/com/apps/adrcotfas/goodtime/TimerService.java b/app/src/main/java/com/apps/adrcotfas/goodtime/TimerService.java
+index 0834b781..800277f0 100644
+--- a/app/src/main/java/com/apps/adrcotfas/goodtime/TimerService.java
++++ b/app/src/main/java/com/apps/adrcotfas/goodtime/TimerService.java
+@@ -1,25 +1,28 @@
+ package com.apps.adrcotfas.goodtime;
+ 
++import android.app.AlarmManager;
+ import android.app.NotificationManager;
++import android.app.PendingIntent;
+ import android.app.Service;
++import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
++import android.content.IntentFilter;
+ import android.content.SharedPreferences;
+ import android.media.AudioManager;
+ import android.net.wifi.WifiManager;
+ import android.os.Binder;
+-import android.os.Handler;
++import android.os.Build;
+ import android.os.IBinder;
+-import android.os.PowerManager;
++import android.os.SystemClock;
+ import android.support.v4.content.LocalBroadcastManager;
+ import android.util.Log;
++import java.util.concurrent.TimeUnit;
+ 
+-import java.util.Timer;
+-
++import static android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP;
+ import static android.media.AudioManager.RINGER_MODE_SILENT;
+-import static android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP;
+-import static android.os.PowerManager.ON_AFTER_RELEASE;
+-import static android.os.PowerManager.PARTIAL_WAKE_LOCK;
++import static android.os.Build.VERSION.SDK_INT;
++import static com.apps.adrcotfas.goodtime.SessionType.LONG_BREAK;
+ import static com.apps.adrcotfas.goodtime.TimerActivity.NOTIFICATION_TAG;
+ import static com.apps.adrcotfas.goodtime.Notifications.createCompletionNotification;
+ import static com.apps.adrcotfas.goodtime.Notifications.createForegroundNotification;
+@@ -34,21 +37,22 @@ public class TimerService extends Service {
+     private static final int NOTIFICATION_ID = 1;
+     private static final String TAG = "TimerService";
+     public final static String ACTION_TIMERSERVICE = "com.apps.adrcotfas.goodtime.TIMERSERVICE";
+-    public final static String REMAINING_TIME = "com.apps.adrcotfas.goodtime.REMAINING_TIME";
++    public final static String COUNTDOWN_FINISHED = "com.apps.adrcotfas.goodtime.COUNTDOWN_FINISHED";
+ 
+-    private int mRemainingTime;
++    private long mCountDownFinishedTime;
++    private int mRemainingTimePaused;
+     private int mCurrentSessionStreak;
+-    private Timer mTimer;
+     private TimerState mTimerState;
+-    private TimerState mTimerBroughtToForegroundState;
+     private final IBinder mBinder = new TimerBinder();
+     private LocalBroadcastManager mBroadcastManager;
+     private int mPreviousRingerMode;
+     private boolean mPreviousWifiMode;
+-    private boolean mIsOnForeground;
++    private boolean mIsTimerRunning;
+     private Preferences mPref;
+     private SessionType mCurrentSession;
+-    private PowerManager.WakeLock mWakeLock;
++
++    private BroadcastReceiver mAlarmReceiver;
++    private AlarmManager mAlarmManager;
+ 
+     @Override
+     public void onCreate() {
+@@ -73,14 +77,13 @@ public class TimerService extends Service {
+     @Override
+     public void onDestroy() {
+         super.onDestroy();
+-        releaseWakelock();
+     }
+ 
+-    public void startSession(long delay, SessionType sessionType) {
+-        mRemainingTime = calculateSessionDurationFor(sessionType);
+-        Log.i(TAG, "Starting new timer for " + sessionType + ", duration " + mRemainingTime);
+-
+-        acquirePartialWakelock();
++    public void startSession(SessionType sessionType) {
++        mIsTimerRunning = true;
++        mCountDownFinishedTime = calculateSessionDurationFor(sessionType);
++        Log.i(TAG, "Starting new timer for " + sessionType + ", ending in "
++                + getRemainingTime() + " seconds.");
+ 
+         if (mPref.getDisableSoundAndVibration() && sessionType == WORK) {
+             saveCurrentStateOfSound();
+@@ -93,91 +96,62 @@ public class TimerService extends Service {
+ 
+         mTimerState = ACTIVE;
+         mCurrentSession = sessionType;
+-
+-        createAndStartTimer(delay);
+-    }
+-
+-    private int calculateSessionDurationFor(
+-            SessionType sessionType
+-    ) {
+-        switch (sessionType) {
+-            case WORK:
+-                return mPref.getSessionDuration() * 60;
+-            case BREAK:
+-                return mPref.getBreakDuration() * 60;
+-            case LONG_BREAK:
+-                return mPref.getLongBreakDuration() * 60;
+-            default:
+-                throw new IllegalStateException("This cannot happen");
+-        }
+-    }
+-
+-    private void acquirePartialWakelock() {
+-        mWakeLock = ((PowerManager) getSystemService(POWER_SERVICE)).newWakeLock(
+-                PARTIAL_WAKE_LOCK | ON_AFTER_RELEASE | ACQUIRE_CAUSES_WAKEUP,
+-                "starting partial wake lock"
+-        );
+-        mWakeLock.acquire();
+-    }
+-
+-    public void unpauseTimer(long delay) {
+-        mTimerState = ACTIVE;
+-        createAndStartTimer(delay);
++        setAlarm(mCountDownFinishedTime);
+     }
+ 
+     public void stopSession() {
++        mIsTimerRunning = false;
+         Log.d(TAG, "Session stopped");
+ 
+         sendToBackground();
+ 
+-        releaseWakelock();
+-        removeTimer();
+-
+         if (mPref.getDisableSoundAndVibration()) {
+             restoreSound();
+         }
+         if (mPref.getDisableWifi()) {
+             restoreWifi();
+         }
++        if (mCurrentSession == LONG_BREAK) {
++            resetCurrentSessionStreak();
++        }
+ 
+         mTimerState = INACTIVE;
++        cancelAlarm();
+     }
+ 
+-    private void createAndStartTimer(long delay) {
+-        Log.d(TAG, "Starting new timer");
+-
+-        sendUpdateIntent();
+-
+-        mTimer = new Timer();
+-        mTimer.schedule(
+-                new UpdateTask(new Handler(), this),
+-                delay,
+-                1000
+-        );
++    private long calculateSessionDurationFor(SessionType sessionType) {
++        long currentTime = SystemClock.elapsedRealtime();
++        switch (sessionType) {
++            case WORK:
++                return currentTime + TimeUnit.MINUTES.toMillis(mPref.getSessionDuration());
++            case BREAK:
++                return currentTime + TimeUnit.MINUTES.toMillis(mPref.getBreakDuration());
++            case LONG_BREAK:
++                return currentTime + TimeUnit.MINUTES.toMillis(mPref.getLongBreakDuration());
++            default:
++                throw new IllegalStateException("This cannot happen");
++        }
+     }
+ 
+-    public void countdown() {
+-        if (mTimerState != INACTIVE && mTimerState != PAUSED) {
+-            if (mRemainingTime > 0) {
+-                mRemainingTime--;
+-            }
+-
+-            if (mRemainingTime == 0) {
+-                onCountdownFinished();
+-            }
+-
+-            sendUpdateIntent();
++    public void pauseSession() {
++        mTimerState = PAUSED;
++        mIsTimerRunning = false;
++        mRemainingTimePaused = getRemainingTime();
++        cancelAlarm();
++    }
+ 
+-            if (mIsOnForeground && mTimerBroughtToForegroundState != mTimerState) {
+-                bringToForegroundAndUpdateNotification();
+-            }
+-        }
++    public void unPauseSession() {
++        mTimerState = ACTIVE;
++        mIsTimerRunning = true;
++        mCountDownFinishedTime = SystemClock.elapsedRealtime() +
++                TimeUnit.SECONDS.toMillis(mRemainingTimePaused);
++        Log.i(TAG, "Resuming countdown for " + getSessionType() + ", ending in "
++                + getRemainingTime() + " seconds.");
++        setAlarm(mCountDownFinishedTime);
+     }
+ 
+     private void onCountdownFinished() {
+         Log.d(TAG, "Countdown finished");
+-        releaseWakelock();
+-        removeTimer();
+ 
+         if (mPref.getDisableSoundAndVibration()) {
+             restoreSound();
+@@ -187,21 +161,11 @@ public class TimerService extends Service {
+         }
+ 
+         sendFinishedNotification();
++        mIsTimerRunning = false;
+         mTimerState = INACTIVE;
+         sendToBackground();
+     }
+ 
+-
+-    private void releaseWakelock() {
+-        if (mWakeLock != null) {
+-            try {
+-                mWakeLock.release();
+-            } catch (Throwable th) {
+-                // ignoring this exception, probably wakeLock was already released
+-            }
+-        }
+-    }
+-
+     private void saveCurrentStateOfSound() {
+         AudioManager aManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+         mPreviousRingerMode = aManager.getRingerMode();
+@@ -249,28 +213,8 @@ public class TimerService extends Service {
+         );
+     }
+ 
+-    private void sendUpdateIntent() {
+-        Intent remainingTimeIntent = new Intent(ACTION_TIMERSERVICE);
+-        remainingTimeIntent.putExtra(REMAINING_TIME, mRemainingTime);
+-        mBroadcastManager.sendBroadcast(remainingTimeIntent);
+-    }
+-
+-    public void pauseTimer() {
+-        mTimerState = PAUSED;
+-        removeTimer();
+-        releaseWakelock();
+-    }
+-
+-    public void removeTimer() {
+-        if (mIsOnForeground) {
+-            bringToForegroundAndUpdateNotification();
+-        }
+-
+-        if (mTimer != null) {
+-            mTimer.cancel();
+-            mTimer.purge();
+-            mTimer = null;
+-        }
++    public boolean isTimerRunning() {
++        return mIsTimerRunning;
+     }
+ 
+     public class TimerBinder extends Binder {
+@@ -300,6 +244,11 @@ public class TimerService extends Service {
+         return mCurrentSessionStreak;
+     }
+ 
++    public int getRemainingTime() {
++        return (int) (TimeUnit.MILLISECONDS.toSeconds(
++                mCountDownFinishedTime - SystemClock.elapsedRealtime()));
++    }
++
+     public void increaseCurrentSessionStreak() {
+         mCurrentSessionStreak++;
+     }
+@@ -308,9 +257,7 @@ public class TimerService extends Service {
+         mCurrentSessionStreak = 0;
+     }
+ 
+-    protected void bringToForegroundAndUpdateNotification() {
+-        mIsOnForeground = true;
+-        mTimerBroughtToForegroundState = mTimerState;
++    protected void bringToForeground() {
+         startForeground(
+                 NOTIFICATION_ID,
+                 createForegroundNotification(this, mCurrentSession, mTimerState)
+@@ -318,8 +265,47 @@ public class TimerService extends Service {
+     }
+ 
+     protected void sendToBackground() {
+-        mIsOnForeground = false;
+         stopForeground(true);
+     }
+ 
++    public void setAlarm(long countDownTime) {
++        Log.w(TAG, "Alarm set.");
++        mAlarmReceiver = new BroadcastReceiver() {
++            @Override public void onReceive(Context context, Intent _ )
++            {
++                Intent finishedIntent = new Intent(ACTION_TIMERSERVICE);
++                finishedIntent.putExtra(COUNTDOWN_FINISHED, true);
++                mBroadcastManager.sendBroadcast(finishedIntent);
++                Log.d(TAG, "Countdown finished");
++                onCountdownFinished();
++                context.unregisterReceiver(this);
++            }
++        };
++
++        this.registerReceiver( mAlarmReceiver, new IntentFilter(ACTION_TIMERSERVICE) );
++
++        PendingIntent intent = PendingIntent.getBroadcast( this, 0, new Intent(ACTION_TIMERSERVICE), 0);
++        mAlarmManager = (AlarmManager)(this.getSystemService(Context.ALARM_SERVICE));
++
++        if (SDK_INT >= Build.VERSION_CODES.M) {
++            mAlarmManager.setExactAndAllowWhileIdle(ELAPSED_REALTIME_WAKEUP, countDownTime, intent);
++        } else if (SDK_INT >= Build.VERSION_CODES.KITKAT) {
++            mAlarmManager.setExact(ELAPSED_REALTIME_WAKEUP, countDownTime, intent);
++        } else {
++            mAlarmManager.set(ELAPSED_REALTIME_WAKEUP, countDownTime, intent);
++        }
++    }
++
++    void cancelAlarm() {
++        Log.w(TAG, "Alarm canceled.");
++        PendingIntent intent = PendingIntent.getBroadcast(this, 0, new Intent(ACTION_TIMERSERVICE), 0);
++        mAlarmManager.cancel(intent);
++
++        try {
++            this.unregisterReceiver(mAlarmReceiver);
++        } catch(IllegalArgumentException e) {
++            Log.w(TAG, "AlarmReceiver is already unregistered.");
++        }
++    }
++
+ }
+diff --git a/app/src/main/java/com/apps/adrcotfas/goodtime/UpdateTask.java b/app/src/main/java/com/apps/adrcotfas/goodtime/UpdateTask.java
+deleted file mode 100644
+index 529f278f..00000000
+--- a/app/src/main/java/com/apps/adrcotfas/goodtime/UpdateTask.java
++++ /dev/null
+@@ -1,27 +0,0 @@
+-package com.apps.adrcotfas.goodtime;
+-
+-import android.os.Handler;
+-
+-import java.util.TimerTask;
+-
+-public class UpdateTask extends TimerTask {
+-
+-    private final Handler handler;
+-    private final TimerService ref;
+-
+-    public UpdateTask(Handler handler, TimerService ref) {
+-        super();
+-        this.handler = handler;
+-        this.ref = ref;
+-    }
+-
+-    @Override
+-    public void run() {
+-        handler.post(new Runnable() {
+-            @Override
+-            public void run() {
+-                ref.countdown();
+-            }
+-        });
+-    }
+-}

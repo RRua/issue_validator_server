@@ -1,0 +1,146 @@
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ComicPageView.java b/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ComicPageView.java
+index eda0793..a0e5c84 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ComicPageView.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ComicPageView.java
+@@ -10,6 +10,7 @@ import android.graphics.RectF;
+ import android.graphics.drawable.Drawable;
+ import android.support.annotation.Nullable;
+ import android.util.AttributeSet;
++import android.util.Log;
+ import android.view.MotionEvent;
+ import android.view.SurfaceView;
+ 
+@@ -66,7 +67,6 @@ public class ComicPageView extends SurfaceView implements Runnable, Target {
+         readChapterActivity = (ReadChapterActivity)context;
+         paint = new Paint();
+         slideOffset = (int) (getResources().getDisplayMetrics().density*10);
+-        slideAnimator = ValueAnimator.ofInt(0, 0);
+     }
+ 
+     @Override
+@@ -111,6 +111,8 @@ public class ComicPageView extends SurfaceView implements Runnable, Target {
+             case ACTION_POINTER_UP:
+                 if(touchState == TouchState.ZOOM) {
+                     endZoom();
++                    saveStartPoint1(event.getX(), event.getY());
++                    touchState = TouchState.MOVE;
+                 }
+                 break;
+             case ACTION_MOVE:
+@@ -144,7 +146,6 @@ public class ComicPageView extends SurfaceView implements Runnable, Target {
+             animateZoom(newX, newY, newW, newH, (long)((noZoom-currentZoom)/(noZoom-minZoom)*FIX_ZOOM_SPEED));
+             currentZoom = noZoom;
+         }
+-        touchState = TouchState.MOVE;
+     }
+ 
+     private void saveStartPoint1(float x, float y) {
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ReadChapterActivity.java b/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ReadChapterActivity.java
+index 62761a1..cf5f8e0 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ReadChapterActivity.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/ReadChapter/ReadChapterActivity.java
+@@ -3,8 +3,10 @@ package com.example.halftough.webcomreader.activities.ReadChapter;
+ 
+ import android.content.Intent;
+ import android.os.Bundle;
++import android.os.PersistableBundle;
+ import android.support.v7.app.AppCompatActivity;
+ import android.support.v7.widget.Toolbar;
++import android.util.Log;
+ 
+ import com.example.halftough.webcomreader.NoWebcomClassException;
+ import com.example.halftough.webcomreader.R;
+@@ -16,7 +18,6 @@ import com.example.halftough.webcomreader.webcoms.Webcom;
+ 
+ public class ReadChapterActivity extends AppCompatActivity {
+     private Webcom webcom;
+-    private String number;
+     ComicPageView readChapterImage;
+     ReadChapterRepository readChapterRepository;
+ 
+@@ -37,11 +38,22 @@ public class ReadChapterActivity extends AppCompatActivity {
+             e.printStackTrace();
+         }
+ 
+-        number = intent.getStringExtra(ChapterListActivity.CHAPTER_NUMBER);
+-
+         readChapterRepository = new ReadChapterRepository(this, webcom, readChapterImage);
+-        setChapter(number);
++        setChapter( intent.getStringExtra(ChapterListActivity.CHAPTER_NUMBER) );
++    }
++
++    @Override
++    public void onSaveInstanceState(Bundle savedInstance) {
++        String number = readChapterRepository.getChapterNumber();
++        savedInstance.putString(ChapterListActivity.CHAPTER_NUMBER, number);
++        super.onSaveInstanceState(savedInstance);
++    }
+ 
++    @Override
++    protected void onRestoreInstanceState(Bundle savedInstanceState) {
++        super.onRestoreInstanceState(savedInstanceState);
++        String number = savedInstanceState.getString(ChapterListActivity.CHAPTER_NUMBER);
++        setChapter(number);
+     }
+ 
+     @Override
+@@ -67,7 +79,6 @@ public class ReadChapterActivity extends AppCompatActivity {
+ 
+     public void setChapter(String c){
+         readChapterRepository.setChapter(c);
+-        //readChapterRepository.getImageFor(readChapterImage);
+     }
+ 
+     public void nextPage() {
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java b/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
+index f61c687..bf521bd 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
+@@ -24,11 +24,11 @@ import retrofit2.Response;
+ 
+ public class ReadChapterRepository {
+     private ChaptersDAO chaptersDAO;
+-    Webcom webcom;
+-    LiveData<Chapter> chapter;
+-    ComicPageView imageView;
+-    boolean wasUpdate = false;
+-    Activity context;
++    private Webcom webcom;
++    private LiveData<Chapter> chapter;
++    private ComicPageView imageView;
++    private boolean wasUpdate = false;
++    private Activity context;
+ 
+     public ReadChapterRepository(Activity context, Webcom webcom, ComicPageView imageView) {
+         AppDatabase db = AppDatabase.getDatabase(context.getApplicationContext());
+@@ -43,7 +43,9 @@ public class ReadChapterRepository {
+         chapter.observeForever(new ChapterChangedObserver(chapter, context));
+     }
+ 
+-    public void getImage() {
++    private void getImage() {
++        if(chapter.getValue()==null)
++            return;
+         Call<ComicPage> call = webcom.getPageCall(chapter.getValue().getChapter());
+         call.enqueue(new Callback<ComicPage>() {
+             @Override
+@@ -59,6 +61,8 @@ public class ReadChapterRepository {
+     }
+ 
+     public void markRead(){
++        if(chapter.getValue() == null)
++            return;
+         wasUpdate = true;
+         chapter.getValue().setStatus(Chapter.Status.READ);
+         new updateAsyncTask(chaptersDAO).execute(chapter.getValue());
+@@ -78,6 +82,10 @@ public class ReadChapterRepository {
+         chapter.observeForever(new ChapterChangedObserver(chapter, context));
+     }
+ 
++    public String getChapterNumber() {
++        return chapter.getValue()!=null?chapter.getValue().getChapter():null;
++    }
++
+     private static class updateAsyncTask extends AsyncTask<Chapter, Void, Void> {
+         private ChaptersDAO mAsyncTaskDao;
+         updateAsyncTask(ChaptersDAO dao) {

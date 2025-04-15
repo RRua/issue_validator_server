@@ -1,0 +1,333 @@
+diff --git a/src/com/innodroid/mongobrowser/Constants.java b/src/com/innodroid/mongobrowser/Constants.java
+index c1c65ac..b35c55f 100644
+--- a/src/com/innodroid/mongobrowser/Constants.java
++++ b/src/com/innodroid/mongobrowser/Constants.java
+@@ -9,6 +9,7 @@ public class Constants {
+ 	public static final String ARG_CONNECTION_ID = "connid";
+ 	public static final String ARG_COLLECTION_NAME = "collname";
+ 	public static final String ARG_ACTIVATE_ON_CLICK = "actonclick";
++	public static final String ARG_DOCUMENT_TITLE = "doctitle";
+ 	public static final String ARG_DOCUMENT_CONTENT = "doccontent";
+ 	public static final String ARG_IS_NEW = "isnew";
+ 	
+diff --git a/src/com/innodroid/mongobrowser/DocumentListFragment.java b/src/com/innodroid/mongobrowser/DocumentListFragment.java
+index 035e6fd..6f7acbc 100644
+--- a/src/com/innodroid/mongobrowser/DocumentListFragment.java
++++ b/src/com/innodroid/mongobrowser/DocumentListFragment.java
+@@ -4,6 +4,7 @@ package com.innodroid.mongobrowser;
+ import java.net.UnknownHostException;
+ 
+ import android.app.Activity;
++import android.database.Cursor;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.preference.PreferenceManager;
+@@ -15,18 +16,21 @@ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+ import android.widget.ListView;
++import android.widget.Toast;
+ 
+ import com.innodroid.mongo.MongoHelper;
++import com.innodroid.mongobrowser.data.MongoBrowserProviderHelper;
+ import com.innodroid.mongobrowser.data.MongoDocumentAdapter;
+ import com.innodroid.mongobrowser.util.SafeAsyncTask;
+ import com.innodroid.mongobrowser.util.UiUtils;
+ import com.innodroid.mongobrowser.util.UiUtils.ConfirmCallbacks;
+ 
+-public class DocumentListFragment extends ListFragment implements CollectionEditDialogFragment.Callbacks, QueryEditDialogFragment.Callbacks {
++public class DocumentListFragment extends ListFragment implements CollectionEditDialogFragment.Callbacks, QueryEditTextDialogFragment.Callbacks, QueryEditNameDialogFragment.Callbacks {
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+     private static final String STATE_QUERY_TEXT = "query_text";
+ 
+     private String mCollectionName;
++    private String mQueryName;
+     private String mQueryText;
+     private MongoDocumentAdapter mAdapter;
+     private Callbacks mCallbacks = null;
+@@ -122,6 +126,12 @@ public class DocumentListFragment extends ListFragment implements CollectionEdit
+     		case R.id.menu_document_list_edit_query:
+     			editQuery();
+     			return true;
++    		case R.id.menu_document_list_save_query:
++    			saveQuery();
++    			return true;
++    		case R.id.menu_document_list_clear_query:
++    			clearQuery();
++    			return true;
+     		case R.id.menu_document_list_edit:
+     			editCollection();
+     			return true;
+@@ -137,12 +147,37 @@ public class DocumentListFragment extends ListFragment implements CollectionEdit
+     }
+ 
+ 	private void newQuery() {
++		mQueryName = null;
++		mQueryText = null;
+ 		editQuery();
+ 	}
+ 	
+     private void editQuery() {
+ 		String query = (mQueryText == null) ? Constants.NEW_DOCUMENT_CONTENT_PADDED : mQueryText;
+-		QueryEditDialogFragment.create(query, this).show(getFragmentManager(), null);
++		QueryEditTextDialogFragment.create(query, this).show(getFragmentManager(), null);
++	}
++
++    private void saveQuery() {
++    	if (mQueryName == null) {
++    		new GetUniqueQueryName().execute();
++    		return;
++    	}
++    	
++		QueryEditNameDialogFragment.create(mQueryName, this).show(getFragmentManager(), null);
++	}
++
++	public void clearQuery() {
++		mQueryName = null;
++		mQueryText = null;
++		reloadList(true);
++    	if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
++    		getActivity().invalidateOptionsMenu();
++	}
++	
++	@Override 
++	public void onQueryNamed(String name) {
++		mQueryName = name;
++		new SaveQuery().execute();
+ 	}
+ 
+ 	public void onDocumentCreated(String content) {
+@@ -266,14 +301,6 @@ public class DocumentListFragment extends ListFragment implements CollectionEdit
+     		getActivity().invalidateOptionsMenu();
+ 	}
+ 
+-	@Override
+-	public void onQueryCleared() {
+-		mQueryText = null;
+-		reloadList(true);
+-    	if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
+-    		getActivity().invalidateOptionsMenu();
+-	}
+-
+     private class RenameCollectionTask extends SafeAsyncTask<String, Void, String> {
+     	public RenameCollectionTask() {
+ 			super(getActivity());
+@@ -355,4 +382,64 @@ public class DocumentListFragment extends ListFragment implements CollectionEdit
+ 			return "Failed to Load";
+ 		}		
+     }
++    
++    private class GetUniqueQueryName extends SafeAsyncTask<Void, Void, String> {
++    	public GetUniqueQueryName() {
++			super(getActivity());
++    	}
++
++		@Override
++		protected String safeDoInBackground(Void... args) {
++			String name = "Query ";
++			MongoBrowserProviderHelper helper = new MongoBrowserProviderHelper(getActivity().getContentResolver());
++			
++			int i = 1;
++			while (true)
++			{
++				String tryName = name + i;
++				Cursor cursor = helper.getQueryByName(tryName);
++				boolean taken = cursor.moveToFirst();
++				cursor.close();
++				
++				if (!taken)
++					return tryName;
++			
++				i++;
++			}
++		}
++
++		@Override
++		protected void safeOnPostExecute(String results) {
++			mQueryName = results;
++			saveQuery();
++		}
++
++		@Override
++		protected String getErrorTitle() {
++			return "Failed to Get Query Name";
++		}		
++    }
++    
++    private class SaveQuery extends SafeAsyncTask<Void, Void, Void> {
++    	public SaveQuery() {
++			super(getActivity());
++    	}
++
++		@Override
++		protected Void safeDoInBackground(Void... args) {
++			MongoBrowserProviderHelper helper = new MongoBrowserProviderHelper(getActivity().getContentResolver());
++			helper.saveQuery(mQueryName, mQueryText);
++			return null;
++		}
++
++		@Override
++		protected void safeOnPostExecute(Void args) {
++			Toast.makeText(getActivity(), "Query Saved", Toast.LENGTH_SHORT).show();
++		}
++
++		@Override
++		protected String getErrorTitle() {
++			return "Failed to Save";
++		}		
++    }
+ }
+diff --git a/src/com/innodroid/mongobrowser/QueryEditNameDialogFragment.java b/src/com/innodroid/mongobrowser/QueryEditNameDialogFragment.java
+new file mode 100644
+index 0000000..61b86cb
+--- /dev/null
++++ b/src/com/innodroid/mongobrowser/QueryEditNameDialogFragment.java
+@@ -0,0 +1,51 @@
++package com.innodroid.mongobrowser;
++
++import android.app.Dialog;
++import android.os.Bundle;
++import android.support.v4.app.DialogFragment;
++import android.view.View;
++import android.widget.EditText;
++
++import com.innodroid.mongobrowser.util.UiUtils;
++
++public class QueryEditNameDialogFragment extends DialogFragment {
++
++	private EditText mContentEdit;
++	private String mContent;
++	private static Callbacks mCallbacks;
++
++    public interface Callbacks {
++    	void onQueryNamed(String query);
++    }
++
++    static QueryEditNameDialogFragment create(String content, Callbacks callbacks) {
++    	QueryEditNameDialogFragment fragment = new QueryEditNameDialogFragment();
++    	Bundle args = new Bundle();
++    	args.putString(Constants.ARG_DOCUMENT_CONTENT, content);
++    	fragment.setArguments(args);
++    	QueryEditNameDialogFragment.mCallbacks = callbacks;
++    	return fragment;
++    }
++
++    @Override
++    public Dialog onCreateDialog(Bundle savedInstanceState) {
++    	View view = getActivity().getLayoutInflater().inflate(R.layout.fragment_query_name_edit, null);
++
++    	mContent = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
++    	mContentEdit = (EditText)view.findViewById(R.id.query_edit_name);
++    	mContentEdit.setText(mContent);
++    	
++    	return UiUtils.buildAlertDialog(view, android.R.drawable.ic_menu_edit, "Query Name", true, 0, new UiUtils.AlertDialogCallbacks() {			
++			@Override
++			public boolean onOK() {
++				mCallbacks.onQueryNamed(mContentEdit.getText().toString());
++				return true;
++			}
++
++			@Override
++			public boolean onNeutralButton() {
++				return true;
++			}
++		});    
++    }
++}
+diff --git a/src/com/innodroid/mongobrowser/QueryEditDialogFragment.java b/src/com/innodroid/mongobrowser/QueryEditTextDialogFragment.java
+similarity index 72%
+rename from src/com/innodroid/mongobrowser/QueryEditDialogFragment.java
+rename to src/com/innodroid/mongobrowser/QueryEditTextDialogFragment.java
+index 26e7cc6..0a70a4d 100644
+--- a/src/com/innodroid/mongobrowser/QueryEditDialogFragment.java
++++ b/src/com/innodroid/mongobrowser/QueryEditTextDialogFragment.java
+@@ -8,7 +8,7 @@ import android.widget.EditText;
+ 
+ import com.innodroid.mongobrowser.util.UiUtils;
+ 
+-public class QueryEditDialogFragment extends DialogFragment {
++public class QueryEditTextDialogFragment extends DialogFragment {
+ 
+ 	private EditText mContentEdit;
+ 	private String mContent;
+@@ -16,27 +16,26 @@ public class QueryEditDialogFragment extends DialogFragment {
+ 
+     public interface Callbacks {
+     	void onQueryUpdated(String query);
+-    	void onQueryCleared();
+     }
+ 
+-    static QueryEditDialogFragment create(String content, Callbacks callbacks) {
+-    	QueryEditDialogFragment fragment = new QueryEditDialogFragment();
++    static QueryEditTextDialogFragment create(String content, Callbacks callbacks) {
++    	QueryEditTextDialogFragment fragment = new QueryEditTextDialogFragment();
+     	Bundle args = new Bundle();
+     	args.putString(Constants.ARG_DOCUMENT_CONTENT, content);
+     	fragment.setArguments(args);
+-    	QueryEditDialogFragment.mCallbacks = callbacks;
++    	QueryEditTextDialogFragment.mCallbacks = callbacks;
+     	return fragment;
+     }
+ 
+     @Override
+     public Dialog onCreateDialog(Bundle savedInstanceState) {
+-    	View view = getActivity().getLayoutInflater().inflate(R.layout.fragment_query_edit, null);
++    	View view = getActivity().getLayoutInflater().inflate(R.layout.fragment_query_text_edit, null);
+ 
+     	mContent = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
+     	mContentEdit = (EditText)view.findViewById(R.id.query_edit_content);
+     	mContentEdit.setText(mContent);
+     	
+-    	return UiUtils.buildAlertDialog(view, android.R.drawable.ic_menu_edit, "Edit Query", true, R.string.clear, new UiUtils.AlertDialogCallbacks() {			
++    	return UiUtils.buildAlertDialog(view, android.R.drawable.ic_menu_edit, "Edit Query", true, 0, new UiUtils.AlertDialogCallbacks() {			
+ 			@Override
+ 			public boolean onOK() {
+ 				mCallbacks.onQueryUpdated(mContentEdit.getText().toString());
+@@ -45,7 +44,6 @@ public class QueryEditDialogFragment extends DialogFragment {
+ 
+ 			@Override
+ 			public boolean onNeutralButton() {
+-				mCallbacks.onQueryCleared();
+ 				return true;
+ 			}
+ 		});    
+diff --git a/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java b/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
+index 16a62a7..e3790d3 100644
+--- a/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
++++ b/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
+@@ -40,6 +40,24 @@ public class MongoBrowserProviderHelper {
+ 		mResolver.update(MongoBrowserProvider.CONNECTION_URI, cv, BaseColumns._ID + " = ?", new String[] { Long.toString(id) });
+ 	}
+ 
++	public void saveQuery(String name, String text) {
++		Log.i(LOG_TAG, "Saving query");
++
++		Cursor test = getQueryByName(name);
++		boolean alreadyExists = test.moveToFirst();
++		test.close();
++		
++		ContentValues cv = new ContentValues();
++		cv.put(MongoBrowserProvider.NAME_QUERY_TEXT, text);
++
++		if (alreadyExists) {
++			mResolver.update(MongoBrowserProvider.QUERY_URI, cv, MongoBrowserProvider.NAME_QUERY_NAME + " = ?", new String[] { name });
++		} else {
++			cv.put(MongoBrowserProvider.NAME_QUERY_NAME, name);
++			mResolver.insert(MongoBrowserProvider.QUERY_URI, cv);			
++		}
++	}
++
+ 	public void deleteConnection(long id) {
+ 		Log.i(LOG_TAG, "Deleting Connection");
+ 
+@@ -50,6 +68,10 @@ public class MongoBrowserProviderHelper {
+ 		Log.i(LOG_TAG, "Deleting all Connections");
+ 		return mResolver.delete(MongoBrowserProvider.CONNECTION_URI, null, null);
+ 	}
++	
++	public Cursor getQueryByName(String name) {
++		return mResolver.query(MongoBrowserProvider.QUERY_URI, null, MongoBrowserProvider.NAME_QUERY_NAME + " = ?", new String[] { name }, null);
++	}
+ 
+ 	public static ContentValues getContentValuesForConnection(String name, String server, int port, String db, String user, String pass) {
+ 		ContentValues cv = new ContentValues();

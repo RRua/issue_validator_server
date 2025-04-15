@@ -1,0 +1,2472 @@
+diff --git a/app/src/main/java/com/lun/chin/aicamera/CameraActivity.java b/app/src/main/java/com/lun/chin/aicamera/CameraActivity.java
+index a1f7109..1eff896 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/CameraActivity.java
++++ b/app/src/main/java/com/lun/chin/aicamera/CameraActivity.java
+@@ -1,45 +1,19 @@
+-/*
+- * Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *       http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+ package com.lun.chin.aicamera;
+ 
+ import android.Manifest;
+-import android.content.Context;
+ import android.content.pm.PackageManager;
+-import android.hardware.Camera;
+-import android.hardware.camera2.CameraAccessException;
+-import android.hardware.camera2.CameraCharacteristics;
+-import android.hardware.camera2.CameraManager;
+-import android.hardware.camera2.params.StreamConfigurationMap;
+-import android.media.Image;
+-import android.media.Image.Plane;
+-import android.media.ImageReader;
+-import android.media.ImageReader.OnImageAvailableListener;
++import android.graphics.Bitmap;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.HandlerThread;
+-import android.os.Trace;
+ import android.support.v4.app.Fragment;
++import android.support.v4.app.FragmentManager;
+ import android.support.v7.app.AppCompatActivity;
+ import android.util.Size;
+-import android.view.KeyEvent;
+-import android.view.Surface;
+ import android.view.View;
+ import android.view.WindowManager;
++import android.widget.ImageButton;
+ import android.widget.Toast;
+ 
+ import com.lun.chin.aicamera.env.ImageUtils;
+@@ -48,49 +22,55 @@ import com.lun.chin.aicamera.env.Logger;
+ import org.opencv.android.BaseLoaderCallback;
+ import org.opencv.android.LoaderCallbackInterface;
+ import org.opencv.android.OpenCVLoader;
++import org.opencv.android.Utils;
++import org.opencv.core.CvType;
++import org.opencv.core.Mat;
++import org.opencv.imgproc.Imgproc;
+ 
+-import java.nio.ByteBuffer;
+-
+-
+-public abstract class CameraActivity extends AppCompatActivity
+-        implements
+-            OnImageAvailableListener,
+-            Camera.PreviewCallback,
+-            CameraFragment.OnCameraButtonClickedListener,
+-            RunInBackgroundListener {
++import java.io.IOException;
++import java.util.List;
+ 
++public class CameraActivity extends AppCompatActivity
++        implements CameraViewBase.CameraFrameAvailableListener {
+     private static final Logger LOGGER = new Logger();
+ 
+     private static final int PERMISSIONS_REQUEST = 1;
+-
+     private static final String PERMISSION_CAMERA = Manifest.permission.CAMERA;
+     private static final String PERMISSION_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
++    private static final Size DESIRED_PREVIEW_SIZE = new Size(640, 480);
++    private static final int INFERENCE_SIZE = 200; // Length of the longest edge.
++    private static final int PICTURE_INFERENCE_SIZE = 500; // Length of the longest edge.
+ 
+-    private boolean mDebug = false;
++    // ShuffleSeg configs.
++    private static final String SHUFFLESEG_MODEL_FILE = "file:///android_asset/shuffleseg_human_cat_dog_39618.pb";
++    private static final String SHUFFLESEG_INPUT_NAME = "image_tensor";
++    private static final String[] SHUFFLESEG_OUTPUT_NAMES = { "output_mask" };
+ 
+     private Handler mHandler;
+     private HandlerThread mHandlerThread;
+-    private boolean mIsProcessingFrame = false;
+-    private boolean mIsProcessingPreviewFrame = false;
+-    private byte[][] mYuvBytes = new byte[3][];
+-    private int[] mRgbBytes = null;
+-    private int[] mRgbBytesPreview = null;
+-    private int mYRowStride;
+-    private byte[] mPictureBytes;
+-
+-    protected boolean mUseCamera2API;
+-    protected int mPreviewWidth = 0;
+-    protected int mPreviewHeight = 0;
+-    protected int mPictureWidth = 0;
+-    protected int mPictureHeight = 0;
+-
+-    private Runnable mPostInferenceCallback;
+-    private Runnable mPostPreviewInferenceCallback;
+-    private Runnable mImageConverter;
+-    private Runnable mPreviewImageConverter;
+-
+-    private int mRotation = 90;
+-    protected String mFilename;
++
++    private CameraViewBase mCameraView;
++    private Classifier mDetector;
++
++    // Variables for the preview.
++    private Bitmap mBitmap;
++    private Mat mMat;
++    private Mat mInferenceMat;
++    private int mInferenceWidth;
++    private int mInferenceHeight;
++
++    // Dimensions for the picture.
++    private int mPictureInferenceHeight;
++    private int mPictureInferenceWidth;
++    private int mDisplayWidth;
++    private int mDisplayHeight;
++
++    private String mFilename;
++    private boolean mPausePreviewProcessing = false;
++
++    private final int mBlurAmount = 11;
++    private final int mPreviewBlurAmount = 5;
++    private final boolean mGrayScale = true;
+ 
+     private BaseLoaderCallback _baseLoaderCallback = new BaseLoaderCallback(this) {
+         @Override
+@@ -110,6 +90,52 @@ public abstract class CameraActivity extends AppCompatActivity
+         }
+     };
+ 
++    private class CameraButtonsListener implements View.OnClickListener {
++        @Override
++        public void onClick(View v) {
++            switch (v.getId()) {
++                case R.id.take_picture:
++                    final Long timeStamp = System.currentTimeMillis();
++                    mFilename = "IMG_" + timeStamp.toString() + ".png";
++                    ImageManager.getInstance().addPendingImage(mFilename);
++                    mCameraView.takePicture();
++                    break;
++                case R.id.goto_gallery:
++                    mCameraView.pauseCamera();
++                    mCameraView.setVisibility(View.INVISIBLE);
++
++                    GalleryViewPagerFragment galleryViewPagerFragment =
++                            GalleryViewPagerFragment.newInstance(
++                                    0, ImageManager.getInstance().getImageItems());
++
++                    final FragmentManager fragmentManager = getSupportFragmentManager();
++
++                    fragmentManager
++                            .beginTransaction()
++                            .replace(R.id.container, galleryViewPagerFragment)
++                            .addToBackStack(null)
++                            .commit();
++
++                    fragmentManager.addOnBackStackChangedListener(
++                            new FragmentManager.OnBackStackChangedListener() {
++                                public void onBackStackChanged() {
++                                    if (fragmentManager.getBackStackEntryCount() == 0) {
++                                        mCameraView.setVisibility(View.VISIBLE);
++                                        mCameraView.resumeCamera();
++                                    }
++                                }
++                            });
++                    break;
++                case R.id.switch_camera:
++                    mCameraView.switchCamera();
++                    LOGGER.d("switch button");
++                    break;
++            }
++        }
++    }
++
++    private CameraButtonsListener mCameraButtonsListener = new CameraButtonsListener();
++
+     @Override
+     protected void onCreate(final Bundle savedInstanceState) {
+         LOGGER.d("onCreate " + this);
+@@ -119,247 +145,19 @@ public abstract class CameraActivity extends AppCompatActivity
+         setContentView(R.layout.activity_camera);
+ 
+         if (hasPermission()) {
+-            setFragment();
++            initialise();
+         } else {
+             requestPermission();
+         }
+-    }
+-
+-    private byte[] lastPreviewFrame;
+-
+-    protected int[] getRgbBytes() {
+-        mImageConverter.run();
+-        return mRgbBytes;
+-    }
+ 
+-    protected byte[] getPictureBytes() {
+-        return mPictureBytes;
+-    }
++        ImageButton takePictureButton = findViewById(R.id.take_picture);
++        takePictureButton.setOnClickListener(mCameraButtonsListener);
+ 
+-    protected int[] getRgbBytesPreview() {
+-        mPreviewImageConverter.run();
+-        return mRgbBytesPreview;
+-    }
++        ImageButton galleryButton = findViewById(R.id.goto_gallery);
++        galleryButton.setOnClickListener(mCameraButtonsListener);
+ 
+-    protected int getLuminanceStride() {
+-        return mYRowStride;
+-    }
+-
+-    protected byte[] getLuminance() {
+-        return mYuvBytes[0];
+-    }
+-
+-    /**
+-     * Callback for android.hardware.Camera API
+-     */
+-    @Override
+-    public void onPreviewFrame(final byte[] bytes, final Camera camera) {
+-        if (mIsProcessingPreviewFrame) {
+-            LOGGER.w("Dropping frame!");
+-            return;
+-        }
+-
+-        mIsProcessingPreviewFrame = true;
+-
+-        try {
+-            // Initialize the storage bitmaps once when the resolution is known.
+-            if (mRgbBytesPreview == null) {
+-                Camera.Size previewSize = camera.getParameters().getPreviewSize();
+-                mPreviewHeight = previewSize.height;
+-                mPreviewWidth = previewSize.width;
+-                mRgbBytesPreview = new int[mPreviewWidth * mPreviewHeight];
+-                onPreviewSizeChosen(new Size(previewSize.width, previewSize.height), 90);
+-            }
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            return;
+-        }
+-
+-        mPreviewImageConverter =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        ImageUtils.convertYUV420SPToARGB8888(bytes,
+-                                mPreviewWidth,
+-                                mPreviewHeight,
+-                                mRgbBytesPreview);
+-                    }
+-                };
+-
+-        mPostPreviewInferenceCallback =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        camera.addCallbackBuffer(bytes);
+-                        mIsProcessingPreviewFrame = false;
+-                    }
+-                };
+-
+-        processPreview();
+-    }
+-
+-    public void onCaptureStillFrame(final byte[] bytes, final Camera camera) {
+-        if (mIsProcessingFrame) {
+-            return;
+-        }
+-
+-        final Long timeStamp = System.currentTimeMillis();
+-        mFilename = "IMG_" + timeStamp.toString() + ".png";
+-        ImageManager.getInstance().addPendingImage(mFilename);
+-
+-        mIsProcessingFrame = true;
+-
+-        // Initialize the storage bitmaps once when the resolution is known.
+-        if (mPictureBytes == null) {
+-            prepareBitmap(camera.getParameters().getPictureSize());
+-        }
+-
+-        mPictureBytes = bytes;
+-
+-        mPostInferenceCallback =
+-                new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        camera.addCallbackBuffer(bytes);
+-                        mIsProcessingFrame = false;
+-                    }
+-                };
+-
+-        processImage();
+-    }
+-
+-    private void prepareBitmap(Camera.Size pictureSize) {
+-        try {
+-            mPictureHeight = pictureSize.height;
+-            mPictureWidth = pictureSize.width;
+-            onPictureSizeChosen(new Size(pictureSize.width, pictureSize.height), mRotation);
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            return;
+-        }
+-    }
+-
+-    // Callback for when a still image is taken with the Camera2 API.
+-    @Override
+-    public void onImageAvailable(final ImageReader reader) {
+-        if (mPictureWidth == 0 || mPictureHeight == 0) {
+-            return;
+-        }
+-        try {
+-            final Image image = reader.acquireLatestImage();
+-
+-            if (image == null) {
+-                return;
+-            }
+-
+-            if (mIsProcessingFrame) {
+-                image.close();
+-                return;
+-            }
+-            mIsProcessingFrame = true;
+-            Trace.beginSection("imageAvailable");
+-
+-            final Plane[] planes = image.getPlanes();
+-            fillBytes(planes, mYuvBytes);
+-            mYRowStride = planes[0].getRowStride();
+-            final int uvRowStride = planes[1].getRowStride();
+-            final int uvPixelStride = planes[1].getPixelStride();
+-
+-            mImageConverter =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            ImageUtils.convertYUV420ToARGB8888(
+-                                    mYuvBytes[0],
+-                                    mYuvBytes[1],
+-                                    mYuvBytes[2],
+-                                    mPictureWidth,
+-                                    mPictureHeight,
+-                                    mYRowStride,
+-                                    uvRowStride,
+-                                    uvPixelStride,
+-                                    mRgbBytes);
+-                        }
+-                    };
+-
+-            mPostInferenceCallback =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            image.close();
+-                            mIsProcessingFrame = false;
+-                        }
+-                    };
+-
+-            processImage();
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            Trace.endSection();
+-            return;
+-        }
+-        Trace.endSection();
+-    }
+-
+-    // Callback when preview image is available from the Camera2 API
+-    private void onPreviewImageAvailable(final ImageReader reader) {
+-        if (mPreviewWidth == 0 || mPreviewHeight == 0) {
+-            return;
+-        }
+-        try {
+-            final Image image = reader.acquireLatestImage();
+-
+-            if (image == null) {
+-                LOGGER.i("image null");
+-                return;
+-            }
+-
+-            if (mIsProcessingPreviewFrame) {
+-                LOGGER.i("processing preview true");
+-                image.close();
+-                return;
+-            }
+-            mIsProcessingPreviewFrame  = true;
+-            Trace.beginSection("imageAvailable");
+-
+-            final Plane[] planes = image.getPlanes();
+-            fillBytes(planes, mYuvBytes);
+-            mYRowStride = planes[0].getRowStride();
+-            final int uvRowStride = planes[1].getRowStride();
+-            final int uvPixelStride = planes[1].getPixelStride();
+-
+-            mPreviewImageConverter =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            ImageUtils.convertYUV420ToARGB8888(
+-                                    mYuvBytes[0],
+-                                    mYuvBytes[1],
+-                                    mYuvBytes[2],
+-                                    mPreviewWidth,
+-                                    mPreviewHeight,
+-                                    mYRowStride,
+-                                    uvRowStride,
+-                                    uvPixelStride,
+-                                    mRgbBytesPreview);
+-                        }
+-                    };
+-
+-            mPostPreviewInferenceCallback =
+-                    new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            image.close();
+-                            mIsProcessingPreviewFrame = false;
+-                        }
+-                    };
+-
+-            processPreview();
+-        } catch (final Exception e) {
+-            LOGGER.e(e, "Exception!");
+-            Trace.endSection();
+-            return;
+-        }
+-        Trace.endSection();
++        ImageButton switchCamera = findViewById(R.id.switch_camera);
++        switchCamera.setOnClickListener(mCameraButtonsListener);
+     }
+ 
+     @Override
+@@ -390,6 +188,7 @@ public abstract class CameraActivity extends AppCompatActivity
+     public synchronized void onPause() {
+         LOGGER.d("onPause " + this);
+         super.onPause();
++        mCameraView.pauseCamera();
+     }
+ 
+     @Override
+@@ -414,12 +213,6 @@ public abstract class CameraActivity extends AppCompatActivity
+         super.onDestroy();
+     }
+ 
+-    protected synchronized void runInBackground(final Runnable r) {
+-        if (mHandler != null) {
+-            mHandler.post(r);
+-        }
+-    }
+-
+     @Override
+     public void onRequestPermissionsResult(
+             final int requestCode, final String[] permissions, final int[] grantResults) {
+@@ -427,7 +220,7 @@ public abstract class CameraActivity extends AppCompatActivity
+             if (grantResults.length > 0
+                     && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                     && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+-                setFragment();
++                initialise();
+             } else {
+                 requestPermission();
+             }
+@@ -435,256 +228,193 @@ public abstract class CameraActivity extends AppCompatActivity
+     }
+ 
+     @Override
+-    public void onCameraButtonClicked(View v) {
+-        switch (v.getId()) {
+-            case R.id.goto_gallery:
+-                GalleryViewPagerFragment galleryViewPagerFragment =
+-                        GalleryViewPagerFragment.newInstance(
+-                                0, ImageManager.getInstance().getImageItems());
+-
+-                getSupportFragmentManager()
+-                        .beginTransaction()
+-                        .replace(R.id.container, galleryViewPagerFragment)
+-                        .addToBackStack(null)
+-                        .commit();
+-
+-                // TODO improve the loading speed of the gallery page. Remove it for now.
+-                /*
+-                RecyclerViewFragment fragment
+-                        = RecyclerViewFragment.newInstance(
+-                                ImageManager.getInstance().getImageItems());
+-
+-                getSupportFragmentManager()
+-                        .beginTransaction()
+-                        .replace(R.id.container, fragment)
+-                        .addToBackStack(null)
+-                        .commit();
+-                */
+-                break;
+-        }
+-    }
++    public void onCameraStarted(Size previewSize, Size pictureSize) {
++        LOGGER.d("onCameraStarted");
++        // Allocate bitmap and mat.
++        int width = previewSize.getHeight();
++        int height = previewSize.getWidth();
++        float scale = INFERENCE_SIZE / (float)Math.max(width, height);
++        mInferenceWidth = (int)(width * scale);
++        mInferenceHeight = (int)(height * scale);
+ 
+-    @Override
+-    public void run(Runnable runnable) {
+-        runInBackground(runnable);
+-    }
++        mBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
++        mMat = new Mat(height, width, CvType.CV_8UC3);
++        mInferenceMat = new Mat(mInferenceHeight, mInferenceWidth, CvType.CV_8UC3);
+ 
+-    private boolean hasPermission() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
+-                    checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
+-        } else {
+-            return true;
+-        }
+-    }
++        width = pictureSize.getHeight();
++        height = pictureSize.getWidth();
++        scale = PICTURE_INFERENCE_SIZE / (float) Math.max(width, height);
++        mPictureInferenceWidth = (int) (width * scale);
++        mPictureInferenceHeight = (int) (height * scale);
+ 
+-    private void requestPermission() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
+-                    shouldShowRequestPermissionRationale(PERMISSION_STORAGE)) {
+-                Toast.makeText(CameraActivity.this,
+-                        "Camera AND storage permission are required for this demo", Toast.LENGTH_LONG).show();
+-            }
+-            requestPermissions(new String[] {PERMISSION_CAMERA, PERMISSION_STORAGE}, PERMISSIONS_REQUEST);
+-        }
+-    }
++        Size preferredSize = ImageManager.getPreferredImageSize();
++        scale = Math.max(preferredSize.getHeight(), preferredSize.getWidth())
++                / (float)Math.max(width, height);
+ 
+-    // Returns true if the device supports the required hardware level, or better.
+-    private boolean isHardwareLevelSupported(
+-            CameraCharacteristics characteristics, int requiredLevel) {
+-        int deviceLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+-        if (deviceLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
+-            return requiredLevel == deviceLevel;
+-        }
+-        // deviceLevel is not LEGACY, can use numerical sort
+-        return requiredLevel <= deviceLevel;
++        mDisplayWidth = Math.round(scale * width);
++        mDisplayHeight = Math.round(scale * height);
+     }
+ 
+-    private String chooseCamera() {
+-        final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+-        try {
+-            for (final String cameraId : manager.getCameraIdList()) {
+-                final CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
+-
+-                // We don't use a front facing camera in this sample.
+-                final Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+-                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+-                    continue;
+-                }
+-
+-                final StreamConfigurationMap map =
+-                        characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+-
+-                if (map == null) {
+-                    continue;
+-                }
++    @Override
++    public Bitmap processPreview(CameraViewBase.CameraFrame frame) {
++        mMat = frame.rgb();
+ 
+-                // Fallback to camera1 API for internal cameras that don't have full support.
+-                // This should help with legacy situations where using the camera2 API causes
+-                // distorted or otherwise broken previews.
+-                /*
+-                mUseCamera2API = (facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
+-                        || isHardwareLevelSupported(characteristics,
+-                        CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
+-                LOGGER.i("Camera API lv2?: %s", mUseCamera2API);
+-                */
+-
+-                // TODO add support for Camera2 API.
+-                mUseCamera2API = false;
+-                return cameraId;
+-            }
+-        } catch (CameraAccessException e) {
+-            LOGGER.e(e, "Not allowed to access camera");
++        if (mPausePreviewProcessing) {
++            Utils.matToBitmap(mMat, mBitmap);
++            return mBitmap;
+         }
+ 
+-        return null;
+-    }
++        Imgproc.resize(mMat, mInferenceMat, new org.opencv.core.Size(mInferenceWidth, mInferenceHeight));
+ 
+-    protected void setFragment() {
+-        String cameraId = chooseCamera();
+-        if (cameraId == null) {
+-            Toast.makeText(this, "No Camera Detected", Toast.LENGTH_SHORT).show();
+-            finish();
+-        }
++        int length = (int)(mInferenceMat.total() * mInferenceMat.channels());
++        byte matData[] = new byte[length];
++        mInferenceMat.get(0, 0, matData);
+ 
+-        final Fragment fragment;
+-        if (mUseCamera2API) {
+-            LOGGER.i("Using Camera2 API");
+-            CameraConnectionFragment camera2Fragment =
+-                    CameraConnectionFragment.newInstance(
+-                            new CameraConnectionFragment.ConnectionCallback() {
+-                                @Override
+-                                public void onPreviewSizeChosen(final Size size, final int rotation) {
+-                                    mPreviewHeight = size.getHeight();
+-                                    mPreviewWidth = size.getWidth();
+-                                    CameraActivity.this.onPreviewSizeChosen(size, rotation);
+-                                }
+-                            },
+-                            this,
+-                            new OnImageAvailableListener() {
+-                                @Override
+-                                public void onImageAvailable(ImageReader reader) {
+-                                    onPreviewImageAvailable(reader);
+-                                }
+-                            },
+-                            getLayoutId(),
+-                            getDesiredPreviewFrameSize());
++        final List<Classifier.Recognition> results =
++                mDetector.recognizeImage(matData, mInferenceHeight, mInferenceWidth);
+ 
+-            camera2Fragment.setCamera(cameraId);
+-            fragment = camera2Fragment;
+-        } else {
+-            LOGGER.i("Using Camera API");
+-            fragment = LegacyCameraConnectionFragment.newInstance(
+-                    new Camera.PreviewCallback() {
+-                        @Override
+-                        public void onPreviewFrame(final byte[] data, final Camera camera) {
+-                            onCaptureStillFrame(data, camera);
+-                        }
+-                    },
+-                    null, //this,
+-                    new CameraChangedListener() {
+-                        @Override
+-                        public void onCameraChangedListener(Camera camera, boolean isFrontFacing) {
+-                            mRotation = isFrontFacing ? -90 : 90;
+-                            prepareBitmap(camera.getParameters().getPictureSize());
+-                        }
+-                    },
+-                    getLayoutId(),
+-                    getDesiredPreviewFrameSize());
+-        }
++        Classifier.Recognition result = results.get(0);
++        ImageUtils.applyMask(
++                mMat,
++                mBitmap,
++                result.getMask(),
++                mInferenceWidth,
++                mInferenceHeight,
++                mPreviewBlurAmount,
++                mGrayScale);
+ 
+-        getSupportFragmentManager()
+-                .beginTransaction()
+-                .replace(R.id.container, fragment)
+-                .commit();
++        return mBitmap;
+     }
+ 
+-    protected void fillBytes(final Plane[] planes, final byte[][] yuvBytes) {
+-        // Because of the variable row stride it's not possible to know in
+-        // advance the actual necessary dimensions of the yuv planes.
+-        for (int i = 0; i < planes.length; ++i) {
+-            final ByteBuffer buffer = planes[i].getBuffer();
+-            if (yuvBytes[i] == null) {
+-                LOGGER.d("Initializing buffer %d at size %d", i, buffer.capacity());
+-                yuvBytes[i] = new byte[buffer.capacity()];
++    @Override
++    public void processPicture(final CameraViewBase.CameraFrame frame) {
++        LOGGER.d("processPicture");
++        mPausePreviewProcessing = true;
++
++        runInBackground(new Runnable() {
++            @Override
++            public void run() {
++                int width = frame.Height();
++                int height = frame.Width();
++                int infWidth = mPictureInferenceWidth;
++                int infHeight = mPictureInferenceHeight;
++                int disWidth = mDisplayWidth;
++                int disHeight = mDisplayHeight;
++
++                Bitmap pictureBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
++                Bitmap displayBitmap = Bitmap.createBitmap(disWidth, disHeight, Bitmap.Config.ARGB_8888);
++                Mat displayMat = new Mat(disHeight, disWidth, CvType.CV_8UC3);
++                Mat inferenceMat = new Mat(infHeight, infWidth, CvType.CV_8UC3);
++
++                Mat mat = frame.rgb();
++                Utils.matToBitmap(mat, pictureBitmap);
++
++                Imgproc.resize(mat, inferenceMat, new org.opencv.core.Size(infWidth, infHeight));
++                Imgproc.resize(mat, displayMat, new org.opencv.core.Size(disWidth, disHeight));
++
++                byte data[] = new byte[(int)inferenceMat.total() * inferenceMat.channels()];
++                inferenceMat.get(0, 0, data);
++
++                final List<Classifier.Recognition> results =
++                        mDetector.recognizeImage(data, infHeight, infWidth);
++
++                mPausePreviewProcessing = false;
++
++                Classifier.Recognition result = results.get(0);
++                int[] mask = result.getMask();
++
++                ImageUtils.applyMask(displayMat,
++                        displayBitmap,
++                        mask,
++                        infWidth,
++                        infHeight,
++                        mBlurAmount,
++                        mGrayScale);
++
++                ImageManager.getInstance().cacheBitmap(mFilename, displayBitmap);
++                ImageData imageData = new ImageData(pictureBitmap, mask, infWidth, infHeight, mBlurAmount, mGrayScale);
++                ImageManager.getInstance().storeImageData(mFilename, imageData);
++
++                onProcessingComplete(mFilename);
++
++                int blurAmount = Math.round((float)mBlurAmount * width / disWidth);
++                Bitmap finalResult = Bitmap.createBitmap(pictureBitmap);
++                ImageUtils.applyMask(mat, finalResult, mask, infWidth, infHeight, blurAmount, mGrayScale);
++                ImageManager.getInstance().saveBitmap(mFilename, finalResult);
++
++                finalResult.recycle();
++                inferenceMat.release();
++                displayMat.release();
++                mat.release();
+             }
+-            buffer.get(yuvBytes[i]);
+-        }
+-    }
+-
+-    public boolean isDebug() {
+-        return mDebug;
++        });
++    }
++
++    private void onProcessingComplete(final String filename) {
++        runOnUiThread(new Runnable() {
++            @Override
++            public void run() {
++                LOGGER.d("onProcessingComplete");
++                Fragment fragment = getSupportFragmentManager().findFragmentById(R.id.container);
++                LOGGER.d("Found fragment = " + (fragment != null));
++
++                if (fragment != null && fragment.isAdded()) {
++                    if (fragment instanceof RecyclerViewFragment) {
++                        ((RecyclerViewFragment)fragment).notifyImageChange(filename);
++                    } else if (fragment instanceof GalleryViewPagerFragment) {
++                        ((GalleryViewPagerFragment)fragment).notifyImageChange(filename);
++                    }
++                }
++            }
++        });
+     }
+ 
+-    public void requestRender() {
+-        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
+-        if (overlay != null) {
+-            overlay.postInvalidate();
+-        }
+-    }
++    private void initialise() {
++        LOGGER.d("Initialising camera.");
++        mCameraView = findViewById(R.id.preview_activity_surface_view);
++        mCameraView.setVisibility(View.VISIBLE);
++        mCameraView.setProcessPreviewListener(this);
++        mCameraView.setDesiredSize(DESIRED_PREVIEW_SIZE);
+ 
+-    public void addCallback(final OverlayView.DrawCallback callback) {
+-        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
+-        if (overlay != null) {
+-            overlay.addCallback(callback);
++        try {
++            if (mDetector == null) {
++                LOGGER.d("Initialising detector.");
++                mDetector = SegmentationModel.Create(
++                        getAssets(),
++                        SHUFFLESEG_MODEL_FILE,
++                        "",
++                        SHUFFLESEG_INPUT_NAME,
++                        SHUFFLESEG_OUTPUT_NAMES);
++            }
++        } catch (final IOException e) {
++            LOGGER.e("Exception initializing classifier!", e);
++            finish();
+         }
+     }
+ 
+-    public void onSetDebug(final boolean debug) {}
+-
+-    @Override
+-    public boolean onKeyDown(final int keyCode, final KeyEvent event) {
+-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
+-                || keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
+-            mDebug = !mDebug;
+-            requestRender();
+-            onSetDebug(mDebug);
++    private boolean hasPermission() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
++                    checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
++        } else {
+             return true;
+         }
+-        return super.onKeyDown(keyCode, event);
+     }
+ 
+-    protected void readyForNextImage() {
+-        if (mPostInferenceCallback != null) {
+-            mPostInferenceCallback.run();
+-        }
+-    }
+-
+-    protected void readyForNextPreviewImage() {
+-        if (mPostPreviewInferenceCallback != null) {
+-            mPostPreviewInferenceCallback.run();
+-        }
+-    }
+-
+-    protected int getScreenOrientation() {
+-        switch (getWindowManager().getDefaultDisplay().getRotation()) {
+-            case Surface.ROTATION_270:
+-                return 270;
+-            case Surface.ROTATION_180:
+-                return 180;
+-            case Surface.ROTATION_90:
+-                return 90;
+-            default:
+-                return 0;
++    private void requestPermission() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
++                    shouldShowRequestPermissionRationale(PERMISSION_STORAGE)) {
++                Toast.makeText(this,
++                        "Camera AND storage permission are required for this demo", Toast.LENGTH_LONG).show();
++            }
++            requestPermissions(new String[] {PERMISSION_CAMERA, PERMISSION_STORAGE}, PERMISSIONS_REQUEST);
+         }
+     }
+ 
+-    protected void notifyFragmentOfImageChange(String filename) {
+-        Fragment fragment = getSupportFragmentManager().findFragmentById(R.id.container);
+-
+-        if (fragment != null && fragment.isAdded()) {
+-            if (fragment instanceof RecyclerViewFragment) {
+-                ((RecyclerViewFragment)fragment).notifyImageChange(filename);
+-            } else if (fragment instanceof GalleryViewPagerFragment) {
+-                ((GalleryViewPagerFragment)fragment).notifyImageChange(filename);
+-            }
++    protected synchronized void runInBackground(final Runnable r) {
++        if (mHandler != null) {
++            mHandler.post(r);
+         }
+     }
+-
+-    protected abstract void processImage();
+-    protected abstract void processPreview();
+-    protected abstract void onPreviewSizeChosen(final Size size, final int rotation);
+-    protected abstract void onPictureSizeChosen(final Size size, final int rotation);
+-    protected abstract int getLayoutId();
+-    protected abstract Size getDesiredPreviewFrameSize();
+ }
+diff --git a/app/src/main/java/com/lun/chin/aicamera/CameraView.java b/app/src/main/java/com/lun/chin/aicamera/CameraView.java
+new file mode 100644
+index 0000000..41ca53a
+--- /dev/null
++++ b/app/src/main/java/com/lun/chin/aicamera/CameraView.java
+@@ -0,0 +1,214 @@
++package com.lun.chin.aicamera;
++
++import android.content.Context;
++import android.graphics.ImageFormat;
++import android.graphics.SurfaceTexture;
++import android.hardware.Camera;
++import android.util.AttributeSet;
++import android.util.Size;
++
++import com.lun.chin.aicamera.env.ImageUtils;
++import com.lun.chin.aicamera.env.Logger;
++
++import org.opencv.core.CvType;
++import org.opencv.core.Mat;
++import org.opencv.core.MatOfByte;
++import org.opencv.imgcodecs.Imgcodecs;
++
++import java.io.IOException;
++import java.util.List;
++
++public class CameraView extends CameraViewBase implements Camera.PreviewCallback{
++    private static final Logger LOGGER = new Logger();
++
++    private Camera mCamera;
++    private Mat[] mFrameChain;
++    private CameraFrame[] mCameraFrames;
++    private int mChainIdx = 0;
++    private SurfaceTexture mDummyTexture;
++
++    Runnable mProcessPreview = new Runnable() {
++        @Override
++        public void run() {
++            drawFrame(mCameraFrames[1 - mChainIdx]);
++        }
++    };
++
++    public CameraView(Context context) {
++        super(context);
++    }
++
++    public CameraView(Context context, AttributeSet attr) {
++        super(context, attr);
++    }
++
++    public CameraView(final Context context, final AttributeSet attrs, final int defStyle) {
++        super(context, attrs, defStyle);
++    }
++
++    @Override
++    protected void openCamera() {
++        LOGGER.d("openCamera");
++        int index = mUseFrontCamera ? getFrontCameraId() : getCameraId();
++
++        if (mCamera != null) {
++            releaseCamera();
++        }
++        mCamera = Camera.open(index);
++
++        try {
++            Camera.Parameters parameters = mCamera.getParameters();
++
++            // Set camera focus mode.
++            List<String> focusModes = parameters.getSupportedFocusModes();
++            if (focusModes != null
++                    && focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
++                parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
++            }
++
++            // Determine the best preview size.
++            List<Camera.Size> cameraSizes = parameters.getSupportedPreviewSizes();
++            Size[] sizes = new Size[cameraSizes.size()];
++            int i = 0;
++            for (Camera.Size size : cameraSizes) {
++                sizes[i++] = new Size(size.width, size.height);
++            }
++            Size previewSize = CameraViewBase.chooseOptimalSize(sizes, mDesiredSize);
++            parameters.setPreviewSize(previewSize.getWidth(), previewSize.getHeight());
++            LOGGER.i("Chosen preview size: " + previewSize.getWidth() + "x" + previewSize.getHeight());
++
++            // Determine the largest picture size.
++            List<Camera.Size> pictureSizes = parameters.getSupportedPictureSizes();
++            Size[] picSizes = new Size[pictureSizes.size()];
++            i = 0;
++            for (Camera.Size size : pictureSizes) {
++                picSizes[i++] = new Size(size.width, size.height);
++            }
++
++            Size pictureSize = CameraViewBase.chooseLargestSize(picSizes);
++            parameters.setPictureSize(pictureSize.getWidth(), pictureSize.getHeight());
++            LOGGER.i("Chosen picture size: " + pictureSize.getWidth() + "x" + pictureSize.getHeight());
++
++            mCamera.setParameters(parameters);
++            Camera.Size s = mCamera.getParameters().getPreviewSize();
++            Camera.Size ps = mCamera.getParameters().getPictureSize();
++            mPreviewWidth = s.width;
++            mPreviewHeight = s.height;
++            // Scaling needed to fit the preview to the screen.
++            mScale = (float)getWidth() / mPreviewHeight;
++
++            mFrameChain = new Mat[2];
++            mFrameChain[0] = new Mat(mPreviewHeight + (mPreviewHeight/2), mPreviewWidth, CvType.CV_8UC1);
++            mFrameChain[1] = new Mat(mPreviewHeight + (mPreviewHeight/2), mPreviewWidth, CvType.CV_8UC1);
++
++            mCameraFrames = new CameraFrame[2];
++            mCameraFrames[0] = new CameraFrame(mFrameChain[0], mPreviewWidth, mPreviewHeight, mRotation, ImageFormat.NV21);
++            mCameraFrames[1] = new CameraFrame(mFrameChain[1], mPreviewWidth, mPreviewHeight, mRotation, ImageFormat.NV21);
++
++            mCamera.addCallbackBuffer(new byte[ImageUtils.getYUVByteSize(mPreviewHeight, mPreviewWidth)]);
++            mCamera.setPreviewCallbackWithBuffer(this);
++
++            mDummyTexture = new SurfaceTexture(10);
++            mCamera.setPreviewTexture(mDummyTexture);
++            mCamera.startPreview();
++
++            setAspectRatio(mPreviewHeight, mPreviewWidth);
++            startBackgroundThread();
++
++            mCameraFrameAvailableListener.onCameraStarted(
++                    new Size(s.width, s.height),
++                    new Size(ps.width, ps.height));
++
++        } catch (IOException exception) {
++            mCamera.release();
++        }
++    }
++
++    @Override
++    protected void stopCamera() {
++        LOGGER.d("stopCamera");
++        stopBackgroundThread();
++        releaseCamera();
++    }
++
++    @Override
++    protected void pauseCamera() {
++        LOGGER.d("Pause camera preview.");
++        if (mCamera != null) {
++            mCamera.stopPreview();
++            removeBackgroundTasks(mProcessPreview);
++        }
++    }
++
++    @Override
++    protected void resumeCamera() {
++        LOGGER.d("Resume camera preview.");
++        if (mCamera != null) {
++            mCamera.startPreview();
++        } else {
++            openCamera();
++        }
++        startBackgroundThread();
++    }
++
++    @Override
++    protected void switchCamera() {
++        mUseFrontCamera = !mUseFrontCamera;
++        mRotation = mUseFrontCamera ? 270 : 90;
++        openCamera();
++    }
++
++    protected void releaseCamera() {
++        if (mCamera != null) {
++            mCamera.stopPreview();
++            mCamera.setPreviewCallback(null);
++            mCamera.release();
++            mCamera = null;
++        }
++        removeBackgroundTasks(mProcessPreview);
++    }
++
++    @Override
++    public void onPreviewFrame(byte[] data, Camera camera) {
++        mFrameChain[mChainIdx].put(0, 0, data);
++        mChainIdx = 1 - mChainIdx;
++        runInBackground(mProcessPreview);
++        mCamera.addCallbackBuffer(data);
++    }
++
++    @Override
++    protected void takePicture() {
++        mCamera.takePicture(null, null, new Camera.PictureCallback() {
++            @Override
++            public void onPictureTaken(byte[] data, Camera camera) {
++                camera.stopPreview();
++                removeBackgroundTasks(mProcessPreview);
++                Camera.Size size = camera.getParameters().getPictureSize();
++                Mat mat = Imgcodecs.imdecode(new MatOfByte(data), Imgcodecs.CV_LOAD_IMAGE_UNCHANGED);
++                CameraFrame frame = new CameraFrame(mat, size.width, size.height, mRotation, ImageFormat.JPEG);
++                mCameraFrameAvailableListener.processPicture(frame);
++                camera.startPreview();
++            }
++        });
++    }
++
++    private int getCameraId() {
++        Camera.CameraInfo ci = new Camera.CameraInfo();
++        for (int i = 0; i < Camera.getNumberOfCameras(); i++) {
++            Camera.getCameraInfo(i, ci);
++            if (ci.facing == Camera.CameraInfo.CAMERA_FACING_BACK)
++                return i;
++        }
++        return -1; // No mCamera found
++    }
++
++    private int getFrontCameraId() {
++        Camera.CameraInfo ci = new Camera.CameraInfo();
++        for (int i = 0; i < Camera.getNumberOfCameras(); ++i) {
++            Camera.getCameraInfo(i, ci);
++            if (ci.facing == Camera.CameraInfo.CAMERA_FACING_FRONT)
++                return i;
++        }
++        return -1;
++    }
++}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/CameraViewBase.java b/app/src/main/java/com/lun/chin/aicamera/CameraViewBase.java
+new file mode 100644
+index 0000000..f6197f1
+--- /dev/null
++++ b/app/src/main/java/com/lun/chin/aicamera/CameraViewBase.java
+@@ -0,0 +1,262 @@
++package com.lun.chin.aicamera;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.ImageFormat;
++import android.graphics.Rect;
++import android.graphics.SurfaceTexture;
++import android.os.Handler;
++import android.os.HandlerThread;
++import android.text.TextUtils;
++import android.util.AttributeSet;
++import android.util.Size;
++import android.view.TextureView;
++
++import com.lun.chin.aicamera.env.Logger;
++
++import org.opencv.core.Core;
++import org.opencv.core.Mat;
++import org.opencv.imgproc.Imgproc;
++
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.Comparator;
++import java.util.List;
++
++public abstract class CameraViewBase extends AutoFitTextureView implements
++    TextureView.SurfaceTextureListener {
++
++    private static final Logger LOGGER = new Logger();
++
++    protected CameraFrameAvailableListener mCameraFrameAvailableListener;
++    protected boolean mUseFrontCamera = false;
++    protected Size mDesiredSize;
++    protected int mPreviewWidth;
++    protected int mPreviewHeight;
++    protected int mRotation = 90;
++    protected float mScale;
++
++    private Handler mHandler;
++    private HandlerThread mHandlerThread;
++
++    public CameraViewBase(Context context) {
++        super(context);
++        setSurfaceTextureListener(this);
++    }
++
++    public CameraViewBase(Context context, AttributeSet attr) {
++        super(context, attr);
++        setSurfaceTextureListener(this);
++    }
++
++    public CameraViewBase(final Context context, final AttributeSet attrs, final int defStyle) {
++        super(context, attrs, defStyle);
++    }
++
++    public interface CameraFrameAvailableListener {
++        Bitmap processPreview(CameraFrame frame);
++        void processPicture(CameraFrame frame);
++        void onCameraStarted(Size previewSize, Size pictureSize);
++    }
++
++    @Override
++    public void onSurfaceTextureAvailable(
++            final SurfaceTexture texture, final int width, final int height) {
++        openCamera();
++    }
++
++    @Override
++    public void onSurfaceTextureSizeChanged(
++            final SurfaceTexture texture, final int width, final int height) {}
++
++    @Override
++    public boolean onSurfaceTextureDestroyed(final SurfaceTexture texture) {
++        stopCamera();
++        return true;
++    }
++
++    @Override
++    public void onSurfaceTextureUpdated(final SurfaceTexture texture) {}
++
++    protected void drawFrame(CameraFrame frame) {
++        Canvas canvas = lockCanvas();
++        if (canvas != null) {
++            canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
++            Bitmap bitmap = mCameraFrameAvailableListener.processPreview(frame);
++            int width = (int)(bitmap.getWidth() * mScale);
++            int height = (int)(bitmap.getHeight() * mScale);
++
++            Rect dst = new Rect((canvas.getWidth() - width) / 2,
++                    (canvas.getHeight() - height) / 2,
++                    (canvas.getWidth() - width) / 2 + width,
++                    (canvas.getHeight() - height) / 2 + height);
++
++            canvas.drawBitmap(bitmap, null, dst, null);
++            unlockCanvasAndPost(canvas);
++        }
++    }
++
++    public void setProcessPreviewListener(CameraFrameAvailableListener listener) {
++        mCameraFrameAvailableListener = listener;
++    }
++
++    public void setDesiredSize(Size size) {
++        mDesiredSize = size;
++    }
++
++    protected void runInBackground(Runnable runnable) {
++        mHandler.post(runnable);
++    }
++
++    protected void startBackgroundThread() {
++        mHandlerThread = new HandlerThread("CameraBackground");
++        mHandlerThread.start();
++        mHandler = new Handler(mHandlerThread.getLooper());
++    }
++
++    protected void removeBackgroundTasks(Runnable r) {
++        if (mHandler != null) {
++            mHandler.removeCallbacks(r);
++        }
++    }
++
++    protected void stopBackgroundThread() {
++        mHandlerThread.quitSafely();
++        try {
++            mHandlerThread.join();
++            mHandlerThread = null;
++            mHandler = null;
++        } catch (final InterruptedException e) {
++            LOGGER.e(e, "Exception!");
++        }
++    }
++
++    /**
++     * Given {@code choices} of {@code Size}s supported by a camera, chooses the smallest one whose
++     * width and height are at least as large as the minimum of both, or an exact match if possible.
++     *
++     * @param choices The list of sizes that the camera supports for the intended output class
++     * @param desiredSize The preferred size for the camera frames.
++     * @return The optimal {@code Size}, or an arbitrary one if none were big enough
++     */
++    protected static Size chooseOptimalSize(final Size[] choices, final Size desiredSize) {
++        final int minSize = Math.min(desiredSize.getWidth(), desiredSize.getHeight());
++
++        // Collect the supported resolutions that are at least as big as the preview Surface
++        boolean exactSizeFound = false;
++        final List<Size> bigEnough = new ArrayList<Size>();
++        final List<Size> tooSmall = new ArrayList<Size>();
++        for (final Size option : choices) {
++            if (option.equals(desiredSize)) {
++                // Set the size but don't return yet so that remaining sizes will still be logged.
++                exactSizeFound = true;
++            }
++
++            if (option.getHeight() >= minSize && option.getWidth() >= minSize) {
++                bigEnough.add(option);
++            } else {
++                tooSmall.add(option);
++            }
++        }
++
++        LOGGER.i("Desired size: " + desiredSize + ", min size: " + minSize + "x" + minSize);
++        LOGGER.i("Valid preview sizes: [" + TextUtils.join(", ", bigEnough) + "]");
++        LOGGER.i("Rejected preview sizes: [" + TextUtils.join(", ", tooSmall) + "]");
++
++        if (exactSizeFound) {
++            LOGGER.i("Exact size match found.");
++            return desiredSize;
++        }
++
++        // Pick the smallest of those, assuming we found any
++        if (bigEnough.size() > 0) {
++            final Size chosenSize = Collections.min(bigEnough, new CompareSizesByArea());
++            LOGGER.i("Chosen size: " + chosenSize.getWidth() + "x" + chosenSize.getHeight());
++            return chosenSize;
++        } else {
++            LOGGER.e("Couldn't find any suitable preview size");
++            return choices[0];
++        }
++    }
++
++    public static Size chooseLargestSize(final Size[] choices) {
++        LOGGER.i("Available picture sizes: [" + TextUtils.join(", ", choices) + "]");
++        return Collections.max(Arrays.asList(choices), new CompareSizesByArea());
++    }
++
++    /**
++     * Compares two {@code Size}s based on their areas.
++     */
++    static class CompareSizesByArea implements Comparator<Size> {
++        @Override
++        public int compare(final Size lhs, final Size rhs) {
++            // We cast here to ensure the multiplications won't overflow
++            return Long.signum(
++                    (long) lhs.getWidth() * lhs.getHeight() - (long) rhs.getWidth() * rhs.getHeight());
++        }
++    }
++
++    protected abstract void openCamera();
++    protected abstract void stopCamera();
++    protected abstract void pauseCamera();
++    protected abstract void resumeCamera();
++    protected abstract void switchCamera();
++    protected abstract void takePicture();
++
++    public class CameraFrame {
++
++        private int mImageFormat;
++        private Mat mData;
++        private Mat mRgb;
++        private int mWidth;
++        private int mHeight;
++        private int mRotation;
++
++        public CameraFrame(Mat data, int width, int height, int rotation, int format) {
++            mWidth = width;
++            mHeight = height;
++            mRotation = rotation;
++            mData = data;
++            mRgb = new Mat();
++            mImageFormat = format;
++        }
++
++        private void rotate(Mat src, Mat dst) {
++            if (mRotation == 90)
++                Core.rotate(src, dst, Core.ROTATE_90_CLOCKWISE);
++            else if (mRotation == 180)
++                Core.rotate(src, dst, Core.ROTATE_180);
++            else if (mRotation == 270)
++                Core.rotate(src, dst, Core.ROTATE_90_COUNTERCLOCKWISE);
++        }
++
++        public Mat gray() {
++            Mat gray = mData.submat(0, mHeight, 0, mWidth);
++            rotate(gray, gray);
++            return gray;
++        }
++
++        public Mat rgb() {
++            if (mImageFormat == ImageFormat.NV21)
++                Imgproc.cvtColor(mData, mRgb, Imgproc.COLOR_YUV420sp2RGB, 3);
++            else if (mImageFormat == ImageFormat.JPEG)
++                Imgproc.cvtColor(mData, mRgb, Imgproc.COLOR_BGR2RGB);
++            else
++                throw new IllegalArgumentException("Format must be either NV21 or JPEG");
++
++            rotate(mRgb, mRgb);
++
++            return mRgb;
++        }
++
++        public int Width() { return mWidth; }
++        public int Height() { return mHeight; }
++
++        public void release() {
++            mData.release();
++            mRgb.release();
++        }
++    }
++}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/Classifier.java b/app/src/main/java/com/lun/chin/aicamera/Classifier.java
+index 4cb1204..b5f182b 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/Classifier.java
++++ b/app/src/main/java/com/lun/chin/aicamera/Classifier.java
+@@ -111,6 +111,8 @@ public interface Classifier {
+ 
+   List<Recognition> recognizeImage(Bitmap bitmap);
+ 
++  List<Recognition> recognizeImage(byte[] data, int height, int width);
++
+   void enableStatLogging(final boolean debug);
+ 
+   String getStatString();
+diff --git a/app/src/main/java/com/lun/chin/aicamera/EditImageFragment.java b/app/src/main/java/com/lun/chin/aicamera/EditImageFragment.java
+index b63afd2..b370608 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/EditImageFragment.java
++++ b/app/src/main/java/com/lun/chin/aicamera/EditImageFragment.java
+@@ -1,8 +1,9 @@
+ package com.lun.chin.aicamera;
+ 
+-import android.content.Context;
+ import android.graphics.Bitmap;
+ import android.os.Bundle;
++import android.os.Handler;
++import android.os.HandlerThread;
+ import android.support.v4.app.Fragment;
+ import android.util.Size;
+ import android.view.LayoutInflater;
+@@ -13,6 +14,7 @@ import android.widget.SeekBar;
+ 
+ import com.lun.chin.aicamera.env.ImageUtils;
+ import com.github.chrisbanes.photoview.PhotoView;
++import com.lun.chin.aicamera.env.Logger;
+ 
+ 
+ /**
+@@ -21,6 +23,7 @@ import com.github.chrisbanes.photoview.PhotoView;
+  * create an instance of this fragment.
+  */
+ public class EditImageFragment extends Fragment {
++    private static final Logger LOGGER = new Logger();
+     private static final String EXTRA_IMAGE = "image_item";
+ 
+     private ImageItem mImageItem;
+@@ -28,7 +31,8 @@ public class EditImageFragment extends Fragment {
+     private Bitmap mProcessedBitmap;
+     private PhotoView mPhotoView;
+     private ImageButton mSaveButton;
+-    private RunInBackgroundListener mBackgroundRunner;
++    private HandlerThread mBackgroundThread;
++    private Handler mBackgroundHandler;
+ 
+     private final int MAX_BLUR = 12;
+ 
+@@ -121,7 +125,7 @@ public class EditImageFragment extends Fragment {
+                 mImageData.setBlurAmount(mBlurAmount);
+                 ImageManager.getInstance().cacheBitmap(mImageItem.getTitle(), mProcessedBitmap);
+ 
+-                mBackgroundRunner.run(new Runnable() {
++                mBackgroundHandler.post(new Runnable() {
+                     @Override
+                     public void run() {
+                         Bitmap result = Bitmap.createBitmap(mImageData.getOriginalImage());
+@@ -142,23 +146,20 @@ public class EditImageFragment extends Fragment {
+             }
+         });
+         mSaveButton.setEnabled(false);
++
++        startBackgroundThread();
+     }
+ 
+     @Override
+-    public void onAttach(Context context) {
+-        super.onAttach(context);
+-        if (context instanceof RunInBackgroundListener) {
+-            mBackgroundRunner = (RunInBackgroundListener) context;
+-        } else {
+-            throw new RuntimeException(context.toString()
+-                    + " must implement RunInBackgroundListener");
+-        }
++    public void onResume() {
++        super.onResume();
++        startBackgroundThread();
+     }
+ 
+     @Override
+-    public void onDetach() {
+-        super.onDetach();
+-        mBackgroundRunner = null;
++    public void onPause() {
++        super.onPause();
++        stopBackgroundThread();
+     }
+ 
+     private void processImage(int blurAmount, boolean grayscale) {
+@@ -176,4 +177,21 @@ public class EditImageFragment extends Fragment {
+         mPhotoView.setImageBitmap(mProcessedBitmap);
+         mSaveButton.setEnabled(true);
+     }
++
++    private void startBackgroundThread() {
++        mBackgroundThread = new HandlerThread("EditBackground");
++        mBackgroundThread.start();
++        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
++    }
++
++    private void stopBackgroundThread() {
++        mBackgroundThread.quitSafely();
++        try {
++            mBackgroundThread.join();
++            mBackgroundThread = null;
++            mBackgroundHandler = null;
++        } catch (final InterruptedException e) {
++            LOGGER.e(e, "Exception!");
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/lun/chin/aicamera/RecyclerViewAdapter.java b/app/src/main/java/com/lun/chin/aicamera/RecyclerViewAdapter.java
+index b4ec16f..56f5feb 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/RecyclerViewAdapter.java
++++ b/app/src/main/java/com/lun/chin/aicamera/RecyclerViewAdapter.java
+@@ -2,7 +2,6 @@ package com.lun.chin.aicamera;
+ 
+ import android.content.Context;
+ import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+ import android.graphics.Color;
+ import android.support.v7.widget.RecyclerView;
+ import android.view.LayoutInflater;
+@@ -10,8 +9,6 @@ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.ImageView;
+ 
+-import com.lun.chin.aicamera.env.ImageUtils;
+-
+ import java.util.ArrayList;
+ 
+ public class RecyclerViewAdapter extends RecyclerView.Adapter<RecyclerViewAdapter.ViewHolder> {
+diff --git a/app/src/main/java/com/lun/chin/aicamera/SegmentationModel.java b/app/src/main/java/com/lun/chin/aicamera/SegmentationModel.java
+index 856e58d..93ea3aa 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/SegmentationModel.java
++++ b/app/src/main/java/com/lun/chin/aicamera/SegmentationModel.java
+@@ -72,7 +72,12 @@ public class SegmentationModel implements Classifier {
+             byteValues[i * 3 + 0] = (byte) ((intValues[i] >> 16) & 0xFF);
+         }
+ 
+-        mInferenceInterface.feed(mInputTensorName, byteValues, 1, inputHeight, inputWidth, 3);
++        return recognizeImage(byteValues, inputHeight, inputWidth);
++    }
++
++    @Override
++    public List<Recognition> recognizeImage(final byte[] data, int inputHeight, int inputWidth) {
++        mInferenceInterface.feed(mInputTensorName, data, 1, inputHeight, inputWidth, 3);
+         mInferenceInterface.run(mOutputTensorNames, false);
+ 
+         // outputSegMap is an array where each element is an integer corresponding to the class label.
+diff --git a/app/src/main/java/com/lun/chin/aicamera/env/ImageUtils.java b/app/src/main/java/com/lun/chin/aicamera/env/ImageUtils.java
+index 05dc633..d1db684 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/env/ImageUtils.java
++++ b/app/src/main/java/com/lun/chin/aicamera/env/ImageUtils.java
+@@ -425,17 +425,22 @@ public class ImageUtils {
+             long imgAddr, long maskAddr, long resultAddr, int previewWidth, int previewHeight, int blurAmount, boolean grayscale);
+ 
+     public static void applyMask(Bitmap src, Bitmap dst, int[] mask, int maskWidth, int maskHeight, int blurAmount, boolean grayscale) {
+-        final int w = src.getWidth();
+-        final int h = src.getHeight();
+-
+         Mat img = new Mat();
+         Utils.bitmapToMat(src, img);
++
++        applyMask(img, dst, mask, maskWidth, maskHeight, blurAmount, grayscale);
++    }
++
++    public static void applyMask(Mat src, Bitmap dst, int[] mask, int maskWidth, int maskHeight, int blurAmount, boolean grayscale) {
++        final int w = src.width();
++        final int h = src.height();
++
+         Mat maskMat = new Mat(maskHeight, maskWidth, CvType.CV_32SC1);
+-        Mat outImage = new Mat(img.size(), img.type());
++        Mat outImage = new Mat(src.size(), src.type());
+         maskMat.put(0, 0, mask);
+ 
+         // Add bokeh effect.
+-        bokeh(img.getNativeObjAddr(),
++        bokeh(src.getNativeObjAddr(),
+                 maskMat.getNativeObjAddr(),
+                 outImage.getNativeObjAddr(),
+                 w,
+diff --git a/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java
+new file mode 100644
+index 0000000..ad4ea4a
+--- /dev/null
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraActivity.java
+@@ -0,0 +1,697 @@
++/*
++ * Copyright 2016 The TensorFlow Authors. All Rights Reserved.
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.lun.chin.aicamera.oldCode;
++
++import android.Manifest;
++import android.content.Context;
++import android.content.pm.PackageManager;
++import android.hardware.Camera;
++import android.hardware.camera2.CameraAccessException;
++import android.hardware.camera2.CameraCharacteristics;
++import android.hardware.camera2.CameraManager;
++import android.hardware.camera2.params.StreamConfigurationMap;
++import android.media.Image;
++import android.media.Image.Plane;
++import android.media.ImageReader;
++import android.media.ImageReader.OnImageAvailableListener;
++import android.os.Build;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.HandlerThread;
++import android.os.Trace;
++import android.support.v4.app.Fragment;
++import android.support.v7.app.AppCompatActivity;
++import android.util.Size;
++import android.view.KeyEvent;
++import android.view.Surface;
++import android.view.View;
++import android.view.WindowManager;
++import android.widget.Toast;
++
++import com.lun.chin.aicamera.CameraChangedListener;
++import com.lun.chin.aicamera.GalleryViewPagerFragment;
++import com.lun.chin.aicamera.ImageManager;
++import com.lun.chin.aicamera.OverlayView;
++import com.lun.chin.aicamera.R;
++import com.lun.chin.aicamera.RecyclerViewFragment;
++import com.lun.chin.aicamera.RunInBackgroundListener;
++import com.lun.chin.aicamera.env.ImageUtils;
++import com.lun.chin.aicamera.env.Logger;
++
++import org.opencv.android.BaseLoaderCallback;
++import org.opencv.android.LoaderCallbackInterface;
++import org.opencv.android.OpenCVLoader;
++
++import java.nio.ByteBuffer;
++
++
++public abstract class CameraActivity extends AppCompatActivity
++        implements
++            OnImageAvailableListener,
++            Camera.PreviewCallback,
++        CameraFragment.OnCameraButtonClickedListener,
++        RunInBackgroundListener {
++
++    private static final Logger LOGGER = new Logger();
++
++    private static final int PERMISSIONS_REQUEST = 1;
++
++    private static final String PERMISSION_CAMERA = Manifest.permission.CAMERA;
++    private static final String PERMISSION_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
++
++    private boolean mDebug = false;
++
++    private Handler mHandler;
++    private HandlerThread mHandlerThread;
++    private boolean mIsProcessingFrame = false;
++    private boolean mIsProcessingPreviewFrame = false;
++    private byte[][] mYuvBytes = new byte[3][];
++    private int[] mRgbBytes = null;
++    private int[] mRgbBytesPreview = null;
++    private int mYRowStride;
++    private byte[] mPictureBytes;
++
++    protected boolean mUseCamera2API;
++    protected int mPreviewWidth = 0;
++    protected int mPreviewHeight = 0;
++    protected int mPictureWidth = 0;
++    protected int mPictureHeight = 0;
++
++    private Runnable mPostInferenceCallback;
++    private Runnable mPostPreviewInferenceCallback;
++    private Runnable mImageConverter;
++    private Runnable mPreviewImageConverter;
++
++    private int mRotation = 90;
++    protected String mFilename;
++
++    private BaseLoaderCallback _baseLoaderCallback = new BaseLoaderCallback(this) {
++        @Override
++        public void onManagerConnected(int status) {
++            switch (status) {
++                case LoaderCallbackInterface.SUCCESS: {
++                    LOGGER.d("OpenCV loaded successfully");
++                    // Load ndk built module, as specified in moduleName in build.gradle
++                    // after opencv initialization
++                    System.loadLibrary("native-lib");
++                }
++                break;
++                default: {
++                    super.onManagerConnected(status);
++                }
++            }
++        }
++    };
++
++    @Override
++    protected void onCreate(final Bundle savedInstanceState) {
++        LOGGER.d("onCreate " + this);
++        super.onCreate(null);
++        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++
++        setContentView(R.layout.activity_camera_old);
++
++        if (hasPermission()) {
++            setFragment();
++        } else {
++            requestPermission();
++        }
++    }
++
++    private byte[] lastPreviewFrame;
++
++    protected int[] getRgbBytes() {
++        mImageConverter.run();
++        return mRgbBytes;
++    }
++
++    protected byte[] getPictureBytes() {
++        return mPictureBytes;
++    }
++
++    protected int[] getRgbBytesPreview() {
++        mPreviewImageConverter.run();
++        return mRgbBytesPreview;
++    }
++
++    protected int getLuminanceStride() {
++        return mYRowStride;
++    }
++
++    protected byte[] getLuminance() {
++        return mYuvBytes[0];
++    }
++
++    /**
++     * Callback for android.hardware.Camera API
++     */
++    @Override
++    public void onPreviewFrame(final byte[] bytes, final Camera camera) {
++        if (mIsProcessingPreviewFrame) {
++            LOGGER.w("Dropping frame!");
++            return;
++        }
++
++        mIsProcessingPreviewFrame = true;
++
++        try {
++            // Initialize the storage bitmaps once when the resolution is known.
++            if (mRgbBytesPreview == null) {
++                Camera.Size previewSize = camera.getParameters().getPreviewSize();
++                mPreviewHeight = previewSize.height;
++                mPreviewWidth = previewSize.width;
++                mRgbBytesPreview = new int[mPreviewWidth * mPreviewHeight];
++                onPreviewSizeChosen(new Size(previewSize.width, previewSize.height), 90);
++            }
++        } catch (final Exception e) {
++            LOGGER.e(e, "Exception!");
++            return;
++        }
++
++        mPreviewImageConverter =
++                new Runnable() {
++                    @Override
++                    public void run() {
++                        ImageUtils.convertYUV420SPToARGB8888(bytes,
++                                mPreviewWidth,
++                                mPreviewHeight,
++                                mRgbBytesPreview);
++                    }
++                };
++
++        mPostPreviewInferenceCallback =
++                new Runnable() {
++                    @Override
++                    public void run() {
++                        camera.addCallbackBuffer(bytes);
++                        mIsProcessingPreviewFrame = false;
++                    }
++                };
++
++        processPreview();
++    }
++
++    public void onCaptureStillFrame(final byte[] bytes, final Camera camera) {
++        if (mIsProcessingFrame) {
++            return;
++        }
++
++        final Long timeStamp = System.currentTimeMillis();
++        mFilename = "IMG_" + timeStamp.toString() + ".png";
++        ImageManager.getInstance().addPendingImage(mFilename);
++
++        mIsProcessingFrame = true;
++
++        // Initialize the storage bitmaps once when the resolution is known.
++        if (mPictureBytes == null) {
++            prepareBitmap(camera.getParameters().getPictureSize());
++        }
++
++        mPictureBytes = bytes;
++
++        mPostInferenceCallback =
++                new Runnable() {
++                    @Override
++                    public void run() {
++                        camera.addCallbackBuffer(bytes);
++                        mIsProcessingFrame = false;
++                    }
++                };
++
++        processImage();
++    }
++
++    private void prepareBitmap(Camera.Size pictureSize) {
++        try {
++            mPictureHeight = pictureSize.height;
++            mPictureWidth = pictureSize.width;
++            onPictureSizeChosen(new Size(pictureSize.width, pictureSize.height), mRotation);
++        } catch (final Exception e) {
++            LOGGER.e(e, "Exception!");
++            return;
++        }
++    }
++
++    // Callback for when a still image is taken with the Camera2 API.
++    @Override
++    public void onImageAvailable(final ImageReader reader) {
++        if (mPictureWidth == 0 || mPictureHeight == 0) {
++            return;
++        }
++        try {
++            final Image image = reader.acquireLatestImage();
++
++            if (image == null) {
++                return;
++            }
++
++            if (mIsProcessingFrame) {
++                image.close();
++                return;
++            }
++            mIsProcessingFrame = true;
++            Trace.beginSection("imageAvailable");
++
++            final Plane[] planes = image.getPlanes();
++            fillBytes(planes, mYuvBytes);
++            mYRowStride = planes[0].getRowStride();
++            final int uvRowStride = planes[1].getRowStride();
++            final int uvPixelStride = planes[1].getPixelStride();
++
++            mImageConverter =
++                    new Runnable() {
++                        @Override
++                        public void run() {
++                            ImageUtils.convertYUV420ToARGB8888(
++                                    mYuvBytes[0],
++                                    mYuvBytes[1],
++                                    mYuvBytes[2],
++                                    mPictureWidth,
++                                    mPictureHeight,
++                                    mYRowStride,
++                                    uvRowStride,
++                                    uvPixelStride,
++                                    mRgbBytes);
++                        }
++                    };
++
++            mPostInferenceCallback =
++                    new Runnable() {
++                        @Override
++                        public void run() {
++                            image.close();
++                            mIsProcessingFrame = false;
++                        }
++                    };
++
++            processImage();
++        } catch (final Exception e) {
++            LOGGER.e(e, "Exception!");
++            Trace.endSection();
++            return;
++        }
++        Trace.endSection();
++    }
++
++    // Callback when preview image is available from the Camera2 API
++    private void onPreviewImageAvailable(final ImageReader reader) {
++        if (mPreviewWidth == 0 || mPreviewHeight == 0) {
++            return;
++        }
++        try {
++            final Image image = reader.acquireLatestImage();
++
++            if (image == null) {
++                LOGGER.i("image null");
++                return;
++            }
++
++            if (mIsProcessingPreviewFrame) {
++                LOGGER.i("processing preview true");
++                image.close();
++                return;
++            }
++            mIsProcessingPreviewFrame  = true;
++            Trace.beginSection("imageAvailable");
++
++            final Plane[] planes = image.getPlanes();
++            fillBytes(planes, mYuvBytes);
++            mYRowStride = planes[0].getRowStride();
++            final int uvRowStride = planes[1].getRowStride();
++            final int uvPixelStride = planes[1].getPixelStride();
++
++            mPreviewImageConverter =
++                    new Runnable() {
++                        @Override
++                        public void run() {
++                            ImageUtils.convertYUV420ToARGB8888(
++                                    mYuvBytes[0],
++                                    mYuvBytes[1],
++                                    mYuvBytes[2],
++                                    mPreviewWidth,
++                                    mPreviewHeight,
++                                    mYRowStride,
++                                    uvRowStride,
++                                    uvPixelStride,
++                                    mRgbBytesPreview);
++                        }
++                    };
++
++            mPostPreviewInferenceCallback =
++                    new Runnable() {
++                        @Override
++                        public void run() {
++                            image.close();
++                            mIsProcessingPreviewFrame = false;
++                        }
++                    };
++
++            processPreview();
++        } catch (final Exception e) {
++            LOGGER.e(e, "Exception!");
++            Trace.endSection();
++            return;
++        }
++        Trace.endSection();
++    }
++
++    @Override
++    public synchronized void onStart() {
++        LOGGER.d("onStart " + this);
++        super.onStart();
++    }
++
++    @Override
++    public synchronized void onResume() {
++        LOGGER.d("onResume " + this);
++        super.onResume();
++
++        if (!OpenCVLoader.initDebug()) {
++            LOGGER.d("Internal OpenCV library not found. Using OpenCV Manager for initialization");
++            OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_0_0, this, _baseLoaderCallback);
++        } else {
++            LOGGER.d("OpenCV library found inside package. Using it!");
++            _baseLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
++        }
++
++        mHandlerThread = new HandlerThread("inference");
++        mHandlerThread.start();
++        mHandler = new Handler(mHandlerThread.getLooper());
++    }
++
++    @Override
++    public synchronized void onPause() {
++        LOGGER.d("onPause " + this);
++        super.onPause();
++    }
++
++    @Override
++    public synchronized void onStop() {
++        LOGGER.d("onStop " + this);
++        super.onStop();
++    }
++
++    @Override
++    public synchronized void onDestroy() {
++        LOGGER.d("onDestroy " + this);
++
++        mHandlerThread.quitSafely();
++        try {
++            mHandlerThread.join();
++            mHandlerThread = null;
++            mHandler = null;
++        } catch (final InterruptedException e) {
++            LOGGER.e(e, "Exception!");
++        }
++
++        super.onDestroy();
++    }
++
++    protected synchronized void runInBackground(final Runnable r) {
++        if (mHandler != null) {
++            mHandler.post(r);
++        }
++    }
++
++    @Override
++    public void onRequestPermissionsResult(
++            final int requestCode, final String[] permissions, final int[] grantResults) {
++        if (requestCode == PERMISSIONS_REQUEST) {
++            if (grantResults.length > 0
++                    && grantResults[0] == PackageManager.PERMISSION_GRANTED
++                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
++                setFragment();
++            } else {
++                requestPermission();
++            }
++        }
++    }
++
++    @Override
++    public void onCameraButtonClicked(View v) {
++        switch (v.getId()) {
++            case R.id.goto_gallery:
++                GalleryViewPagerFragment galleryViewPagerFragment =
++                        GalleryViewPagerFragment.newInstance(
++                                0, ImageManager.getInstance().getImageItems());
++
++                getSupportFragmentManager()
++                        .beginTransaction()
++                        .replace(R.id.container, galleryViewPagerFragment)
++                        .addToBackStack(null)
++                        .commit();
++
++                // TODO improve the loading speed of the gallery page. Remove it for now.
++                /*
++                RecyclerViewFragment fragment
++                        = RecyclerViewFragment.newInstance(
++                                ImageManager.getInstance().getImageItems());
++
++                getSupportFragmentManager()
++                        .beginTransaction()
++                        .replace(R.id.container, fragment)
++                        .addToBackStack(null)
++                        .commit();
++                */
++                break;
++        }
++    }
++
++    @Override
++    public void run(Runnable runnable) {
++        runInBackground(runnable);
++    }
++
++    private boolean hasPermission() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            return checkSelfPermission(PERMISSION_CAMERA) == PackageManager.PERMISSION_GRANTED &&
++                    checkSelfPermission(PERMISSION_STORAGE) == PackageManager.PERMISSION_GRANTED;
++        } else {
++            return true;
++        }
++    }
++
++    private void requestPermission() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            if (shouldShowRequestPermissionRationale(PERMISSION_CAMERA) ||
++                    shouldShowRequestPermissionRationale(PERMISSION_STORAGE)) {
++                Toast.makeText(CameraActivity.this,
++                        "Camera AND storage permission are required for this demo", Toast.LENGTH_LONG).show();
++            }
++            requestPermissions(new String[] {PERMISSION_CAMERA, PERMISSION_STORAGE}, PERMISSIONS_REQUEST);
++        }
++    }
++
++    // Returns true if the device supports the required hardware level, or better.
++    private boolean isHardwareLevelSupported(
++            CameraCharacteristics characteristics, int requiredLevel) {
++        int deviceLevel = characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
++        if (deviceLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY) {
++            return requiredLevel == deviceLevel;
++        }
++        // deviceLevel is not LEGACY, can use numerical sort
++        return requiredLevel <= deviceLevel;
++    }
++
++    private String chooseCamera() {
++        final CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
++        try {
++            for (final String cameraId : manager.getCameraIdList()) {
++                final CameraCharacteristics characteristics = manager.getCameraCharacteristics(cameraId);
++
++                // We don't use a front facing camera in this sample.
++                final Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
++                if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
++                    continue;
++                }
++
++                final StreamConfigurationMap map =
++                        characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
++
++                if (map == null) {
++                    continue;
++                }
++
++                // Fallback to camera1 API for internal cameras that don't have full support.
++                // This should help with legacy situations where using the camera2 API causes
++                // distorted or otherwise broken previews.
++                /*
++                mUseCamera2API = (facing == CameraCharacteristics.LENS_FACING_EXTERNAL)
++                        || isHardwareLevelSupported(characteristics,
++                        CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
++                LOGGER.i("Camera API lv2?: %s", mUseCamera2API);
++                */
++
++                // TODO add support for Camera2 API.
++                mUseCamera2API = false;
++                return cameraId;
++            }
++        } catch (CameraAccessException e) {
++            LOGGER.e(e, "Not allowed to access camera");
++        }
++
++        return null;
++    }
++
++    protected void setFragment() {
++        String cameraId = chooseCamera();
++        if (cameraId == null) {
++            Toast.makeText(this, "No Camera Detected", Toast.LENGTH_SHORT).show();
++            finish();
++        }
++
++        final Fragment fragment;
++        if (mUseCamera2API) {
++            LOGGER.i("Using Camera2 API");
++            CameraConnectionFragment camera2Fragment =
++                    CameraConnectionFragment.newInstance(
++                            new CameraConnectionFragment.ConnectionCallback() {
++                                @Override
++                                public void onPreviewSizeChosen(final Size size, final int rotation) {
++                                    mPreviewHeight = size.getHeight();
++                                    mPreviewWidth = size.getWidth();
++                                    CameraActivity.this.onPreviewSizeChosen(size, rotation);
++                                }
++                            },
++                            this,
++                            new OnImageAvailableListener() {
++                                @Override
++                                public void onImageAvailable(ImageReader reader) {
++                                    onPreviewImageAvailable(reader);
++                                }
++                            },
++                            getLayoutId(),
++                            getDesiredPreviewFrameSize());
++
++            camera2Fragment.setCamera(cameraId);
++            fragment = camera2Fragment;
++        } else {
++            LOGGER.i("Using Camera API");
++            fragment = LegacyCameraConnectionFragment.newInstance(
++                    new Camera.PreviewCallback() {
++                        @Override
++                        public void onPreviewFrame(final byte[] data, final Camera camera) {
++                            onCaptureStillFrame(data, camera);
++                        }
++                    },
++                    null, //this,
++                    new CameraChangedListener() {
++                        @Override
++                        public void onCameraChangedListener(Camera camera, boolean isFrontFacing) {
++                            mRotation = isFrontFacing ? -90 : 90;
++                            prepareBitmap(camera.getParameters().getPictureSize());
++                        }
++                    },
++                    getLayoutId(),
++                    getDesiredPreviewFrameSize());
++        }
++
++        getSupportFragmentManager()
++                .beginTransaction()
++                .replace(R.id.container, fragment)
++                .commit();
++    }
++
++    protected void fillBytes(final Plane[] planes, final byte[][] yuvBytes) {
++        // Because of the variable row stride it's not possible to know in
++        // advance the actual necessary dimensions of the yuv planes.
++        for (int i = 0; i < planes.length; ++i) {
++            final ByteBuffer buffer = planes[i].getBuffer();
++            if (yuvBytes[i] == null) {
++                LOGGER.d("Initializing buffer %d at size %d", i, buffer.capacity());
++                yuvBytes[i] = new byte[buffer.capacity()];
++            }
++            buffer.get(yuvBytes[i]);
++        }
++    }
++
++    public boolean isDebug() {
++        return mDebug;
++    }
++
++    public void requestRender() {
++        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
++        if (overlay != null) {
++            overlay.postInvalidate();
++        }
++    }
++
++    public void addCallback(final OverlayView.DrawCallback callback) {
++        final OverlayView overlay = (OverlayView) findViewById(R.id.debug_overlay);
++        if (overlay != null) {
++            overlay.addCallback(callback);
++        }
++    }
++
++    public void onSetDebug(final boolean debug) {}
++
++    @Override
++    public boolean onKeyDown(final int keyCode, final KeyEvent event) {
++        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP
++                || keyCode == KeyEvent.KEYCODE_BUTTON_L1 || keyCode == KeyEvent.KEYCODE_DPAD_CENTER) {
++            mDebug = !mDebug;
++            requestRender();
++            onSetDebug(mDebug);
++            return true;
++        }
++        return super.onKeyDown(keyCode, event);
++    }
++
++    protected void readyForNextImage() {
++        if (mPostInferenceCallback != null) {
++            mPostInferenceCallback.run();
++        }
++    }
++
++    protected void readyForNextPreviewImage() {
++        if (mPostPreviewInferenceCallback != null) {
++            mPostPreviewInferenceCallback.run();
++        }
++    }
++
++    protected int getScreenOrientation() {
++        switch (getWindowManager().getDefaultDisplay().getRotation()) {
++            case Surface.ROTATION_270:
++                return 270;
++            case Surface.ROTATION_180:
++                return 180;
++            case Surface.ROTATION_90:
++                return 90;
++            default:
++                return 0;
++        }
++    }
++
++    protected void notifyFragmentOfImageChange(String filename) {
++        Fragment fragment = getSupportFragmentManager().findFragmentById(R.id.container);
++
++        if (fragment != null && fragment.isAdded()) {
++            if (fragment instanceof RecyclerViewFragment) {
++                ((RecyclerViewFragment)fragment).notifyImageChange(filename);
++            } else if (fragment instanceof GalleryViewPagerFragment) {
++                ((GalleryViewPagerFragment)fragment).notifyImageChange(filename);
++            }
++        }
++    }
++
++    protected abstract void processImage();
++    protected abstract void processPreview();
++    protected abstract void onPreviewSizeChosen(final Size size, final int rotation);
++    protected abstract void onPictureSizeChosen(final Size size, final int rotation);
++    protected abstract int getLayoutId();
++    protected abstract Size getDesiredPreviewFrameSize();
++}
+diff --git a/app/src/main/java/com/lun/chin/aicamera/CameraConnectionFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java
+similarity index 99%
+rename from app/src/main/java/com/lun/chin/aicamera/CameraConnectionFragment.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java
+index 0099742..acb38e6 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/CameraConnectionFragment.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraConnectionFragment.java
+@@ -1,4 +1,4 @@
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ import android.app.Activity;
+ import android.app.AlertDialog;
+@@ -36,7 +36,6 @@ import android.view.Surface;
+ import android.view.TextureView;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.Button;
+ import android.widget.ImageButton;
+ import android.widget.Toast;
+ 
+@@ -52,6 +51,8 @@ import java.util.List;
+ import java.util.concurrent.Semaphore;
+ import java.util.concurrent.TimeUnit;
+ 
++import com.lun.chin.aicamera.AutoFitTextureView;
++import com.lun.chin.aicamera.R;
+ import com.lun.chin.aicamera.env.Logger;
+ 
+ 
+diff --git a/app/src/main/java/com/lun/chin/aicamera/CameraFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java
+similarity index 85%
+rename from app/src/main/java/com/lun/chin/aicamera/CameraFragment.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java
+index e0403c9..ba154a4 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/CameraFragment.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/CameraFragment.java
+@@ -1,4 +1,4 @@
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ import android.app.Activity;
+ import android.support.v4.app.Fragment;
+@@ -15,7 +15,7 @@ public class CameraFragment extends Fragment {
+     };
+ 
+     public interface OnCameraButtonClickedListener {
+-        public void onCameraButtonClicked(View v);
++        void onCameraButtonClicked(View v);
+     }
+ 
+     @Override
+@@ -28,7 +28,7 @@ public class CameraFragment extends Fragment {
+             mCameraButtonCallback = (OnCameraButtonClickedListener) activity;
+         } catch (ClassCastException e) {
+             throw new ClassCastException(activity.toString()
+-                    + " must implement OnHeadlineSelectedListener");
++                    + " must implement OnCameraButtonClickedListener");
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/lun/chin/aicamera/DeepLab.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java
+similarity index 93%
+rename from app/src/main/java/com/lun/chin/aicamera/DeepLab.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java
+index 6e661fb..3d11bb5 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/DeepLab.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/DeepLab.java
+@@ -1,25 +1,18 @@
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ import android.content.res.AssetManager;
+ import android.graphics.Bitmap;
+-import android.graphics.RectF;
+ 
++import com.lun.chin.aicamera.Classifier;
+ import com.lun.chin.aicamera.env.Logger;
+ 
+ import org.tensorflow.Graph;
+ import org.tensorflow.Operation;
+ import org.tensorflow.contrib.android.TensorFlowInferenceInterface;
+ 
+-import java.io.BufferedReader;
+ import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.InputStreamReader;
+ import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.Comparator;
+ import java.util.List;
+-import java.util.PriorityQueue;
+-import java.util.Vector;
+ 
+ public class DeepLab implements Classifier {
+     private static final Logger LOGGER = new Logger();
+@@ -108,6 +101,11 @@ public class DeepLab implements Classifier {
+         return recognitions;
+     }
+ 
++    @Override
++    public List<Recognition> recognizeImage(byte[] data, int height, int width) {
++        return null;
++    }
++
+     @Override
+     public void enableStatLogging(final boolean logStats) {}
+ 
+diff --git a/app/src/main/java/com/lun/chin/aicamera/DetectorActivity.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java
+similarity index 97%
+rename from app/src/main/java/com/lun/chin/aicamera/DetectorActivity.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java
+index 8e46e74..7527b81 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/DetectorActivity.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/DetectorActivity.java
+@@ -1,4 +1,4 @@
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+@@ -7,6 +7,12 @@ import android.media.ImageReader;
+ import android.util.Size;
+ import android.widget.Toast;
+ 
++import com.lun.chin.aicamera.Classifier;
++import com.lun.chin.aicamera.ImageData;
++import com.lun.chin.aicamera.ImageManager;
++import com.lun.chin.aicamera.OverlayView;
++import com.lun.chin.aicamera.R;
++import com.lun.chin.aicamera.SegmentationModel;
+ import com.lun.chin.aicamera.env.ImageUtils;
+ import com.lun.chin.aicamera.env.Logger;
+ 
+diff --git a/app/src/main/java/com/lun/chin/aicamera/LegacyCameraConnectionFragment.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java
+similarity index 98%
+rename from app/src/main/java/com/lun/chin/aicamera/LegacyCameraConnectionFragment.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java
+index 9f5b82f..07790bc 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/LegacyCameraConnectionFragment.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/LegacyCameraConnectionFragment.java
+@@ -1,4 +1,4 @@
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ /*
+  * Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+@@ -29,12 +29,14 @@ import android.view.Surface;
+ import android.view.TextureView;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.Button;
+ import android.widget.ImageButton;
+ 
+ import java.io.IOException;
+ import java.util.List;
+ 
++import com.lun.chin.aicamera.AutoFitTextureView;
++import com.lun.chin.aicamera.CameraChangedListener;
++import com.lun.chin.aicamera.R;
+ import com.lun.chin.aicamera.env.Logger;
+ import com.lun.chin.aicamera.env.ImageUtils;
+ 
+diff --git a/app/src/main/java/com/lun/chin/aicamera/TensorFlowImageClassifier.java b/app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java
+similarity index 97%
+rename from app/src/main/java/com/lun/chin/aicamera/TensorFlowImageClassifier.java
+rename to app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java
+index 7db35a6..609a491 100644
+--- a/app/src/main/java/com/lun/chin/aicamera/TensorFlowImageClassifier.java
++++ b/app/src/main/java/com/lun/chin/aicamera/oldCode/TensorFlowImageClassifier.java
+@@ -13,13 +13,15 @@ See the License for the specific language governing permissions and
+ limitations under the License.
+ ==============================================================================*/
+ 
+-package com.lun.chin.aicamera;
++package com.lun.chin.aicamera.oldCode;
+ 
+ import android.content.res.AssetManager;
+ import android.graphics.Bitmap;
+ import android.os.Trace;
+ import android.util.Log;
+ 
++import com.lun.chin.aicamera.Classifier;
++
+ import org.tensorflow.Operation;
+ import org.tensorflow.contrib.android.TensorFlowInferenceInterface;
+ 
+@@ -184,6 +186,11 @@ public class TensorFlowImageClassifier implements Classifier {
+     return recognitions;
+   }
+ 
++  @Override
++  public List<Recognition> recognizeImage(byte[] data, int height, int width) {
++    return null;
++  }
++
+   @Override
+   public void enableStatLogging(boolean logStats) {
+     this.logStats = logStats;

@@ -1,0 +1,410 @@
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/App.java b/app/src/main/java/at/flausch_productions/amsprung/App.java
+index 6f000a9..7d94025 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/App.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/App.java
+@@ -2,6 +2,7 @@ package at.flausch_productions.amsprung;
+ 
+ import android.app.Application;
+ 
++import at.flausch_productions.amsprung.util.OkHttpClientProvider;
+ import timber.log.Timber;
+ 
+ /**
+@@ -16,5 +17,7 @@ public class App extends Application {
+         if (BuildConfig.DEBUG) {
+             Timber.plant(new Timber.DebugTree());
+         }
++
++        OkHttpClientProvider.initOrbot(this);
+     }
+ }
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/DeparturesAdapter.java b/app/src/main/java/at/flausch_productions/amsprung/DeparturesAdapter.java
+index 1c94938..e22520a 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/DeparturesAdapter.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/DeparturesAdapter.java
+@@ -15,6 +15,7 @@ import at.flausch_productions.amsprung.persistance.LineType;
+ import at.flausch_productions.amsprung.persistance.StopsHelper;
+ import at.flausch_productions.amsprung.wienerlinienapi.LineColorHelper;
+ import at.flausch_productions.amsprung.wienerlinienapi.MonitorInfoAsyncTask;
++import lombok.EqualsAndHashCode;
+ import lombok.Getter;
+ import lombok.Setter;
+ import timber.log.Timber;
+@@ -42,7 +43,11 @@ public class DeparturesAdapter extends RecyclerView.Adapter<DeparturesAdapter.De
+                                     dep.setLineName(line.getName());
+                                     dep.setTowards(line.getTowards());
+                                     dep.setLineType(LineType.fromString(line.getType()));
+-                                    deps.add(dep);
++                                    if(!deps.contains(dep)) {
++                                        // apis might be sending duplicates...
++                                        deps.add(dep);
++                                    }
++                                    Timber.v("parsed: %s %s %s %d", dep.getLineName(), dep.getTowards(), dep.getLineType(), dep.getCountdown());
+                                 }
+                             }
+                         }
+@@ -59,7 +64,7 @@ public class DeparturesAdapter extends RecyclerView.Adapter<DeparturesAdapter.De
+         });
+ 
+         for (Dep dep : deps){
+-            Timber.d("dep: %s %s %s %d", dep.getLineName(), dep.getTowards(), dep.getLineType(), dep.getCountdown());
++            Timber.v("dep: %s %s %s %d", dep.getLineName(), dep.getTowards(), dep.getLineType(), dep.getCountdown());
+         }
+     }
+ 
+@@ -107,6 +112,7 @@ public class DeparturesAdapter extends RecyclerView.Adapter<DeparturesAdapter.De
+         }
+     }
+ 
++    @EqualsAndHashCode
+     public class Dep{
+         @Getter @Setter String lineName;
+         @Getter @Setter LineType lineType;
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/LocateMeActivity.java b/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
+similarity index 82%
+rename from app/src/main/java/at/flausch_productions/amsprung/LocateMeActivity.java
+rename to app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
+index 5e5541c..0eaefb8 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/LocateMeActivity.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
+@@ -1,6 +1,5 @@
+ package at.flausch_productions.amsprung;
+ 
+-import android.location.Location;
+ import android.os.AsyncTask;
+ import android.os.Bundle;
+ import android.support.design.widget.FloatingActionButton;
+@@ -10,18 +9,10 @@ import android.support.v7.widget.LinearLayoutManager;
+ import android.support.v7.widget.RecyclerView;
+ import android.support.v7.widget.Toolbar;
+ import android.view.View;
+-import android.webkit.WebView;
+-import android.widget.ListAdapter;
+ 
+-import java.util.List;
+-import java.util.Map;
+-import java.util.TreeMap;
+-
+-import at.flausch_productions.amsprung.persistance.StopModel;
+ import at.flausch_productions.amsprung.persistance.StopsHelper;
+-import timber.log.Timber;
+ 
+-public class LocateMeActivity extends AppCompatActivity {
++public class NearbyStopsActivity extends AppCompatActivity {
+ 
+     private static final double LAT = 48.20943;
+     private static final double LNG = 16.35615;
+@@ -35,7 +26,7 @@ public class LocateMeActivity extends AppCompatActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_locate_me);
++        setContentView(R.layout.activity_nearby_stops);
+         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+         setSupportActionBar(toolbar);
+ 
+@@ -58,7 +49,7 @@ public class LocateMeActivity extends AppCompatActivity {
+             @Override
+             protected NearestStopsAdapter doInBackground(Void... params) {
+ 
+-                cache = new StopsHelper.Cache(LocateMeActivity.this);
++                cache = new StopsHelper.Cache(NearbyStopsActivity.this);
+                 return new NearestStopsAdapter(cache, LNG, LAT);
+             }
+ 
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/StopActivity.java b/app/src/main/java/at/flausch_productions/amsprung/StopActivity.java
+index c899639..7738ca8 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/StopActivity.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/StopActivity.java
+@@ -1,7 +1,7 @@
+ package at.flausch_productions.amsprung;
+ 
+-import android.os.AsyncTask;
+ import android.os.Bundle;
++import android.os.Handler;
+ import android.support.design.widget.FloatingActionButton;
+ import android.support.design.widget.Snackbar;
+ import android.support.v7.app.AppCompatActivity;
+@@ -13,18 +13,15 @@ import android.webkit.WebView;
+ import android.widget.TextView;
+ 
+ import com.google.gson.Gson;
+-import com.koushikdutta.async.future.FutureCallback;
+-import com.koushikdutta.ion.Ion;
+ 
+-import java.util.ArrayList;
+-import java.util.Collections;
+ import java.util.List;
+ 
+ import at.flausch_productions.amsprung.persistance.StairModel;
+ import at.flausch_productions.amsprung.persistance.StopModel;
+ import at.flausch_productions.amsprung.persistance.StopsHelper;
++import at.flausch_productions.amsprung.util.OkHttpClientProvider;
++import at.flausch_productions.amsprung.wienerlinienapi.MonitorInfosForStairsAsyncTask;
+ import at.flausch_productions.amsprung.wienerlinienapi.MonitorInfoAsyncTask;
+-import timber.log.Timber;
+ 
+ public class StopActivity extends AppCompatActivity {
+ 
+@@ -38,6 +35,8 @@ public class StopActivity extends AppCompatActivity {
+ 
+     private WebView webView;
+ 
++    private Handler mainHandler;
++
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+@@ -45,6 +44,8 @@ public class StopActivity extends AppCompatActivity {
+         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+         setSupportActionBar(toolbar);
+ 
++        mainHandler = new Handler(getMainLooper());
++
+         FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
+         fab.setOnClickListener(new View.OnClickListener() {
+             @Override
+@@ -66,51 +67,27 @@ public class StopActivity extends AppCompatActivity {
+         layoutManager = new LinearLayoutManager(this);
+         recycler.setLayoutManager(layoutManager);
+ 
+-        new AsyncTask<Void,Void,Void>() {
++
++        cache = new StopsHelper.Cache(StopActivity.this);
++        final List<StairModel> stairs = StopsHelper.findStairsForStop(cache, stop);
++        new MonitorInfosForStairsAsyncTask(OkHttpClientProvider.get(this), new Gson()){
+             @Override
+-            protected Void doInBackground(Void... params) {
+-
+-                cache = new StopsHelper.Cache(StopActivity.this);
+-                final List<StairModel> stairs = StopsHelper.findStairsForStop(cache, stop);
+-
+-                final List<MonitorInfoAsyncTask.MonitorInfo> monitorInfos = Collections.synchronizedList(new ArrayList<MonitorInfoAsyncTask.MonitorInfo>());
+-
+-                if(stairs != null) {
+-                    for (StairModel stairModel : stairs) {
+-                        if (stairModel.getRbl() != 0) {
+-                            String url = "http://www.wienerlinien.at/ogd_realtime/monitor?rbl="
+-                                    + stairModel.getRbl()
+-                                    + "&activateTrafficInfo=stoerungkurz&activateTrafficInfo=stoerunglang&activateTrafficInfo=aufzugsinfo&sender=dKC5HXuVrj";
+-                            Ion.with(StopActivity.this).load(url).as(MonitorInfoAsyncTask.MonitorInfo.class).setCallback(new FutureCallback<MonitorInfoAsyncTask.MonitorInfo>() {
+-                                @Override
+-                                public void onCompleted(Exception e, MonitorInfoAsyncTask.MonitorInfo result) {
+-                                    if (e != null) {
+-                                        Timber.d(e, "could not get monitor info from server");
+-                                        monitorInfos.add(new MonitorInfoAsyncTask.MonitorInfo());
+-                                    } else {
+-                                        monitorInfos.add(result);
+-                                        Timber.d(new Gson().toJson(result));
+-                                    }
+-
+-                                    if (adapter == null) {
+-                                        adapter = new DeparturesAdapter(monitorInfos);
+-                                        recycler.setAdapter(adapter);
+-                                    } else {
+-                                        adapter = new DeparturesAdapter(monitorInfos);
+-                                        recycler.swapAdapter(adapter, true);
+-                                    }
+-                                }
+-                            });
+-                        }
+-                    }
++            protected void onPostExecute(List<MonitorInfoAsyncTask.MonitorInfo> monitorInfos) {
++                super.onPostExecute(monitorInfos);
++
++                if (adapter == null) {
++                    adapter = new DeparturesAdapter(monitorInfos);
++                    recycler.setAdapter(adapter);
++                } else {
++                    adapter = new DeparturesAdapter(monitorInfos);
++                    recycler.swapAdapter(adapter, true);
+                 }
+-
+-                return null;
+             }
+-        }.execute();
++        }.execute(stairs);
+ 
+         setTitle(stop.getName());
+         ((TextView)findViewById(R.id.stopCommune)).setText(stop.getCommuneName());
+     }
+ 
++
+ }
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/util/OkHttpClientProvider.java b/app/src/main/java/at/flausch_productions/amsprung/util/OkHttpClientProvider.java
+new file mode 100644
+index 0000000..5a3d68a
+--- /dev/null
++++ b/app/src/main/java/at/flausch_productions/amsprung/util/OkHttpClientProvider.java
+@@ -0,0 +1,73 @@
++package at.flausch_productions.amsprung.util;
++
++import android.content.Context;
++
++import info.guardianproject.netcipher.client.StrongBuilder;
++import info.guardianproject.netcipher.client.StrongOkHttpClientBuilder;
++import info.guardianproject.netcipher.proxy.OrbotHelper;
++import okhttp3.OkHttpClient;
++import timber.log.Timber;
++
++/**
++ * Created by uniq on 26.04.17.
++ */
++
++public class OkHttpClientProvider {
++
++    private static boolean torInit = false;
++    private static OkHttpClient torOkHttpClient = null;
++    private static OkHttpClient trackableOkHttpClient = null;
++
++    public static void initOrbot(Context context) {
++        torInit = OrbotHelper.get(context).init();
++
++        if (torInit) {
++            loadTorClient(context);
++        }
++    }
++
++    private static void loadTorClient(Context context){
++        try {
++            StrongOkHttpClientBuilder.forMaxSecurity(context).withWeakCiphers().build(new StrongBuilder.Callback<OkHttpClient>() {
++                @Override
++                public void onConnected(OkHttpClient okHttpClient) {
++                    OkHttpClientProvider.torOkHttpClient = okHttpClient;
++                    Timber.d("torOkHttpClient ready");
++                }
++
++                @Override
++                public void onConnectionException(Exception e) {
++                    Timber.w(e, "torOkHttpClient could not be instantiated");
++                }
++
++                @Override
++                public void onTimeout() {
++                    Timber.w("torOkHttpClient builder timed out");
++                }
++
++                @Override
++                public void onInvalid() {
++                    Timber.w("torOkHttpClient builder returned onInvalid");
++                }
++            });
++        } catch (Exception e) {
++            e.printStackTrace();
++        }
++    }
++
++    public static OkHttpClient get(Context context){
++        OrbotHelper.get(context).init();
++
++        if (torOkHttpClient != null) {
++            Timber.i("using torOkHttpClient");
++            return torOkHttpClient;
++        } else {
++            if (trackableOkHttpClient == null) {
++                trackableOkHttpClient = new OkHttpClient.Builder().build();
++            }
++            Timber.i("using trackableOkHttpClient");
++            return trackableOkHttpClient;
++        }
++    }
++
++}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfoAsyncTask.java b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfoAsyncTask.java
+index 77d6787..b021c36 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfoAsyncTask.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfoAsyncTask.java
+@@ -14,7 +14,7 @@ import timber.log.Timber;
+ /**
+  * Created by uniq on 18.09.15.
+  */
+-public class MonitorInfoAsyncTask extends WienerLinienApiAsyncTask<Integer, List<MonitorInfoAsyncTask.MonitorInfo>> {
++public class MonitorInfoAsyncTask extends WienerLinienApiAsyncTask<Integer, Void, List<MonitorInfoAsyncTask.MonitorInfo>> {
+ 
+     @Override
+     protected List<MonitorInfo> doInBackground(Integer... ints) {
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfosForStairsAsyncTask.java b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfosForStairsAsyncTask.java
+new file mode 100644
+index 0000000..a38d5d4
+--- /dev/null
++++ b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/MonitorInfosForStairsAsyncTask.java
+@@ -0,0 +1,64 @@
++package at.flausch_productions.amsprung.wienerlinienapi;
++
++import com.google.gson.Gson;
++
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.List;
++
++import at.flausch_productions.amsprung.persistance.StairModel;
++import at.flausch_productions.amsprung.persistance.StopModel;
++import at.flausch_productions.amsprung.persistance.StopsHelper;
++import at.flausch_productions.amsprung.util.OkHttpClientProvider;
++import okhttp3.OkHttpClient;
++import okhttp3.Request;
++import okhttp3.Response;
++import timber.log.Timber;
++
++/**
++ * Created by uniq on 26.04.17.
++ */
++
++public class MonitorInfosForStairsAsyncTask extends WienerLinienApiAsyncTask<List<StairModel>, Void, List<MonitorInfoAsyncTask.MonitorInfo>>{
++
++    private final OkHttpClient okHttpClient;
++    private final Gson gson;
++
++    public MonitorInfosForStairsAsyncTask(OkHttpClient okHttpClient, Gson gson) {
++        this.okHttpClient = okHttpClient;
++        this.gson = gson;
++    }
++
++    @Override
++    protected List<MonitorInfoAsyncTask.MonitorInfo> doInBackground(List<StairModel>... params) {
++        List<MonitorInfoAsyncTask.MonitorInfo> monitorInfos = new ArrayList<MonitorInfoAsyncTask.MonitorInfo>();
++        if (params != null) {
++            for (List<StairModel> stairs : params) {
++                if (stairs != null) {
++                    for (StairModel stair : stairs) {
++                        if (stair != null && stair.getRbl() != 0) {
++                            final String url = API_BASE_URL + "?rbl="
++                                    + stair.getRbl()
++                                    + "&activateTrafficInfo=stoerungkurz&activateTrafficInfo=stoerunglang&activateTrafficInfo=aufzugsinfo&sender=dKC5HXuVrj";
++                            Timber.v("url: %s", url);
++
++                            Request request = new Request.Builder().url(url).build();
++                            try {
++                                Response response = okHttpClient.newCall(request).execute();
++                                String responseString = response.body().string();
++                                Timber.v("response: %s", responseString);
++                                MonitorInfoAsyncTask.MonitorInfo i = gson.fromJson(responseString, MonitorInfoAsyncTask.MonitorInfo.class);
++                                if (i != null){
++                                    monitorInfos.add(i);
++                                }
++                            } catch (IOException e) {
++                                Timber.e(e, "http request failed");
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        return monitorInfos;
++    }
++}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/WienerLinienApiAsyncTask.java b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/WienerLinienApiAsyncTask.java
+index f3f554e..f68ccf5 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/WienerLinienApiAsyncTask.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/WienerLinienApiAsyncTask.java
+@@ -21,8 +21,8 @@ import timber.log.Timber;
+ /**
+  * Created by uniq on 18.09.15.
+  */
+-public abstract class WienerLinienApiAsyncTask<Param, Result> extends AsyncTask<Param, Void, Result>{
++public abstract class WienerLinienApiAsyncTask<Param, TmpResult, Result> extends AsyncTask<Param, TmpResult, Result>{
+ 
+-    public static final String API_BASE_URL = "http://www.wienerlinien.at/ogd_realtime/monitor";
++    public static final String API_BASE_URL = "https://www.wienerlinien.at/ogd_realtime/monitor";
+ 
+ }

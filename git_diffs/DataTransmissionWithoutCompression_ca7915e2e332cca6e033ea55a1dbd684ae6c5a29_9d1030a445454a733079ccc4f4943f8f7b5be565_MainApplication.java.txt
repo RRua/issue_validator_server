@@ -1,0 +1,691 @@
+diff --git a/android/app/src/debug/java/com/mattermost/flipper/ReactNativeFlipper.java b/android/app/src/debug/java/com/mattermost/flipper/ReactNativeFlipper.java
+deleted file mode 100644
+index f67cd6321..000000000
+--- a/android/app/src/debug/java/com/mattermost/flipper/ReactNativeFlipper.java
++++ /dev/null
+@@ -1,63 +0,0 @@
+-/**
+- * Copyright (c) Meta Platforms, Inc. and affiliates.
+- *
+- * <p>This source code is licensed under the MIT license found in the LICENSE file in the root
+- * directory of this source tree.
+- */
+-package com.mattermost.flipper;
+-
+-import android.content.Context;
+-import com.facebook.flipper.android.AndroidFlipperClient;
+-import com.facebook.flipper.android.utils.FlipperUtils;
+-import com.facebook.flipper.core.FlipperClient;
+-import com.facebook.flipper.plugins.crashreporter.CrashReporterPlugin;
+-import com.facebook.flipper.plugins.databases.DatabasesFlipperPlugin;
+-import com.facebook.flipper.plugins.fresco.FrescoFlipperPlugin;
+-import com.facebook.flipper.plugins.inspector.DescriptorMapping;
+-import com.facebook.flipper.plugins.inspector.InspectorFlipperPlugin;
+-import com.facebook.flipper.plugins.network.FlipperOkhttpInterceptor;
+-import com.facebook.flipper.plugins.network.NetworkFlipperPlugin;
+-import com.facebook.flipper.plugins.sharedpreferences.SharedPreferencesFlipperPlugin;
+-import com.facebook.react.ReactInstanceEventListener;
+-import com.facebook.react.ReactInstanceManager;
+-import com.facebook.react.bridge.ReactContext;
+-import com.facebook.react.modules.network.NetworkingModule;
+-import com.mattermost.networkclient.RCTOkHttpClientFactory;
+-
+-/**
+- * Class responsible of loading Flipper inside your React Native application. This is the debug
+- * flavor of it. Here you can add your own plugins and customize the Flipper setup.
+- */
+-public class ReactNativeFlipper {
+-  public static void initializeFlipper(Context context, ReactInstanceManager reactInstanceManager) {
+-    if (FlipperUtils.shouldEnableFlipper(context)) {
+-      final FlipperClient client = AndroidFlipperClient.getInstance(context);
+-      client.addPlugin(new InspectorFlipperPlugin(context, DescriptorMapping.withDefaults()));
+-      client.addPlugin(new DatabasesFlipperPlugin(context));
+-      client.addPlugin(new SharedPreferencesFlipperPlugin(context));
+-      client.addPlugin(CrashReporterPlugin.getInstance());
+-      NetworkFlipperPlugin networkFlipperPlugin = new NetworkFlipperPlugin();
+-      RCTOkHttpClientFactory.Companion.setFlipperPlugin(networkFlipperPlugin);
+-      NetworkingModule.setCustomClientBuilder(
+-              builder -> builder.addNetworkInterceptor(new FlipperOkhttpInterceptor(networkFlipperPlugin)));
+-      client.addPlugin(networkFlipperPlugin);
+-      client.start();
+-      // Fresco Plugin needs to ensure that ImagePipelineFactory is initialized
+-      // Hence we run if after all native modules have been initialized
+-      ReactContext reactContext = reactInstanceManager.getCurrentReactContext();
+-      if (reactContext == null) {
+-        reactInstanceManager.addReactInstanceEventListener(
+-            new ReactInstanceEventListener() {
+-              @Override
+-              public void onReactContextInitialized(ReactContext reactContext) {
+-                reactInstanceManager.removeReactInstanceEventListener(this);
+-                reactContext.runOnNativeModulesQueueThread(
+-                        () -> client.addPlugin(new FrescoFlipperPlugin()));
+-              }
+-            });
+-      } else {
+-        client.addPlugin(new FrescoFlipperPlugin());
+-      }
+-    }
+-  }
+-}
+diff --git a/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.java b/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.java
+deleted file mode 100644
+index 3f0efc13e..000000000
+--- a/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.java
++++ /dev/null
+@@ -1,106 +0,0 @@
+-package com.mattermost.rnbeta;
+-
+-import android.os.Bundle;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-
+-import android.view.KeyEvent;
+-import android.content.res.Configuration;
+-
+-import com.facebook.react.ReactActivityDelegate;
+-import com.reactnativenavigation.NavigationActivity;
+-import com.github.emilioicai.hwkeyboardevent.HWKeyboardEventModule;
+-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
+-import com.facebook.react.defaults.DefaultReactActivityDelegate;
+-
+-import java.util.Objects;
+-
+-public class MainActivity extends NavigationActivity {
+-    private boolean HWKeyboardConnected = false;
+-    private final FoldableObserver foldableObserver = FoldableObserver.Companion.getInstance(this);
+-
+-    @Override
+-    protected String getMainComponentName() {
+-        return "Mattermost";
+-    }
+-
+-    /**
+-     * Returns the instance of the {@link ReactActivityDelegate}. Here we use a util class {@link
+-     * DefaultReactActivityDelegate} which allows you to easily enable Fabric and Concurrent React
+-     * (aka React 18) with two boolean flags.
+-     */
+-    @Override
+-    protected ReactActivityDelegate createReactActivityDelegate() {
+-        return new DefaultReactActivityDelegate(
+-                this,
+-                Objects.requireNonNull(getMainComponentName()),
+-                // If you opted-in for the New Architecture, we enable the Fabric Renderer.
+-                DefaultNewArchitectureEntryPoint.getFabricEnabled());
+-    }
+-
+-    @Override
+-    protected void onCreate(@Nullable Bundle savedInstanceState) {
+-        super.onCreate(null);
+-        setContentView(R.layout.launch_screen);
+-        setHWKeyboardConnected();
+-        foldableObserver.onCreate();
+-    }
+-
+-    @Override
+-    protected void onStart() {
+-        super.onStart();
+-        foldableObserver.onStart();
+-    }
+-
+-    @Override
+-    protected void onStop() {
+-        super.onStop();
+-        foldableObserver.onStop();
+-    }
+-
+-    @Override
+-    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-
+-        if (newConfig.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO) {
+-            HWKeyboardConnected = true;
+-        } else if (newConfig.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_YES) {
+-            HWKeyboardConnected = false;
+-        }
+-    }
+-
+-    @Override
+-    public void onWindowFocusChanged(boolean hasFocus) {
+-        super.onWindowFocusChanged(hasFocus);
+-        getReactGateway().onWindowFocusChanged(hasFocus);
+-    }
+-
+-    /*
+-    https://mattermost.atlassian.net/browse/MM-10601
+-    Required by react-native-hw-keyboard-event
+-    (https://github.com/emilioicai/react-native-hw-keyboard-event)
+-    */
+-    @Override
+-    public boolean dispatchKeyEvent(KeyEvent event) {
+-        if (HWKeyboardConnected) {
+-            int keyCode = event.getKeyCode();
+-            int keyAction = event.getAction();
+-            if (keyAction == KeyEvent.ACTION_UP) {
+-                if (keyCode == KeyEvent.KEYCODE_ENTER) {
+-                    String keyPressed = event.isShiftPressed() ? "shift-enter" : "enter";
+-                    HWKeyboardEventModule.getInstance().keyPressed(keyPressed);
+-                    return true;
+-                } else if (keyCode == KeyEvent.KEYCODE_K && event.isCtrlPressed()) {
+-                    HWKeyboardEventModule.getInstance().keyPressed("find-channels");
+-                    return true;
+-                }
+-            }
+-        }
+-        return super.dispatchKeyEvent(event);
+-    }
+-
+-    private void setHWKeyboardConnected() {
+-        HWKeyboardConnected = getResources().getConfiguration().keyboard == Configuration.KEYBOARD_QWERTY;
+-    }
+-}
+diff --git a/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.kt b/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.kt
+new file mode 100644
+index 000000000..720bc5666
+--- /dev/null
++++ b/android/app/src/main/java/com/mattermost/rnbeta/MainActivity.kt
+@@ -0,0 +1,89 @@
++package com.mattermost.rnbeta
++
++import android.os.Bundle
++
++import android.view.KeyEvent
++import android.content.res.Configuration
++
++import com.facebook.react.ReactActivityDelegate
++import com.reactnativenavigation.NavigationActivity
++import com.github.emilioicai.hwkeyboardevent.HWKeyboardEventModule
++import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
++import com.facebook.react.defaults.DefaultReactActivityDelegate
++
++class MainActivity : NavigationActivity() {
++    private var HWKeyboardConnected = false
++    private val foldableObserver = FoldableObserver.getInstance(this)
++
++    /**
++     * Returns the name of the main component registered from JavaScript. This is used to schedule
++     * rendering of the component.
++     */
++    override fun getMainComponentName(): String = "Mattermost"
++
++    /**
++     * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]
++     * which allows you to enable New Architecture with a single boolean flags [fabricEnabled]
++     */
++    override fun createReactActivityDelegate(): ReactActivityDelegate =
++        DefaultReactActivityDelegate(this, mainComponentName, DefaultNewArchitectureEntryPoint.fabricEnabled)
++
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(null)
++        setContentView(R.layout.launch_screen)
++        setHWKeyboardConnected()
++        foldableObserver.onCreate()
++    }
++
++    override fun onStart() {
++        super.onStart()
++        foldableObserver.onStart()
++    }
++
++    override fun onStop() {
++        super.onStop()
++        foldableObserver.onStop()
++    }
++
++    override fun onConfigurationChanged(newConfig: Configuration) {
++        super.onConfigurationChanged(newConfig)
++        if (newConfig.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO) {
++            HWKeyboardConnected = true
++        } else if (newConfig.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_YES) {
++            HWKeyboardConnected = false
++        }
++    }
++
++    override fun onWindowFocusChanged(hasFocus: Boolean) {
++        super.onWindowFocusChanged(hasFocus)
++        reactGateway.onWindowFocusChanged(hasFocus)
++    }
++
++    /*
++    https://mattermost.atlassian.net/browse/MM-10601
++    Required by react-native-hw-keyboard-event
++    (https://github.com/emilioicai/react-native-hw-keyboard-event)
++    */
++    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
++        if (HWKeyboardConnected) {
++            val keyCode = event.keyCode
++            val keyAction = event.action
++            if (keyAction == KeyEvent.ACTION_UP) {
++                if (keyCode == KeyEvent.KEYCODE_ENTER) {
++                    val keyPressed = if (event.isShiftPressed) "shift-enter" else "enter"
++                    HWKeyboardEventModule.getInstance().keyPressed(keyPressed)
++                    return true
++                } else if (keyCode == KeyEvent.KEYCODE_K && event.isCtrlPressed) {
++                    HWKeyboardEventModule.getInstance().keyPressed("find-channels")
++                    return true
++                }
++            }
++        }
++        return super.dispatchKeyEvent(event)
++    }
++
++    private fun setHWKeyboardConnected() {
++        HWKeyboardConnected = getResources().configuration.keyboard == Configuration.KEYBOARD_QWERTY
++    }
++}
+diff --git a/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.java b/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.java
+deleted file mode 100644
+index cd817a0e8..000000000
+--- a/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.java
++++ /dev/null
+@@ -1,161 +0,0 @@
+-package com.mattermost.rnbeta;
+-
+-import android.content.Context;
+-import android.os.Bundle;
+-import android.util.Log;
+-
+-import java.io.File;
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-
+-import com.mattermost.helpers.RealPathUtil;
+-import com.mattermost.share.ShareModule;
+-import com.wix.reactnativenotifications.RNNotificationsPackage;
+-
+-import com.reactnativenavigation.NavigationApplication;
+-import com.wix.reactnativenotifications.core.notification.INotificationsApplication;
+-import com.wix.reactnativenotifications.core.notification.IPushNotification;
+-import com.wix.reactnativenotifications.core.AppLaunchHelper;
+-import com.wix.reactnativenotifications.core.AppLifecycleFacade;
+-import com.wix.reactnativenotifications.core.JsIOHelper;
+-
+-import com.facebook.react.PackageList;
+-import com.facebook.react.ReactPackage;
+-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint;
+-import com.facebook.react.defaults.DefaultReactNativeHost;
+-import com.facebook.react.ReactNativeHost;
+-import com.facebook.react.TurboReactPackage;
+-import com.facebook.react.bridge.JSIModuleSpec;
+-import com.facebook.react.bridge.NativeModule;
+-import com.facebook.react.bridge.ReactApplicationContext;
+-import com.facebook.react.bridge.JSIModulePackage;
+-import com.facebook.react.module.model.ReactModuleInfo;
+-import com.facebook.react.module.model.ReactModuleInfoProvider;
+-import com.facebook.react.modules.network.OkHttpClientProvider;
+-import com.facebook.soloader.SoLoader;
+-
+-import com.mattermost.flipper.ReactNativeFlipper;
+-import com.mattermost.networkclient.RCTOkHttpClientFactory;
+-import com.nozbe.watermelondb.jsi.WatermelonDBJSIPackage;
+-
+-public class MainApplication extends NavigationApplication implements INotificationsApplication {
+-  public static MainApplication instance;
+-
+-  public Boolean sharedExtensionIsOpened = false;
+-  private final ReactNativeHost mReactNativeHost =
+-    new DefaultReactNativeHost(this) {
+-      @Override
+-      public boolean getUseDeveloperSupport() {
+-        return BuildConfig.DEBUG;
+-      }
+-
+-      @Override
+-      protected List<ReactPackage> getPackages() {
+-        List<ReactPackage> packages = new PackageList(this).getPackages();
+-        // Packages that cannot be autolinked yet can be added manually here, for example:
+-        // packages.add(new MyReactNativePackage());
+-        packages.add(new RNNotificationsPackage(MainApplication.this));
+-
+-
+-        packages.add(
+-          new TurboReactPackage() {
+-                @Override
+-                public NativeModule getModule(String name, ReactApplicationContext reactContext) {
+-                  switch (name) {
+-                  case "MattermostManaged":
+-                      return MattermostManagedModule.getInstance(reactContext);
+-                  case "MattermostShare":
+-                    return ShareModule.getInstance(reactContext);
+-                  case "Notifications":
+-                    return NotificationsModule.getInstance(instance, reactContext);
+-                  case "SplitView":
+-                      return SplitViewModule.Companion.getInstance(reactContext);
+-                  default:
+-                    throw new IllegalArgumentException("Could not find module " + name);
+-                  }
+-                }
+-
+-                @Override
+-                public ReactModuleInfoProvider getReactModuleInfoProvider() {
+-                  return () -> {
+-                    Map<String, ReactModuleInfo> map = new HashMap<>();
+-                    map.put("MattermostManaged", new ReactModuleInfo("MattermostManaged", "com.mattermost.rnbeta.MattermostManagedModule", false, false, false, false, false));
+-                    map.put("MattermostShare", new ReactModuleInfo("MattermostShare", "com.mattermost.share.ShareModule", false, false, true, false, false));
+-                    map.put("Notifications", new ReactModuleInfo("Notifications", "com.mattermost.rnbeta.NotificationsModule", false, false, false, false, false));
+-                    map.put("SplitView", new ReactModuleInfo("SplitView", "com.mattermost.rnbeta.SplitViewModule", false, false, false, false, false));
+-                    return map;
+-                  };
+-                }
+-              }
+-        );
+-
+-        return packages;
+-      }
+-
+-      @Override
+-      protected JSIModulePackage getJSIModulePackage() {
+-        return (reactApplicationContext, jsContext) -> {
+-          List<JSIModuleSpec> modules = Collections.emptyList();
+-          modules.addAll(new WatermelonDBJSIPackage().getJSIModules(reactApplicationContext, jsContext));
+-
+-          return modules;
+-        };
+-      }
+-
+-      @Override
+-      protected String getJSMainModuleName() {
+-        return "index";
+-      }
+-
+-        @Override
+-        protected boolean isNewArchEnabled() {
+-            return BuildConfig.IS_NEW_ARCHITECTURE_ENABLED;
+-        }
+-        @Override
+-        protected Boolean isHermesEnabled() {
+-            return BuildConfig.IS_HERMES_ENABLED;
+-        }
+-    };
+-
+-  @Override
+-  public ReactNativeHost getReactNativeHost() {
+-    return mReactNativeHost;
+-  }
+-
+-  @Override
+-  public void onCreate() {
+-    super.onCreate();
+-    instance = this;
+-    Context context = getApplicationContext();
+-
+-    // Delete any previous temp files created by the app
+-    File tempFolder = new File(context.getCacheDir(), RealPathUtil.CACHE_DIR_NAME);
+-    RealPathUtil.deleteTempFiles(tempFolder);
+-    Log.i("ReactNative", "Cleaning temp cache " + tempFolder.getAbsolutePath());
+-
+-    // Tells React Native to use our RCTOkHttpClientFactory which builds an OKHttpClient
+-    // with a cookie jar defined in APIClientModule and an interceptor to intercept all
+-    // requests that originate from React Native's OKHttpClient
+-    OkHttpClientProvider.setOkHttpClientFactory(new RCTOkHttpClientFactory());
+-
+-      SoLoader.init(this, /* native exopackage */ false);
+-      if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
+-          // If you opted-in for the New Architecture, we load the native entry point for this app.
+-          DefaultNewArchitectureEntryPoint.load();
+-      }
+-      ReactNativeFlipper.initializeFlipper(this, getReactNativeHost().getReactInstanceManager());
+-  }
+-
+-  @Override
+-  public IPushNotification getPushNotification(Context context, Bundle bundle, AppLifecycleFacade defaultFacade, AppLaunchHelper defaultAppLaunchHelper) {
+-    return new CustomPushNotification(
+-            context,
+-            bundle,
+-            defaultFacade,
+-            defaultAppLaunchHelper,
+-            new JsIOHelper()
+-    );
+-  }
+-}
+diff --git a/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.kt b/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.kt
+new file mode 100644
+index 000000000..b8767cba4
+--- /dev/null
++++ b/android/app/src/main/java/com/mattermost/rnbeta/MainApplication.kt
+@@ -0,0 +1,183 @@
++package com.mattermost.rnbeta
++
++import android.content.Context
++import android.os.Bundle
++import android.util.Log
++
++import com.facebook.react.PackageList
++import com.facebook.react.ReactHost
++import com.facebook.react.ReactNativeHost
++import com.facebook.react.ReactPackage
++import com.facebook.react.TurboReactPackage
++import com.facebook.react.bridge.JSIModulePackage
++import com.facebook.react.bridge.JSIModuleSpec
++import com.facebook.react.bridge.JavaScriptContextHolder
++import com.facebook.react.bridge.NativeModule
++import com.facebook.react.bridge.ReactApplicationContext
++import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
++import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
++import com.facebook.react.defaults.DefaultReactNativeHost
++import com.facebook.react.flipper.ReactNativeFlipper
++import com.facebook.react.module.model.ReactModuleInfo
++import com.facebook.react.module.model.ReactModuleInfoProvider
++import com.facebook.react.modules.network.OkHttpClientProvider
++import com.facebook.soloader.SoLoader
++
++import com.mattermost.helpers.RealPathUtil
++import com.mattermost.networkclient.RCTOkHttpClientFactory
++import com.mattermost.share.ShareModule
++
++import com.nozbe.watermelondb.jsi.WatermelonDBJSIPackage
++
++import com.reactnativenavigation.NavigationApplication
++
++import com.wix.reactnativenotifications.RNNotificationsPackage
++import com.wix.reactnativenotifications.core.AppLaunchHelper
++import com.wix.reactnativenotifications.core.AppLifecycleFacade
++import com.wix.reactnativenotifications.core.JsIOHelper
++import com.wix.reactnativenotifications.core.notification.INotificationsApplication
++import com.wix.reactnativenotifications.core.notification.IPushNotification
++
++import java.io.File
++
++class MainApplication : NavigationApplication(), INotificationsApplication {
++    var instance: MainApplication? = null
++    var sharedExtensionIsOpened = false
++
++    override val reactNativeHost: ReactNativeHost =
++        object : DefaultReactNativeHost(this) {
++            override fun getPackages(): List<ReactPackage> =
++                PackageList(this).packages.apply {
++                    // Packages that cannot be autolinked yet can be added manually here, for example:
++                    // add(MyReactNativePackage())
++                    add(RNNotificationsPackage(this@MainApplication))
++                    add(object : TurboReactPackage() {
++                        override fun getModule(
++                            name: String,
++                            reactContext: ReactApplicationContext
++                        ): NativeModule {
++                            return when (name) {
++                                "MattermostManaged" -> MattermostManagedModule.getInstance(
++                                    reactContext
++                                )
++                                "MattermostShare" -> ShareModule.getInstance(reactContext)
++                                "Notifications" -> NotificationsModule.getInstance(
++                                    instance,
++                                    reactContext
++                                )
++                                "SplitView" -> SplitViewModule.getInstance(
++                                    reactContext
++                                )
++                                else ->
++                                    throw IllegalArgumentException("Could not find module $name")
++                            }
++                        }
++
++                        override fun getReactModuleInfoProvider(): ReactModuleInfoProvider {
++                            return ReactModuleInfoProvider {
++                                val map: MutableMap<String, ReactModuleInfo> = java.util.HashMap()
++                                map["MattermostManaged"] = ReactModuleInfo(
++                                    "MattermostManaged",
++                                    "com.mattermost.rnbeta.MattermostManagedModule",
++                                    false,
++                                    false,
++                                    false,
++                                    false
++                                )
++                                map["MattermostShare"] = ReactModuleInfo(
++                                    "MattermostShare",
++                                    "com.mattermost.share.ShareModule",
++                                    false,
++                                    false,
++                                    false,
++                                    false
++                                )
++                                map["Notifications"] = ReactModuleInfo(
++                                    "Notifications",
++                                    "com.mattermost.rnbeta.NotificationsModule",
++                                    false,
++                                    false,
++                                    false,
++                                    false
++                                )
++                                map["SplitView"] = ReactModuleInfo(
++                                    "SplitView",
++                                    "com.mattermost.rnbeta.SplitViewModule",
++                                    false,
++                                    false,
++                                    false,
++                                    false
++                                )
++                                map
++                            }
++                        }
++                    })
++                }
++
++            override fun getJSIModulePackage(): JSIModulePackage {
++                return JSIModulePackage { reactApplicationContext: ReactApplicationContext?, jsContext: JavaScriptContextHolder? ->
++                    val modules =
++                        mutableListOf<JSIModuleSpec<*>>()
++                    modules.addAll(
++                        WatermelonDBJSIPackage().getJSIModules(
++                            reactApplicationContext,
++                            jsContext
++                        )
++                    )
++                    modules
++                }
++            }
++
++            override fun getJSMainModuleName(): String = "index"
++
++            override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
++
++            override val isNewArchEnabled: Boolean = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
++            override val isHermesEnabled: Boolean = BuildConfig.IS_HERMES_ENABLED
++        }
++
++    override val reactHost: ReactHost
++        get() = getDefaultReactHost(this.applicationContext, reactNativeHost)
++
++    override fun onCreate() {
++        super.onCreate()
++        instance = this
++        val context: Context = applicationContext
++
++        // Delete any previous temp files created by the app
++        val tempFolder = File(context.cacheDir, RealPathUtil.CACHE_DIR_NAME)
++        RealPathUtil.deleteTempFiles(tempFolder)
++        Log.i("ReactNative", "Cleaning temp cache " + tempFolder.absolutePath)
++
++        // Tells React Native to use our RCTOkHttpClientFactory which builds an OKHttpClient
++        // with a cookie jar defined in APIClientModule and an interceptor to intercept all
++        // requests that originate from React Native's OKHttpClient
++
++        // Tells React Native to use our RCTOkHttpClientFactory which builds an OKHttpClient
++        // with a cookie jar defined in APIClientModule and an interceptor to intercept all
++        // requests that originate from React Native's OKHttpClient
++        OkHttpClientProvider.setOkHttpClientFactory(RCTOkHttpClientFactory())
++
++        SoLoader.init(this, false)
++        if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
++            // If you opted-in for the New Architecture, we load the native entry point for this app.
++            load()
++        }
++        ReactNativeFlipper.initializeFlipper(this, reactNativeHost.reactInstanceManager)
++    }
++
++    override fun getPushNotification(
++        context: Context?,
++        bundle: Bundle?,
++        defaultFacade: AppLifecycleFacade?,
++        defaultAppLaunchHelper: AppLaunchHelper?
++    ): IPushNotification {
++        return CustomPushNotification(
++            context,
++            bundle,
++            defaultFacade,
++            defaultAppLaunchHelper,
++            JsIOHelper()
++        )
++    }
++}
+diff --git a/android/app/src/main/java/com/mattermost/share/ShareActivity.java b/android/app/src/main/java/com/mattermost/share/ShareActivity.java
+index 573f9ac83..7f9d19cae 100644
+--- a/android/app/src/main/java/com/mattermost/share/ShareActivity.java
++++ b/android/app/src/main/java/com/mattermost/share/ShareActivity.java
+@@ -15,6 +15,6 @@ public class ShareActivity extends ReactActivity {
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         MainApplication app = (MainApplication) this.getApplication();
+-        app.sharedExtensionIsOpened = true;
++        app.setSharedExtensionIsOpened(true);
+     }
+ }
+diff --git a/android/app/src/main/java/com/mattermost/share/ShareModule.java b/android/app/src/main/java/com/mattermost/share/ShareModule.java
+index fc9bad103..e97f36639 100644
+--- a/android/app/src/main/java/com/mattermost/share/ShareModule.java
++++ b/android/app/src/main/java/com/mattermost/share/ShareModule.java
+@@ -100,7 +100,7 @@ public class ShareModule extends ReactContextBaseJavaModule {
+     public Map<String, Object> getConstants() {
+         HashMap<String, Object> constants = new HashMap<>(1);
+         constants.put("cacheDirName", RealPathUtil.CACHE_DIR_NAME);
+-        constants.put("isOpened", mApplication.sharedExtensionIsOpened);
++        constants.put("isOpened", mApplication.getSharedExtensionIsOpened());
+         return constants;
+     }
+ 
+@@ -130,7 +130,7 @@ public class ShareModule extends ReactContextBaseJavaModule {
+             }
+         }
+ 
+-        mApplication.sharedExtensionIsOpened = false;
++        mApplication.setSharedExtensionIsOpened(false);
+         RealPathUtil.deleteTempFiles(this.tempFolder);
+     }
+ 
+diff --git a/android/app/src/release/java/com/mattermost/flipper/ReactNativeFlipper.java b/android/app/src/release/java/com/mattermost/flipper/ReactNativeFlipper.java
+deleted file mode 100644
+index ae3179b7c..000000000
+--- a/android/app/src/release/java/com/mattermost/flipper/ReactNativeFlipper.java
++++ /dev/null
+@@ -1,19 +0,0 @@
+-/**
+- * Copyright (c) Meta Platforms, Inc. and affiliates.
+- *
+- * <p>This source code is licensed under the MIT license found in the LICENSE file in the root
+- * directory of this source tree.
+- */
+-package com.mattermost.flipper;
+-
+-import android.content.Context;
+-import com.facebook.react.ReactInstanceManager;
+-/**
+- * Class responsible of loading Flipper inside your React Native application. This is the release
+- * flavor of it so it's empty as we don't want to load Flipper.
+- */
+-public class ReactNativeFlipper {
+-    public static void initializeFlipper(Context context, ReactInstanceManager reactInstanceManager) {
+-        // Do nothing as we don't want to initialize Flipper on Release.
+-    }
+-}

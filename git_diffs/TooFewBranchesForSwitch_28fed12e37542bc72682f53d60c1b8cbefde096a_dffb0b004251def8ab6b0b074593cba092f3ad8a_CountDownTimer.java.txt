@@ -1,0 +1,987 @@
+diff --git a/app/src/main/java/com/chess/clock/dialog/EditStageDialogFragment.java b/app/src/main/java/com/chess/clock/dialog/EditStageDialogFragment.java
+index a69173d..8200e4c 100644
+--- a/app/src/main/java/com/chess/clock/dialog/EditStageDialogFragment.java
++++ b/app/src/main/java/com/chess/clock/dialog/EditStageDialogFragment.java
+@@ -32,10 +32,8 @@ public class EditStageDialogFragment extends FullScreenDialogFragment
+ 
+     public static final String TAG = "EditStageDialogFragment";
+     private static final String ARG_STAGE_KEY = "arg_stage_key";
+-    private static final String ARG_TIME_INCREMENT_KEY = "arg_time_increment_key";
+ 
+     private Stage stage;
+-    private TimeIncrement timeIncrement;
+ 
+     EditText hoursEt;
+     EditText minutesEt;
+@@ -48,11 +46,10 @@ public class EditStageDialogFragment extends FullScreenDialogFragment
+         return R.layout.dialog_fragment_edit_stage;
+     }
+ 
+-    public static EditStageDialogFragment newInstance(Stage stage, TimeIncrement timeIncrement) {
++    public static EditStageDialogFragment newInstance(Stage stage) {
+ 
+         Bundle args = new Bundle();
+         args.putParcelable(ARG_STAGE_KEY, stage);
+-        args.putParcelable(ARG_TIME_INCREMENT_KEY, timeIncrement);
+ 
+         EditStageDialogFragment fragment = new EditStageDialogFragment();
+         fragment.setArguments(args);
+@@ -62,11 +59,11 @@ public class EditStageDialogFragment extends FullScreenDialogFragment
+     @Nullable
+     @Override
+     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+-        stage = requireArguments().getParcelable(ARG_STAGE_KEY);
++
+         if (savedInstanceState == null) {
+-            timeIncrement = requireArguments().getParcelable(ARG_TIME_INCREMENT_KEY);
++            stage = requireArguments().getParcelable(ARG_STAGE_KEY);
+         } else {
+-            timeIncrement = savedInstanceState.getParcelable(ARG_TIME_INCREMENT_KEY);
++            stage = savedInstanceState.getParcelable(ARG_STAGE_KEY);
+         }
+ 
+         return super.onCreateView(inflater, container, savedInstanceState);
+@@ -84,10 +81,10 @@ public class EditStageDialogFragment extends FullScreenDialogFragment
+         );
+ 
+         timeIncrementDetailsTv = view.findViewById(R.id.incrementDetailsTv);
+-        timeIncrementDetailsTv.setText(timeIncrement.toString());
++        timeIncrementDetailsTv.setText(stage.getTimeIncrement().toString());
+ 
+         view.findViewById(R.id.incrementLay).setOnClickListener(v -> {
+-            DialogFragment dialogFragment = EditTimeIncrementDialogFragment.newInstance(timeIncrement);
++            DialogFragment dialogFragment = EditTimeIncrementDialogFragment.newInstance(stage.getTimeIncrement());
+             dialogFragment.show(getChildFragmentManager(), EditTimeIncrementDialogFragment.TAG);
+         });
+ 
+@@ -164,18 +161,15 @@ public class EditStageDialogFragment extends FullScreenDialogFragment
+ 
+     @Override
+     public void onTimeIncrementEditDone(TimeIncrement.Type type, long time) {
+-        ((EditTimeIncrementDialogFragment.OnTimeIncrementEditListener) requireParentFragment())
+-                .onTimeIncrementEditDone(type, time);
+-
+-        timeIncrement.setType(type);
+-        timeIncrement.setValue(time);
+-        timeIncrementDetailsTv.setText(timeIncrement.toString());
++        TimeIncrement increment = new TimeIncrement(type, time);
++        stage.setTimeIncrement(increment);
++        timeIncrementDetailsTv.setText(increment.toString());
+     }
+ 
+     @Override
+     public void onSaveInstanceState(@NonNull Bundle outState) {
+         super.onSaveInstanceState(outState);
+-        outState.putParcelable(ARG_TIME_INCREMENT_KEY, timeIncrement);
++        outState.putParcelable(ARG_STAGE_KEY, stage);
+     }
+ 
+     /**
+diff --git a/app/src/main/java/com/chess/clock/dialog/EditTimeIncrementDialogFragment.java b/app/src/main/java/com/chess/clock/dialog/EditTimeIncrementDialogFragment.java
+index 89dac16..1010ec8 100644
+--- a/app/src/main/java/com/chess/clock/dialog/EditTimeIncrementDialogFragment.java
++++ b/app/src/main/java/com/chess/clock/dialog/EditTimeIncrementDialogFragment.java
+@@ -84,7 +84,7 @@ public class EditTimeIncrementDialogFragment extends FullScreenDialogFragment {
+ 
+         if (savedInstanceState == null) {
+             ClockTime clockTime = timeIncrement.getDuration();
+-            minutesEt.setText(ClockUtils.twoDecimalPlacesFormat(clockTime.minutes));
++            minutesEt.setText(ClockUtils.twoDecimalPlacesFormat(clockTime.totalMinutes()));
+             secondsEt.setText(ClockUtils.twoDecimalPlacesFormat(clockTime.seconds));
+         }
+ 
+diff --git a/app/src/main/java/com/chess/clock/engine/CountDownTimer.java b/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
+index a0ef6f1..44eaec2 100644
+--- a/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
++++ b/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
+@@ -216,13 +216,11 @@ public class CountDownTimer implements TimeControl.TimeControlListener {
+ 
+             // Only starts the clock if currently stopped (ignores state Finished)
+             if (mTimerState == CountDownTimer.TimerState.STOPPED) {
+-                switch (mTimeControl.getTimeIncrement().getType()) {
+-                    case DELAY:
+-                        forceStartDelayed(mTimeControl.getTimeIncrement().getValue());
+-                        break;
+-                    default:
+-                        forceStart();
+-                        break;
++                TimeIncrement increment = currentTimeIncrement();
++                if (increment.getType() == TimeIncrement.Type.DELAY) {
++                    forceStartDelayed(increment.getValue());
++                } else {
++                    forceStart();
+                 }
+             }
+         } else {
+@@ -231,6 +229,10 @@ public class CountDownTimer implements TimeControl.TimeControlListener {
+         }
+     }
+ 
++    private TimeIncrement currentTimeIncrement() {
++        return mTimeControl.getStageManager().getCurrentStage().getTimeIncrement();
++    }
++
+     /**
+      * Stop the clock and registers a move.
+      */
+@@ -241,13 +243,13 @@ public class CountDownTimer implements TimeControl.TimeControlListener {
+ 
+             // Only stops the clock if currently running or paused
+             if (isStarted()) {
+-
+-                switch (mTimeControl.getTimeIncrement().getType()) {
++                TimeIncrement increment = currentTimeIncrement();
++                switch (increment.getType()) {
+                     case FISCHER:
+-                        forceStopAndIncrementFull(mTimeControl.getTimeIncrement().getValue());
++                        forceStopAndIncrementFull(increment.getValue());
+                         break;
+                     case BRONSTEIN:
+-                        forceStopAndIncrementAtMost(mTimeControl.getTimeIncrement().getValue());
++                        forceStopAndIncrementAtMost(increment.getValue());
+                         break;
+                     default:
+                         forceStop();
+@@ -276,14 +278,14 @@ public class CountDownTimer implements TimeControl.TimeControlListener {
+ 
+             // Reset last tick time
+             mLastTickTime = 0;
+-
+-            if (mTimeControl.getTimeIncrement().getType() == TimeIncrement.Type.DELAY) {
++            TimeIncrement increment = currentTimeIncrement();
++            if (increment.getType() == TimeIncrement.Type.DELAY) {
+ 
+                 // Pausing in the middle of a delay?
+                 long elapsedTime = System.currentTimeMillis() - lastStartDelayTime;
+-                if (elapsedTime < mTimeControl.getTimeIncrement().getValue()) {
++                if (elapsedTime < increment.getValue()) {
+ 
+-                    mPendingDelayOnResume = mTimeControl.getTimeIncrement().getValue() - elapsedTime;
++                    mPendingDelayOnResume = increment.getValue() - elapsedTime;
+                     Log.i(TAG, "Pausing in the middle of delay, next resume will have delay: " + mPendingDelayOnResume);
+ 
+                 } else {
+diff --git a/app/src/main/java/com/chess/clock/engine/Stage.java b/app/src/main/java/com/chess/clock/engine/Stage.java
+index 1d3aa2c..95e12d2 100644
+--- a/app/src/main/java/com/chess/clock/engine/Stage.java
++++ b/app/src/main/java/com/chess/clock/engine/Stage.java
+@@ -5,6 +5,8 @@ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.util.Log;
+ 
++import androidx.annotation.NonNull;
++
+ import com.chess.clock.entities.ClockTime;
+ 
+ /**
+@@ -33,14 +35,10 @@ public class Stage implements Parcelable, Cloneable {
+         }
+     };
+ 
+-    /**
+-     * Game Stage Type
+-     */
++
+     private StageType mStageType;
+-    /**
+-     * Game Stage State
+-     */
+     private StageState mStageState;
++    private TimeIncrement timeIncrement;
+     /**
+      * Registered Id used to identify the game stage after completion.
+      *
+@@ -70,20 +68,22 @@ public class Stage implements Parcelable, Cloneable {
+      * @param moves    Limited number of moves for the stage. If zero provided, Stage type will be GAME.
+      * @throws java.lang.IllegalArgumentException if duration is not positive or moves is not positive.
+      */
+-    public Stage(int id, long duration, int moves) {
+-        this(id, duration);
++    public Stage(int id, long duration, int moves, TimeIncrement timeIncrement) {
++        this(id, duration, timeIncrement);
+         this.mMoves = moves;
+         this.mStageType = StageType.MOVES;
+     }
+ 
+     /**
+-     * @param id       Game stage identifier.
+-     * @param duration Stage duration in milliseconds.
++     * @param id            Game stage identifier.
++     * @param duration      Stage duration in milliseconds.
++     * @param timeIncrement TimeIncrement for this stage.
+      */
+-    public Stage(int id, long duration) {
++    public Stage(int id, long duration, TimeIncrement timeIncrement) {
+         this.mId = id;
+         this.mDuration = duration;
+         this.mStageType = StageType.GAME;
++        this.timeIncrement = timeIncrement;
+         reset();
+     }
+ 
+@@ -101,12 +101,12 @@ public class Stage implements Parcelable, Cloneable {
+     /**
+      * Set the id of the stage.
+      *
+-     * @param id
++     * @param id stage id, one of values [0,1,2]
+      */
+     public void setId(int id) {
+-        if (id >= 0 && id < MAX_ALLOWED_STAGES_COUNT) {
+-            mId = id;
+-        }
++        if (id < 0 || id >= MAX_ALLOWED_STAGES_COUNT)
++            throw new AssertionError("stage id out of range");
++        mId = id;
+     }
+ 
+     /**
+@@ -118,8 +118,6 @@ public class Stage implements Parcelable, Cloneable {
+ 
+     /**
+      * Set stage duration
+-     *
+-     * @param duration
+      */
+     public void setDuration(long duration) {
+         mDuration = duration;
+@@ -132,13 +130,6 @@ public class Stage implements Parcelable, Cloneable {
+         return mMoves;
+     }
+ 
+-    /**
+-     * @return The current number of moves played in this stage.
+-     */
+-    public int getStageMoveCount() {
+-        return mStageMoveCount;
+-    }
+-
+     /**
+      * Set the number of moves for this stage.
+      *
+@@ -152,7 +143,6 @@ public class Stage implements Parcelable, Cloneable {
+      * Check if Stage object is equal to this one.
+      *
+      * @param stage Stage Object.
+-     * @return
+      */
+     public boolean isEqual(Stage stage) {
+         // ID
+@@ -166,6 +156,11 @@ public class Stage implements Parcelable, Cloneable {
+                     + " - " + stage.getStageType().getValue());
+             return false;
+         }
++        // TimeIncrement
++        else if (!timeIncrement.isEqual(stage.timeIncrement)) {
++            Log.i(TAG, "TimeIncrement not equal. " + timeIncrement + " != " + stage.getTimeIncrement());
++            return false;
++        }
+         // Duration
+         else if (mDuration != stage.getDuration()) {
+             Log.i(TAG, "Duration not equal. " + mDuration + " != " + stage.getDuration());
+@@ -188,6 +183,22 @@ public class Stage implements Parcelable, Cloneable {
+         }
+     }
+ 
++    /**
++     * @return [TimeIncrement] of this stage
++     */
++    public TimeIncrement getTimeIncrement() {
++        return timeIncrement;
++    }
++
++    /**
++     * Set the TimeIncrement of this stage.
++     *
++     * @param increment [TimeIncrement] for this stage.
++     */
++    public void setTimeIncrement(TimeIncrement increment) {
++        timeIncrement = increment;
++    }
++
+     /**
+      * @return StageType of this stage.
+      */
+@@ -221,7 +232,7 @@ public class Stage implements Parcelable, Cloneable {
+     /**
+      * Performs a chess addMove in this game stage.
+      *
+-     * @throws GameStageException
++     * @throws GameStageException if stage is finished
+      */
+     public void addMove() throws GameStageException {
+ 
+@@ -303,6 +314,7 @@ public class Stage implements Parcelable, Cloneable {
+         mStageMoveCount = parcel.readInt();
+         mStageState = StageState.fromInteger(parcel.readInt());
+         mStageType = StageType.fromInteger(parcel.readInt());
++        timeIncrement = parcel.readParcelable(TimeIncrement.class.getClassLoader());
+     }
+ 
+     @Override
+@@ -313,6 +325,7 @@ public class Stage implements Parcelable, Cloneable {
+         parcel.writeInt(mStageMoveCount);
+         parcel.writeInt(mStageState.getValue());
+         parcel.writeInt(mStageType.getValue());
++        parcel.writeParcelable(timeIncrement, flags);
+     }
+ 
+     @Override
+@@ -320,12 +333,14 @@ public class Stage implements Parcelable, Cloneable {
+         return 0;
+     }
+ 
++    @NonNull
+     @Override
+     public Object clone() throws CloneNotSupportedException {
+         Stage clone = (Stage) super.clone();
+         clone.mStageState = StageState.fromInteger(mStageState.getValue());
+         clone.mStageType = StageType.fromInteger(mStageType.getValue());
+         clone.mOnStageEndListener = null;
++        clone.timeIncrement = (TimeIncrement) timeIncrement.clone();
+         return clone;
+     }
+ 
+diff --git a/app/src/main/java/com/chess/clock/engine/StageManager.java b/app/src/main/java/com/chess/clock/engine/StageManager.java
+index 0d16a7a..fd46ef2 100644
+--- a/app/src/main/java/com/chess/clock/engine/StageManager.java
++++ b/app/src/main/java/com/chess/clock/engine/StageManager.java
+@@ -4,6 +4,8 @@ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.util.Log;
+ 
++import androidx.annotation.NonNull;
++
+ import java.util.ArrayList;
+ 
+ /**
+@@ -103,23 +105,44 @@ public class StageManager implements Parcelable, Cloneable, Stage.OnStageFinishL
+         if (!canAddStage()) return;
+ 
+         Stage newStage;
++        TimeIncrement increment = TimeIncrement.defaultIncrement();
+         switch (getTotalStages()) {
+             case 0:
+-                newStage = new Stage(Stage.STAGE_ONE_ID, Stage.STAGE_DURATION_5_MIN);
++                newStage = new Stage(
++                        Stage.STAGE_ONE_ID,
++                        Stage.STAGE_DURATION_5_MIN,
++                        increment
++                );
+                 break;
+             case 1:
+                 Stage existingStage = mStages.get(Stage.STAGE_ONE_ID);
+                 existingStage.setStageType(Stage.StageType.MOVES);
+                 existingStage.setMoves(Stage.DEFAULT_STAGE_MOVES);
+ 
+-                newStage = new Stage(Stage.STAGE_TWO_ID, Stage.STAGE_DURATION_5_MIN);
++                try {
++                    increment = (TimeIncrement) existingStage.getTimeIncrement().clone();
++                } catch (CloneNotSupportedException e) {
++                    // no-op, will use default one
++                }
++
++                newStage = new Stage(
++                        Stage.STAGE_TWO_ID,
++                        Stage.STAGE_DURATION_5_MIN,
++                        increment
++                );
+                 break;
+             case 2:
+                 Stage lastExistingStage = mStages.get(Stage.STAGE_TWO_ID);
+                 lastExistingStage.setStageType(Stage.StageType.MOVES);
+                 lastExistingStage.setMoves(Stage.DEFAULT_STAGE_MOVES);
+ 
+-                newStage = new Stage(Stage.STAGE_THREE_ID, Stage.STAGE_DURATION_5_MIN);
++                try {
++                    increment = (TimeIncrement) lastExistingStage.getTimeIncrement().clone();
++                } catch (CloneNotSupportedException e) {
++                    // no-op, will use default one
++                }
++
++                newStage = new Stage(Stage.STAGE_THREE_ID, Stage.STAGE_DURATION_5_MIN, increment);
+                 break;
+             default:
+                 throw new IllegalStateException("Unexpected stages state: " + getTotalStages());
+@@ -286,6 +309,7 @@ public class StageManager implements Parcelable, Cloneable, Stage.OnStageFinishL
+         }
+     }
+ 
++    @NonNull
+     @Override
+     protected Object clone() throws CloneNotSupportedException {
+         StageManager clone = (StageManager) super.clone();
+diff --git a/app/src/main/java/com/chess/clock/engine/TimeControl.java b/app/src/main/java/com/chess/clock/engine/TimeControl.java
+index fae4cb4..b42b6b0 100644
+--- a/app/src/main/java/com/chess/clock/engine/TimeControl.java
++++ b/app/src/main/java/com/chess/clock/engine/TimeControl.java
+@@ -3,6 +3,8 @@ package com.chess.clock.engine;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ 
++import androidx.annotation.NonNull;
++
+ import com.chess.clock.util.Args;
+ 
+ /**
+@@ -43,7 +45,7 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+             return new TimeControl[size];
+         }
+     };
+-    private static final String TAG = TimeControl.class.getName();
++
+     /**
+      * TimeControl identifier.
+      */
+@@ -54,11 +56,6 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+      */
+     private StageManager mStageManager;
+ 
+-    /**
+-     * Time increment associated with Time Control.
+-     */
+-    private TimeIncrement mTimeIncrement;
+-
+     /**
+      * Listener used to dispatch time control update events.
+      *
+@@ -71,15 +68,12 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+      *
+      * @param name   Name identifier.
+      * @param stages stages of the TimeControl.
+-     * @param time   TimeIncrement object associated with the TimeControl.
+      * @throws java.lang.NullPointerException if StageManager or TimeIncrement are not provided.
+      */
+-    public TimeControl(String name, Stage[] stages, TimeIncrement time) {
++    public TimeControl(String name, Stage[] stages) {
+         Args.checkForNull(stages);
+-        Args.checkForNull(time);
+ 
+         mName = name;
+-        mTimeIncrement = time;
+         mStageManager = new StageManager(stages);
+ 
+         // Set up listener for Stage Manager.
+@@ -101,9 +95,7 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+         boolean equalNames = (mName == null && tc.getName() == null) ||
+                 mName.equals(tc.getName());
+ 
+-        return (equalNames
+-                && mStageManager.isEqual(tc.getStageManager())
+-                && mTimeIncrement.isEqual(tc.getTimeIncrement()));
++        return (equalNames && mStageManager.isEqual(tc.getStageManager()));
+     }
+ 
+     /**
+@@ -134,15 +126,6 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+         mName = name;
+     }
+ 
+-    /**
+-     * Gets the time increment associated with this time control.
+-     *
+-     * @return TimeIncrement associated with this TimeControl.
+-     */
+-    public TimeIncrement getTimeIncrement() {
+-        return mTimeIncrement;
+-    }
+-
+     /**
+      * Gets the Stage manager associated with this time control.
+      *
+@@ -156,14 +139,12 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+         mName = parcel.readString();
+         mStageManager = parcel.readParcelable(StageManager.class.getClassLoader());
+         mStageManager.setStageManagerListener(this);
+-        mTimeIncrement = parcel.readParcelable(TimeIncrement.class.getClassLoader());
+     }
+ 
+     @Override
+     public void writeToParcel(Parcel parcel, int flags) {
+         parcel.writeString(mName);
+         parcel.writeParcelable(mStageManager, flags);
+-        parcel.writeParcelable(mTimeIncrement, flags);
+     }
+ 
+     @Override
+@@ -195,6 +176,7 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+         }
+     }
+ 
++    @NonNull
+     @Override
+     public Object clone() throws CloneNotSupportedException {
+         TimeControl clone = (TimeControl) super.clone();
+@@ -203,9 +185,6 @@ public class TimeControl implements Parcelable, Cloneable, StageManager.StageMan
+         clone.mStageManager = (StageManager) mStageManager.clone();
+         clone.mStageManager.setStageManagerListener(clone);
+ 
+-        // Clone TimeIncrement object
+-        clone.mTimeIncrement = (TimeIncrement) mTimeIncrement.clone();
+-
+         clone.mTimeControlListener = null;
+         return clone;
+     }
+diff --git a/app/src/main/java/com/chess/clock/engine/TimeControlDefaults.java b/app/src/main/java/com/chess/clock/engine/TimeControlDefaults.java
+index 6d14fee..88897b8 100644
+--- a/app/src/main/java/com/chess/clock/engine/TimeControlDefaults.java
++++ b/app/src/main/java/com/chess/clock/engine/TimeControlDefaults.java
+@@ -70,9 +70,9 @@ public class TimeControlDefaults {
+         }
+ 
+         TimeControlWrapper toTimeControl(Context context) {
+-            Stage stage = new Stage(0, minutes * 60 * 1000L);
+             TimeIncrement timeIncrement = new TimeIncrement(TimeIncrement.Type.FISCHER, incrementSeconds * 1000L);
+-            TimeControl timeControl = new TimeControl(getName(context), new Stage[]{stage}, timeIncrement);
++            Stage stage = new Stage(0, minutes * 60 * 1000L, timeIncrement);
++            TimeControl timeControl = new TimeControl(getName(context), new Stage[]{stage});
+             return new TimeControlWrapper(timeControl, timeControl);
+         }
+     }
+diff --git a/app/src/main/java/com/chess/clock/engine/TimeControlManager.java b/app/src/main/java/com/chess/clock/engine/TimeControlManager.java
+index 86b2f8f..b6a314e 100644
+--- a/app/src/main/java/com/chess/clock/engine/TimeControlManager.java
++++ b/app/src/main/java/com/chess/clock/engine/TimeControlManager.java
+@@ -170,10 +170,9 @@ public class TimeControlManager {
+         isNewEditableTimeControl = true;
+ 
+         // Set default stage and time increment
+-        Stage stage1 = new Stage(0, 2 * 60 * 60 * 1000L, 40);
+-        Stage stage2 = new Stage(1, 60 * 60 * 1000L);
+-        TimeIncrement timeIncrement = new TimeIncrement(TimeIncrement.Type.FISCHER, 0);
+-        TimeControl blank = new TimeControl(null, new Stage[]{stage1, stage2}, timeIncrement);
++        Stage stage1 = new Stage(0, 2 * 60 * 60 * 1000L, 40, TimeIncrement.defaultIncrement());
++        Stage stage2 = new Stage(1, 60 * 60 * 1000L, TimeIncrement.defaultIncrement());
++        TimeControl blank = new TimeControl(null, new Stage[]{stage1, stage2});
+ 
+         // Set current editable time control with a new "blank" time control
+         try {
+diff --git a/app/src/main/java/com/chess/clock/engine/TimeControlParser.java b/app/src/main/java/com/chess/clock/engine/TimeControlParser.java
+index 9e583a3..3c0661f 100644
+--- a/app/src/main/java/com/chess/clock/engine/TimeControlParser.java
++++ b/app/src/main/java/com/chess/clock/engine/TimeControlParser.java
+@@ -1,10 +1,13 @@
+ package com.chess.clock.engine;
+ 
++import android.annotation.SuppressLint;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.util.Log;
+ 
++import androidx.annotation.NonNull;
++
+ import com.chess.clock.service.ChessClockLocalService;
+ 
+ import org.json.JSONArray;
+@@ -70,6 +73,7 @@ public class TimeControlParser {
+     /**
+      * Store TimeControl Array in shared preferences as json String.
+      */
++    @SuppressLint("ApplySharedPref")
+     public static void saveTimeControls(Context context, ArrayList<TimeControlWrapper> timeControls) {
+ 
+         if (timeControls == null) {
+@@ -88,34 +92,15 @@ public class TimeControlParser {
+ 
+                 // Save Stages
+                 for (Stage stage : tc.getTimeControlPlayerOne().getStageManager().getStages()) {
+-                    JSONObject stageJSONObject = new JSONObject();
+-                    stageJSONObject.put(TC_JSON_ID, stage.getId());
+-                    stageJSONObject.put(TC_JSON_DURATION, stage.getDuration());
+-                    stageJSONObject.put(TC_JSON_MOVES, stage.getTotalMoves());
+-                    timeControlStagesJSONArray.put(stageJSONObject);
++                    timeControlStagesJSONArray.put(stageToJsonObject(stage));
+                 }
+ 
+                 for (Stage stage : tc.getTimeControlPlayerTwo().getStageManager().getStages()) {
+-                    JSONObject stageJSONObject = new JSONObject();
+-                    stageJSONObject.put(TC_JSON_ID, stage.getId());
+-                    stageJSONObject.put(TC_JSON_DURATION, stage.getDuration());
+-                    stageJSONObject.put(TC_JSON_MOVES, stage.getTotalMoves());
+-                    timeControlStagesPlayerTwoJSONArray.put(stageJSONObject);
++                    timeControlStagesPlayerTwoJSONArray.put(stageToJsonObject(stage));
+                 }
+ 
+-                // Save TimeIncrement
+-                JSONObject timeIncrementJSONObject = new JSONObject();
+-                timeIncrementJSONObject.put(TC_JSON_VALUE, tc.getTimeControlPlayerOne().getTimeIncrement().getValue());
+-                timeIncrementJSONObject.put(TC_JSON_TYPE, tc.getTimeControlPlayerOne().getTimeIncrement().getType().getValue());
+-
+-                JSONObject timeIncrementPlayerTwoJSONObject = new JSONObject();
+-                timeIncrementPlayerTwoJSONObject.put(TC_JSON_VALUE, tc.getTimeControlPlayerTwo().getTimeIncrement().getValue());
+-                timeIncrementPlayerTwoJSONObject.put(TC_JSON_TYPE, tc.getTimeControlPlayerTwo().getTimeIncrement().getType().getValue());
+-
+                 // Add name, stages and time increment to TimeControl json object.
+                 timeControlJSONObject.put(TC_JSON_NAME, tc.getTimeControlPlayerOne().getName());
+-                timeControlJSONObject.put(TC_JSON_TIME_INCREMENT, timeIncrementJSONObject);
+-                timeControlJSONObject.put(TC_JSON_TIME_INCREMENT_PLAYER_TWO, timeIncrementPlayerTwoJSONObject);
+                 timeControlJSONObject.put(TC_JSON_STAGES, timeControlStagesJSONArray);
+                 timeControlJSONObject.put(TC_JSON_STAGES_PLAYER_TWO, timeControlStagesPlayerTwoJSONArray);
+ 
+@@ -142,11 +127,26 @@ public class TimeControlParser {
+         spe.commit();
+     }
+ 
++    @NonNull
++    private static JSONObject stageToJsonObject(Stage stage) throws JSONException {
++        JSONObject stageJSONObject = new JSONObject();
++        stageJSONObject.put(TC_JSON_ID, stage.getId());
++        stageJSONObject.put(TC_JSON_DURATION, stage.getDuration());
++        stageJSONObject.put(TC_JSON_MOVES, stage.getTotalMoves());
++
++        JSONObject timeIncrementJSONObject = new JSONObject();
++        timeIncrementJSONObject.put(TC_JSON_VALUE, stage.getTimeIncrement().getValue());
++        timeIncrementJSONObject.put(TC_JSON_TYPE, stage.getTimeIncrement().getType().getValue());
++        stageJSONObject.put(TC_JSON_TIME_INCREMENT, timeIncrementJSONObject);
++        return stageJSONObject;
++    }
++
+     /**
+      * Stores the selected time control position in the time control list.
+      *
+      * @param idx list index.
+      */
++    @SuppressLint("ApplySharedPref")
+     public static void saveTimeControlCheckIndex(Context context, int idx) {
+         SharedPreferences sp = getSharedPreferences(context);
+         SharedPreferences.Editor spe = sp.edit();
+@@ -190,28 +190,28 @@ public class TimeControlParser {
+             JSONArray timeControlsJSONArray = json.getJSONArray(TC_JSON_TIME_CONTROLS);
+             for (int i = 0; i < timeControlsJSONArray.length(); i++) {
+                 JSONObject timeControlJSON = timeControlsJSONArray.getJSONObject(i);
+-                JSONObject timeIncrementPlayerTwoJSONOBject = null;
+-                JSONArray timeControlStagesPlayerTwoJSON = null;
+ 
+-                JSONObject timeIncrementJSONOBject = timeControlJSON.getJSONObject(TC_JSON_TIME_INCREMENT);
++                JSONArray timeControlStagesPlayerTwoJSON = null;
+                 JSONArray timeControlStagesJSON = timeControlJSON.getJSONArray(TC_JSON_STAGES);
+ 
+-                if (timeControlJSON.has(TC_JSON_TIME_INCREMENT_PLAYER_TWO) && timeControlJSON.has(TC_JSON_STAGES_PLAYER_TWO)) {
+-                    timeIncrementPlayerTwoJSONOBject = timeControlJSON.getJSONObject(TC_JSON_TIME_INCREMENT_PLAYER_TWO);
++                if (timeControlJSON.has(TC_JSON_STAGES_PLAYER_TWO)) {
+                     timeControlStagesPlayerTwoJSON = timeControlJSON.getJSONArray(TC_JSON_STAGES_PLAYER_TWO);
+                 }
+ 
+                 String name = timeControlJSON.getString(TC_JSON_NAME);
+-                Stage[] stages = getStages(timeControlStagesJSON);
+-                Stage[] stagesPlayerTwo = timeControlStagesPlayerTwoJSON == null ? stages : getStages(timeControlStagesPlayerTwoJSON);
+-                TimeIncrement timeIncrement = getTimeIncrement(timeIncrementJSONOBject);
+-                TimeIncrement timeIncrementPlayerTwo = timeIncrementPlayerTwoJSONOBject == null ? timeIncrement : getTimeIncrement(timeIncrementPlayerTwoJSONOBject);
++
++                // old model will be migrated automatically to new one
++                JSONObject playerOneOldTimeIncrement = getOldTimeIncrementJsonOrNull(timeControlJSON, TC_JSON_TIME_INCREMENT);
++                JSONObject playerTwoOldTimeIncrement = getOldTimeIncrementJsonOrNull(timeControlJSON, TC_JSON_TIME_INCREMENT_PLAYER_TWO);
++
++                Stage[] stages = getStages(timeControlStagesJSON, playerOneOldTimeIncrement);
++                Stage[] stagesPlayerTwo = timeControlStagesPlayerTwoJSON == null ? stages : getStages(timeControlStagesPlayerTwoJSON, playerTwoOldTimeIncrement);
+ 
+                 boolean isSameAsPlayerOne = !timeControlJSON.has(TC_JSON_SAME_AS_PLAYER_ONE) ||
+                         timeControlJSON.getBoolean(TC_JSON_SAME_AS_PLAYER_ONE);
+ 
+-                TimeControl timeControl = new TimeControl(name, stages, timeIncrement);
+-                TimeControl timeControlPlayerTwo = new TimeControl(name, stagesPlayerTwo, timeIncrementPlayerTwo);
++                TimeControl timeControl = new TimeControl(name, stages);
++                TimeControl timeControlPlayerTwo = new TimeControl(name, stagesPlayerTwo);
+                 TimeControlWrapper wrapper = new TimeControlWrapper(timeControl, timeControlPlayerTwo);
+                 wrapper.setSameAsPlayerOne(isSameAsPlayerOne);
+                 timeControls.add(wrapper);
+@@ -227,6 +227,14 @@ public class TimeControlParser {
+         return timeControls;
+     }
+ 
++    private static JSONObject getOldTimeIncrementJsonOrNull(JSONObject timeControlJSON, String key) throws JSONException {
++        JSONObject oldTimeIncrementObject = null;
++        if (timeControlJSON.has(key)) {
++            oldTimeIncrementObject = timeControlJSON.getJSONObject(key);
++        }
++        return oldTimeIncrementObject;
++    }
++
+     /**
+      * migrate json data format to new if needed
+      */
+@@ -257,12 +265,12 @@ public class TimeControlParser {
+         }
+     }
+ 
+-    private static Stage[] getStages(JSONArray stagesJSONArray) {
++    private static Stage[] getStages(JSONArray stagesJSONArray, JSONObject oldTimeControlObject) {
+         try {
+             Stage[] stages = new Stage[stagesJSONArray.length()];
+             for (int i = 0; i < stagesJSONArray.length(); i++) {
+                 JSONObject stageJSONObject = stagesJSONArray.getJSONObject(i);
+-                Stage stage = getStage(stageJSONObject);
++                Stage stage = getStage(stageJSONObject, oldTimeControlObject);
+                 stages[i] = stage;
+             }
+             return stages;
+@@ -273,15 +281,23 @@ public class TimeControlParser {
+         }
+     }
+ 
+-    private static Stage getStage(JSONObject stageJSONObject) {
++    private static Stage getStage(JSONObject stageJSONObject, JSONObject oldTimeControlJson) {
+         try {
+             int id = stageJSONObject.getInt(TC_JSON_ID);
+             long duration = stageJSONObject.getLong(TC_JSON_DURATION);
+             int moves = stageJSONObject.getInt(TC_JSON_MOVES);
++
++            TimeIncrement increment;
++            if (oldTimeControlJson != null) {
++                increment = getTimeIncrement(oldTimeControlJson);
++            } else {
++                increment = getTimeIncrement(stageJSONObject.getJSONObject(TC_JSON_TIME_INCREMENT));
++            }
++
+             if (moves > 0) {
+-                return new Stage(id, duration, moves);
++                return new Stage(id, duration, moves, increment);
+             } else {
+-                return new Stage(id, duration);
++                return new Stage(id, duration, increment);
+             }
+         } catch (JSONException e) {
+             Log.e(TAG, e.getMessage());
+diff --git a/app/src/main/java/com/chess/clock/engine/TimeIncrement.java b/app/src/main/java/com/chess/clock/engine/TimeIncrement.java
+index 1625fb5..7fa16aa 100644
+--- a/app/src/main/java/com/chess/clock/engine/TimeIncrement.java
++++ b/app/src/main/java/com/chess/clock/engine/TimeIncrement.java
+@@ -1,10 +1,11 @@
+ package com.chess.clock.engine;
+ 
+-import android.annotation.SuppressLint;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.util.Log;
+ 
++import androidx.annotation.NonNull;
++
+ import com.chess.clock.entities.ClockTime;
+ 
+ /**
+@@ -46,6 +47,10 @@ public class TimeIncrement implements Parcelable, Cloneable {
+         this.readFromParcel(parcel);
+     }
+ 
++    public static TimeIncrement defaultIncrement() {
++        return new TimeIncrement(TimeIncrement.Type.FISCHER, 0);
++    }
++
+     /**
+      * @return The increment type.
+      */
+@@ -69,15 +74,6 @@ public class TimeIncrement implements Parcelable, Cloneable {
+         return mValue;
+     }
+ 
+-    /**
+-     * Set the increment time value.
+-     *
+-     * @param value increment time in milliseconds.
+-     */
+-    public void setValue(long value) {
+-        mValue = value;
+-    }
+-
+     /**
+      * @return Int array with {hour,minute,second}
+      */
+@@ -109,19 +105,9 @@ public class TimeIncrement implements Parcelable, Cloneable {
+      *
+      * @return String representing info content of TimeIncrement.
+      */
++    @NonNull
+     public String toString() {
+-        String durationString = formatTime(getValue());
+-        return mType + ", " + durationString;
+-    }
+-
+-    /**
+-     * @param time Player time in milliseconds.
+-     * @return Readable String format of time.
+-     */
+-    @SuppressLint("DefaultLocale")
+-    public String formatTime(long time) {
+-        ClockTime clockTime = ClockTime.raw(time);
+-        return String.format("%02d:%02d", clockTime.minutes, clockTime.seconds);
++        return mType + ", " + ClockTime.raw(mValue).toMinutesFormat();
+     }
+ 
+     /**
+@@ -131,9 +117,7 @@ public class TimeIncrement implements Parcelable, Cloneable {
+      * @return TimeIncrement value or zero if negative.
+      */
+     private long validateIncrementValue(long value) {
+-        if (value < 0)
+-            return 0;
+-        return value;
++        return Math.max(0, value);
+     }
+ 
+     private void readFromParcel(Parcel parcel) {
+@@ -152,6 +136,7 @@ public class TimeIncrement implements Parcelable, Cloneable {
+         return 0;
+     }
+ 
++    @NonNull
+     @Override
+     public Object clone() throws CloneNotSupportedException {
+         TimeIncrement cloned = (TimeIncrement) super.clone();
+diff --git a/app/src/main/java/com/chess/clock/entities/ClockTime.java b/app/src/main/java/com/chess/clock/entities/ClockTime.java
+index 99d1fb3..fe26dea 100644
+--- a/app/src/main/java/com/chess/clock/entities/ClockTime.java
++++ b/app/src/main/java/com/chess/clock/entities/ClockTime.java
+@@ -28,6 +28,14 @@ public final class ClockTime {
+         }
+     }
+ 
++    public int totalMinutes() {
++        return hours * 60 + minutes;
++    }
++
++    public String toMinutesFormat() {
++        return String.format(CLOCK_FORMAT_MINUTES, totalMinutes(), seconds);
++    }
++
+     public boolean atLeaseOneHourLeft() {
+         return remainingTimeMs >= HOUR_MILLIS;
+     }
+diff --git a/app/src/main/java/com/chess/clock/fragments/TimeControlFragment.java b/app/src/main/java/com/chess/clock/fragments/TimeControlFragment.java
+index e3865c4..6685904 100644
+--- a/app/src/main/java/com/chess/clock/fragments/TimeControlFragment.java
++++ b/app/src/main/java/com/chess/clock/fragments/TimeControlFragment.java
+@@ -31,7 +31,6 @@ import androidx.fragment.app.Fragment;
+ 
+ import com.chess.clock.R;
+ import com.chess.clock.dialog.EditStageDialogFragment;
+-import com.chess.clock.dialog.EditTimeIncrementDialogFragment;
+ import com.chess.clock.engine.Stage;
+ import com.chess.clock.engine.TimeControl;
+ import com.chess.clock.engine.TimeControlWrapper;
+@@ -44,8 +43,7 @@ import com.google.android.material.tabs.TabLayout;
+ /**
+  * UI fragment to create and edit a TimeControl.
+  */
+-public class TimeControlFragment extends BaseFragment implements EditStageDialogFragment.OnStageEditListener,
+-        EditTimeIncrementDialogFragment.OnTimeIncrementEditListener {
++public class TimeControlFragment extends BaseFragment implements EditStageDialogFragment.OnStageEditListener {
+ 
+     /**
+      * Bundle/Instance state keys
+@@ -196,8 +194,8 @@ public class TimeControlFragment extends BaseFragment implements EditStageDialog
+             StageRowView row = (StageRowView) stagesList.getChildAt(i);
+             if (i < stages.length) {
+                 Stage stage = stages[i];
+-                row.updateData(i + 1, stage, selectedTimeControl.getTimeIncrement());
+-                row.setOnClickListener(v -> showStageEditorDialog(stage, selectedTimeControl.getTimeIncrement()));
++                row.updateData(i + 1, stage);
++                row.setOnClickListener(v -> showStageEditorDialog(stage));
+                 row.setVisibility(View.VISIBLE);
+             } else {
+                 row.setOnClickListener(null);
+@@ -345,9 +343,9 @@ public class TimeControlFragment extends BaseFragment implements EditStageDialog
+                     return;
+                 }
+ 
+-                Stage stage = new Stage(0, gameDurationMs);
+                 TimeIncrement timeIncrement = new TimeIncrement(TimeIncrement.Type.FISCHER, incrementMs);
+-                TimeControl simpleControl = new TimeControl(newControlName, new Stage[]{stage}, timeIncrement);
++                Stage stage = new Stage(0, gameDurationMs, timeIncrement);
++                TimeControl simpleControl = new TimeControl(newControlName, new Stage[]{stage});
+                 timeControlWrapper.setTimeControlPlayerOne(simpleControl);
+                 timeControlWrapper.setTimeControlPlayerTwo(simpleControl);
+             }
+@@ -394,8 +392,8 @@ public class TimeControlFragment extends BaseFragment implements EditStageDialog
+         updateStagesDisplay();
+     }
+ 
+-    private void showStageEditorDialog(Stage stage, TimeIncrement timeIncrement) {
+-        DialogFragment dialogFragment = EditStageDialogFragment.newInstance(stage, timeIncrement);
++    private void showStageEditorDialog(Stage stage) {
++        DialogFragment dialogFragment = EditStageDialogFragment.newInstance(stage);
+         dialogFragment.show(getChildFragmentManager(), EditStageDialogFragment.TAG);
+     }
+ 
+@@ -437,15 +435,6 @@ public class TimeControlFragment extends BaseFragment implements EditStageDialog
+         updateStagesDisplay();
+     }
+ 
+-    @Override
+-    public void onTimeIncrementEditDone(TimeIncrement.Type type, long time) {
+-        // Get Time Increment
+-        TimeIncrement timeIncrement = selectedTimeControl.getTimeIncrement();
+-
+-        timeIncrement.setType(type);
+-        timeIncrement.setValue(time);
+-    }
+-
+     /**
+      * This interface must be implemented by activities that contain this fragment to allow interaction.
+      */
+@@ -470,21 +459,21 @@ public class TimeControlFragment extends BaseFragment implements EditStageDialog
+ 
+             AlertDialog.Builder builder = new AlertDialog.Builder(getActivity(), R.style.WhiteButtonsDialogTheme);
+             AlertDialog alertDialog = builder
+-                .setTitle(getString(R.string.exit_dialog_title))
+-                .setMessage(getString(R.string.exit_dialog_message))
+-                .setNegativeButton(getString(R.string.exit_dialog_cancel), (arg0, arg1) -> {
+-                    Fragment target = getTargetFragment();
+-                    if (target != null) {
+-                        target.requireActivity().getSupportFragmentManager().popBackStack();
+-                    }
+-                })
+-                .setPositiveButton(getString(R.string.exit_dialog_ok), (arg0, arg1) -> {
+-                    Fragment target = getTargetFragment();
+-                    if (target != null) {
+-                        ((TimeControlFragment) target).saveTimeControl();
+-                    }
+-                })
+-                .create();
++                    .setTitle(getString(R.string.exit_dialog_title))
++                    .setMessage(getString(R.string.exit_dialog_message))
++                    .setNegativeButton(getString(R.string.exit_dialog_cancel), (arg0, arg1) -> {
++                        Fragment target = getTargetFragment();
++                        if (target != null) {
++                            target.requireActivity().getSupportFragmentManager().popBackStack();
++                        }
++                    })
++                    .setPositiveButton(getString(R.string.exit_dialog_ok), (arg0, arg1) -> {
++                        Fragment target = getTargetFragment();
++                        if (target != null) {
++                            ((TimeControlFragment) target).saveTimeControl();
++                        }
++                    })
++                    .create();
+             ViewUtils.setLargePopupMessageTextSize(alertDialog, getResources());
+             return alertDialog;
+         }
+diff --git a/app/src/main/java/com/chess/clock/views/StageRowView.java b/app/src/main/java/com/chess/clock/views/StageRowView.java
+index c9393af..9c19cbd 100644
+--- a/app/src/main/java/com/chess/clock/views/StageRowView.java
++++ b/app/src/main/java/com/chess/clock/views/StageRowView.java
+@@ -12,7 +12,6 @@ import androidx.constraintlayout.widget.ConstraintLayout;
+ 
+ import com.chess.clock.R;
+ import com.chess.clock.engine.Stage;
+-import com.chess.clock.engine.TimeIncrement;
+ 
+ public class StageRowView extends ConstraintLayout {
+ 
+@@ -31,7 +30,7 @@ public class StageRowView extends ConstraintLayout {
+         timeIncrementDetails = view.findViewById(R.id.incrementDetailsTv);
+     }
+ 
+-    public void updateData(int position, Stage stage, TimeIncrement timeIncrement) {
++    public void updateData(int position, Stage stage) {
+         positionLabel.setText(String.valueOf(position));
+         String details = "";
+         String timeFormatted = stage.durationTimeFormatted();
+@@ -41,6 +40,6 @@ public class StageRowView extends ConstraintLayout {
+             details = getResources().getQuantityString(R.plurals.x_moves_in, stage.getTotalMoves(), stage.getTotalMoves(), timeFormatted);
+         }
+         stageDetails.setText(details);
+-        timeIncrementDetails.setText(timeIncrement.toString());
++        timeIncrementDetails.setText(stage.getTimeIncrement().toString());
+     }
+ }

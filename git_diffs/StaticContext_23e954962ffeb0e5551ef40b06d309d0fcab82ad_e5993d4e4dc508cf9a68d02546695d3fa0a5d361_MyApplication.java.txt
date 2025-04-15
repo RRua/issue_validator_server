@@ -1,0 +1,4039 @@
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/BigSOC.java b/app/src/main/java/ca/farrelltonsolar/classic/BigSOC.java
+deleted file mode 100644
+index 277acbc..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/BigSOC.java
++++ /dev/null
+@@ -1,163 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.SharedPreferences;
+-import android.os.Bundle;
+-import android.preference.PreferenceManager;
+-import android.support.v4.content.LocalBroadcastManager;
+-import android.support.v7.app.ActionBarActivity;
+-import android.view.View;
+-import android.view.animation.AlphaAnimation;
+-import android.view.animation.Animation;
+-
+-import ca.farrelltonsolar.uicomponents.SOCGauge;
+-import ca.farrelltonsolar.uicomponents.SolarGauge;
+-
+-/**
+- * Created by Graham on 02/03/14.
+- */
+-public class BigSOC extends ActionBarActivity {
+-
+-    boolean _bidirectionalUnitsInWatts = false;
+-    boolean _lockScale = false;
+-    int _biDirectionalScaleIndex;
+-    int _batteryCurrentScaleIndex;
+-
+-    @Override
+-    public void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        setContentView(R.layout.bigsoc);
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.GaugePage"));
+-        SolarGauge gaugeView = (SolarGauge) findViewById(R.id.BatCurrent);
+-        LoadSettings();
+-        if (_bidirectionalUnitsInWatts) {
+-            gaugeView.setScaleEnd(Constants.BiDirectionalPowerScales[_biDirectionalScaleIndex]);
+-            gaugeView.setTitle(MyApplication.getAppContext().getString(R.string.BatPowerTitle));
+-            gaugeView.setUnit("W");
+-        } else {
+-            gaugeView.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-            gaugeView.setTitle(MyApplication.getAppContext().getString(R.string.BatCurrentTitle));
+-            gaugeView.setUnit("A");
+-        }
+-        if (_lockScale == false) {
+-            gaugeView.setOnClickListener(GetClickListener());
+-        }
+-        gaugeView.setBiDirectional(true);
+-
+-    }
+-
+-    private void LoadSettings() {
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-        _bidirectionalUnitsInWatts = settings.getBoolean(Constants.BIDIRECTIONALUNIT_PREFERENCE, false);
+-        _lockScale = settings.getBoolean(Constants.LOCK_SCALE_PREFERENCE, false);
+-        _biDirectionalScaleIndex = settings.getInt(Constants.BiDirectionalPowerScale, 0);
+-        if (_biDirectionalScaleIndex >= Constants.BiDirectionalPowerScales.length) {
+-            _biDirectionalScaleIndex = 0;
+-        }
+-        _batteryCurrentScaleIndex = settings.getInt(Constants.BatteryCurrentScale, 0);
+-        if (_batteryCurrentScaleIndex >= Constants.BatteryCurrentScales.length) {
+-            _batteryCurrentScaleIndex = 0;
+-        }
+-    }
+-
+-    // Our handler for received Intents.
+-    private BroadcastReceiver mReadingsReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            // Get extra data included in the Intent
+-            SetReadings(new Readings(intent.getBundleExtra("readings")));
+-        }
+-    };
+-
+-    private void SetReadings(Readings readings) {
+-        SolarGauge gaugeView = (SolarGauge) findViewById(R.id.BatCurrent);
+-        float batteryCurrent = readings.GetFloat(RegisterName.BatCurrent);
+-        if (_bidirectionalUnitsInWatts) {
+-            float batteryVolts = readings.GetFloat(RegisterName.BatVoltage);
+-            gaugeView.setTargetValue(batteryCurrent * batteryVolts);
+-        } else {
+-            gaugeView.setTargetValue(batteryCurrent);
+-        }
+-        int socVal = readings.GetInt(RegisterName.SOC);
+-        SOCGauge soc = (SOCGauge) findViewById(R.id.SOC);
+-        soc.setValue(socVal);
+-    }
+-
+-    @Override
+-    protected void onPause() {
+-        super.onStop();
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, getApplicationContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Control", ConnectionState.Paused.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+-    }
+-
+-    @Override
+-    protected void onResume() {
+-        super.onResume();
+-
+-        StartModbus();
+-    }
+-
+-    private void StartModbus() {
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, getApplicationContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Control", ConnectionState.Connected.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+-    }
+-
+-    private View.OnClickListener GetClickListener() {
+-        return new View.OnClickListener() {
+-
+-            @Override
+-            public void onClick(final View v) {
+-
+-                if (_lockScale == false) {
+-                    Animation animation = new AlphaAnimation(1.0f, 0.0f);
+-                    animation.setDuration(300);
+-                    animation.setAnimationListener(new Animation.AnimationListener() {
+-
+-                        @Override
+-                        public void onAnimationEnd(Animation arg0) {
+-                            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-                            SolarGauge gaugeView = (SolarGauge) v;
+-                            if (_bidirectionalUnitsInWatts) {
+-                                _biDirectionalScaleIndex++;
+-                                if (_biDirectionalScaleIndex >= Constants.BiDirectionalPowerScales.length) {
+-                                    _biDirectionalScaleIndex = 0;
+-                                }
+-                                gaugeView.setScaleEnd(Constants.BiDirectionalPowerScales[_biDirectionalScaleIndex]);
+-                                settings.edit().putInt(Constants.BiDirectionalPowerScale, _biDirectionalScaleIndex).commit();
+-                            } else {
+-                                _batteryCurrentScaleIndex++;
+-                                if (_batteryCurrentScaleIndex >= Constants.BatteryCurrentScales.length) {
+-                                    _batteryCurrentScaleIndex = 0;
+-                                }
+-                                gaugeView.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-                                settings.edit().putInt(Constants.BatteryCurrentScale, _batteryCurrentScaleIndex).commit();
+-                            }
+-                            Animation animation2 = new AlphaAnimation(0.0f, 1.0f);
+-                            animation2.setDuration(1000);
+-                            v.startAnimation(animation2);
+-                        }
+-
+-                        @Override
+-                        public void onAnimationRepeat(Animation arg0) {
+-                            // TODO Auto-generated method stub
+-
+-                        }
+-
+-                        @Override
+-                        public void onAnimationStart(Animation arg0) {
+-                            // TODO Auto-generated method stub
+-
+-                        }
+-
+-                    });
+-                    v.startAnimation(animation);
+-                }
+-            }
+-        };
+-    }
+-}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/BroadcastNotifier.java b/app/src/main/java/ca/farrelltonsolar/classic/BroadcastNotifier.java
+deleted file mode 100644
+index 123621f..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/BroadcastNotifier.java
++++ /dev/null
+@@ -1,71 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.content.Intent;
+-import android.support.v4.content.LocalBroadcastManager;
+-
+-/**
+- * Created by Graham on 01/03/14.
+- */
+-public class BroadcastNotifier {
+-    private LocalBroadcastManager mBroadcaster;
+-
+-    /**
+-     * Creates a BroadcastNotifier containing an instance of LocalBroadcastManager.
+-     * LocalBroadcastManager is more efficient than BroadcastManager; because it only
+-     * broadcasts to components within the app, it doesn't have to do parceling and so forth.
+-     *
+-     */
+-    public BroadcastNotifier() {
+-
+-        // Gets an instance of the support library local broadcastmanager
+-        mBroadcaster = LocalBroadcastManager.getInstance(MyApplication.getAppContext());
+-
+-    }
+-
+-    /**
+-     *
+-     * Uses LocalBroadcastManager to send an {@link android.content.Intent} containing {@code status}. The
+-     * {@link android.content.Intent} has the action {@code BROADCAST_ACTION} and the category {@code DEFAULT}.
+-     *
+-     * @param status {@link Integer} denoting a work request status
+-     */
+-    public void broadcastIntentWithState(int status) {
+-
+-        Intent localIntent = new Intent();
+-
+-        // The Intent contains the custom broadcast action for this app
+-        localIntent.setAction(Constants.BROADCAST_ACTION);
+-
+-        // Puts the status into the Intent
+-        localIntent.putExtra(Constants.EXTENDED_DATA_STATUS, status);
+-        localIntent.addCategory(Intent.CATEGORY_DEFAULT);
+-
+-        // Broadcasts the Intent
+-        mBroadcaster.sendBroadcast(localIntent);
+-
+-    }
+-
+-    /**
+-     * Uses LocalBroadcastManager to send an {@link String} containing a logcat message.
+-     * {@link Intent} has the action {@code BROADCAST_ACTION} and the category {@code DEFAULT}.
+-     *
+-     * @param logData a {@link String} to insert into the log.
+-     */
+-    public void notifyProgress(String logData) {
+-
+-        Intent localIntent = new Intent();
+-
+-        // The Intent contains the custom broadcast action for this app
+-        localIntent.setAction(Constants.BROADCAST_ACTION);
+-
+-        localIntent.putExtra(Constants.EXTENDED_DATA_STATUS, -1);
+-
+-        // Puts log data into the Intent
+-        localIntent.putExtra(Constants.EXTENDED_STATUS_LOG, logData);
+-        localIntent.addCategory(Intent.CATEGORY_DEFAULT);
+-
+-        // Broadcasts the Intent
+-        mBroadcaster.sendBroadcast(localIntent);
+-
+-    }
+-}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/CalendarPage.java b/app/src/main/java/ca/farrelltonsolar/classic/CalendarPage.java
+index 84f1abb..2fa9642 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/CalendarPage.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/CalendarPage.java
+@@ -42,32 +42,28 @@ public class CalendarPage extends Fragment {
+         webSettings.setJavaScriptEnabled(true);
+         mWebView.addJavascriptInterface(new WebViewInterface(), "MainActivityInterface");
+         mWebView.setWebChromeClient(new WebChromeClient());
+-        String MonthNames = MyApplication.getAppContext().getString(R.string.MonthNames);
+-        String MonthNamesShort = MyApplication.getAppContext().getString(R.string.MonthNamesShort);
+-        String DayNames = MyApplication.getAppContext().getString(R.string.DayNames);
+-        String DayNamesShort = MyApplication.getAppContext().getString(R.string.DayNamesShort);
++        String MonthNames = MonitorApplication.getAppContext().getString(R.string.MonthNames);
++        String MonthNamesShort = MonitorApplication.getAppContext().getString(R.string.MonthNamesShort);
++        String DayNames = MonitorApplication.getAppContext().getString(R.string.DayNames);
++        String DayNamesShort = MonitorApplication.getAppContext().getString(R.string.DayNamesShort);
+         mPageData = String.format(Constants.Calendar_html, GetCSS(), MonthNames, MonthNamesShort, DayNames, DayNamesShort);
+         mWebView.loadDataWithBaseURL("file:///android_asset/", mPageData, "text/html", "utf-8", null);
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.DayLogs"));
++        LocalBroadcastManager.getInstance(MonitorApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.DayLogs"));
+         return theView;
+     }
+ 
+     private String GetCSS() {
+         String rVal;
+-        if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_XLARGE) {
+-            rVal =  "fullcalendar-xlarge";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_LARGE) {
+-            rVal =  "fullcalendar-large";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_NORMAL) {
+-            rVal =  "fullcalendar-normal";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_SMALL) {
+-            rVal =  "fullcalendar-small";
+-        }
+-        else {
+-            rVal =  "fullcalendar-normal";
++        if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_XLARGE) {
++            rVal = "fullcalendar-xlarge";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_LARGE) {
++            rVal = "fullcalendar-large";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_NORMAL) {
++            rVal = "fullcalendar-normal";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_SMALL) {
++            rVal = "fullcalendar-small";
++        } else {
++            rVal = "fullcalendar-normal";
+         }
+         return rVal;
+     }
+@@ -77,11 +73,11 @@ public class CalendarPage extends Fragment {
+         webView.loadDataWithBaseURL("file:///android_asset/", mPageData, "text/html", "utf-8", null);
+     }
+ 
+-    public class WebViewInterface{
++    public class WebViewInterface {
+ 
+         @JavascriptInterface
+-        public void  showToast(String message){
+-            Toast.makeText(MyApplication.getAppContext(), message, Toast.LENGTH_LONG).show();
++        public void showToast(String message) {
++            Toast.makeText(MonitorApplication.getAppContext(), message, Toast.LENGTH_LONG).show();
+         }
+ 
+         @JavascriptInterface
+@@ -114,33 +110,31 @@ public class CalendarPage extends Fragment {
+                         if (fromYesterday >= 0) {
+                             String t = String.valueOf(mData[fromYesterday] / 10.0f) + " kWh";
+                             if (mFloatData[fromYesterday] > 0) {
+-                                t += "\n " + MyApplication.getAppContext().getString(R.string.CalendarFloat);
++                                t += "\n " + MonitorApplication.getAppContext().getString(R.string.CalendarFloat);
+                             }
+                             days[i] = new EventObject(t, s);
+                             fromYesterday--;
+-                        }
+-                        else {
++                        } else {
+                             days[i] = new EventObject("", s);
+                         }
+                         calendar.add(Calendar.DATE, 1);
+                     }
+                 }
+-            }
+-            catch (Exception e) {
++            } catch (Exception e) {
+                 e.printStackTrace();
+             }
+             return days;
+         }
+ 
+-        public Date FromUnixTime(long unixTime)
+-        {
+-            Date dateTime = new Date(unixTime*1000);
++        public Date FromUnixTime(long unixTime) {
++            Date dateTime = new Date(unixTime * 1000);
+             return dateTime;
+         }
++
+         public int getDifferenceDays(Date d1, Date d2) {
+-            int daysdiff=0;
++            int daysdiff = 0;
+             long diff = d2.getTime() - d1.getTime();
+-            long diffDays = diff / (24 * 60 * 60 * 1000)+1;
++            long diffDays = diff / (24 * 60 * 60 * 1000) + 1;
+             daysdiff = (int) diffDays;
+             return daysdiff;
+         }
+@@ -163,9 +157,9 @@ public class CalendarPage extends Fragment {
+     }
+ 
+     private void RequestCalendarData() {
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Page", Function.DayLogs.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
++//        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
++//        modbusInitIntent.putExtra("Page", Function.DayLogs.ordinal());
++//        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+     }
+ 
+     // Our handler for received Intents.
+@@ -191,9 +185,7 @@ public class CalendarPage extends Fragment {
+                     mFloatData = logs.getShortArray(String.valueOf(Constants.CLASSIC_FLOAT_TIME_DAILY_CATEGORY));
+                 }
+                 Refresh();
+-            }
+-            catch (Exception e)
+-            {
++            } catch (Exception e) {
+                 e.printStackTrace();
+             }
+         }
+@@ -203,12 +195,13 @@ public class CalendarPage extends Fragment {
+         public int start;
+         public int end;
+     }
+-    public class EventObject
+-    {
++
++    public class EventObject {
+         public EventObject(String t, String s) {
+             title = t;
+             start = s;
+         }
++
+         public String title = "";
+         public String start = "";
+     }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ChargeControllers.java b/app/src/main/java/ca/farrelltonsolar/classic/ChargeControllers.java
+index e9a3721..4b5f106 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ChargeControllers.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/ChargeControllers.java
+@@ -16,29 +16,68 @@
+ 
+ package ca.farrelltonsolar.classic;
+ 
+-import com.google.gson.Gson;
++import android.widget.ArrayAdapter;
+ 
++import java.net.InetSocketAddress;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+ public class ChargeControllers {
+-    private static Gson GSON = new Gson();
++    final Object lock = new Object();
+ 
+     public ChargeControllers() {
+         this.devices = new ArrayList<>();
+     }
+ 
+-    public ChargeControllers(List<ChargeController> devices) {
+-        this.devices = devices;
++    private List<ChargeController> devices;
++
++    public ChargeController get(int position) {
++        synchronized (lock) {
++//            if (position >= devices.size()) {
++//                position = 0;
++//            }
++            return devices.get(position);
++        }
+     }
+ 
+-    private List<ChargeController> devices;
++    public void add(ChargeController cc) {
++        synchronized (lock) {
++            devices.add(cc);
++        }
++    }
++
++    public void remove(ChargeController cc) {
++        synchronized (lock) {
++            devices.remove(cc);
++        }
++    }
+ 
+-    public List<ChargeController> getControllers() {
+-        return devices;
++    public int count() {
++        synchronized (lock) {
++            return devices.size();
++        }
+     }
+ 
+-    public String toJSON() {
+-        return GSON.toJson(this);
++    public void clear() {
++        synchronized (lock) {
++            devices.clear();
++        }
+     }
++
++    public void load(ArrayAdapter adapter) {
++        synchronized (lock) {
++            for (ChargeController ct : devices) {
++                adapter.add(ct);
++            }
++        }
++    }
++
++    public void load(ArrayList<InetSocketAddress> arr) {
++        synchronized (lock) {
++            for (ChargeController cc : devices) {
++                arr.add(cc.getInetSocketAddress());
++            }
++        }
++    }
++
+ }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ChartPage.java b/app/src/main/java/ca/farrelltonsolar/classic/ChartPage.java
+index 3cb51ab..d8d2de8 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ChartPage.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/ChartPage.java
+@@ -42,26 +42,22 @@ public class ChartPage extends Fragment {
+         mWebView.setWebChromeClient(new WebChromeClient());
+         URL = GetHtmlPage();
+         mWebView.loadUrl(URL);
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.MinuteLogs"));
++        LocalBroadcastManager.getInstance(MonitorApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.MinuteLogs"));
+         return theView;
+     }
+ 
+     private String GetHtmlPage() {
+         String rVal;
+-        if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_XLARGE) {
+-            rVal =  "file:///android_asset/chart-xlarge.html";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_LARGE) {
+-            rVal =  "file:///android_asset/chart-large.html";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_NORMAL) {
+-            rVal =  "file:///android_asset/chart-normal.html";
+-        }
+-        else if ((getResources().getConfiguration().screenLayout &      Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_SMALL) {
+-            rVal =  "file:///android_asset/chart-small.html";
+-        }
+-        else {
+-            rVal =  "file:///android_asset/chart-normal.html";
++        if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_XLARGE) {
++            rVal = "file:///android_asset/chart-xlarge.html";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_LARGE) {
++            rVal = "file:///android_asset/chart-large.html";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_NORMAL) {
++            rVal = "file:///android_asset/chart-normal.html";
++        } else if ((getResources().getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_SMALL) {
++            rVal = "file:///android_asset/chart-small.html";
++        } else {
++            rVal = "file:///android_asset/chart-normal.html";
+         }
+         return rVal;
+ 
+@@ -72,11 +68,11 @@ public class ChartPage extends Fragment {
+         webView.loadUrl(URL);
+     }
+ 
+-    public class WebViewInterface{
++    public class WebViewInterface {
+ 
+         @JavascriptInterface
+-        public void  showToast(String message){
+-            Toast.makeText(MyApplication.getAppContext(), message, Toast.LENGTH_LONG).show();
++        public void showToast(String message) {
++            Toast.makeText(MonitorApplication.getAppContext(), message, Toast.LENGTH_LONG).show();
+         }
+ 
+         @JavascriptInterface
+@@ -86,7 +82,7 @@ public class ChartPage extends Fragment {
+                 Gson gson = new Gson();
+                 short[] reverseData = new short[mData.length];
+                 int j = 0;
+-                for (int i = mData.length-1; i >= 0; i--) {
++                for (int i = mData.length - 1; i >= 0; i--) {
+                     reverseData[j++] = mData[i];
+                 }
+                 rVal = gson.toJson(reverseData);
+@@ -161,9 +157,9 @@ public class ChartPage extends Fragment {
+     }
+ 
+     private void RequestChartData() {
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Page", Function.MinuteLogs.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
++//        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
++//        modbusInitIntent.putExtra("Page", Function.MinuteLogs.ordinal());
++//        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+     }
+ 
+     // Our handler for received Intents.
+@@ -188,9 +184,7 @@ public class ChartPage extends Fragment {
+                     mData = logs.getShortArray(String.valueOf(Constants.CLASSIC_POWER_HOURLY_CATEGORY));
+                 }
+                 Refresh();
+-            }
+-            catch (Exception e)
+-            {
++            } catch (Exception e) {
+                 e.printStackTrace();
+             }
+         }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/Constants.java b/app/src/main/java/ca/farrelltonsolar/classic/Constants.java
+index 2a6764c..787d0ad 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/Constants.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/Constants.java
+@@ -4,22 +4,11 @@ package ca.farrelltonsolar.classic;
+  * Created by Graham on 01/03/14.
+  */
+ public class Constants {
+-    // Used to write to the system log from this class.
+-    public static final String LOG_TAG = "FarrelltonSolar";
+ 
+     // UDP listening port for available classics on the subnet
+     public static final int CLASSIC_UDP_PORT = 4626;
+-
+-    // Defines a custom Intent action
+-    public static final String BROADCAST_ACTION = "ca.farrelltonsolar.classic.BROADCAST";
+-
+-    // Defines the key for the status "extra" in an Intent
+-    public static final String EXTENDED_DATA_STATUS = "ca.farrelltonsolar.classic.STATUS";
+-
+-    // Defines the key for the log "extra" in an Intent
+-    public static final String EXTENDED_STATUS_LOG = "ca.farrelltonsolar.classic.LOG";
+     public static final int MODBUS_RETRIES = 3;
+-    public static final int MODBUS_POLL_TIME = 1000;
++    public static final int MODBUS_POLL_TIME = 2000;
+ 
+     public static final int CLASSIC_DAILY_LOG = 5;
+     public static final int CLASSIC_MINUTE_LOG = 6;
+@@ -41,44 +30,19 @@ public class Constants {
+     public static final int CLASSIC_ENERGY_HOURLY_CATEGORY = 7;
+ 
+     public static final String IP_ADDRESS_PREFERENCE = "IpAddress";
+-    public static final String LAST_IP_ADDRESS = "LastIpAddress";
++
+     public static final String PORT_PREFERENCE = "PortSetting";
+     public static final String SUBNET_SCAN_PREFERENCE = "SubnetScan";
+-    public static final String START_IP_PREFERENCE = "StartIpAddress";
+-    public static final String END_IP_COUNT_PREFERENCE = "EndIpAddressCount";
++
+     public static final String BIDIRECTIONALUNIT_PREFERENCE = "BidirectionalUnitInWatts";
+-    public static final String LOCK_SCALE_PREFERENCE = "LockScale";
+-    public static final String BatteryVoltScale = "BatteryVoltScale";
+-    public static final String BatteryCurrentScale = "BatteryCurrentScale";
+-    public static final String PVVoltScale = "PVVoltScale";
+-    public static final String PVCurrentScale = "PVCurrentScale";
+-    public static final String PowerScale = "PowerScale";
+-    public static final String BiDirectionalPowerScale = "BiDirectionalPowerScale";
++
+     public static final String UploadToPVOutput = "UploadToPVOutput";
+     public static final String APIKey = "APIKey";
+     public static final String SID = "SID";
+ 
+-    public static final int[] BatteryVoltScales = new int[]{160, 100, 80, 40, 20};
+-    public static final int[] BatteryCurrentScales = new int[]{250, 200, 150, 100, 80, 40, 20};
+-    public static final int[] PVVoltScales = new int[]{250, 200, 160, 100, 80, 40};
+-    public static final int[] PVCurrentScales = new int[]{80, 50, 40, 20, 10};
+-    public static final int[] PowerScales = new int[]{5000, 4000, 3000, 2000, 1000};
+-    public static final int[] BiDirectionalPowerScales = new int[]{8000, 5000, 3000, 2000, 1000, 500};
+-
+     public static final int PVOUTPUT_RATE_LIMIT = 10000; // every n milliseconds
+     public static final int PVOUTPUT_RECORD_LIMIT = 20; // max uploads per session
+ 
+-    public static final int ELAPSED_LIMIT = 5;
+-    public static final int HTTP_CONNECT_TIMEOUT = 15000;
+-    public static final int HTTP_SO_TIMEOUT = 15000;
+-    public static final double DEFAULT_TEMPERATURE = -1000;
+-    public static final double DEFAULT_VOLTAGE = -1;
+-    public static final int MAX_BATCH_SIZE = 30;
+-    public static final int MAX_TOTAL_CONNECTION = 20;
+-    public static final int MAX_CONNECTIONS_PER_ROUTE = 20;
+-    public static final int TIMEOUT_CONNECT = 15000;
+-    public static final int TIMEOUT_READ = 15000;
+-
+     public static final String Calendar_html = "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0 Transitional//EN\">\n<html>\n<head>\n     <title id='Description'>Calendar</title>\n" +
+             "    <link rel='stylesheet' type='text/css' href='file:///android_asset/%s.css' />\n" +
+             "    <script type=\"text/javascript\" src=\"file:///android_asset/jquery.min.js\"></script>\n" +
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/EnergyFragment.java b/app/src/main/java/ca/farrelltonsolar/classic/EnergyFragment.java
+new file mode 100644
+index 0000000..1c0a9a8
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/EnergyFragment.java
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.app.Activity;
++import android.os.Bundle;
++import android.view.View;
++import android.widget.TextView;
++
++import ca.farrelltonsolar.uicomponents.BaseGauge;
++
++/**
++ * Created by Graham on 14/12/2014.
++ */
++public class EnergyFragment extends GaugeFramentBase {
++
++    public static int TabTitle = R.string.EnergyTabTitle;
++
++    public EnergyFragment() {
++        super(R.layout.fragment_energy);
++    }
++
++    public void initializeReadings(View view, Bundle savedInstanceState) {
++        BaseGauge energyTodayGauge = (BaseGauge) view.findViewById(R.id.EnergyToday);
++        energyTodayGauge.setTargetValue(0.0f);
++        energyTodayGauge.setGreenRange(10, 100);
++    }
++
++    @Override
++    public void onAttach(Activity activity) {
++        super.onAttach(activity);
++    }
++
++    @Override
++    public void onDetach() {
++        super.onDetach();
++    }
++
++    public void setReadings(Readings readings) {
++        try {
++
++            BaseGauge energyTodayGauge = (BaseGauge) this.getView().findViewById(R.id.EnergyToday);
++            energyTodayGauge.setTargetValue(autoAdjustScale(energyTodayGauge.getId(), readings.GetFloat(RegisterName.EnergyToday)));
++            TextView tv = (TextView) this.getView().findViewById(R.id.EnergyTotalValue);
++            tv.setText(String.valueOf(readings.GetFloat(RegisterName.TotalEnergy)));
++
++        } catch (Exception ignore) {
++
++        }
++    }
++
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/GaugeFragmentInterface.java b/app/src/main/java/ca/farrelltonsolar/classic/GaugeFragmentInterface.java
+new file mode 100644
+index 0000000..55d343b
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/GaugeFragmentInterface.java
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.os.Bundle;
++import android.view.View;
++
++/**
++ * Created by Graham on 14/12/2014.
++ */
++public interface GaugeFragmentInterface {
++    void initializeReadings(View view, Bundle savedInstanceState);
++
++    void setReadings(Readings reading);
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/GaugeFramentBase.java b/app/src/main/java/ca/farrelltonsolar/classic/GaugeFramentBase.java
+new file mode 100644
+index 0000000..afea33f
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/GaugeFramentBase.java
+@@ -0,0 +1,80 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.os.Bundle;
++import android.support.v4.app.Fragment;
++import android.support.v4.content.LocalBroadcastManager;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++
++import ca.farrelltonsolar.uicomponents.BaseGauge;
++
++/**
++ * Created by Graham on 14/12/2014.
++ */
++public abstract class GaugeFramentBase extends Fragment implements GaugeFragmentInterface {
++
++    int layoutId;
++
++    protected GaugeFramentBase(int layoutId) {
++        this.layoutId = layoutId;
++    }
++
++    @Override
++    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
++        View theView = inflater.inflate(layoutId, container, false);
++        return theView;
++    }
++
++    @Override
++    public void onViewCreated(View view, Bundle savedInstanceState) {
++        super.onViewCreated(view, savedInstanceState);
++        initializeReadings(view, savedInstanceState);
++        LocalBroadcastManager.getInstance(MonitorApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.GaugePage"));
++
++    }
++
++    // Our handler for received Intents.
++    protected BroadcastReceiver mReadingsReceiver = new BroadcastReceiver() {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            // Get extra data included in the Intent
++            setReadings(new Readings(intent.getBundleExtra("readings")));
++        }
++    };
++
++
++    protected float autoAdjustScale(int gaugeId, float target) {
++        BaseGauge gauge = (BaseGauge) this.getActivity().findViewById(gaugeId);
++        gauge.setScaleEnd(getScale(gauge.getScaleEnd(), target));
++        return target;
++    }
++
++    protected float getScale(float currentScaleEnd, float target) {
++        while (currentScaleEnd < target) {
++            currentScaleEnd *= 2;
++        }
++        return currentScaleEnd;
++    }
++
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/GaugePage.java b/app/src/main/java/ca/farrelltonsolar/classic/GaugePage.java
+deleted file mode 100644
+index 28cf1bd..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/GaugePage.java
++++ /dev/null
+@@ -1,361 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.SharedPreferences;
+-import android.os.Bundle;
+-import android.preference.PreferenceManager;
+-import android.support.v4.app.Fragment;
+-import android.support.v4.content.LocalBroadcastManager;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.view.animation.AlphaAnimation;
+-import android.view.animation.Animation;
+-import android.widget.TextView;
+-import android.widget.Toast;
+-
+-import ca.farrelltonsolar.uicomponents.BaseGauge;
+-import ca.farrelltonsolar.uicomponents.SOCGauge;
+-import ca.farrelltonsolar.uicomponents.SolarGauge;
+-
+-/**
+- * Created by Graham on 01/03/14.
+- */
+-public class GaugePage extends Fragment {
+-
+-    boolean _bidirectionalGaugeScaleSet = false;
+-    boolean _bidirectionalUnitsInWatts = false;
+-    boolean _lockScale = false;
+-    int _powerScaleIndex;
+-    int _pvVoltageScaleIndex;
+-    int _pvCurrentScaleIndex;
+-    int _batteryVoltageScaleIndex;
+-    int _batteryCurrentScaleIndex;
+-    int _biDirectionalScaleIndex;
+-
+-    @Override
+-    public void onDestroyView() {
+-        super.onDestroyView();
+-    }
+-
+-    @Override
+-    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+-                             Bundle savedInstanceState) {
+-        View theView = inflater.inflate(R.layout.gauge_page, container, false);
+-        LoadSettings();
+-        BaseGauge gauge;
+-
+-        gauge = (BaseGauge) theView.findViewById(R.id.Power);
+-        if (gauge != null) {
+-            gauge.setScaleEnd(Constants.PowerScales[_powerScaleIndex]);
+-            if (_lockScale == false) {
+-                gauge.setOnClickListener(GetClickListener(container));
+-            }
+-        }
+-        gauge = (BaseGauge) theView.findViewById(R.id.PVCurrent);
+-        if (gauge != null) {
+-            gauge.setScaleEnd(Constants.PVCurrentScales[_pvCurrentScaleIndex]);
+-            if (_lockScale == false) {
+-                gauge.setOnClickListener(GetClickListener(container));
+-            }
+-        }
+-        gauge = (BaseGauge) theView.findViewById(R.id.PVVoltage);
+-        if (gauge != null) {
+-            gauge.setScaleEnd(Constants.PVVoltScales[_pvVoltageScaleIndex]);
+-            if (_lockScale == false) {
+-                gauge.setOnClickListener(GetClickListener(container));
+-            }
+-        }
+-        gauge = (BaseGauge) theView.findViewById(R.id.BatVoltage);
+-        if (gauge != null) {
+-            gauge.setScaleEnd(Constants.BatteryVoltScales[_batteryVoltageScaleIndex]);
+-            if (_lockScale == false) {
+-                gauge.setOnClickListener(GetClickListener(container));
+-            }
+-        }
+-        gauge = (BaseGauge) theView.findViewById(R.id.BatCurrent);
+-        if (gauge != null) {
+-            gauge.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-            if (_lockScale == false) {
+-                gauge.setOnClickListener(GetClickListener(container));
+-            }
+-        }
+-
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mReadingsReceiver, new IntentFilter("ca.farrelltonsolar.classic.GaugePage"));
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mToastReceiver, new IntentFilter("ca.farrelltonsolar.classic.Toast"));
+-
+-        return theView;
+-    }
+-
+-    private void LoadSettings() {
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-        _bidirectionalUnitsInWatts = settings.getBoolean(Constants.BIDIRECTIONALUNIT_PREFERENCE, false);
+-        _lockScale = settings.getBoolean(Constants.LOCK_SCALE_PREFERENCE, false);
+-        _powerScaleIndex = settings.getInt(Constants.PowerScale, 0);
+-        if (_powerScaleIndex >= Constants.PowerScales.length) {
+-            _powerScaleIndex = 0;
+-        }
+-        _pvVoltageScaleIndex = settings.getInt(Constants.PVVoltScale, 0);
+-        if (_pvVoltageScaleIndex >= Constants.PVVoltScales.length) {
+-            _pvVoltageScaleIndex = 0;
+-        }
+-        _pvCurrentScaleIndex = settings.getInt(Constants.PVCurrentScale, 0);
+-        if (_pvCurrentScaleIndex >= Constants.PVCurrentScales.length) {
+-            _pvCurrentScaleIndex = 0;
+-        }
+-        _batteryVoltageScaleIndex = settings.getInt(Constants.BatteryVoltScale, 0);
+-        if (_batteryVoltageScaleIndex >= Constants.BatteryVoltScales.length) {
+-            _batteryVoltageScaleIndex = 0;
+-        }
+-        _biDirectionalScaleIndex = settings.getInt(Constants.BiDirectionalPowerScale, 0);
+-        if (_biDirectionalScaleIndex >= Constants.BiDirectionalPowerScales.length) {
+-            _biDirectionalScaleIndex = 0;
+-        }
+-        _batteryCurrentScaleIndex = settings.getInt(Constants.BatteryCurrentScale, 0);
+-        if (_batteryCurrentScaleIndex >= Constants.BatteryCurrentScales.length) {
+-            _batteryCurrentScaleIndex = 0;
+-        }
+-    }
+-
+-    @Override
+-    public void onViewCreated(View view, Bundle savedInstanceState) {
+-        super.onViewCreated(view, savedInstanceState);
+-        InitializeReadings(view);
+-    }
+-
+-    @Override
+-    public void setUserVisibleHint(boolean isVisibleToUser) {
+-        super.setUserVisibleHint(isVisibleToUser);
+-        if (isVisibleToUser) {
+-            RequestGaugeData();
+-        }
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        if (this.getUserVisibleHint()) {
+-            RequestGaugeData();
+-        }
+-    }
+-
+-    private void RequestGaugeData() {
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Page", Function.Registers.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+-    }
+-
+-    // Our handler for received Intents.
+-    private BroadcastReceiver mToastReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            // Get extra data included in the Intent
+-            Toast.makeText(context, intent.getStringExtra("message"), Toast.LENGTH_SHORT).show();
+-        }
+-    };
+-
+-    // Our handler for received Intents.
+-    private BroadcastReceiver mReadingsReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            // Get extra data included in the Intent
+-            SetReadings(new Readings(intent.getBundleExtra("readings")));
+-        }
+-    };
+-
+-    private void SetReadings(Readings readings) {
+-        try {
+-
+-            SolarGauge powerGauge = (SolarGauge) this.getView().findViewById(R.id.Power);
+-            powerGauge.setTargetValue(readings.GetFloat(RegisterName.Power));
+-            powerGauge.setLeftLed(readings.GetBoolean(RegisterName.Aux1));
+-            powerGauge.setRightLed(readings.GetBoolean(RegisterName.Aux2));
+-
+-            BaseGauge gauge = (BaseGauge) this.getView().findViewById(R.id.PVVoltage);
+-            gauge.setTargetValue(readings.GetFloat(RegisterName.PVVoltage));
+-            gauge = (BaseGauge) this.getView().findViewById(R.id.PVCurrent);
+-            gauge.setTargetValue(readings.GetFloat(RegisterName.PVCurrent));
+-            gauge = (BaseGauge) this.getView().findViewById(R.id.BatVoltage);
+-            float batteryVolts = readings.GetFloat(RegisterName.BatVoltage);
+-            gauge.setTargetValue(batteryVolts);
+-            gauge = (BaseGauge) this.getView().findViewById(R.id.BatCurrent);
+-            float batteryCurrent = readings.GetFloat(RegisterName.BatCurrent);
+-            boolean biDirectional = readings.GetBoolean(RegisterName.BiDirectional);
+-            if (biDirectional) {
+-                SOCGauge soc = (SOCGauge) this.getView().findViewById(R.id.SOC);
+-                if (soc.getVisibility() != View.VISIBLE) {
+-                    soc.setOnClickListener(new View.OnClickListener() {
+-                        @Override
+-                        //On click function
+-                        public void onClick(View view) {
+-                            startActivity(new Intent(view.getContext(), BigSOC.class));
+-                        }
+-                    });
+-                    soc.setVisibility(View.VISIBLE);
+-                }
+-                if (_bidirectionalGaugeScaleSet == false) {
+-                    if (_bidirectionalUnitsInWatts) {
+-                        gauge.setScaleEnd(Constants.BiDirectionalPowerScales[_biDirectionalScaleIndex]);
+-                    } else {
+-                        gauge.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-                    }
+-                    _bidirectionalGaugeScaleSet = true;
+-                }
+-                if (_bidirectionalUnitsInWatts) {
+-                    gauge.setTargetValue(batteryCurrent * batteryVolts);
+-                } else {
+-                    gauge.setTargetValue(batteryCurrent);
+-                }
+-                int socVal = readings.GetInt(RegisterName.SOC);
+-                soc.setValue(socVal); //  convert x/100 to y/360
+-            } else {
+-                gauge.setTargetValue(readings.GetFloat(RegisterName.BatCurrent));
+-            }
+-            SetBidirectional(biDirectional);
+-            TextView tv = (TextView) this.getView().findViewById(R.id.EnergyTotalValue);
+-            tv.setText(String.valueOf(readings.GetFloat(RegisterName.TotalEnergy)));
+-            tv = (TextView) this.getView().findViewById(R.id.EnergyTodayValue);
+-            tv.setText(String.valueOf(readings.GetFloat(RegisterName.EnergyToday)));
+-            tv = (TextView) this.getView().findViewById(R.id.ChargeStateTitle);
+-            int cs = readings.GetInt(RegisterName.ChargeState);
+-            tv.setText(MyApplication.getChargeStateTitleText(cs));
+-            tv = (TextView) this.getView().findViewById(R.id.ChargeState);
+-            tv.setText(MyApplication.getChargeStateText(cs));
+-        } catch (Exception ignore) {
+-
+-        }
+-    }
+-
+-    private void InitializeReadings(View view) {
+-        BaseGauge powerGauge = (BaseGauge) view.findViewById(R.id.Power);
+-        powerGauge.setTargetValue(0.0f);
+-        BaseGauge gauge;
+-        gauge = (BaseGauge) view.findViewById(R.id.PVVoltage);
+-        gauge.setTargetValue(0.0f);
+-        gauge = (BaseGauge) view.findViewById(R.id.PVCurrent);
+-        gauge.setTargetValue(0.0f);
+-        gauge = (BaseGauge) view.findViewById(R.id.BatVoltage);
+-        gauge.setTargetValue(0.0f);
+-        gauge = (BaseGauge) view.findViewById(R.id.BatCurrent);
+-        gauge.setTargetValue(0.0f);
+-        TextView tv = (TextView) this.getView().findViewById(R.id.ChargeState);
+-        tv.setText(getString(R.string.NoConnection));
+-    }
+-
+-    private void SetBidirectional(boolean val) {
+-        BaseGauge gauge = (BaseGauge) this.getView().findViewById(R.id.BatCurrent);
+-        if (gauge.getBiDirectional() != val) {
+-            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-            if (_bidirectionalUnitsInWatts) {
+-                gauge.setScaleEnd(Constants.BiDirectionalPowerScales[_biDirectionalScaleIndex]);
+-                gauge.setTitle(MyApplication.getAppContext().getString(R.string.BatPowerTitle));
+-                gauge.setUnit("W");
+-            } else {
+-                gauge.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-                gauge.setTitle(MyApplication.getAppContext().getString(R.string.BatCurrentTitle));
+-                gauge.setUnit("A");
+-            }
+-            gauge.setBiDirectional(val);
+-        }
+-    }
+-
+-    private View.OnClickListener GetClickListener(final ViewGroup container) {
+-        return new View.OnClickListener() {
+-
+-            @Override
+-            public void onClick(final View v) {
+-                if (_lockScale == false) {
+-                    Animation animation = new AlphaAnimation(1.0f, 0.0f);
+-                    animation.setDuration(500);
+-                    animation.setAnimationListener(new Animation.AnimationListener() {
+-                        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-
+-                        @Override
+-                        public void onAnimationEnd(Animation arg0) {
+-                            BaseGauge gauge;
+-                            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-                            switch (v.getId()) {
+-                                case R.id.Power:
+-                                    _powerScaleIndex++;
+-                                    if (_powerScaleIndex >= Constants.PowerScales.length) {
+-                                        _powerScaleIndex = 0;
+-                                    }
+-                                    BaseGauge powerGauge = (BaseGauge) v;
+-                                    powerGauge.setScaleEnd(Constants.PowerScales[_powerScaleIndex]);
+-                                    settings.edit().putInt(Constants.PowerScale, _powerScaleIndex).commit();
+-                                    break;
+-                                case R.id.PVVoltage:
+-                                    gauge = (BaseGauge) v;
+-                                    _pvVoltageScaleIndex++;
+-                                    if (_pvVoltageScaleIndex >= Constants.PVVoltScales.length) {
+-                                        _pvVoltageScaleIndex = 0;
+-                                    }
+-                                    gauge.setScaleEnd(Constants.PVVoltScales[_pvVoltageScaleIndex]);
+-                                    settings.edit().putInt(Constants.PVVoltScale, _pvVoltageScaleIndex).commit();
+-                                    break;
+-                                case R.id.PVCurrent:
+-                                    gauge = (BaseGauge) v;
+-                                    _pvCurrentScaleIndex++;
+-                                    if (_pvCurrentScaleIndex >= Constants.PVCurrentScales.length) {
+-                                        _pvCurrentScaleIndex = 0;
+-                                    }
+-                                    gauge.setScaleEnd(Constants.PVCurrentScales[_pvCurrentScaleIndex]);
+-                                    settings.edit().putInt(Constants.PVCurrentScale, _pvCurrentScaleIndex).commit();
+-                                    break;
+-                                case R.id.BatVoltage:
+-                                    gauge = (BaseGauge) v;
+-                                    _batteryVoltageScaleIndex++;
+-                                    if (_batteryVoltageScaleIndex >= Constants.BatteryVoltScales.length) {
+-                                        _batteryVoltageScaleIndex = 0;
+-                                    }
+-                                    gauge.setScaleEnd(Constants.BatteryVoltScales[_batteryVoltageScaleIndex]);
+-                                    settings.edit().putInt(Constants.BatteryVoltScale, _batteryVoltageScaleIndex).commit();
+-                                    break;
+-                                case R.id.BatCurrent:
+-                                    gauge = (BaseGauge) v;
+-                                    boolean isBidirectional = gauge.getBiDirectional();
+-                                    if (isBidirectional && _bidirectionalUnitsInWatts) {
+-                                        _biDirectionalScaleIndex++;
+-                                        if (_biDirectionalScaleIndex >= Constants.BiDirectionalPowerScales.length) {
+-                                            _biDirectionalScaleIndex = 0;
+-                                        }
+-                                        gauge.setScaleEnd(Constants.BiDirectionalPowerScales[_biDirectionalScaleIndex]);
+-                                        settings.edit().putInt(Constants.BiDirectionalPowerScale, _biDirectionalScaleIndex).commit();
+-                                    } else {
+-                                        _batteryCurrentScaleIndex++;
+-                                        if (_batteryCurrentScaleIndex >= Constants.BatteryCurrentScales.length) {
+-                                            _batteryCurrentScaleIndex = 0;
+-                                        }
+-                                        gauge.setScaleEnd(Constants.BatteryCurrentScales[_batteryCurrentScaleIndex]);
+-                                        settings.edit().putInt(Constants.BatteryCurrentScale, _batteryCurrentScaleIndex).commit();
+-                                    }
+-                                    break;
+-                            }
+-                            Animation animation2 = new AlphaAnimation(0.0f, 1.0f);
+-                            animation2.setDuration(500);
+-                            v.startAnimation(animation2);
+-                        }
+-
+-                        @Override
+-                        public void onAnimationRepeat(Animation arg0) {
+-                            // TODO Auto-generated method stub
+-
+-                        }
+-
+-                        @Override
+-                        public void onAnimationStart(Animation arg0) {
+-                            // TODO Auto-generated method stub
+-
+-                        }
+-
+-                    });
+-                    v.startAnimation(animation);
+-                }
+-            }
+-        };
+-    }
+-
+-}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ListPage.java b/app/src/main/java/ca/farrelltonsolar/classic/ListPage.java
+deleted file mode 100644
+index 69f9232..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ListPage.java
++++ /dev/null
+@@ -1,94 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.app.Activity;
+-import android.content.Intent;
+-import android.content.res.TypedArray;
+-import android.os.Bundle;
+-import android.support.v4.app.Fragment;
+-import android.support.v4.content.LocalBroadcastManager;
+-import android.util.AttributeSet;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.TextView;
+-
+-public class ListPage extends Fragment {
+-
+-    protected RegisterName _register;
+-    protected String _title;
+-    protected String _unitOfMeasure;
+-
+-    @Override
+-    public View onCreateView(LayoutInflater inflater, ViewGroup container,
+-                             Bundle savedInstanceState) {
+-        int resource = R.layout.reading_layout;
+-        switch (_register) {
+-            case EnergyToday:
+-                break;
+-            case TotalEnergy:
+-                break;
+-        }
+-        View rootView = inflater.inflate(resource, container, false);
+-        if (rootView != null) {
+-            TextView view = (TextView) rootView.findViewById(R.id.Unit);
+-            view.setText(_unitOfMeasure);
+-            TextView title = (TextView) rootView.findViewById(R.id.Title);
+-            title.setText(_title);
+-        }
+-        return rootView;
+-    }
+-    @Override
+-    public void onInflate(Activity activity, AttributeSet attrs, Bundle savedInstanceState) {
+-        super.onInflate(activity, attrs, savedInstanceState);
+-
+-        TypedArray a = activity.getBaseContext().obtainStyledAttributes(attrs, R.styleable.SolarFragment, 0, 0);
+-        if (a != null) {
+-            try {
+-                _register = RegisterName.valueOf(a.getString(R.styleable.SolarFragment_register));
+-            }
+-            catch (Exception e) {
+-                e.printStackTrace();
+-            }
+-            if (a.hasValue(R.styleable.SolarFragment_reading_title)) {
+-                _title = a.getString(R.styleable.SolarFragment_reading_title);
+-            }
+-            if (a.hasValue(R.styleable.SolarFragment_reading_unit)) {
+-                _unitOfMeasure = a.getString(R.styleable.SolarFragment_reading_unit);
+-            }
+-
+-        }
+-    }
+-
+-    public void setValue (float val) {
+-        TextView view = (TextView) this.getView().findViewById(R.id.Value);
+-        view.setText(String.valueOf(val));
+-    }
+-
+-    public void setValue (String val) {
+-        TextView view = (TextView) this.getView().findViewById(R.id.Value);
+-        view.setText(val);
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        if (this.getUserVisibleHint()) {
+-            RequestGaugeData();
+-        }
+-    }
+-
+-    @Override
+-    public void setUserVisibleHint(boolean isVisibleToUser) {
+-        super.setUserVisibleHint(isVisibleToUser);
+-        if (isVisibleToUser) {
+-            RequestGaugeData();
+-        }
+-    }
+-
+-    private void RequestGaugeData() {
+-        Intent modbusInitIntent = new Intent("ca.farrelltonsolar.classic.ModbusControl", null, MyApplication.getAppContext(), ModbusMaster.class);
+-        modbusInitIntent.putExtra("Page", Function.Registers.ordinal());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(modbusInitIntent);
+-    }
+-
+-}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/LogSaver.java b/app/src/main/java/ca/farrelltonsolar/classic/LogSaver.java
+index 4f25337..8eea9cb 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/LogSaver.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/LogSaver.java
+@@ -47,10 +47,10 @@ public class LogSaver {
+     }
+ 
+     public static void ResetLogs() {
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         String fName = settings.getString("LogDate", "");
+         if (fName.length() > 0) {
+-            MyApplication.getAppContext().deleteFile(fName);
++            MonitorApplication.getAppContext().deleteFile(fName);
+         }
+         settings.edit().remove("LogDate").commit();
+         settings.edit().remove("UploadDate").commit();
+@@ -78,8 +78,7 @@ public class LogSaver {
+                         e.printStackTrace();
+                     }
+                 }
+-            }
+-            else {
++            } else {
+                 SaveLogs(logs); // never saved before!
+             }
+         }
+@@ -88,17 +87,17 @@ public class LogSaver {
+     private void SaveLogs(Bundle logs) {
+         String updatedLogFilename = GetFileName();
+         save(logs, updatedLogFilename);
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         String fName = settings.getString("LogDate", "");
+         if (fName.length() > 0) {
+-            MyApplication.getAppContext().deleteFile(fName);
++            MonitorApplication.getAppContext().deleteFile(fName);
+         }
+         settings.edit().putString("LogDate", updatedLogFilename).commit();
+     }
+ 
+     private Date LogDate() {
+         Date logDate = null;
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         String fName = settings.getString("LogDate", "");
+         if (fName.length() > 0) {
+             try {
+@@ -112,15 +111,15 @@ public class LogSaver {
+ 
+     public void Start() {
+ 
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mDayLogReceiver, new IntentFilter("ca.farrelltonsolar.classic.DayLogs"));
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        LocalBroadcastManager.getInstance(MonitorApplication.getAppContext()).registerReceiver(mDayLogReceiver, new IntentFilter("ca.farrelltonsolar.classic.DayLogs"));
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         boolean doUpload = settings.getBoolean(Constants.UploadToPVOutput, false);
+         if (doUpload) {
+             mLogger = new Thread(new Runnable() {
+                 public void run() {
+                     boolean running = true;
+                     int sleepTime = 10000;
+-                    SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++                    SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+                     String uploadDateString = settings.getString("UploadDate", "");
+                     String APIKey = settings.getString(Constants.APIKey, "");
+                     String SID = settings.getString(Constants.SID, "");
+@@ -180,7 +179,7 @@ public class LogSaver {
+                                 }
+                                 Thread.sleep(sleepTime);
+                             } while (running);
+-                        }catch (Exception e) {
++                        } catch (Exception e) {
+                             e.printStackTrace();
+                         }
+                     }
+@@ -209,7 +208,7 @@ public class LogSaver {
+     }
+ 
+     private int getDifferenceDays(Date d1, Date d2) {
+-        int daysdiff=0;
++        int daysdiff = 0;
+         long diff = d2.getTime() - d1.getTime();
+         long diffDays = diff / (24 * 60 * 60 * 1000);
+         daysdiff = (int) diffDays;
+@@ -278,7 +277,7 @@ public class LogSaver {
+ 
+     public void save(final Bundle bundle, String file) {
+         try {
+-            FileOutputStream fOut = MyApplication.getAppContext().openFileOutput(file, Context.MODE_PRIVATE);
++            FileOutputStream fOut = MonitorApplication.getAppContext().openFileOutput(file, Context.MODE_PRIVATE);
+             fOut.write(serializeBundle(bundle));
+             fOut.close();
+         } catch (Exception e) {
+@@ -292,7 +291,7 @@ public class LogSaver {
+             byte[] array = new byte[kBufferExpansionSize];
+             int bytesRead = 0;
+             int totalLength = 0;
+-            InputStream fin = MyApplication.getAppContext().openFileInput(file);
++            InputStream fin = MonitorApplication.getAppContext().openFileInput(file);
+             //InputStream fin = new BufferedInputStream(new FileInputStream(file));
+             while ((bytesRead = fin.read(array, totalLength, array.length - totalLength)) != -1) {
+                 totalLength += bytesRead;
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ModbusMaster.java b/app/src/main/java/ca/farrelltonsolar/classic/ModbusMaster.java
+deleted file mode 100644
+index 8bbed8d..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ModbusMaster.java
++++ /dev/null
+@@ -1,755 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.app.IntentService;
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.SharedPreferences;
+-import android.os.Bundle;
+-import android.preference.PreferenceManager;
+-import android.support.v4.content.LocalBroadcastManager;
+-import android.util.Log;
+-
+-import java.net.InetAddress;
+-import java.net.InetSocketAddress;
+-import java.net.UnknownHostException;
+-
+-import ca.farrelltonsolar.j2modlite.Modbus;
+-import ca.farrelltonsolar.j2modlite.ModbusException;
+-import ca.farrelltonsolar.j2modlite.ModbusIOException;
+-import ca.farrelltonsolar.j2modlite.ModbusSlaveException;
+-import ca.farrelltonsolar.j2modlite.facade.ModbusTCPMaster;
+-import ca.farrelltonsolar.j2modlite.msg.ReadFileTransferResponse;
+-import ca.farrelltonsolar.j2modlite.msg.ReadMultipleRegistersResponse;
+-import ca.farrelltonsolar.j2modlite.procimg.Register;
+-
+-// Classic modbus table
+-//            new Register { Address = 4115, Label = "Average battery voltage", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4116, Label = "PV input voltage", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4117, Label = "Average battery current", UnitOfMeasure = "Amps", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4118, Label = "Average energy to the battery", UnitOfMeasure = "kWh", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4119, Label = "Average power to the battery", UnitOfMeasure = "Watts", Conversion = address => U16(address)},
+-//            new Register { Address = 4120, Label = "Battery charge state", UnitOfMeasure = "", Conversion = address => ChargeState(address)},
+-//            new Register { Address = 4121, Label = "Average PV inout current", UnitOfMeasure = "Amps", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4122, Label = "PV VOC", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4125, Label = "Daily amp hours", UnitOfMeasure = "Amp hours", Conversion = address => U16_OneDec(address)},
+-//            new Register { Address = 4126, Label = "Total kWhours", UnitOfMeasure = "kWh", Conversion = address => U32_OneDec(address)},
+-//            new Register { Address = 4128, Label = "Total Amp hours", UnitOfMeasure = "Amp hours", Conversion = address => U32_OneDec(address)},
+-//            new Register { Address = 4130, Label = "Info flag", UnitOfMeasure = "", Conversion = address => Info(address)}
+-
+-//            new Tupple { Description = "(Off) No power, waiting for power source, battery voltage over set point.", Value = 0 },
+-//            new Tupple { Description = "(Absorb) Regulating battery voltage at absorb set point until the batteries are charged.", Value = 3 },
+-//            new Tupple { Description = "(Bulk) Max power point tracking until absorb voltage reached.", Value = 4 },
+-//            new Tupple { Description = "(Float) Battery is full and regulating battery voltage at float set point.", Value = 5 },
+-//            new Tupple { Description = "(Float) Max power point tracking. Seeking float set point voltage.", Value = 6 },
+-//            new Tupple { Description = "(Equalize) Regulating battery voltage at equalize set point.", Value = 7 },
+-//            new Tupple { Description = "(Error) Input voltage is above maximum classic operating voltage.", Value = 10 },
+-//            new Tupple { Description = "(Equalizing) Max power point tracking. Seeking equalize set point voltage.", Value = 18 }
+-
+-
+-// TriStar modbus table
+-//            new Register { Address = 1, Label = "V Scale", UnitOfMeasure = "", Conversion = address => U32(address)},
+-//            new Register { Address = 3, Label = "A Scale", UnitOfMeasure = "", Conversion = address => U32(address)},
+-//            new Register { Address = 25, Label = "Average battery voltage", UnitOfMeasure = "Volts", Conversion = address => VScale(address)},
+-//            new Register { Address = 28, Label = "PV input voltage", UnitOfMeasure = "Volts", Conversion = address => VScale(address)},
+-//            new Register { Address = 29, Label = "Average battery current", UnitOfMeasure = "Amps", Conversion = address => IScale(address)},
+-//            new Register { Address = 30, Label = "Average PV current", UnitOfMeasure = "Amps", Conversion = address => IScale(address)},
+-//            new Register { Address = 45, Label = "Info flag", UnitOfMeasure = "", Conversion = address => Info(address)},
+-//            new Register { Address = 51, Label = "Battery charge state", UnitOfMeasure = "", Conversion = address => ChargeState(address)},
+-//            new Register { Address = 58, Label = "Total kWhours", UnitOfMeasure = "kWh", Conversion = address => U16(address)},
+-//            new Register { Address = 59, Label = "Average power to the battery", UnitOfMeasure = "Watts", Conversion = address => PScale(address)},
+-//            new Register { Address = 69, Label = "Average energy to the battery", UnitOfMeasure = "kWh", Conversion = address => WHr(address)}
+-
+-//            new Tupple { Description = "(Start) System startup.", Value = 0 },
+-//            new Tupple { Description = "(Night check) No power, detecting nightfall.", Value = 1 },
+-//            new Tupple { Description = "(Disconnected) No power.", Value = 2 },
+-//            new Tupple { Description = "(Night) No power, waiting for power source.", Value = 3 },
+-//            new Tupple { Description = "(Fault) Detected fault.", Value = 4 },
+-//            new Tupple { Description = "(Bulk) Max power point tracking until absorb voltage reached.", Value = 5 },
+-//            new Tupple { Description = "(Absorb) Regulating battery voltage at absorb set point until the batteries are charged.", Value = 6 },
+-//            new Tupple { Description = "(Float) Max power point tracking. Seeking float set point voltage.", Value = 7 },
+-//            new Tupple { Description = "(Equalize) Regulating battery voltage at equalize set point.", Value = 8 },
+-//            new Tupple { Description = "(Slave) State set by master charge controller.", Value = 9 }
+-
+-
+-public class ModbusMaster extends IntentService {
+-
+-    private BroadcastNotifier _broadcaster;
+-
+-    //    private PortScanner _portScanner;
+-    private ModbusTCPMaster _modbusMaster;
+-
+-    private InetAddress _inetAddress = null; //the slave's address
+-    private int _port = Modbus.DEFAULT_PORT;
+-    private int _pollTime = Constants.MODBUS_POLL_TIME;
+-    private int _reference = 4100; //the reference; offset where to start reading from
+-    private Readings _readings = new Readings();
+-    private LogEntry _dayLogEntry = new LogEntry();
+-    private LogEntry _minuteLogEntry = new LogEntry();
+-
+-    private boolean _scanLocalSubnet = true;
+-    private boolean _foundWhizBangJr = false;
+-    private boolean _foundTriStar = false;
+-    private ConnectionState _connectionState = ConnectionState.NotFound;
+-    private Function _function = Function.Registers;
+-
+-    /**
+-     * Creates an IntentService.  Invoked by your subclass's constructor.
+-     */
+-    public ModbusMaster() {
+-        super("ModbusMaster");
+-//        _portScanner = new PortScanner();
+-        _broadcaster = new BroadcastNotifier();
+-    }
+-
+-    private ConnectionState GetConnectionState() {
+-        ConnectionState rVal;
+-        synchronized (this) {
+-            rVal = _connectionState;
+-        }
+-        return rVal;
+-    }
+-
+-    public void SetConnectionState(ConnectionState state) {
+-        synchronized (this) {
+-            _connectionState = state;
+-        }
+-    }
+-
+-    private Function GetFunction() {
+-        Function rVal;
+-        synchronized (this) {
+-            rVal = _function;
+-        }
+-        return rVal;
+-    }
+-
+-    public void SetFunction(Function state) {
+-        synchronized (this) {
+-            _function = state;
+-        }
+-    }
+-
+-    public void SetIPAddress(String IPAddress) {
+-
+-        try {
+-            synchronized (this) {
+-                InetSocketAddress address = new InetSocketAddress(IPAddress, _port);
+-                _inetAddress = address.getAddress();
+-            }
+-            SetConnectionState(ConnectionState.NotFound);
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    public void SetPort(int p) {
+-        try {
+-            _port = p;
+-            InetSocketAddress address = new InetSocketAddress(_inetAddress.getHostAddress(), _port);
+-            _inetAddress = address.getAddress();
+-            SetConnectionState(ConnectionState.NotFound);
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    public void SetSubnetScan(boolean val) {
+-        _scanLocalSubnet = val;
+-    }
+-
+-    public String Slave() {
+-        ConnectionState state = GetConnectionState();
+-        if (state == ConnectionState.Connected) {
+-            return String.format(MyApplication.getAppContext().getString(R.string.FoundClassic), _inetAddress.toString(), _port);
+-        } else if (state == ConnectionState.Initialized) {
+-            if (_scanLocalSubnet) {
+-                return String.format(MyApplication.getAppContext().getString(R.string.ClassicNotFound), _port);
+-            } else {
+-                return String.format(MyApplication.getAppContext().getString(R.string.ClassicNotConnecting), _inetAddress.toString(), _port);
+-            }
+-        } else {
+-            return "";
+-        }
+-    }
+-
+-    //    Our handler for received Intents.
+-    private BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            if ("ca.farrelltonsolar.classic.ModbusControl".equalsIgnoreCase(intent.getAction())) {
+-                int val = intent.getIntExtra("Control", -1);
+-                if (val >= 0 && val < ConnectionState.values().length) {
+-                    ConnectionState state = ConnectionState.values()[val];
+-                    if (GetConnectionState() != ConnectionState.Stopped) {
+-                        SetConnectionState(state);
+-                        Log.d(Constants.LOG_TAG, String.format("ModbusControl: %s", state.name()));
+-                    } else {
+-                        Log.d(Constants.LOG_TAG, String.format("ModbusControl is stopped, cannot be set to: %s", state.name()));
+-                    }
+-                } else {
+-                    int page = intent.getIntExtra("Page", -1);
+-                    if (page >= 0 && page < Function.values().length) {
+-                        Function function = Function.values()[page];
+-                        Bundle args = intent.getBundleExtra("Args");
+-                        SetFunction(function);
+-                    }
+-                }
+-            }
+-        }
+-    };
+-
+-    @Override
+-    public void onDestroy() {
+-        SetConnectionState(ConnectionState.Stopped);
+-        super.onDestroy();
+-    }
+-
+-    @Override
+-    protected void onHandleIntent(Intent intent) {
+-        //android.os.Debug.waitForDebugger();
+-        Log.d(Constants.LOG_TAG, String.format("Modbus onHandleIntent action: %s", intent.getAction()));
+-        if ("ca.farrelltonsolar.classic.ModbusSetup".equalsIgnoreCase(intent.getAction())) {
+-            if (GetConnectionState() == ConnectionState.NotFound) {
+-                LocalBroadcastManager.getInstance(MyApplication.getAppContext()).registerReceiver(mMessageReceiver, new IntentFilter("ca.farrelltonsolar.classic.ModbusControl"));
+-                LoadSettings();
+-                DefaultReadings();
+-                if (_scanLocalSubnet) {
+-                    return;
+-//                    Log.d(Constants.LOG_TAG, "Scanning local subnet");
+-//                    boolean classicFound = false;
+-//                    while (!classicFound) {
+-//                        try {
+-//                            classicFound = _portScanner.ScanLocalSubnet();
+-//                        } catch (UnknownHostException e) {
+-//                            e.printStackTrace();
+-//                        } catch (InterruptedException e) {
+-//                            e.printStackTrace();
+-//                            return;
+-//                        }
+-//                        if (!classicFound) {
+-//                            DefaultReadings();
+-//                            LoadSettings();
+-//                            if (!_scanLocalSubnet) {
+-//                                SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-//                                settings.edit().putString(Constants.LAST_IP_ADDRESS, "").commit();
+-//                                SetConnectionState(ConnectionState.Initialized);
+-//                                break;
+-//                            }
+-//                        }
+-//                    }
+-//                    _inetAddress = _portScanner.GetFoundInetAddress();
+-//                    SetConnectionState(ConnectionState.Initialized);
+-                } else {
+-                    SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-                    settings.edit().putString(Constants.LAST_IP_ADDRESS, "").commit();
+-                    SetConnectionState(ConnectionState.Initialized);
+-                }
+-                boolean modbusSetup = false;
+-                boolean running = true;
+-                boolean connected = false;
+-                DefaultReadings();
+-                while (running) {
+-                    try {
+-                        if (SetupModbus()) {
+-                            if (modbusSetup == false) {
+-                                String message = String.format(MyApplication.getAppContext().getString(R.string.FoundClassic), _inetAddress.toString(), _port);
+-                                BroadcastToast(message);
+-                            }
+-                            modbusSetup = true;
+-                            connected = true;
+-                            synchronized (this) {
+-                                _connectionState = ConnectionState.Connected;
+-                            }
+-                            if (LookForTriStar() == false) {
+-                                LookForWhizBangJr();
+-                                GetUnitName();
+-                            }
+-                        } else {
+-                            Thread.sleep(2000);
+-                            if (modbusSetup) {
+-                                DefaultReadings();
+-                            }
+-                        }
+-                    } catch (ModbusIOException e) {
+-                        e.printStackTrace();
+-                    } catch (ModbusSlaveException e) {
+-                        e.printStackTrace();
+-                    } catch (InterruptedException e) {
+-                        e.printStackTrace();
+-                        return;
+-                    } catch (Exception e) {
+-                        e.printStackTrace();
+-                    }
+-                    if (GetConnectionState() == ConnectionState.Stopped) {
+-                        running = false;
+-                        if (connected) {
+-                            _modbusMaster.disconnect();
+-                            connected = false;
+-                        }
+-                    }
+-                    while (connected) {
+-                        try {
+-                            if (Function.Registers.equals(GetFunction())) {
+-                                GetModbusReadings();
+-                                if (_dayLogEntry.GetLogs().isEmpty()) {
+-                                    LoadDayLogs();
+-                                }
+-                                if (_minuteLogEntry.GetLogs().isEmpty()) {
+-                                    LoadMinuteLogs();
+-                                }
+-                            } else if (Function.DayLogs.equals(GetFunction())) {
+-                                BroadcastLogs("ca.farrelltonsolar.classic.DayLogs", _dayLogEntry);
+-                                SetFunction(Function.Registers); // back to registers when loaded
+-                            } else if (Function.MinuteLogs.equals(GetFunction())) {
+-                                BroadcastLogs("ca.farrelltonsolar.classic.MinuteLogs", _minuteLogEntry);
+-                                SetFunction(Function.Registers); // back to registers when loaded
+-                            }
+-                        } catch (ModbusException e) {
+-                            e.printStackTrace();
+-                            connected = false;
+-                            _modbusMaster.disconnect();
+-                            synchronized (this) {
+-                                _connectionState = ConnectionState.Initialized;
+-                            }
+-                        } finally {
+-                            try {
+-                                Thread.sleep(_pollTime);
+-                            } catch (InterruptedException e) {
+-                                e.printStackTrace();
+-                                _modbusMaster.disconnect();
+-                                synchronized (this) {
+-                                    _connectionState = ConnectionState.Initialized;
+-                                }
+-                            }
+-                        }
+-                        if (GetConnectionState() == ConnectionState.Stopped) {
+-                            running = false;
+-                            connected = false;
+-                            _modbusMaster.disconnect();
+-                            Log.d(Constants.LOG_TAG, "Modbus disconnected");
+-                        }
+-                        if (GetConnectionState() == ConnectionState.Paused) {
+-                            DefaultReadings();
+-                            while (GetConnectionState() == ConnectionState.Paused) {
+-                                try {
+-                                    if (_modbusMaster.isConnected()) {
+-                                        _modbusMaster.disconnect();
+-                                    }
+-                                    Thread.sleep(2000);
+-                                } catch (InterruptedException e) {
+-                                    e.printStackTrace();
+-                                    _modbusMaster.disconnect();
+-                                    synchronized (this) {
+-                                        _connectionState = ConnectionState.Initialized;
+-                                    }
+-                                    return;
+-                                }
+-                            }
+-                            if (_modbusMaster.isConnected() == false) {
+-                                try {
+-                                    _modbusMaster.connect();
+-                                } catch (Exception e) {
+-                                    connected = false;
+-                                    e.printStackTrace();
+-                                }
+-                            }
+-                        }
+-                    }
+-                }
+-                Log.d(Constants.LOG_TAG, "ca.farrelltonsolar.classic.Modbus terminating");
+-                LocalBroadcastManager.getInstance(MyApplication.getAppContext()).unregisterReceiver(mMessageReceiver);
+-            }
+-            SetConnectionState(ConnectionState.NotFound);
+-        } else if ("ca.farrelltonsolar.classic.ModbusUnitName".equalsIgnoreCase(intent.getAction())) {
+-            try {
+-                _modbusMaster = new ModbusTCPMaster(_inetAddress, _port, 1);
+-                _modbusMaster.setRetries(Constants.MODBUS_RETRIES);
+-                _modbusMaster.connect();
+-                if (_modbusMaster.isConnected()) {
+-                    if (LookForTriStar() == false) {
+-                        GetUnitName();
+-                    }
+-                }
+-            } catch (ModbusIOException e) {
+-                e.printStackTrace();
+-            } catch (ModbusSlaveException e) {
+-                e.printStackTrace();
+-            } catch (Exception e) {
+-                e.printStackTrace();
+-            }
+-        }
+-    }
+-
+-    public void LoadSettings() {
+-        try {
+-            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
+-//        settings.edit().clear().commit();
+-            try {
+-                String address = settings.getString(Constants.IP_ADDRESS_PREFERENCE, "");
+-                SetIPAddress(address);
+-                String port = settings.getString(Constants.PORT_PREFERENCE, "502");
+-                SetPort(Integer.valueOf(port));
+-                SetSubnetScan(settings.getBoolean(Constants.SUBNET_SCAN_PREFERENCE, true));
+-//                if (_scanLocalSubnet) {
+-//                    _portScanner.SetStartIP(settings.getString(Constants.START_IP_PREFERENCE, ""));
+-//                    String countString = settings.getString(Constants.END_IP_COUNT_PREFERENCE, "255");
+-//                    _portScanner.SetScanCount(Integer.valueOf(countString));
+-//                }
+-            } catch (Exception e) {
+-                Log.d(Constants.LOG_TAG, "Reset settings and use defaults");
+-                settings.edit().clear().commit();
+-                SetPort(502);
+-                SetSubnetScan(true);
+-            }
+-        } catch (Exception unused) {
+-        }
+-
+-    }
+-
+-    private void DefaultReadings() {
+-        _readings.Set(RegisterName.Power, 0.0f);
+-        _readings.Set(RegisterName.BatVoltage, 0.0f);
+-        _readings.Set(RegisterName.BatCurrent, 0.0f);
+-        _readings.Set(RegisterName.PVVoltage, 0.0f);
+-        _readings.Set(RegisterName.PVCurrent, 0.0f);
+-        _readings.Set(RegisterName.EnergyToday, 0.0f);
+-        _readings.Set(RegisterName.TotalEnergy, 0.0f);
+-        _readings.Set(RegisterName.ChargeState, -1);
+-        _readings.Set(RegisterName.ConnectionState, 0);
+-        _readings.Set(RegisterName.SOC, 0);
+-        _readings.Set(RegisterName.Aux1, false);
+-        _readings.Set(RegisterName.Aux2, false);
+-        BroadcastReadings();
+-    }
+-
+-    private boolean SetupModbus() throws ModbusIOException, ModbusSlaveException {
+-        boolean rVal = false;
+-        try {
+-            _modbusMaster = new ModbusTCPMaster(_inetAddress, _port, 1);
+-            _modbusMaster.setRetries(Constants.MODBUS_RETRIES);
+-            _modbusMaster.connect();
+-            rVal = _modbusMaster.isConnected();
+-        } catch (UnknownHostException e) {
+-            e.printStackTrace();
+-        } catch (Exception e1) {
+-            Log.w(Constants.LOG_TAG, String.format("Could not connect to %s", _inetAddress.toString()));
+-        }
+-        return rVal;
+-    }
+-
+-    protected float WHr(float val) {
+-        val /= 1000;
+-        return val;
+-    }
+-
+-    protected float PScale(float val) {
+-        val = val * v_pu * i_pu;
+-        val /= 131072;
+-        return val;
+-    }
+-
+-    protected float VScale(float val) {
+-        val = val * v_pu;
+-        val /= 32768;
+-        return val;
+-    }
+-
+-    protected float IScale(float val) {
+-        val = val * i_pu;
+-        val /= 32768;
+-        return val;
+-    }
+-
+-    private void GetModbusReadings() throws ModbusException {
+-        try {
+-            if (_foundTriStar) {
+-                ReadMultipleRegistersResponse regRes = _modbusMaster.readMultipleRegisters(0, 80);
+-                if (regRes != null) {
+-
+-                    _readings.Set(RegisterName.BatVoltage, VScale(regRes.getRegisterValue(OffsetFor(25))));
+-                    _readings.Set(RegisterName.PVVoltage, VScale(regRes.getRegisterValue(OffsetFor(28))));
+-                    _readings.Set(RegisterName.BatCurrent, IScale(regRes.getRegisterValue(OffsetFor(29))));
+-                    _readings.Set(RegisterName.PVCurrent, IScale(regRes.getRegisterValue(OffsetFor(30))));
+-
+-                    _readings.Set(RegisterName.Power, PScale(regRes.getRegisterValue(OffsetFor(59))));
+-                    _readings.Set(RegisterName.EnergyToday, WHr(regRes.getRegisterValue(OffsetFor(69))));
+-                    _readings.Set(RegisterName.TotalEnergy, regRes.getRegisterValue(OffsetFor(58)));
+-
+-                }
+-            } else {
+-                ReadMultipleRegistersResponse regRes = _modbusMaster.readMultipleRegisters(_reference, 36);
+-                if (regRes != null) {
+-                    if (!_foundWhizBangJr) {
+-                        Register a = regRes.getRegister(OffsetFor(4117));
+-                        _readings.Set(RegisterName.BatCurrent, a.toShort() / 10.0f);
+-                    }
+-                    _readings.Set(RegisterName.Power, (float) regRes.getRegisterValue(OffsetFor(4119)));
+-                    _readings.Set(RegisterName.BatVoltage, regRes.getRegisterValue(OffsetFor(4115)) / 10.0f);
+-                    _readings.Set(RegisterName.PVVoltage, regRes.getRegisterValue(OffsetFor(4116)) / 10.0f);
+-                    _readings.Set(RegisterName.PVCurrent, regRes.getRegisterValue(OffsetFor(4121)) / 10.0f);
+-                    _readings.Set(RegisterName.EnergyToday, regRes.getRegisterValue(OffsetFor(4118)) / 10.0f);
+-                    _readings.Set(RegisterName.TotalEnergy, regRes.getRegisterValue(OffsetFor(4126)) / 10.0f);
+-                    _readings.Set(RegisterName.ChargeState, MSBFor(regRes.getRegisterValue(OffsetFor(4120))));
+-                    int infoFlag = regRes.getRegisterValue(OffsetFor(4130));
+-                    _readings.Set(RegisterName.Aux1, (infoFlag & 0x4000) != 0);
+-                    _readings.Set(RegisterName.Aux2, (infoFlag & 0x8000) != 0);
+-                } else {
+-                    Log.d(Constants.LOG_TAG, String.format("Modbus readMultipleRegisters returned null"));
+-                    throw new ModbusException("Failed to read data from modbus");
+-                }
+-                if (_foundWhizBangJr) {
+-                    ReadMultipleRegistersResponse regRes2 = _modbusMaster.readMultipleRegisters(4360, 16);
+-                    if (regRes2 != null) {
+-                        Register a = regRes2.getRegister(10);
+-                        _readings.Set(RegisterName.BatCurrent, a.toShort() / 10.0f);
+-                        Register soc = regRes2.getRegister(12);
+-                        short socVal = soc.toShort();
+-                        _readings.Set(RegisterName.SOC, socVal);
+-                    }
+-                }
+-                _readings.Set(RegisterName.BiDirectional, _foundWhizBangJr);
+-            }
+-            BroadcastReadings();
+-            //Log.d(Constants.LOG_TAG, String.format(String.format("Modbus BroadcastReadings on thread: %d", Thread.currentThread().getId())));
+-        } catch (ModbusException e) {
+-            e.printStackTrace();
+-            throw e;
+-        } catch (Exception all) {
+-            all.printStackTrace();
+-            throw new ModbusException(all.getMessage());
+-        }
+-    }
+-
+-    private void BroadcastToast(String message) {
+-        Intent intent2 = new Intent("ca.farrelltonsolar.classic.Toast");
+-        intent2.setClass(MyApplication.getAppContext(), GaugePage.class);
+-        intent2.putExtra("message", message);
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(intent2);
+-    }
+-
+-    private void BroadcastReadings() {
+-        Intent intent = new Intent("ca.farrelltonsolar.classic.GaugePage");
+-        intent.setClass(MyApplication.getAppContext(), GaugePage.class);
+-        intent.putExtra("readings", _readings.GetReadings());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(intent);
+-    }
+-
+-    private void LookForWhizBangJr() {
+-        try {
+-            ReadMultipleRegistersResponse regRes = _modbusMaster.readMultipleRegisters(4360, 12);
+-            if (regRes != null) {
+-                Register a = regRes.getRegister(10);
+-                _foundWhizBangJr = a.toShort() != 0;
+-            }
+-        } catch (ModbusException ignore) {
+-
+-        }
+-    }
+-
+-    private boolean LookForTriStar() {
+-        _foundTriStar = false;
+-        try {
+-            ReadMultipleRegistersResponse regRes = _modbusMaster.readMultipleRegisters(0, 4);
+-            if (regRes != null) {
+-
+-                _foundTriStar = regRes.getRegister(0).toShort() != 0;
+-                if (_foundTriStar) {
+-                    float hi = (float) regRes.getRegister(0).toShort();
+-                    float lo = (float) regRes.getRegister(1).toShort();
+-                    lo = lo / 65536;
+-                    v_pu = hi + lo;
+-
+-                    hi = (float) regRes.getRegister(2).toShort();
+-                    lo = (float) regRes.getRegister(3).toShort();
+-                    lo = lo / 65536;
+-                    i_pu = hi + lo;
+-                    _reference = 0;
+-                }
+-            }
+-        } catch (ModbusException ignore) {
+-
+-        }
+-        return _foundTriStar;
+-    }
+-
+-    private float v_pu;
+-    private float i_pu;
+-
+-    private void GetUnitName() {
+-        try {
+-            ReadMultipleRegistersResponse regRes = _modbusMaster.readMultipleRegisters(4209, 4);
+-            if (regRes != null) {
+-                byte[] v0 = regRes.getRegister(0).toBytes();
+-                byte[] v1 = regRes.getRegister(1).toBytes();
+-                byte[] v2 = regRes.getRegister(2).toBytes();
+-                byte[] v3 = regRes.getRegister(3).toBytes();
+-
+-                byte[] temp = new byte[8];
+-                temp[0] = v0[1];
+-                temp[1] = v0[0];
+-                temp[2] = v1[1];
+-                temp[3] = v1[0];
+-                temp[4] = v2[1];
+-                temp[5] = v2[0];
+-                temp[6] = v3[1];
+-                temp[7] = v3[0];
+-                String unitName = new String(temp);
+-                unitName = unitName.trim();
+-                if (unitName.length() > 0) {
+-                    Intent intent = new Intent("ca.farrelltonsolar.classic.Unit");
+-                    intent.setClass(MyApplication.getAppContext(), MonitorActivity.class);
+-                    intent.putExtra("UnitName", unitName);
+-                    LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(intent);
+-                }
+-            }
+-
+-        } catch (ModbusException ignore) {
+-
+-        }
+-    }
+-
+-    private void LoadDayLogs() throws ModbusException {
+-        int day = 0;
+-        short[] mWattHourLog = new short[512];
+-        short[] mFloatLog = new short[512];
+-        while (day < 365) {
+-            ReadFileTransferResponse regRes = _modbusMaster.readFileTransfer(day, Constants.CLASSIC_KWHOUR_DAILY_CATEGORY, Constants.CLASSIC_DAILY_LOG);
+-            if (regRes != null) {
+-                int count = regRes.getWordCount();
+-                if (count > 0) {
+-                    int j = count - 1;
+-                    for (int i = 0; i < count; i++, j--) {
+-                        mWattHourLog[j + day] = registerToShort(regRes.getRegister(i).toBytes());
+-                    }
+-                    day += count;
+-                }
+-            } else {
+-
+-                Log.d(Constants.LOG_TAG, String.format("Modbus readCustom returned null"));
+-                throw new ModbusException("Failed to read File Transfer data from modbus");
+-            }
+-        }
+-        day = 0;
+-        while (day < 365) {
+-            ReadFileTransferResponse regRes = _modbusMaster.readFileTransfer(day, Constants.CLASSIC_FLOAT_TIME_DAILY_CATEGORY, Constants.CLASSIC_DAILY_LOG);
+-            if (regRes != null) {
+-                int count = regRes.getWordCount();
+-                if (count > 0) {
+-                    int j = count - 1;
+-                    for (int i = 0; i < count; i++, j--) {
+-                        mFloatLog[j + day] = registerToShort(regRes.getRegister(i).toBytes());
+-                    }
+-                    day += count;
+-                }
+-            } else {
+-
+-                Log.d(Constants.LOG_TAG, String.format("Modbus readCustom returned null"));
+-                throw new ModbusException("Failed to read File Transfer data from modbus");
+-            }
+-        }
+-        _dayLogEntry.Set(Constants.CLASSIC_KWHOUR_DAILY_CATEGORY, mWattHourLog);
+-        _dayLogEntry.Set(Constants.CLASSIC_FLOAT_TIME_DAILY_CATEGORY, mFloatLog);
+-    }
+-
+-    private void LoadMinuteLogs() throws ModbusException {
+-        int minute = 0;
+-        short[] mWattLog = new short[1024];
+-        int d = 0;
+-        while (minute < 1024) {
+-            ReadFileTransferResponse regRes = _modbusMaster.readFileTransfer(minute, Constants.CLASSIC_POWER_HOURLY_CATEGORY, Constants.CLASSIC_MINUTE_LOG);
+-            if (regRes != null) {
+-                int count = regRes.getWordCount();
+-                if (count > 0) {
+-                    if (count >= 1024) {
+-                        break;
+-                    }
+-                    int j = count - 1;
+-                    for (int i = 0; i < count; i++, j--) {
+-                        mWattLog[i + minute] = registerToShort(regRes.getRegister(j).toBytes());
+-                    }
+-                    minute += count;
+-                }
+-            } else {
+-
+-                Log.d(Constants.LOG_TAG, String.format("Modbus readCustom returned null"));
+-                throw new ModbusException("Failed to read File Transfer data from modbus");
+-            }
+-        }
+-        short[] mHourlyWattLog = new short[24];
+-
+-        // calculate the hourly power average, assume each entry is at a 5 minute interval (/12)
+-        int v = 12;
+-        int w = 0;
+-        int sum = 0;
+-        for (int k = 0; k < mWattLog.length; k++) {
+-            if (v > 0) {
+-                sum += mWattLog[k];
+-                v--;
+-            } else {
+-                mHourlyWattLog[w++] = (short) (sum / 12);
+-                sum = 0;
+-                v = 12;
+-                if (w >= mHourlyWattLog.length) {
+-                    break;
+-                }
+-            }
+-        }
+-        _minuteLogEntry.Set(Constants.CLASSIC_POWER_HOURLY_CATEGORY, mHourlyWattLog);
+-        //LoadMinuteTimestamps();
+-    }
+-
+-
+-//    private void LoadMinuteTimestamps() throws ModbusException {
+-//        int minute = 0;
+-//        short[] mMinuteTimestampLog = new short[512];
+-//        short[] mHourTimestampLog = new short[512];
+-//        while (minute < 512) {
+-//            ReadFileTransferResponse regRes = _modbusMaster.readFileTransfer(minute, Constants.CLASSIC_TIMESTAMP_HIGH_HOURLY_CATEGORY, Constants.CLASSIC_MINUTE_LOG);
+-//            if (regRes != null) {
+-//                int count = regRes.getWordCount();
+-//                if (count > 0) {
+-//                    if (count >= 512) {
+-//                        break;
+-//                    }
+-//                    int j = count - 1;
+-//                    for (int i = 0; i < count; i++, j--) {
+-//                        short val = registerToShort(regRes.getRegister(j).toBytes());
+-//                        short min = (short) (val & 0x003f);
+-//                        short hour = (short) (val  >> 6);
+-//                        mMinuteTimestampLog[i + minute] = min;
+-//                        mHourTimestampLog[i + minute] = hour;
+-//                    }
+-//                    minute += count;
+-//                }
+-//            } else {
+-//
+-//                Log.d(Constants.LOG_TAG, String.format("Modbus readCustom returned null"));
+-//                throw new ModbusException("Failed to read File Transfer data from modbus");
+-//            }
+-//        }
+-//        _minuteLogEntry.Set(Constants.CLASSIC_TIMESTAMP_HIGH_HOURLY_CATEGORY, mMinuteTimestampLog);
+-//    }
+-
+-    private static short registerToShort(byte[] bytes) {
+-        return (short) ((bytes[1] << 8) | (bytes[0] & 0xff));
+-    }
+-
+-    private void BroadcastLogs(String action, LogEntry logEntry) {
+-        Intent intent = new Intent(action);
+-        intent.setClass(MyApplication.getAppContext(), CalendarPage.class);
+-        intent.putExtra("logs", logEntry.GetLogs());
+-        LocalBroadcastManager.getInstance(MyApplication.getAppContext()).sendBroadcast(intent);
+-    }
+-
+-    private int OffsetFor(int address) {
+-        return address - _reference - 1; // origin 0
+-    }
+-
+-    private int MSBFor(int val) {
+-        return val >> 8;
+-    }
+-
+-}
+-
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ModbusService.java b/app/src/main/java/ca/farrelltonsolar/classic/ModbusService.java
+index c0ff627..4130a4f 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ModbusService.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/ModbusService.java
+@@ -51,9 +51,7 @@ public class ModbusService extends Service {
+         }
+         if (pollTimer != null) {
+             pollTimer.cancel();
+-            pollTimer.purge();
+         }
+-        Log.d(getClass().getName(), "disconnect");
+     }
+ 
+     public class ModbusServiceBinder extends Binder {
+@@ -82,7 +80,7 @@ public class ModbusService extends Service {
+         pollTimer = new Timer();
+         task = new ModbusTask(controller.getInetSocketAddress(), this.getBaseContext());
+         pollTimer.schedule(task, 1000, Constants.MODBUS_POLL_TIME);
+-        Log.d(getClass().getName(), "Monitor running");
++        Log.d(getClass().getName(), String.format("Monitor running on: %s", controller.toString()));
+     }
+ 
+ 
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/ModbusTask.java b/app/src/main/java/ca/farrelltonsolar/classic/ModbusTask.java
+index 538d3bb..58f7d73 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/ModbusTask.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/ModbusTask.java
+@@ -32,10 +32,62 @@ import ca.farrelltonsolar.j2modlite.msg.ReadFileTransferResponse;
+ import ca.farrelltonsolar.j2modlite.msg.ReadMultipleRegistersResponse;
+ import ca.farrelltonsolar.j2modlite.procimg.Register;
+ 
++// Classic modbus table
++//            new Register { Address = 4115, Label = "Average battery voltage", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4116, Label = "PV input voltage", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4117, Label = "Average battery current", UnitOfMeasure = "Amps", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4118, Label = "Average energy to the battery", UnitOfMeasure = "kWh", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4119, Label = "Average power to the battery", UnitOfMeasure = "Watts", Conversion = address => U16(address)},
++//            new Register { Address = 4120, Label = "Battery charge state", UnitOfMeasure = "", Conversion = address => ChargeState(address)},
++//            new Register { Address = 4121, Label = "Average PV inout current", UnitOfMeasure = "Amps", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4122, Label = "PV VOC", UnitOfMeasure = "Volts", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4125, Label = "Daily amp hours", UnitOfMeasure = "Amp hours", Conversion = address => U16_OneDec(address)},
++//            new Register { Address = 4126, Label = "Total kWhours", UnitOfMeasure = "kWh", Conversion = address => U32_OneDec(address)},
++//            new Register { Address = 4128, Label = "Total Amp hours", UnitOfMeasure = "Amp hours", Conversion = address => U32_OneDec(address)},
++//            new Register { Address = 4130, Label = "Info flag", UnitOfMeasure = "", Conversion = address => Info(address)}
++//            new Register { Address = 4132, Label = "BATTemperature", UnitOfMeasure = "", Conversion = address => U16_OneDec(address)}
++//            new Register { Address = 4133, Label = "FETTemperature", UnitOfMeasure = "", Conversion = address => U16_OneDec(address)}
++//            new Register { Address = 4134, Label = "PCBTemperature", UnitOfMeasure = "", Conversion = address => U16_OneDec(address)}
++
++//            new Tupple { Description = "(Off) No power, waiting for power source, battery voltage over set point.", Value = 0 },
++//            new Tupple { Description = "(Absorb) Regulating battery voltage at absorb set point until the batteries are charged.", Value = 3 },
++//            new Tupple { Description = "(Bulk) Max power point tracking until absorb voltage reached.", Value = 4 },
++//            new Tupple { Description = "(Float) Battery is full and regulating battery voltage at float set point.", Value = 5 },
++//            new Tupple { Description = "(Float) Max power point tracking. Seeking float set point voltage.", Value = 6 },
++//            new Tupple { Description = "(Equalize) Regulating battery voltage at equalize set point.", Value = 7 },
++//            new Tupple { Description = "(Error) Input voltage is above maximum classic operating voltage.", Value = 10 },
++//            new Tupple { Description = "(Equalizing) Max power point tracking. Seeking equalize set point voltage.", Value = 18 }
++
++
++// TriStar modbus table
++//            new Register { Address = 1, Label = "V Scale", UnitOfMeasure = "", Conversion = address => U32(address)},
++//            new Register { Address = 3, Label = "A Scale", UnitOfMeasure = "", Conversion = address => U32(address)},
++//            new Register { Address = 25, Label = "Average battery voltage", UnitOfMeasure = "Volts", Conversion = address => VScale(address)},
++//            new Register { Address = 28, Label = "PV input voltage", UnitOfMeasure = "Volts", Conversion = address => VScale(address)},
++//            new Register { Address = 29, Label = "Average battery current", UnitOfMeasure = "Amps", Conversion = address => IScale(address)},
++//            new Register { Address = 30, Label = "Average PV current", UnitOfMeasure = "Amps", Conversion = address => IScale(address)},
++//            new Register { Address = 45, Label = "Info flag", UnitOfMeasure = "", Conversion = address => Info(address)},
++//            new Register { Address = 51, Label = "Battery charge state", UnitOfMeasure = "", Conversion = address => ChargeState(address)},
++//            new Register { Address = 58, Label = "Total kWhours", UnitOfMeasure = "kWh", Conversion = address => U16(address)},
++//            new Register { Address = 59, Label = "Average power to the battery", UnitOfMeasure = "Watts", Conversion = address => PScale(address)},
++//            new Register { Address = 69, Label = "Average energy to the battery", UnitOfMeasure = "kWh", Conversion = address => WHr(address)}
++
++//            new Tupple { Description = "(Start) System startup.", Value = 0 },
++//            new Tupple { Description = "(Night check) No power, detecting nightfall.", Value = 1 },
++//            new Tupple { Description = "(Disconnected) No power.", Value = 2 },
++//            new Tupple { Description = "(Night) No power, waiting for power source.", Value = 3 },
++//            new Tupple { Description = "(Fault) Detected fault.", Value = 4 },
++//            new Tupple { Description = "(Bulk) Max power point tracking until absorb voltage reached.", Value = 5 },
++//            new Tupple { Description = "(Absorb) Regulating battery voltage at absorb set point until the batteries are charged.", Value = 6 },
++//            new Tupple { Description = "(Float) Max power point tracking. Seeking float set point voltage.", Value = 7 },
++//            new Tupple { Description = "(Equalize) Regulating battery voltage at equalize set point.", Value = 8 },
++//            new Tupple { Description = "(Slave) State set by master charge controller.", Value = 9 }
++
+ /**
+  * Created by Graham on 12/12/2014.
+  */
+ public class ModbusTask extends TimerTask {
++    final Object lock = new Object();
+ 
+     public ModbusTask(InetSocketAddress address, Context ctx) {
+         deviceAddress = address;
+@@ -57,31 +109,37 @@ public class ModbusTask extends TimerTask {
+     private boolean foundWhizBangJr = false;
+     private boolean foundTriStar = false;
+     private boolean initialReadingLoaded = false;
++    private boolean disconnecting = false;
+ 
+     public boolean connect() {
+         boolean rVal = false;
+         InetAddress inetAddress = deviceAddress.getAddress();
++        Log.d(getClass().getName(), String.format("Connecting to %s", inetAddress.toString()));
+         try {
+-
++            disconnect();
+             modbusMaster = new ModbusTCPMaster(inetAddress, deviceAddress.getPort(), 1);
+             modbusMaster.setRetries(Constants.MODBUS_RETRIES);
+             modbusMaster.connect();
+             if (modbusMaster.isConnected()) {
++                disconnecting = false;
+                 rVal = true;
+-                DefaultReadings();
+             }
+         } catch (UnknownHostException e) {
+             e.printStackTrace();
+         } catch (Exception e1) {
+-            Log.w(getClass().getName(), String.format("Could not connect to %s", inetAddress.toString()));
++            Log.w(getClass().getName(), String.format("Could not connect to %s, ex: %s", inetAddress.toString(), e1));
+         }
+         return rVal;
+     }
+ 
+-
+     public void disconnect() {
+-        if (modbusMaster != null) {
+-            modbusMaster.disconnect();
++        disconnecting = true;
++        if (isConnected()) {
++            synchronized (lock) {
++                modbusMaster.disconnect();
++                modbusMaster = null;
++            }
++            Log.d(getClass().getName(), String.format("Disconnected from %s", deviceAddress.toString()));
+         }
+     }
+ 
+@@ -96,42 +154,31 @@ public class ModbusTask extends TimerTask {
+     @Override
+     public void run() {
+         try {
+-            boolean connected = isConnected();
+-            if (connected == false) {
+-                connected = connect();
+-            }
+-            if (connected) {
+-                if (initialReadingLoaded == false) {
+-                    initialReadingLoaded = true;
+-                    if (LookForTriStar() == false) {
+-                        LookForWhizBangJr();
+-                        GetUnitName();
++//            Log.d(getClass().getName(), String.format("Run on %s", deviceAddress.toString()));
++            synchronized (lock) {
++                if (disconnecting) {
++                    return;
++                }
++                boolean connected = isConnected();
++                if (connected == false) {
++                    connected = connect();
++                }
++                if (connected) {
++                    if (initialReadingLoaded == false) {
++                        initialReadingLoaded = true;
++                        if (LookForTriStar() == false) {
++                            LookForWhizBangJr();
++                            GetUnitName();
++                        }
+                     }
++                    GetModbusReadings();
+                 }
+-                GetModbusReadings();
+             }
+         } catch (Exception e1) {
+-            Log.w(getClass().getName(), String.format("Could not get readings from %s", deviceAddress.toString()));
++            Log.w(getClass().getName(), String.format("Could not get readings from %s ex: %s", deviceAddress.toString(), e1));
+         }
+     }
+ 
+-    private void DefaultReadings() {
+-        readings.Set(RegisterName.Power, 0.0f);
+-        readings.Set(RegisterName.BatVoltage, 0.0f);
+-        readings.Set(RegisterName.BatCurrent, 0.0f);
+-        readings.Set(RegisterName.PVVoltage, 0.0f);
+-        readings.Set(RegisterName.PVCurrent, 0.0f);
+-        readings.Set(RegisterName.EnergyToday, 0.0f);
+-        readings.Set(RegisterName.TotalEnergy, 0.0f);
+-        readings.Set(RegisterName.ChargeState, -1);
+-        readings.Set(RegisterName.ConnectionState, 0);
+-        readings.Set(RegisterName.SOC, 0);
+-        readings.Set(RegisterName.Aux1, false);
+-        readings.Set(RegisterName.Aux2, false);
+-        BroadcastReadings();
+-    }
+-
+-
+     private void GetModbusReadings() throws ModbusException {
+         try {
+             if (foundTriStar) {
+@@ -162,11 +209,14 @@ public class ModbusTask extends TimerTask {
+                     readings.Set(RegisterName.EnergyToday, regRes.getRegisterValue(OffsetFor(4118)) / 10.0f);
+                     readings.Set(RegisterName.TotalEnergy, regRes.getRegisterValue(OffsetFor(4126)) / 10.0f);
+                     readings.Set(RegisterName.ChargeState, MSBFor(regRes.getRegisterValue(OffsetFor(4120))));
++                    readings.Set(RegisterName.BatTemperature, regRes.getRegisterValue(OffsetFor(4132)) / 10.0f);
++                    readings.Set(RegisterName.FETTemperature, regRes.getRegisterValue(OffsetFor(4133)) / 10.0f);
++                    readings.Set(RegisterName.PCBTemperature, regRes.getRegisterValue(OffsetFor(4134)) / 10.0f);
+                     int infoFlag = regRes.getRegisterValue(OffsetFor(4130));
+                     readings.Set(RegisterName.Aux1, (infoFlag & 0x4000) != 0);
+                     readings.Set(RegisterName.Aux2, (infoFlag & 0x8000) != 0);
+                 } else {
+-                    Log.d(getClass().getName(), String.format("Modbus readMultipleRegisters returned null"));
++                    Log.w(getClass().getName(), String.format("Modbus readMultipleRegisters returned null"));
+                     throw new ModbusException("Failed to read data from modbus");
+                 }
+                 if (foundWhizBangJr) {
+@@ -194,14 +244,14 @@ public class ModbusTask extends TimerTask {
+ 
+     private void BroadcastToast(String message) {
+         Intent intent2 = new Intent("ca.farrelltonsolar.classic.Toast");
+-        intent2.setClass(context, GaugePage.class);
++        intent2.setClass(context, GaugeFramentBase.class);
+         intent2.putExtra("message", message);
+         LocalBroadcastManager.getInstance(context).sendBroadcast(intent2);
+     }
+ 
+     private void BroadcastReadings() {
+         Intent intent = new Intent("ca.farrelltonsolar.classic.GaugePage");
+-        intent.setClass(context, GaugePage.class);
++        intent.setClass(context, GaugeFramentBase.class);
+         intent.putExtra("readings", readings.GetReadings());
+         LocalBroadcastManager.getInstance(context).sendBroadcast(intent);
+     }
+@@ -319,7 +369,7 @@ public class ModbusTask extends TimerTask {
+                 }
+             } else {
+ 
+-                Log.d(getClass().getName(), String.format("Modbus readCustom returned null"));
++                Log.w(getClass().getName(), String.format("Modbus readCustom returned null"));
+                 throw new ModbusException("Failed to read File Transfer data from modbus");
+             }
+         }
+@@ -337,7 +387,7 @@ public class ModbusTask extends TimerTask {
+                 }
+             } else {
+ 
+-                Log.d(getClass().getName(), String.format("Modbus readCustom returned null"));
++                Log.w(getClass().getName(), String.format("Modbus readCustom returned null"));
+                 throw new ModbusException("Failed to read File Transfer data from modbus");
+             }
+         }
+@@ -365,7 +415,7 @@ public class ModbusTask extends TimerTask {
+                 }
+             } else {
+ 
+-                Log.d(getClass().getName(), String.format("Modbus readCustom returned null"));
++                Log.w(getClass().getName(), String.format("Modbus readCustom returned null"));
+                 throw new ModbusException("Failed to read File Transfer data from modbus");
+             }
+         }
+@@ -417,7 +467,7 @@ public class ModbusTask extends TimerTask {
+ //                }
+ //            } else {
+ //
+-//                Log.d(getClass().getName(), String.format("Modbus readCustom returned null"));
++//                Log.w(getClass().getName(), String.format("Modbus readCustom returned null"));
+ //                throw new ModbusException("Failed to read File Transfer data from modbus");
+ //            }
+ //        }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/MonitorApplication.java b/app/src/main/java/ca/farrelltonsolar/classic/MonitorApplication.java
+new file mode 100644
+index 0000000..f021387
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/MonitorApplication.java
+@@ -0,0 +1,235 @@
++package ca.farrelltonsolar.classic;
++
++import android.app.Activity;
++import android.app.Application;
++import android.content.BroadcastReceiver;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.ServiceConnection;
++import android.content.SharedPreferences;
++import android.os.Bundle;
++import android.os.IBinder;
++import android.preference.PreferenceManager;
++import android.support.v4.content.LocalBroadcastManager;
++import android.util.Log;
++
++import com.google.gson.Gson;
++
++import java.net.InetSocketAddress;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * Created by Graham on 26/12/13.
++ */
++public class MonitorApplication extends Application implements Application.ActivityLifecycleCallbacks {
++    private static Context context;
++
++    static Map<Integer, String> _chargeStates = new HashMap<Integer, String>();
++    static Map<Integer, String> _chargeStateTitles = new HashMap<Integer, String>();
++    static ModbusService modbusService;
++    static UDPListener UDPListenerService;
++    static boolean ismodbusServiceBound = false;
++    static boolean isUDPListenerServiceBound = false;
++    static int currentChargeController = -1;
++
++    public static ChargeControllers getChargeControllers() {
++        return chargeControllers;
++    }
++
++    private static ChargeControllers chargeControllers;
++    private static Gson GSON = new Gson();
++    ComplexPreferences configuration;
++
++    private static LogSaver mLogSaver = new LogSaver();
++
++    @Override
++    public void onTerminate() {
++        super.onTerminate();
++        mLogSaver.Terminate();
++    }
++
++    public void onCreate() {
++        super.onCreate();
++        MonitorApplication.context = getApplicationContext();
++        InitializeChargeStateLookup();
++        InitializeChargeStateTitleLookup();
++        mLogSaver.Start();
++        //mLogSaver.ResetLogs();
++        Log.d(getClass().getName(), "InitializeModbus complete");
++        this.registerActivityLifecycleCallbacks(this);
++        LocalBroadcastManager.getInstance(this).registerReceiver(mCCReceiver, new IntentFilter("ca.farrelltonsolar.classic.AddChargeController"));
++        configuration = ComplexPreferences.getComplexPreferences(this, null, Context.MODE_PRIVATE);
++        chargeControllers = configuration.getObject("devices", ChargeControllers.class);
++        if (chargeControllers == null) { // save empty collection
++            chargeControllers = new ChargeControllers();
++            configuration.putObject("devices", chargeControllers);
++            configuration.commit();
++        }
++
++    }
++
++
++    public static Context getAppContext() {
++        return MonitorApplication.context;
++    }
++
++    public static String getChargeStateText(int cs) {
++        if (_chargeStates.containsKey(cs)) {
++            return _chargeStates.get(cs);
++        }
++        return "";
++    }
++
++    public static String getChargeStateTitleText(int cs) {
++        if (_chargeStateTitles.containsKey(cs)) {
++            return _chargeStateTitles.get(cs);
++        }
++        return "";
++    }
++
++    private void InitializeChargeStateLookup() {
++        _chargeStates.put(-1, getString(R.string.NoConnection));
++        _chargeStates.put(0, getString(R.string.ChargeStateOff));
++        _chargeStates.put(3, getString(R.string.Absorb));
++        _chargeStates.put(4, getString(R.string.Bulk));
++        _chargeStates.put(5, getString(R.string.Float));
++        _chargeStates.put(6, getString(R.string.Tracking));
++        _chargeStates.put(7, getString(R.string.Equalize));
++        _chargeStates.put(10, getString(R.string.Error));
++        _chargeStates.put(18, getString(R.string.SeekingEqualize));
++    }
++
++    private void InitializeChargeStateTitleLookup() {
++        _chargeStateTitles.put(-1, "");
++        _chargeStateTitles.put(0, getString(R.string.ChargeStateOffTitle));
++        _chargeStateTitles.put(3, getString(R.string.AbsorbTitle));
++        _chargeStateTitles.put(4, getString(R.string.BulkTitle));
++        _chargeStateTitles.put(5, getString(R.string.FloatTitle));
++        _chargeStateTitles.put(6, getString(R.string.TrackingTitle));
++        _chargeStateTitles.put(7, getString(R.string.EqualizeTitle));
++        _chargeStateTitles.put(10, getString(R.string.ErrorTitle));
++        _chargeStateTitles.put(18, getString(R.string.SeekingEqualizeTitle));
++    }
++
++    private ServiceConnection modbusServiceConnection = new ServiceConnection() {
++
++        public void onServiceConnected(ComponentName className, IBinder service) {
++            ModbusService.ModbusServiceBinder binder = (ModbusService.ModbusServiceBinder) service;
++            modbusService = binder.getService();
++            ismodbusServiceBound = true;
++            if (currentChargeController != -1) { // device selected before service was bound
++                modbusService.Monitor(chargeControllers.get(currentChargeController));
++            }
++            Log.d(getClass().getName(), currentChargeController != -1 ? String.format("ModbusService ServiceConnected, monitoring device %d", currentChargeController) : "ModbusService ServiceConnected");
++        }
++
++        public void onServiceDisconnected(ComponentName arg0) {
++            ismodbusServiceBound = false;
++            modbusService = null;
++            Log.d(getClass().getName(), "ModbusService ServiceDisconnected");
++        }
++    };
++
++    private ServiceConnection UDPListenerServiceConnection = new ServiceConnection() {
++
++        public void onServiceConnected(ComponentName className, IBinder service) {
++            UDPListener.UDPListenerServiceBinder binder = (UDPListener.UDPListenerServiceBinder) service;
++            UDPListenerService = binder.getService();
++            isUDPListenerServiceBound = true;
++            ArrayList<InetSocketAddress> arr = new ArrayList<>();
++            chargeControllers.load(arr);
++            UDPListenerService.listen(arr);
++            Log.d(getClass().getName(), "UDPListener ServiceConnected");
++        }
++
++        public void onServiceDisconnected(ComponentName arg0) {
++            isUDPListenerServiceBound = false;
++            UDPListenerService = null;
++            Log.d(getClass().getName(), "UDPListener ServiceDisconnected");
++        }
++    };
++
++    // Our handler for received Intents.
++    private BroadcastReceiver mCCReceiver = new BroadcastReceiver() {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            ChargeController cc = GSON.fromJson(intent.getStringExtra("ChargeController"), ChargeController.class);
++            Log.d(getClass().getName(), String.format("adding new controller to list (%s)", cc.toString()));
++            chargeControllers.add(cc);
++            configuration.putObject("devices", chargeControllers);
++            configuration.commit();
++        }
++    };
++
++    @Override
++    public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
++        Log.d(getClass().getName(), "onActivityCreated");
++    }
++
++    @Override
++    public void onActivityStarted(Activity activity) {
++        Log.d(getClass().getName(), "onActivityStarted");
++    }
++
++    @Override
++    public void onActivityResumed(Activity activity) {
++        Log.d(getClass().getName(), "onActivityResumed");
++        bindService(new Intent(this, ModbusService.class), modbusServiceConnection, Context.BIND_AUTO_CREATE);
++        bindService(new Intent(this, UDPListener.class), UDPListenerServiceConnection, Context.BIND_AUTO_CREATE);
++
++    }
++
++    @Override
++    public void onActivityPaused(Activity activity) {
++        Log.d(getClass().getName(), "onActivityPaused");
++    }
++
++    @Override
++    public void onActivityStopped(Activity activity) {
++        Log.d(getClass().getName(), "onActivityStopped");
++        if (ismodbusServiceBound) {
++            modbusService.disconnect();
++            unbindService(modbusServiceConnection);
++            Log.d(getClass().getName(), "unbindService modbusServiceConnection");
++        }
++        if (isUDPListenerServiceBound) {
++            UDPListenerService.stopListening();
++            unbindService(UDPListenerServiceConnection);
++            Log.d(getClass().getName(), "unbindService UDPListenerServiceConnection");
++        }
++    }
++
++    @Override
++    public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
++        Log.d(getClass().getName(), "onActivitySaveInstanceState");
++    }
++
++    @Override
++    public void onActivityDestroyed(Activity activity) {
++        Log.d(getClass().getName(), "onActivityDestroyed");
++    }
++
++    public static void clearChargeControllerList() {
++        modbusService.disconnect();
++        chargeControllers.clear();
++        UDPListenerService.listen(new ArrayList<InetSocketAddress>());
++    }
++
++    public static void monitor(int device) {
++        if (currentChargeController != device) {
++            if (device < 0 || device >= chargeControllers.count()) {
++                return;
++            }
++            currentChargeController = device;
++            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
++            settings.edit().putInt("currentChargeController", device).commit();
++            if (ismodbusServiceBound) {
++                modbusService.Monitor(chargeControllers.get(device));
++            }
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/MyApplication.java b/app/src/main/java/ca/farrelltonsolar/classic/MyApplication.java
+deleted file mode 100644
+index 2a0bc50..0000000
+--- a/app/src/main/java/ca/farrelltonsolar/classic/MyApplication.java
++++ /dev/null
+@@ -1,78 +0,0 @@
+-package ca.farrelltonsolar.classic;
+-
+-import android.app.Application;
+-import android.content.Context;
+-import android.util.Log;
+-
+-import java.util.HashMap;
+-import java.util.Map;
+-
+-/**
+- * Created by Graham on 26/12/13.
+- */
+-public class MyApplication extends Application {
+-    private static Context context;
+-
+-    static Map<Integer, String> _chargeStates = new HashMap<Integer, String>();
+-    static Map<Integer, String> _chargeStateTitles = new HashMap<Integer, String>();
+-
+-    private static LogSaver mLogSaver = new LogSaver();
+-
+-    @Override
+-    public void onTerminate() {
+-        super.onTerminate();
+-        mLogSaver.Terminate();
+-    }
+-
+-    public void onCreate() {
+-        super.onCreate();
+-        MyApplication.context = getApplicationContext();
+-        InitializeChargeStateLookup();
+-        InitializeChargeStateTitleLookup();
+-        mLogSaver.Start();
+-        //mLogSaver.ResetLogs();
+-        Log.d(Constants.LOG_TAG, "InitializeModbus complete");
+-    }
+-
+-    public static Context getAppContext() {
+-        return MyApplication.context;
+-    }
+-
+-    public static String getChargeStateText(int cs) {
+-        if (_chargeStates.containsKey(cs)) {
+-            return _chargeStates.get(cs);
+-        }
+-        return "";
+-    }
+-
+-    public static String getChargeStateTitleText(int cs) {
+-        if (_chargeStateTitles.containsKey(cs)) {
+-            return _chargeStateTitles.get(cs);
+-        }
+-        return "";
+-    }
+-
+-    private void InitializeChargeStateLookup() {
+-        _chargeStates.put(-1, getString(R.string.NoConnection));
+-        _chargeStates.put(0, getString(R.string.ChargeStateOff));
+-        _chargeStates.put(3, getString(R.string.Absorb));
+-        _chargeStates.put(4, getString(R.string.Bulk));
+-        _chargeStates.put(5, getString(R.string.Float));
+-        _chargeStates.put(6, getString(R.string.Tracking));
+-        _chargeStates.put(7, getString(R.string.Equalize));
+-        _chargeStates.put(10, getString(R.string.Error));
+-        _chargeStates.put(18, getString(R.string.SeekingEqualize));
+-    }
+-
+-    private void InitializeChargeStateTitleLookup() {
+-        _chargeStateTitles.put(-1, "");
+-        _chargeStateTitles.put(0, getString(R.string.ChargeStateOffTitle));
+-        _chargeStateTitles.put(3, getString(R.string.AbsorbTitle));
+-        _chargeStateTitles.put(4, getString(R.string.BulkTitle));
+-        _chargeStateTitles.put(5, getString(R.string.FloatTitle));
+-        _chargeStateTitles.put(6, getString(R.string.TrackingTitle));
+-        _chargeStateTitles.put(7, getString(R.string.EqualizeTitle));
+-        _chargeStateTitles.put(10, getString(R.string.ErrorTitle));
+-        _chargeStateTitles.put(18, getString(R.string.SeekingEqualizeTitle));
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/NavigationDrawerFragment.java b/app/src/main/java/ca/farrelltonsolar/classic/NavigationDrawerFragment.java
+index 8ee89f4..6ca2af4 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/NavigationDrawerFragment.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/NavigationDrawerFragment.java
+@@ -1,14 +1,22 @@
+ package ca.farrelltonsolar.classic;
+ 
+ import android.app.Activity;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.SharedPreferences;
+ import android.content.res.Configuration;
+ import android.os.Bundle;
++import android.preference.PreferenceManager;
+ import android.support.v4.app.ActionBarDrawerToggle;
+ import android.support.v4.app.Fragment;
++import android.support.v4.content.LocalBroadcastManager;
+ import android.support.v4.view.GravityCompat;
+ import android.support.v4.widget.DrawerLayout;
+ import android.support.v7.app.ActionBar;
+ import android.support.v7.app.ActionBarActivity;
++import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -20,6 +28,8 @@ import android.widget.ArrayAdapter;
+ import android.widget.ListView;
+ import android.widget.Toast;
+ 
++import com.google.gson.Gson;
++
+ /**
+  * Fragment used for managing interactions for and presentation of a navigation drawer.
+  * See the <a href="https://developer.android.com/design/patterns/navigation-drawer.html#Interaction">
+@@ -51,7 +61,7 @@ public class NavigationDrawerFragment extends Fragment {
+     private DrawerLayout mDrawerLayout;
+     private ListView mDrawerListView;
+     private View mFragmentContainerView;
+-
++    private static Gson GSON = new Gson();
+     private int mCurrentSelectedPosition = 0;
+     private boolean mFromSavedInstanceState;
+     private ArrayAdapter<ChargeController> adapter;
+@@ -65,10 +75,10 @@ public class NavigationDrawerFragment extends Fragment {
+         if (savedInstanceState != null) {
+             mCurrentSelectedPosition = savedInstanceState.getInt(STATE_SELECTED_POSITION);
+             mFromSavedInstanceState = true;
++        } else {
++            SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
++            mCurrentSelectedPosition = settings.getInt("currentChargeController", -1);
+         }
+-        // Select either the default item (0) or the last selected item.
+-        selectItem(mCurrentSelectedPosition);
+-
+     }
+ 
+     @Override
+@@ -111,7 +121,7 @@ public class NavigationDrawerFragment extends Fragment {
+      * @param fragmentId   The android:id of this fragment in its activity's layout.
+      * @param drawerLayout The DrawerLayout containing this fragment's UI.
+      */
+-    public void setUp(int fragmentId, DrawerLayout drawerLayout, ChargeControllers chargeControllers) {
++    public void setUp(int fragmentId, DrawerLayout drawerLayout) {
+         mFragmentContainerView = getActivity().findViewById(fragmentId);
+         mDrawerLayout = drawerLayout;
+ 
+@@ -151,11 +161,8 @@ public class NavigationDrawerFragment extends Fragment {
+                 getActivity().supportInvalidateOptionsMenu(); // calls onPrepareOptionsMenu()
+             }
+         };
+-        if (chargeControllers != null) {
+-            for (ChargeController ct : chargeControllers.getControllers()) {
+-                adapter.add(ct);
+-            }
+-        }
++        ChargeControllers chargeControllers = MonitorApplication.getChargeControllers();
++        chargeControllers.load(adapter);
+         if (adapter.getCount() == 0) {
+             mDrawerLayout.openDrawer(mFragmentContainerView);
+         }
+@@ -167,6 +174,17 @@ public class NavigationDrawerFragment extends Fragment {
+             }
+         });
+         mDrawerLayout.setDrawerListener(mDrawerToggle);
++        LocalBroadcastManager.getInstance(getActivity()).registerReceiver(mCCReceiver, new IntentFilter("ca.farrelltonsolar.classic.AddChargeController"));
++
++        if (mCurrentSelectedPosition != -1) {
++            if (mCallbacks != null) {
++                if (adapter != null) {
++                    if (mCurrentSelectedPosition < adapter.getCount()) {
++                        mCallbacks.onNavigationDrawerItemSelected(mCurrentSelectedPosition);
++                    }
++                }
++            }
++        }
+     }
+ 
+     private void selectItem(int position) {
+@@ -180,7 +198,7 @@ public class NavigationDrawerFragment extends Fragment {
+         if (mCallbacks != null) {
+             if (adapter != null) {
+                 if (position < adapter.getCount()) {
+-                    mCallbacks.onNavigationDrawerItemSelected(adapter.getItem(position));
++                    mCallbacks.onNavigationDrawerItemSelected(position);
+                 }
+             }
+         }
+@@ -189,7 +207,6 @@ public class NavigationDrawerFragment extends Fragment {
+     @Override
+     public void onAttach(Activity activity) {
+         super.onAttach(activity);
+-        Toast.makeText(activity.getBaseContext(), "Drawer attached", Toast.LENGTH_SHORT).show();
+         try {
+             mCallbacks = (NavigationDrawerCallbacks) activity;
+         } catch (ClassCastException e) {
+@@ -207,7 +224,6 @@ public class NavigationDrawerFragment extends Fragment {
+     public void onSaveInstanceState(Bundle outState) {
+         super.onSaveInstanceState(outState);
+         outState.putInt(STATE_SELECTED_POSITION, mCurrentSelectedPosition);
+-//        configuration.commit();
+     }
+ 
+     @Override
+@@ -236,12 +252,14 @@ public class NavigationDrawerFragment extends Fragment {
+ 
+         if (item.getItemId() == R.id.action_scan) {
+             adapter.clear();
+-            MonitorActivity act = (MonitorActivity) getActivity();
+-            act.clearChargeControllerList();
++            MonitorApplication.clearChargeControllerList();
++
+             return true;
+         }
+         if (item.getItemId() == R.id.action_add) {
+             Toast.makeText(getActivity(), "Add static address.", Toast.LENGTH_SHORT).show();
++            ChargeController cc = new ChargeController("192.168.0.12", "Laptop", 502);
++            AddChargeController(cc);
+             return true;
+         }
+ 
+@@ -271,11 +289,23 @@ public class NavigationDrawerFragment extends Fragment {
+         /**
+          * Called when an item in the navigation drawer is selected.
+          */
+-        void onNavigationDrawerItemSelected(ChargeController device);
++        void onNavigationDrawerItemSelected(int position);
+     }
+ 
+     public void AddChargeController(ChargeController cc) {
+-        adapter.add(cc);
++        LocalBroadcastManager broadcaster = LocalBroadcastManager.getInstance(this.getActivity());
++        Intent pkg = new Intent("ca.farrelltonsolar.classic.AddChargeController");
++        pkg.putExtra("ChargeController", GSON.toJson(cc));
++        broadcaster.sendBroadcast(pkg);
+     }
+ 
++    private BroadcastReceiver mCCReceiver = new BroadcastReceiver() {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            ChargeController cc = GSON.fromJson(intent.getStringExtra("ChargeController"), ChargeController.class);
++            Log.d(getClass().getName(), String.format("adding new controller to list (%s)", cc.toString()));
++            adapter.add(cc);
++        }
++    };
++
+ }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/PowerFragment.java b/app/src/main/java/ca/farrelltonsolar/classic/PowerFragment.java
+new file mode 100644
+index 0000000..e0c4f47
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/PowerFragment.java
+@@ -0,0 +1,104 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.app.Activity;
++import android.os.Bundle;
++import android.view.View;
++import android.widget.TextView;
++
++import ca.farrelltonsolar.uicomponents.BaseGauge;
++import ca.farrelltonsolar.uicomponents.SolarGauge;
++
++
++/**
++ * This fragment displays the power gauges
++ */
++public class PowerFragment extends GaugeFramentBase {
++
++    public static int TabTitle = R.string.PowerTabTitle;
++
++    public PowerFragment() {
++        super(R.layout.fragment_power);
++    }
++
++    public void initializeReadings(View view, Bundle savedInstanceState) {
++        BaseGauge powerGauge = (BaseGauge) view.findViewById(R.id.Power);
++        powerGauge.setTargetValue(0.0f);
++        powerGauge.setGreenRange(10, 100);
++        BaseGauge gauge;
++        gauge = (BaseGauge) view.findViewById(R.id.PVVoltage);
++        gauge.setGreenRange(25.0, 75.0);
++        gauge.setTargetValue(0.0f);
++        gauge = (BaseGauge) view.findViewById(R.id.PVCurrent);
++        gauge.setTargetValue(0.0f);
++        gauge = (BaseGauge) view.findViewById(R.id.BatVoltage);
++        gauge.setGreenRange(55.0, 72.5);
++        gauge.setTargetValue(0.0f);
++        gauge = (BaseGauge) view.findViewById(R.id.BatCurrent);
++        gauge.setTargetValue(0.0f);
++        TextView tv = (TextView) this.getView().findViewById(R.id.ChargeState);
++        tv.setText(getString(R.string.NoConnection));
++    }
++
++    public void setReadings(Readings readings) {
++        try {
++
++            SolarGauge powerGauge = (SolarGauge) this.getView().findViewById(R.id.Power);
++            powerGauge.setTargetValue(autoAdjustScale(powerGauge.getId(), readings.GetFloat(RegisterName.Power)));
++            powerGauge.setLeftLed(readings.GetBoolean(RegisterName.Aux1));
++            powerGauge.setRightLed(readings.GetBoolean(RegisterName.Aux2));
++
++            BaseGauge gauge = (BaseGauge) this.getView().findViewById(R.id.PVVoltage);
++            gauge.setTargetValue(autoAdjustScale(gauge.getId(), readings.GetFloat(RegisterName.PVVoltage)));
++            gauge = (BaseGauge) this.getView().findViewById(R.id.PVCurrent);
++            gauge.setTargetValue(autoAdjustScale(gauge.getId(), readings.GetFloat(RegisterName.PVCurrent)));
++            gauge = (BaseGauge) this.getView().findViewById(R.id.BatVoltage);
++            float bVolts = readings.GetFloat(RegisterName.BatVoltage);
++            if (bVolts > 125) { // 120 volt system!
++                gauge.setScaleEnd(200);
++                gauge.setTargetValue(bVolts);
++            } else { // 12, 24, 48, 96
++                gauge.setTargetValue(autoAdjustScale(gauge.getId(), bVolts));
++            }
++            gauge = (BaseGauge) this.getView().findViewById(R.id.BatCurrent);
++            float batAmps = readings.GetFloat(RegisterName.BatCurrent);
++            if (batAmps < 0) {
++                throw new Exception("bad amps reading: " + batAmps);
++            }
++            gauge.setTargetValue(autoAdjustScale(gauge.getId(), batAmps));
++
++            TextView tv = (TextView) this.getView().findViewById(R.id.ChargeStateTitle);
++            int cs = readings.GetInt(RegisterName.ChargeState);
++            tv.setText(MonitorApplication.getChargeStateTitleText(cs));
++            tv = (TextView) this.getView().findViewById(R.id.ChargeState);
++            tv.setText(MonitorApplication.getChargeStateText(cs));
++        } catch (Exception ignore) {
++
++        }
++    }
++
++    @Override
++    public void onAttach(Activity activity) {
++        super.onAttach(activity);
++    }
++
++    @Override
++    public void onDetach() {
++        super.onDetach();
++    }
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/Readings.java b/app/src/main/java/ca/farrelltonsolar/classic/Readings.java
+index 7843454..e95d269 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/Readings.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/Readings.java
+@@ -3,6 +3,7 @@ package ca.farrelltonsolar.classic;
+ import android.os.Bundle;
+ 
+ public class Readings {
++    final Object lock = new Object();
+ 
+     public Readings() {
+         _readings = new Bundle();
+@@ -19,42 +20,50 @@ public class Readings {
+     }
+ 
+     public Float GetFloat(RegisterName name) {
+-        return _readings.getFloat(name.name(), 0);
++        synchronized (lock) {
++            return _readings.getFloat(name.name(), 0);
++        }
+     }
+ 
+     public int GetInt(RegisterName name) {
+-        return _readings.getInt(name.name(), 0);
++        synchronized (lock) {
++            return _readings.getInt(name.name(), 0);
++        }
+     }
+ 
+     public String GetString(RegisterName name) {
+-        return _readings.getString(name.name());
++        synchronized (lock) {
++            return _readings.getString(name.name());
++        }
+     }
+ 
+ 
+     public Boolean GetBoolean(RegisterName name) {
+-        return _readings.getBoolean(name.name(), false);
++        synchronized (lock) {
++            return _readings.getBoolean(name.name(), false);
++        }
+     }
+ 
+     public void Set(RegisterName name, Float value) {
+-        synchronized (this) {
++        synchronized (lock) {
+             _readings.putFloat(name.name(), value);
+         }
+     }
+ 
+     public void Set(RegisterName name, int value) {
+-        synchronized (this) {
++        synchronized (lock) {
+             _readings.putInt(name.name(), value);
+         }
+     }
+ 
+     public void Set(RegisterName name, String value) {
+-        synchronized (this) {
++        synchronized (lock) {
+             _readings.putString(name.name(), value);
+         }
+     }
+ 
+     public void Set(RegisterName name, Boolean value) {
+-        synchronized (this) {
++        synchronized (lock) {
+             _readings.putBoolean(name.name(), value);
+         }
+     }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/RegisterName.java b/app/src/main/java/ca/farrelltonsolar/classic/RegisterName.java
+index 696caf5..a0629b3 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/RegisterName.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/RegisterName.java
+@@ -13,5 +13,8 @@ public enum RegisterName {
+     BiDirectional,
+     SOC,
+     Aux1,
+-    Aux2
++    Aux2,
++    BatTemperature,
++    FETTemperature,
++    PCBTemperature
+ }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/Settings.java b/app/src/main/java/ca/farrelltonsolar/classic/Settings.java
+index 4b5d9c0..346bad3 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/Settings.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/Settings.java
+@@ -18,9 +18,6 @@ public class Settings extends PreferenceActivity implements SharedPreferences.On
+ 
+     private IPAddressPreference _IPAddressPreference;
+     private EditTextPreference _PortPreference;
+-    private CheckBoxPreference _autoScan;
+-    private IPAddressPreference _startScan;
+-    private EditTextPreference _countScan;
+     private CheckBoxPreference _uploadToPVOutput;
+     private EditTextPreference _SID;
+     private EditTextPreference _APIKey;
+@@ -53,25 +50,15 @@ public class Settings extends PreferenceActivity implements SharedPreferences.On
+             }
+         });
+ 
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         try {
+             _PortPreference = (EditTextPreference) findPreference(Constants.PORT_PREFERENCE);
+             _IPAddressPreference = (IPAddressPreference) findPreference(Constants.IP_ADDRESS_PREFERENCE);
+-            _autoScan = (CheckBoxPreference) findPreference(Constants.SUBNET_SCAN_PREFERENCE);
+-            _startScan = (IPAddressPreference) findPreference(Constants.START_IP_PREFERENCE);
+-            _countScan = (EditTextPreference) findPreference(Constants.END_IP_COUNT_PREFERENCE);
+-            ScanEnabled(_autoScan.isChecked());
+             _uploadToPVOutput = (CheckBoxPreference) findPreference(Constants.UploadToPVOutput);
+             _SID = (EditTextPreference) findPreference(Constants.SID);
+             _APIKey = (EditTextPreference) findPreference(Constants.APIKey);
+             UploadToPVOutputEnabled(_uploadToPVOutput.isChecked());
+-            _autoScan.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+-                public boolean onPreferenceChange(Preference preference, Object newValue) {
+-                    boolean isEnabled = ((Boolean) newValue).booleanValue();
+-                    ScanEnabled(isEnabled);
+-                    return true;
+-                }
+-            });
++
+             _uploadToPVOutput.setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+                 public boolean onPreferenceChange(Preference preference, Object newValue) {
+                     boolean isEnabled = ((Boolean) newValue).booleanValue();
+@@ -79,8 +66,7 @@ public class Settings extends PreferenceActivity implements SharedPreferences.On
+                     return true;
+                 }
+             });
+-            _startScan.setSummary(settings.getString(Constants.START_IP_PREFERENCE, ""));
+-            _countScan.setSummary(settings.getString(Constants.END_IP_COUNT_PREFERENCE, "255"));
++
+             _IPAddressPreference.setSummary(settings.getString(Constants.IP_ADDRESS_PREFERENCE, "Static IP Address of the Classic"));
+             _PortPreference.setSummary(settings.getString(Constants.PORT_PREFERENCE, "502"));
+             _SID.setSummary(settings.getString(Constants.SID, ""));
+@@ -108,12 +94,6 @@ public class Settings extends PreferenceActivity implements SharedPreferences.On
+         _APIKey.setEnabled(isEnabled);
+     }
+ 
+-    private void ScanEnabled(boolean isEnabled) {
+-        _startScan.setEnabled(isEnabled);
+-        _countScan.setEnabled(isEnabled);
+-        _IPAddressPreference.setEnabled(!isEnabled);
+-    }
+-
+     private boolean screenIsLarge() {
+         int screenMask = getResources().getConfiguration().screenLayout;
+         return (screenMask & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_LARGE || (screenMask & Configuration.SCREENLAYOUT_SIZE_MASK) == Configuration.SCREENLAYOUT_SIZE_XLARGE;
+@@ -123,37 +103,26 @@ public class Settings extends PreferenceActivity implements SharedPreferences.On
+     protected void onResume() {
+ 
+         super.onResume();
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         settings.registerOnSharedPreferenceChangeListener(this);
+     }
+ 
+     @Override
+     protected void onPause() {
+         super.onPause();
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+         settings.unregisterOnSharedPreferenceChangeListener(this);
+     }
+ 
+     @Override
+     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String key) {
+-        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MyApplication.getAppContext());
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
+ 
+         if (key.equals(Constants.IP_ADDRESS_PREFERENCE)) {
+             _IPAddressPreference.setSummary(settings.getString(key, ""));
+         } else if (key.equals(Constants.PORT_PREFERENCE)) {
+             _PortPreference.setSummary(settings.getString(key, "502"));
+-        } else if (key.equals(Constants.START_IP_PREFERENCE)) {
+-            _startScan.setSummary(settings.getString(key, ""));
+-        } else if (key.equals(Constants.END_IP_COUNT_PREFERENCE)) {
+-            Integer count = 255;
+-            String countString = settings.getString(key, "");
+-            if (countString.length() > 0) {
+-                count = Integer.valueOf(countString);
+-                if (count < 0 || count > 255) {
+-                    count = 255;
+-                }
+-            }
+-            _countScan.setSummary(String.valueOf(count));
++
+         }
+     }
+ }
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/StateOfChargeFragment.java b/app/src/main/java/ca/farrelltonsolar/classic/StateOfChargeFragment.java
+new file mode 100644
+index 0000000..29d2eec
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/StateOfChargeFragment.java
+@@ -0,0 +1,84 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.app.Activity;
++import android.content.SharedPreferences;
++import android.os.Bundle;
++import android.preference.PreferenceManager;
++import android.view.View;
++
++import ca.farrelltonsolar.uicomponents.BaseGauge;
++import ca.farrelltonsolar.uicomponents.SOCGauge;
++
++/**
++ * Created by Graham on 14/12/2014.
++ */
++public class StateOfChargeFragment extends GaugeFramentBase {
++
++    public static int TabTitle = R.string.StateOfChargeTabTitle;
++    private boolean _bidirectionalUnitsInWatts;
++
++    public StateOfChargeFragment() {
++
++        super(R.layout.fragment_state_of_charge);
++        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(MonitorApplication.getAppContext());
++        _bidirectionalUnitsInWatts = settings.getBoolean(Constants.BIDIRECTIONALUNIT_PREFERENCE, false);
++    }
++
++    public void setReadings(Readings readings) {
++        try {
++
++            BaseGauge gaugeView = (BaseGauge) this.getView().findViewById(R.id.BidirectionalCurrent);
++            float batteryCurrent = readings.GetFloat(RegisterName.BatCurrent);
++            if (_bidirectionalUnitsInWatts) {
++                float batteryVolts = readings.GetFloat(RegisterName.BatVoltage);
++                gaugeView.setTargetValue(autoAdjustScale(gaugeView.getId(), batteryCurrent * batteryVolts));
++            } else {
++                gaugeView.setTargetValue(autoAdjustScale(gaugeView.getId(), batteryCurrent));
++            }
++            int socVal = readings.GetInt(RegisterName.SOC);
++            SOCGauge soc = (SOCGauge) this.getView().findViewById(R.id.SOC);
++            soc.setValue(socVal);
++        } catch (Exception ignore) {
++
++        }
++    }
++
++    public void initializeReadings(View view, Bundle savedInstanceState) {
++        BaseGauge gaugeView = (BaseGauge) view.findViewById(R.id.BidirectionalCurrent);
++        if (_bidirectionalUnitsInWatts) {
++            gaugeView.setTitle(this.getString(R.string.BatPowerTitle));
++            gaugeView.setUnit("W");
++        } else {
++            gaugeView.setTitle(this.getString(R.string.BatCurrentTitle));
++            gaugeView.setUnit("A");
++        }
++        gaugeView.setTargetValue(0.0f);
++    }
++
++
++    @Override
++    public void onAttach(Activity activity) {
++        super.onAttach(activity);
++    }
++
++    @Override
++    public void onDetach() {
++        super.onDetach();
++    }
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/TemperatureFragment.java b/app/src/main/java/ca/farrelltonsolar/classic/TemperatureFragment.java
+new file mode 100644
+index 0000000..8be9879
+--- /dev/null
++++ b/app/src/main/java/ca/farrelltonsolar/classic/TemperatureFragment.java
+@@ -0,0 +1,78 @@
++/*
++ * Copyright (c) 2014. FarrelltonSolar
++ *
++ *  Licensed under the Apache License, Version 2.0 (the "License");
++ *  you may not use this file except in compliance with the License.
++ *  You may obtain a copy of the License at
++ *
++ *       http://www.apache.org/licenses/LICENSE-2.0
++ *
++ *  Unless required by applicable law or agreed to in writing, software
++ *  distributed under the License is distributed on an "AS IS" BASIS,
++ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ *  See the License for the specific language governing permissions and
++ *  limitations under the License.
++ */
++
++package ca.farrelltonsolar.classic;
++
++import android.app.Activity;
++import android.os.Bundle;
++import android.view.View;
++
++import ca.farrelltonsolar.uicomponents.BaseGauge;
++
++/**
++ * Created by Graham on 14/12/2014.
++ */
++public class TemperatureFragment extends GaugeFramentBase {
++
++    public static int TabTitle = R.string.TemperatureTabTitle;
++
++    public TemperatureFragment() {
++        super(R.layout.fragment_temperature);
++    }
++
++    @Override
++    public void initializeReadings(View view, Bundle savedInstanceState) {
++        BaseGauge gaugeView = (BaseGauge) this.getView().findViewById(R.id.BatTemperature);
++        gaugeView.setGreenRange(0, 60.0);
++
++        gaugeView = (BaseGauge) this.getView().findViewById(R.id.FETTemperature);
++        gaugeView.setGreenRange(0, 60.0);
++
++        gaugeView = (BaseGauge) this.getView().findViewById(R.id.PCBTemperature);
++        gaugeView.setGreenRange(0, 60.0);
++    }
++
++    @Override
++    public void setReadings(Readings reading) {
++        try {
++
++            BaseGauge gaugeView = (BaseGauge) this.getView().findViewById(R.id.BatTemperature);
++            float batteryTemp = reading.GetFloat(RegisterName.BatTemperature);
++            gaugeView.setTargetValue(batteryTemp);
++
++            gaugeView = (BaseGauge) this.getView().findViewById(R.id.FETTemperature);
++            float fetTemp = reading.GetFloat(RegisterName.FETTemperature);
++            gaugeView.setTargetValue(fetTemp);
++
++            gaugeView = (BaseGauge) this.getView().findViewById(R.id.PCBTemperature);
++            float pcbTemp = reading.GetFloat(RegisterName.PCBTemperature);
++            gaugeView.setTargetValue(pcbTemp);
++
++        } catch (Exception ignore) {
++
++        }
++    }
++
++    @Override
++    public void onAttach(Activity activity) {
++        super.onAttach(activity);
++    }
++
++    @Override
++    public void onDetach() {
++        super.onDetach();
++    }
++}
+diff --git a/app/src/main/java/ca/farrelltonsolar/classic/UDPListener.java b/app/src/main/java/ca/farrelltonsolar/classic/UDPListener.java
+index 228eb90..bf5dfac 100644
+--- a/app/src/main/java/ca/farrelltonsolar/classic/UDPListener.java
++++ b/app/src/main/java/ca/farrelltonsolar/classic/UDPListener.java
+@@ -40,7 +40,7 @@ import ca.farrelltonsolar.j2modlite.ModbusException;
+  */
+ public class UDPListener extends Service {
+ 
+-
++    final Object lock = new Object();
+     private final IBinder mBinder = new UDPListenerServiceBinder();
+     private static Gson GSON = new Gson();
+     private ListenerThread mListener;
+@@ -67,25 +67,34 @@ public class UDPListener extends Service {
+         private DatagramPacket packet;
+         private ArrayList<InetSocketAddress> alreadyFoundList = new ArrayList<>();
+ 
+-        public ArrayList<InetSocketAddress> getAlreadyFoundList() {
+-            synchronized (this) {
+-                return alreadyFoundList;
+-            }
+-        }
+-
+         public void addToAlreadyFoundList(InetSocketAddress address) {
+-            synchronized (this) {
++            synchronized (lock) {
+                 alreadyFoundList.add(address);
+             }
+         }
+ 
+-        public ListenerThread(final ChargeControllers controllers) {
+-            try {
+-                if (controllers != null) {
+-                    for (ChargeController cc : controllers.getControllers()) {
+-                        alreadyFoundList.add(cc.getInetSocketAddress());
++        private boolean hasAddressAlreadyBeenFound(InetSocketAddress address) {
++            boolean rVal = false;
++            synchronized (lock) {
++                for (InetSocketAddress cc : alreadyFoundList) {
++                    if (cc.equals(address)) {
++                        rVal = true;
++                        break;
+                     }
+                 }
++            }
++            return rVal;
++        }
++
++        public void removeFromAlreadyFoundList(InetSocketAddress address) {
++            synchronized (lock) {
++                alreadyFoundList.remove(address);
++            }
++        }
++
++        public ListenerThread(ArrayList<InetSocketAddress> current) {
++            try {
++                alreadyFoundList = current;
+                 packet = new DatagramPacket(buffer, buffer.length);
+                 socket = new DatagramSocket(Constants.CLASSIC_UDP_PORT);
+                 socket.setSoTimeout(2000);
+@@ -96,13 +105,13 @@ public class UDPListener extends Service {
+         }
+ 
+         private boolean GetRunning() {
+-            synchronized (this) {
++            synchronized (lock) {
+                 return running;
+             }
+         }
+ 
+         public void SetRunning(boolean state) {
+-            synchronized (this) {
++            synchronized (lock) {
+                 running = state;
+                 if (state == false && socket != null) {
+                     socket.close();
+@@ -131,6 +140,7 @@ public class UDPListener extends Service {
+                         InetSocketAddress socketAddress = new InetSocketAddress(address, port);
+                         if (hasAddressAlreadyBeenFound(socketAddress) == false) {
+                             Log.d(getClass().getName(), "Found new classic at address: " + address + " port: " + port);
++                            addToAlreadyFoundList(socketAddress);
+                             Runnable r = new NamerThread(socketAddress, this);
+                             new Thread(r).start();
+                         }
+@@ -147,9 +157,9 @@ public class UDPListener extends Service {
+             } catch (Exception e) {
+                 Log.w(getClass().getName(), "mListener Exception: " + e.toString());
+             } finally {
+-                Log.d(getClass().getName(), "finally");
+                 socket.close();
+                 socket.disconnect();
++                Log.d(getClass().getName(), "closed socket and disconnected");
+             }
+             Log.d(getClass().getName(), "mListener exiting");
+         }
+@@ -175,9 +185,10 @@ public class UDPListener extends Service {
+                         Intent pkg = new Intent("ca.farrelltonsolar.classic.AddChargeController");
+                         pkg.putExtra("ChargeController", GSON.toJson(cc));
+                         broadcaster.sendBroadcast(pkg);
+-                        container.addToAlreadyFoundList(socketAddress);
++
+                     } catch (ModbusException e) {
+                         Log.d(getClass().getName(), "Failed to get unit info" + e.getMessage());
++                        removeFromAlreadyFoundList(socketAddress);
+                     } finally {
+                         modbus.disconnect();
+                     }
+@@ -185,22 +196,12 @@ public class UDPListener extends Service {
+             }
+         }
+ 
+-        private boolean hasAddressAlreadyBeenFound(InetSocketAddress address) {
+-            boolean rVal = false;
+-            ArrayList<InetSocketAddress> controllers = getAlreadyFoundList();
+-            for (InetSocketAddress cc : controllers) {
+-                if (cc.equals(address)) {
+-                    rVal = true;
+-                    break;
+-                }
+-            }
+-            return rVal;
+-        }
++
+     }
+ 
+-    public void listen(final ChargeControllers controllers) {
++    public void listen(ArrayList<InetSocketAddress> alreadyFoundList) {
+         stopListening();
+-        mListener = new ListenerThread(controllers);
++        mListener = new ListenerThread(alreadyFoundList);
+         mListener.start();
+         Log.d(getClass().getName(), "UDP Listener running");
+     }
+diff --git a/j2modlite/src/main/java/ca/farrelltonsolar/j2modlite/io/ModbusTCPTransaction.java b/j2modlite/src/main/java/ca/farrelltonsolar/j2modlite/io/ModbusTCPTransaction.java
+index dcf9ecd..e981d2a 100644
+--- a/j2modlite/src/main/java/ca/farrelltonsolar/j2modlite/io/ModbusTCPTransaction.java
++++ b/j2modlite/src/main/java/ca/farrelltonsolar/j2modlite/io/ModbusTCPTransaction.java
+@@ -204,8 +204,9 @@ public class ModbusTCPTransaction implements ModbusTransaction {
+                         m_Response = m_IO.readResponse();
+ 
+                         if (m_Response.getTransactionID() != m_Request.getTransactionID()) {
+-                            Log.d(Modbus.LOG_TAG_MODBUS, "expected " + m_Request.getTransactionID() +
++                            Log.d(Modbus.LOG_TAG_MODBUS, "Wrong transactionId, expected " + m_Request.getTransactionID() +
+                                     ", got " + m_Response.getTransactionID());
++                            m_Response = null;
+                         }
+ 
+                     } while (m_Response == null && ++retryCounter < retryLimit);
+@@ -247,7 +248,7 @@ public class ModbusTCPTransaction implements ModbusTransaction {
+         }
+ 
+ 		/*
+-		 * The slave may have returned an exception -- check for that.
++         * The slave may have returned an exception -- check for that.
+ 		 */
+         if (m_Response instanceof ExceptionResponse)
+             throw new ModbusSlaveException(((ExceptionResponse) m_Response).getExceptionCode());
+diff --git a/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/BaseGauge.java b/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/BaseGauge.java
+index c38dee2..e65e680 100644
+--- a/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/BaseGauge.java
++++ b/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/BaseGauge.java
+@@ -54,78 +54,78 @@ public class BaseGauge extends BaseComponent {
+     protected PointF mTitlePosition;
+     protected PointF mReadingPosition;
+ 
+-    private float mScaleStartAngle;
+-    private float mScaleEndAngle;
+-    private float mAvailableAngle;
+-    private Quadrant mFace = Quadrant.Full;
+-
+-    private float mScaleStartValue;
+-    private float mScaleEndValue;
+-
+-    private float mFaceRadius;
+-    private float mScaleRadius;
+-    private float mInnerRimWidth;
+-    private float mMajorTickStepValue;
+-    private float mMajorTicksLength;
+-    private float mMinorTicksLength;
+-
+-    private int mDefaultColor = Color.rgb(180, 180, 180);
+-    private double mMajorTickPercentOfMax;
+-    private int mMinorTicksPerDivision;
+-
+-    private String mGaugeTitle;
+-    private String mReadingUnit;
+-
+-    private List<ColoredRange> mRanges = new ArrayList<ColoredRange>();
+-
+-    private int mTitleColor;
+-    private int mReadingColor;
+-    private int mTickLabelColor;
+-
+-    private Paint mNeedleScrewPaint;
+-    private Paint mNeedleScrewBorderPaint;
+-    private Paint mBackgroundPaint;
+-    private Paint mBorderAccentPaint;
+-    private Paint mFacePaint;
+-    private Paint mFaceBorderPaint;
+-    private Paint mFaceShadowPaint;
+-    private Paint mNeedleLeftPaint;
+-    private Paint mNeedleRightPaint;
+-    private Paint mTicksPaint;
+-    private Paint mTickLabelTextPaint;
+-    private Paint mColoredRangePaint;
+-    private Paint mTitleTextPaint;
+-    private Paint mReadingTextPaint;
+-
+-    private boolean mBiDirectional;
+-    private boolean mShowReading;
+-    private boolean mShowScale;
+-    private boolean mStaticBackgroundLoaded = false;
+-    private boolean mShowOuterShadow;
+-    private boolean mShowRim;
+-    private boolean mShowInnerRim;
+-    private int mReadingPrecision;
+-
+-    private float mTargetValue;
+-    private float mTargetValueNoCaps;
+-    private float mCurrentValue;
++    protected float mScaleStartAngle;
++    protected float mScaleEndAngle;
++    protected float mAvailableAngle;
++    protected Quadrant mFace = Quadrant.Full;
++
++    protected float mScaleStartValue;
++    protected float mScaleEndValue;
++
++    protected float mFaceRadius;
++    protected float mScaleRadius;
++    protected float mInnerRimWidth;
++    protected float mMajorTickStepValue;
++    protected float mMajorTicksLength;
++    protected float mMinorTicksLength;
++
++    protected int mDefaultColor = Color.rgb(180, 180, 180);
++    protected double mMajorTickPercentOfMax;
++    protected int mMinorTicksPerDivision;
++
++    protected String mGaugeTitle;
++    protected String mReadingUnit;
++
++    protected List<ColoredRange> mRanges = new ArrayList<ColoredRange>();
++
++    protected int mTitleColor;
++    protected int mReadingColor;
++    protected int mTickLabelColor;
++
++    protected Paint mNeedleScrewPaint;
++    protected Paint mNeedleScrewBorderPaint;
++    protected Paint mBackgroundPaint;
++    protected Paint mBorderAccentPaint;
++    protected Paint mFacePaint;
++    protected Paint mFaceBorderPaint;
++    protected Paint mFaceShadowPaint;
++    protected Paint mNeedleLeftPaint;
++    protected Paint mNeedleRightPaint;
++    protected Paint mTicksPaint;
++    protected Paint mTickLabelTextPaint;
++    protected Paint mColoredRangePaint;
++    protected Paint mTitleTextPaint;
++    protected Paint mReadingTextPaint;
++
++    protected boolean mBiDirectional;
++    protected boolean mShowReading;
++    protected boolean mShowScale;
++    protected boolean mStaticBackgroundLoaded = false;
++    protected boolean mShowOuterShadow;
++    protected boolean mShowRim;
++    protected boolean mShowInnerRim;
++    protected int mReadingPrecision;
++
++    protected float mTargetValue;
++    protected float mTargetValueNoCaps;
++    protected float mCurrentValue;
+ 
+     protected RectF mGaugeRect;
+-    private RectF mOuterRim;
+-    private RectF mInnerRim;
+-    private RectF mFaceRect;
+-    private RectF mScaleArc;
+-    private RectF mNeedleScrew;
++    protected RectF mOuterRim;
++    protected RectF mInnerRim;
++    protected RectF mFaceRect;
++    protected RectF mScaleArc;
++    protected RectF mNeedleScrew;
+ 
+-    private Path mNeedleRightPath;
+-    private Path mNeedleLeftPath;
+-    private float mNeedleWidth;
++    protected Path mNeedleRightPath;
++    protected Path mNeedleLeftPath;
++    protected float mNeedleWidth;
+ 
+-    private float mNeedleVelocity;
+-    private float mNeedleAcceleration;
+-    private long mNeedleLastMoved = -1;
++    protected float mNeedleVelocity;
++    protected float mNeedleAcceleration;
++    protected long mNeedleLastMoved = -1;
+ 
+-    private Bitmap mBackground;
++    protected Bitmap mBackground;
+ 
+     private boolean mBSizeChangedComplete = false;
+ 
+@@ -152,30 +152,34 @@ public class BaseGauge extends BaseComponent {
+         this(context, null, 0);
+     }
+ 
+-    public double getScaleStart() {
++    public float getScaleStart() {
+         return mScaleStartValue;
+     }
+ 
+     public void setScaleStart(float scaleStart) {
+         if (scaleStart < 0 || mBiDirectional)
+             scaleStart = 0;
+-        this.mScaleStartValue = scaleStart;
+-        if (mScaleEndValue < mScaleStartValue)
+-            mScaleEndValue = mScaleStartValue + 1;
+-        invalidateAll();
++        if (mScaleStartValue != scaleStart) {
++            this.mScaleStartValue = scaleStart;
++            if (mScaleEndValue < mScaleStartValue)
++                mScaleEndValue = mScaleStartValue + 1;
++            invalidateAll();
++        }
+     }
+ 
+-    public double getScaleEnd() {
++    public float getScaleEnd() {
+         return mScaleEndValue;
+     }
+ 
+     public void setScaleEnd(float scaleEnd) {
+         if (scaleEnd < 0)
+             scaleEnd = 0;
+-        this.mScaleEndValue = scaleEnd;
+-        if (mScaleStartValue > mScaleStartValue)
+-            mScaleStartValue = mScaleEndValue - 1;
+-        invalidateAll();
++        if (mScaleEndValue != scaleEnd) {
++            this.mScaleEndValue = scaleEnd;
++            if (mScaleStartValue > mScaleStartValue)
++                mScaleStartValue = mScaleEndValue - 1;
++            invalidateAll();
++        }
+     }
+ 
+     public boolean getBiDirectional() {
+@@ -196,8 +200,10 @@ public class BaseGauge extends BaseComponent {
+     public void setMajorTickPercentOfMax(double val) {
+         if (val <= 0 || val > 100)
+             throw new IllegalArgumentException("Bad value specified as a major tick step percent.");
+-        this.mMajorTickPercentOfMax = val;
+-        invalidateAll();
++        if (mMajorTickPercentOfMax != val) {
++            this.mMajorTickPercentOfMax = val;
++            invalidateAll();
++        }
+     }
+ 
+     public int getMinorTicks() {
+@@ -205,8 +211,10 @@ public class BaseGauge extends BaseComponent {
+     }
+ 
+     public void setMinorTicksPerDivision(int minorTicks) {
+-        this.mMinorTicksPerDivision = minorTicks;
+-        invalidateAll();
++        if (mMinorTicksPerDivision != minorTicks) {
++            this.mMinorTicksPerDivision = minorTicks;
++            invalidateAll();
++        }
+     }
+ 
+     public void clearColoredRanges() {
+@@ -215,6 +223,11 @@ public class BaseGauge extends BaseComponent {
+     }
+ 
+     public void addColoredRange(double begin, double end, int color) {
++        addRangeSub(begin, end, color);
++        invalidateAll();
++    }
++
++    private void addRangeSub(double begin, double end, int color) {
+         if (begin >= end)
+             throw new IllegalArgumentException("Incorrect number range specified!");
+         if (begin < 0 || begin > 100)
+@@ -222,6 +235,16 @@ public class BaseGauge extends BaseComponent {
+         if (end < 0 || end > 100)
+             throw new IllegalArgumentException("Incorrect number range specified!");
+         mRanges.add(new ColoredRange(color, begin, end));
++    }
++
++    public void setGreenRange(double startGreen, double endGreen) {
++        if (startGreen > 0) {
++            addRangeSub(0, startGreen, Color.YELLOW);
++        }
++        addRangeSub(startGreen, endGreen, Color.GREEN);
++        if (endGreen < 100) {
++            addRangeSub(endGreen, 100, Color.RED);
++        }
+         invalidateAll();
+     }
+ 
+@@ -259,14 +282,30 @@ public class BaseGauge extends BaseComponent {
+         mReadingUnit = val;
+     }
+ 
+-
+     @Override
+     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+-
+         if (w == 0 || h == 0)
+             return;
++        mBackground = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
++        final Canvas canvas = new Canvas(mBackground);
+         mGaugeRect = getScaledRect(1);
+         float scale = 1.0f;
++
++        if (isInEditMode()) {
++            Paint editPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++            editPaint.setStyle(Paint.Style.FILL);
++            editPaint.setColor(Color.RED);
++            if (mFace == Quadrant.Full) {
++                canvas.drawOval(mGaugeRect, editPaint);
++
++            } else if (mFace == Quadrant.Half) {
++                canvas.drawArc(mGaugeRect, 180, 180, true, editPaint);
++            }
++            scale -= mInnerRimWidthPercentOfDiameter / 100;
++            mFaceRect = getScaledRect(scale);
++            drawFace(canvas);
++            return;
++        }
+         if (mShowOuterShadow) {
+             scale = (100 - mOuterShadowWidthPercentOfDiameter) / 100;
+         }
+@@ -287,18 +326,24 @@ public class BaseGauge extends BaseComponent {
+             mFaceRect = getScaledRect(scale);
+         }
+         mScaleArc = getScaledRect(scale * 0.8f);
+-        mNeedleScrew = getScaledRect(0.06f);
+         mScaleRadius = mScaleArc.width() / 2;
++        mNeedleScrew = getScaledRect(0.06f);
+         mFaceRadius = mFaceRect.width() / 2;
+-
+-        if (!isInEditMode()) {
+-
+-            mFacePaint.setShader(new RadialGradient(mFaceRect.centerX(), mFaceRect.centerY(), mFaceRadius, new int[]{Color.rgb(50, 132, 206), Color.rgb(36, 89, 162), Color.rgb(27, 59, 131)}, new float[]{0.5f, 0.96f, 0.99f}, Shader.TileMode.MIRROR));
+-            mFaceShadowPaint.setShader(new RadialGradient(mFaceRect.centerX(), mFaceRect.centerY(), mFaceRadius, new int[]{Color.argb(60, 40, 96, 170),
+-                    Color.argb(80, 15, 34, 98), Color.argb(120, 0, 0, 0), Color.argb(140, 0, 0, 0)},
+-                    new float[]{0.60f, 0.85f, 0.96f, 0.99f}, Shader.TileMode.MIRROR));
++        mFacePaint.setShader(new RadialGradient(mFaceRect.centerX(), mFaceRect.centerY(), mFaceRadius, new int[]{Color.rgb(50, 132, 206), Color.rgb(36, 89, 162), Color.rgb(27, 59, 131)}, new float[]{0.5f, 0.96f, 0.99f}, Shader.TileMode.MIRROR));
++        mFaceShadowPaint.setShader(new RadialGradient(mFaceRect.centerX(), mFaceRect.centerY(), mFaceRadius, new int[]{Color.argb(60, 40, 96, 170),
++                Color.argb(80, 15, 34, 98), Color.argb(120, 0, 0, 0), Color.argb(140, 0, 0, 0)},
++                new float[]{0.60f, 0.85f, 0.96f, 0.99f}, Shader.TileMode.MIRROR));
++        drawRim(canvas);
++        drawFace(canvas);
++        mBSizeChangedComplete = true;
++        updateSizes();
++        if (mShowScale) {
++            drawScale(canvas);
+         }
++        makeNeedle();
++    }
+ 
++    private void makeNeedle() {
+         mNeedleWidth = mNeedleScrew.width() / 4;
+         float needleRadius = mScaleArc.width() / 2.1f;
+         float counterBalanceSize = mNeedleScrew.width();
+@@ -318,18 +363,26 @@ public class BaseGauge extends BaseComponent {
+         mNeedleRightPath.lineTo(x + mNeedleWidth, y - counterBalanceSize);
+         mNeedleRightPath.lineTo(x, y - needleRadius);
+         mNeedleRightPath.lineTo(x, y);
+-
+-        mBSizeChangedComplete = true;
+-        updateSizes();
+     }
+ 
+     public void invalidateAll() {
+-        updateSizes();
+-        invalidate();
++        if (mBSizeChangedComplete && !isInEditMode()) {
++            if (mBackground != null) {
++                mBackground.recycle();
++            }
++            mBackground = Bitmap.createBitmap(mViewWidth, mViewHeight, Bitmap.Config.ARGB_8888);
++            final Canvas canvas = new Canvas(mBackground);
++            drawRim(canvas);
++            drawFace(canvas);
++            updateSizes();
++            if (mShowScale) {
++                drawScale(canvas);
++            }
++        }
+     }
+ 
+     private void updateSizes() {
+-        if (mBSizeChangedComplete) {
++        if (!isInEditMode()) {
+             mMajorTickStepValue = (float) ((mScaleEndValue - mScaleStartValue) * mMajorTickPercentOfMax / 100);
+             mMajorTicksLength = mScaleRadius * 0.1f;
+             mMinorTicksLength = mMajorTicksLength / 2.5f;
+@@ -339,62 +392,26 @@ public class BaseGauge extends BaseComponent {
+             float readingSize = mReadingHeightPercentOfRadius * mFaceRadius / 100;
+             mReadingTextPaint.setTextSize(readingSize * mDensity);
+             mReadingTextPaint.setShadowLayer(readingSize / 5, readingSize / 10, 0, Color.BLACK);
+-            mStaticBackgroundLoaded = false;
+-        }
+-    }
+-
+-    private void loadStaticBackground() {
+-        if (isInEditMode()) {
+-            return;
+-        }
+-        if (null != mBackground) {
+-            // Let go of the old background
+-            mBackground.recycle();
+-        }
+-        // Create a new background according to the new width and height
+-        int h = getHeight();
+-        if (h == 0)
+-            return;
+-
+-        mBackground = Bitmap.createBitmap(mViewWidth, mViewHeight, Bitmap.Config.ARGB_8888);
+-        final Canvas canvas = new Canvas(mBackground);
+-
+-        // debug, draw green outer box to show padding
+-//        RectF outerRing = getScaledRect(1);
+-//        Paint testPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+-//        testPaint.setStyle(Paint.Style.STROKE);
+-//        testPaint.setStrokeWidth(3);
+-//        testPaint.setColor(Color.GREEN);
+-//        canvas.drawRect(0, 0, mViewWidth, mViewHeight, testPaint);
+-//        canvas.drawRect(0, 0,  outerRing.width() + getPaddingLeft() + getPaddingRight(), outerRing.height() + getPaddingTop() + getPaddingBottom(), testPaint);
+-
+-        // end debug
+-
+-        drawRim(canvas);
+-        drawFace(canvas);
+-        if (mShowScale) {
+-            drawScale(canvas);
+         }
+     }
+ 
+     @Override
+     protected void onDraw(Canvas canvas) {
+         super.onDraw(canvas);
++        if (null != mBackground) {
++            canvas.drawBitmap(mBackground, 0, 0, mBackgroundPaint);
++        }
+         if (isInEditMode()) {
+             return;
+         }
+-        if (mStaticBackgroundLoaded == false) {
+-            mStaticBackgroundLoaded = true;
+-            loadStaticBackground();
+-        }
+-        if (null == mBackground) {
+-            //Logger.log.error("Background not created.");
+-        } else {
+-            canvas.drawBitmap(mBackground, 0, 0, mBackgroundPaint);
+-        }
+         drawText(canvas);
+         drawNeedle(canvas);
+-        computeCurrentValue();
++        new Thread(new Runnable() {
++            @Override
++            public void run() {
++                computeCurrentValue();
++            }
++        }).start();
+     }
+ 
+     private void drawNeedle(Canvas canvas) {
+@@ -598,7 +615,6 @@ public class BaseGauge extends BaseComponent {
+         if (!(Math.abs(mCurrentValue - mTargetValue) > 0.01f)) {
+             return;
+         }
+-
+         if (-1 != mNeedleLastMoved) {
+             final float time = (System.currentTimeMillis() - mNeedleLastMoved) / 1000.0f;
+             final float direction = Math.signum(mNeedleVelocity);
+@@ -607,11 +623,9 @@ public class BaseGauge extends BaseComponent {
+             } else {
+                 mNeedleAcceleration = 0.0f;
+             }
+-
+             mNeedleAcceleration = 5.0f * (mTargetValue - mCurrentValue);
+             mCurrentValue += mNeedleVelocity * time;
+             mNeedleVelocity += mNeedleAcceleration * time;
+-
+             if ((mTargetValue - mCurrentValue) * direction < 0.01f * direction) {
+                 mCurrentValue = mTargetValue;
+                 mNeedleVelocity = 0.0f;
+@@ -620,9 +634,7 @@ public class BaseGauge extends BaseComponent {
+             } else {
+                 mNeedleLastMoved = System.currentTimeMillis();
+             }
+-
+-            invalidate();
+-
++            postInvalidate();
+         } else {
+             mNeedleLastMoved = System.currentTimeMillis();
+             computeCurrentValue();
+@@ -762,10 +774,6 @@ public class BaseGauge extends BaseComponent {
+         mTickLabelColor = a.getColor(R.styleable.Gauge_tickLabelColor, Color.WHITE);
+ 
+         a.recycle();
+-
+-        addColoredRange(0, 30, Color.GREEN);
+-        addColoredRange(30, 60, Color.YELLOW);
+-        addColoredRange(60, 100, Color.RED);
+     }
+ 
+     public static class ColoredRange {
+diff --git a/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/SolarGauge.java b/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/SolarGauge.java
+index c94f257..518a81a 100644
+--- a/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/SolarGauge.java
++++ b/uicomponents/src/main/java/ca/farrelltonsolar/uicomponents/SolarGauge.java
+@@ -62,9 +62,9 @@ public class SolarGauge extends BaseGauge {
+     }
+ 
+     private void drawLEDs(final Canvas canvas) {
+-        float x1 = mGaugeRect.centerX() - (mGaugeRect.centerX() * .05f);
+-        float x2 = mGaugeRect.centerX() + (mGaugeRect.centerX() * .05f);
+-        float y = mGaugeRect.bottom - (mGaugeRect.centerY() * .4f);
++        float x1 = mGaugeRect.centerX() - (mGaugeRect.centerX() * .07f);
++        float x2 = mGaugeRect.centerX() + (mGaugeRect.centerX() * .07f);
++        float y = mGaugeRect.centerY() + mScaleRadius;
+         float rad = mGaugeRect.width() * 0.015f;
+         canvas.drawCircle(x1, y, rad, mLed1Colour);
+         canvas.drawCircle(x2, y, rad, mLed2Colour);

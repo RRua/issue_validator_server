@@ -1,0 +1,984 @@
+diff --git a/app/src/main/java/com/gyorog/polycal/CalendarRemoteViewsFactory.java b/app/src/main/java/com/gyorog/polycal/CalendarRemoteViewsFactory.java
+index 3022802..60b47fe 100644
+--- a/app/src/main/java/com/gyorog/polycal/CalendarRemoteViewsFactory.java
++++ b/app/src/main/java/com/gyorog/polycal/CalendarRemoteViewsFactory.java
+@@ -1,5 +1,6 @@
+ package com.gyorog.polycal;
+ 
++import android.appwidget.AppWidgetManager;
+ import android.content.ContentUris;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -8,6 +9,7 @@ import android.database.Cursor;
+ import android.graphics.Color;
+ import android.net.Uri;
+ import android.os.Binder;
++import android.os.Bundle;
+ import android.provider.CalendarContract;
+ import android.text.TextUtils;
+ import android.util.Log;
+@@ -15,8 +17,6 @@ import android.widget.AdapterView;
+ import android.widget.RemoteViews;
+ import android.widget.RemoteViewsService;
+ 
+-import androidx.preference.PreferenceManager;
+-
+ import java.text.DateFormatSymbols;
+ import java.text.SimpleDateFormat;
+ import java.util.Calendar;
+@@ -27,25 +27,48 @@ import java.util.Set;
+ import java.util.TimeZone;
+ 
+ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
++    public static final String EVENT_ID = "com.gyorog.polycal.EVENT_ID";
++    public static final String EVENT_BEGIN = "com.gyorog.polycal.EVENT_BEGIN";
+     private static final String TAG = "CalendarRemoteViewsFactory";
+     private Context mContext;
+     private Cursor mCursor;
++    private int widget_id;
++    private String date_format;
++    private String date_format_allday;
+ 
+     public CalendarRemoteViewsFactory(Context applicationContext, Intent intent) {
+         mContext = applicationContext;
++        //widget_id = Integer.parseInt(intent.getData().getSchemeSpecificPart());
++        widget_id = intent.getExtras().getInt(AppWidgetManager.EXTRA_APPWIDGET_ID);
++        Log.d(TAG, "wID " + widget_id + " created.");
+     }
+ 
+     @Override
+-    public void onCreate() {}
++    public void onCreate() { }
+ 
+     @Override
+     public void onDataSetChanged() {
+         final long identityToken = Binder.clearCallingIdentity();
++        Log.d(TAG, "wID " + widget_id + " got identityToken " + identityToken);
++
++        // SharedPreferences SharePref = PreferenceManager.getDefaultSharedPreferences(mContext);
++        String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++        SharedPreferences SharePref = mContext.getSharedPreferences(pref_file_name , 0);
++
++        date_format = SharePref.getString("date_format", (String) PolyCalDateFormats.getFormatsParseable()[0]);
++        date_format_allday = SharePref.getString("date_format_allday", (String) PolyCalDateFormats.getFormatsParseableAllday()[0]);
++        Log.d(TAG, "wID " + widget_id + " got date_format='" + date_format + "' and date_format_allday='" + date_format_allday + "'");
++
++        Set<String> EnabledCalendarIDs = SharePref.getStringSet("calendar_selection", new HashSet<String>() );
++        Log.d(TAG, "wID " + widget_id + " got calendar_selection='" + EnabledCalendarIDs.toString() + "'" );
++
++        GetCalendarEvents(EnabledCalendarIDs);
++        Log.d(TAG, "wID " + widget_id + " found " + getCount() + " calendar events.");
+ 
+-        GetCalendarEvents();
+         Binder.restoreCallingIdentity(identityToken);
+     }
+ 
++
+     @Override
+     public void onDestroy() {
+         if (mCursor != null) {
+@@ -60,15 +83,16 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+ 
+     @Override
+     public RemoteViews getViewAt(int position) {
++        Log.d(TAG, "RemoteViews getViewAt(" + position + ")");
+         if (position == AdapterView.INVALID_POSITION || mCursor == null || !mCursor.moveToPosition(position)) {
+             return null;
+         }
+ 
+         SimpleDateFormat formatter;
+         if ( 1 == mCursor.getInt(EVENT_INDEX_ALLDAY) ) {
+-            formatter = new SimpleDateFormat(" MMM d ", Locale.US);
++            formatter = new SimpleDateFormat(date_format_allday, Locale.US);
+         } else {
+-            formatter = new SimpleDateFormat(" MMM d | h:mm a ", Locale.US);
++            formatter = new SimpleDateFormat(date_format, Locale.US);
+         }
+         DateFormatSymbols symbols = new DateFormatSymbols(Locale.getDefault());
+         symbols.setAmPmStrings(new String[] { "am", "pm" });
+@@ -77,6 +101,14 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+         formatter.setTimeZone(TimeZone.getTimeZone( mCursor.getString(EVENT_INDEX_EVENT_TIMEZONE) ));
+ 
+         RemoteViews rv = new RemoteViews(mContext.getPackageName(), R.layout.appwidget_item);
++
++        Bundle extras = new Bundle();
++        //extras.putLong(EVENT_ID, mCursor.getLong(EVENT_INDEX_EVENTID));
++        extras.putLong(EVENT_BEGIN, mCursor.getLong(EVENT_INDEX_BEGIN));
++        Intent fillInIntent = new Intent();
++        fillInIntent.putExtras(extras);
++        rv.setOnClickFillInIntent(R.id.item_layout, fillInIntent);
++
+         int other_color = Color.LTGRAY;
+ 
+         rv.setTextViewText(R.id.event_time, formatter.format(StartDate) );
+@@ -119,7 +151,8 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+             CalendarContract.Events.EVENT_TIMEZONE,
+             CalendarContract.Events.DISPLAY_COLOR,
+             CalendarContract.Events.TITLE,
+-            CalendarContract.Events.EVENT_LOCATION
++            CalendarContract.Events.EVENT_LOCATION,
++            CalendarContract.Instances.END
+     };
+     private static final int EVENT_INDEX_EVENTID = 0;
+     private static final int EVENT_INDEX_BEGIN = 1;
+@@ -128,11 +161,9 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+     private static final int EVENT_INDEX_DISPLAY_COLOR = 4;
+     private static final int EVENT_INDEX_TITLE = 5;
+     private static final int EVENT_INDEX_LOCATION = 6;
++    private static final int EVENT_INDEX_END = 7;
+ 
+-    private void GetCalendarEvents() {
+-        SharedPreferences SharePref = PreferenceManager.getDefaultSharedPreferences(mContext);
+-        Set<String> EnabledCalendarIDs = SharePref.getStringSet("calendar_select", new HashSet<String>() );
+-
++    private void GetCalendarEvents(Set<String> EnabledCalendarIDs) {
+         long now_ms = System.currentTimeMillis();
+ 
+         Calendar cal_end = Calendar.getInstance();
+@@ -146,8 +177,11 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+ 
+         String[] selectionArgs = new String[0];
+         String selectionString = "";
+-        if( ! EnabledCalendarIDs.isEmpty() ) {
+-            selectionArgs = EnabledCalendarIDs.toArray(new String[EnabledCalendarIDs.size()]);
++        if( EnabledCalendarIDs.isEmpty() ) {
++            selectionString = "( " + CalendarContract.Instances.CALENDAR_ID + " != " + CalendarContract.Instances.CALENDAR_ID + " )";
++        } else {
++            // selectionArgs = EnabledCalendarIDs.toArray(new String[EnabledCalendarIDs.size()]);
++            selectionArgs = EnabledCalendarIDs.toArray(new String[0]);
+ 
+             String[] query_list = new String[selectionArgs.length];
+             for(int i=0; i<selectionArgs.length; ++i){
+@@ -156,8 +190,8 @@ public class CalendarRemoteViewsFactory implements RemoteViewsService.RemoteView
+             selectionString = TextUtils.join(" OR ", query_list);
+         }
+ 
+-        // Log.e(TAG, "Query: " + selectionString);
+-        // Log.e(TAG, "Args: " + TextUtils.join(",", selectionArgs));
++        // Log.d(TAG, "Query: " + selectionString);
++        // Log.d(TAG, "Args: " + TextUtils.join(",", selectionArgs));
+         mCursor = mContext.getContentResolver().query(instancesUri, EVENT_COLUMN_LIST, selectionString,selectionArgs, CalendarContract.Instances.BEGIN + " ASC");
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/gyorog/polycal/MainActivity.java b/app/src/main/java/com/gyorog/polycal/MainActivity.java
+index 57dbda7..cd0868a 100644
+--- a/app/src/main/java/com/gyorog/polycal/MainActivity.java
++++ b/app/src/main/java/com/gyorog/polycal/MainActivity.java
+@@ -1,13 +1,90 @@
+ package com.gyorog.polycal;
+ 
+ import androidx.appcompat.app.AppCompatActivity;
++
++import android.app.Activity;
++import android.appwidget.AppWidgetManager;
++import android.appwidget.AppWidgetProviderInfo;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
+ import android.os.Bundle;
++import android.util.Log;
++import android.view.View;
++import android.widget.Button;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import java.util.List;
++import java.util.ListIterator;
++import java.util.Objects;
+ 
+ public class MainActivity extends AppCompatActivity {
++    Context context;
++    public final String TAG = "com.gyorog.polycal.MainActivity";
++    int[] widget_ids;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.activity_main);
++        LinearLayout layout = findViewById(R.id.main_layout);
++        context = getApplicationContext();
++        TextView tv = new TextView(context);
++        tv.setEllipsize(null);
++        tv.setHorizontallyScrolling(false);
++
++        AppWidgetManager manager = AppWidgetManager.getInstance(context);
++
++        widget_ids = manager.getAppWidgetIds(ComponentName.unflattenFromString("com.gyorog.polycal/com.gyorog.polycal.PolyCalWidgetProvider"));
++
++        if (widget_ids.length == 0) {
++            tv.setText(getString(R.string.how_to_add_widget));
++            tv.setTextSize((float)20.0);
++            layout.addView(tv);
++
++            Button accept_button = new Button(context);
++            accept_button.setText("OK");
++            accept_button.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        setResult(Activity.RESULT_OK);
++                        finish();
++                    }
++                });
++            layout.addView(accept_button);
++        } else if (widget_ids.length == 1) {
++            Intent intent = new Intent(context, SettingsActivity.class);
++            intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widget_ids[0]);
++            intent.putExtra("from", "MainActivity");
++            startActivityForResult(intent, 0);
++        } else {
++            tv.setText(getString(R.string.choose_widget));
++            tv.setTextSize((float)16.0);
++            layout.addView(tv);
++            for(int i=0; i<widget_ids.length; ++i){
++                Button button = new Button(context);
++                button.setText(String.format("Configure widget %d", 1 + i));
++                button.setTag( widget_ids[i] );
++                button.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        int widget_id = (int) v.getTag();
++                        Intent intent = new Intent(v.getContext(), SettingsActivity.class);
++                        intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widget_id);
++                        intent.putExtra("from", "MainActivity");
++                        startActivityForResult(intent, 0);
++                    }
++                });
++                layout.addView(button);
++            }
++        }
++    }
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++        // requestCode is always 0.
++        if (resultCode == RESULT_CANCELED && widget_ids.length == 1) { // Quit app if the user clicks "back" while in the only widget's config window
++            finish();
++        }
++        super.onActivityResult(requestCode, resultCode, data);
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/gyorog/polycal/PolyCalDateFormats.java b/app/src/main/java/com/gyorog/polycal/PolyCalDateFormats.java
+index a0c9b46..4002ee9 100644
+--- a/app/src/main/java/com/gyorog/polycal/PolyCalDateFormats.java
++++ b/app/src/main/java/com/gyorog/polycal/PolyCalDateFormats.java
+@@ -1,4 +1,34 @@
+ package com.gyorog.polycal;
+ 
+-public class PolyCalDateFormats {
++abstract class PolyCalDateFormats {
++    static CharSequence[] formats_readable = {
++            "Jun 18 | 12:34 pm",
++            "6-18|12:34pm",
++            "June 18, 2020 @ 12:34 pm",
++            "2020-06-18 23:45"
++    };
++    static CharSequence[] formats_parseable = {
++            " MMM d | h:mm a ",
++            " M-d|h:mma ",
++            " MMMM d, yyyy @ h:mm a ",
++            " yyyy-MM-dd kk:mm "
++    };
++    static CharSequence[] formats_readable_allday = {
++            "Jun 18",
++            "06-18",
++            "June 18, 2020",
++            "2020-06-18 23:45"
++    };
++    static CharSequence[] formats_parseable_allday = {
++            " MMM d ",
++            " M-d ",
++            " MMMM d, yyyy ",
++            " yyyy-MM-dd "
++    };
++
++    public static CharSequence[] getFormatsReadable() { return formats_readable; }
++    public static CharSequence[] getFormatsParseable() { return formats_parseable; }
++    public static CharSequence[] getFormatsReadableAllday() { return formats_readable_allday; }
++    public static CharSequence[] getFormatsParseableAllday() { return formats_parseable_allday; }
++
+ }
+diff --git a/app/src/main/java/com/gyorog/polycal/PolyCalWidgetProvider.java b/app/src/main/java/com/gyorog/polycal/PolyCalWidgetProvider.java
+index b63aa33..5977fe9 100644
+--- a/app/src/main/java/com/gyorog/polycal/PolyCalWidgetProvider.java
++++ b/app/src/main/java/com/gyorog/polycal/PolyCalWidgetProvider.java
+@@ -1,81 +1,145 @@
+ package com.gyorog.polycal;
+ 
+ import android.Manifest;
++import android.app.PendingIntent;
+ import android.appwidget.AppWidgetManager;
+ import android.appwidget.AppWidgetProvider;
+ import android.content.ComponentName;
++import android.content.ContentUris;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.PackageManager;
++import android.net.Uri;
++import android.os.Bundle;
++import android.provider.CalendarContract;
+ import android.util.Log;
+ import android.widget.RemoteViews;
+ 
+ import androidx.core.content.ContextCompat;
+-import androidx.preference.PreferenceManager;
+ 
+-import java.util.Random;
+-
+-public class CalendarWidgetProvider extends AppWidgetProvider {
+-    private static final String TAG = "CalendarWidgetProvider";
+-    private RemoteViews remoteViews;
++public class PolyCalWidgetProvider extends AppWidgetProvider {
++    public static final String RELOAD_EVENTS = "com.gyorog.polycal.RELOAD_EVENTS";
++    public static final String CHANGE_SOURCE = "com.gyorog.polycal.CHANGE_SOURCE";
++    public static final String LAUNCH_CALENDAR = "com.gyorog.polycal.LAUNCH_CALENDAR";
++    public static final String EVENT_ID = "com.gyorog.polycal.EVENT_ID";
++    public static final String EVENT_BEGIN = "com.gyorog.polycal.EVENT_BEGIN";
++    private static final String TAG = "PolyCalWidgetProvider";
+ 
+     @Override
+     public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
+         final int N = appWidgetIds.length;
+ 
+-        // Log.w(TAG, "onUpdate called with array length:" + N);
++        boolean calendar_permissions = ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
++        Log.d(TAG, "CheckCalendarPermission() = " + calendar_permissions );
+ 
+         // Perform this loop procedure for each App Widget that belongs to this provider
+         for (int i=0; i<N; i++) {
+             int widgetId = appWidgetIds[i];
+-            // String number = String.format("%03d", (new Random().nextInt(900) + 100));
+-            // Log.w(TAG, "number: " + number);
+-
+-           remoteViews = new RemoteViews(context.getPackageName(), R.layout.appwidget);
+-
+-            if (CheckCalendarPermission(context)) {
+-                if (!CheckScreenshotMode(context)) {
+-                    Intent intent = new Intent(context, CalendarRemoteViewsService.class);
+-                    remoteViews.setRemoteAdapter(R.id.listview, intent);
+-                    appWidgetManager.updateAppWidget(widgetId, remoteViews);
+-                } else {
+-                    Intent intent = new Intent(context, ScreenshotRemoteViewsService.class);
+-                    remoteViews.setRemoteAdapter(R.id.listview, intent);
+-                    appWidgetManager.updateAppWidget(widgetId, remoteViews);
+-                }
++            RemoteViews remoteViews = new RemoteViews(context.getPackageName(), R.layout.appwidget);
++
++            Intent view_intent = null;
++            if (calendar_permissions && ! CheckScreenshotMode(context, widgetId)) {
++                Log.d(TAG, "wID " + widgetId + " is in Calendar mode");
++                view_intent = new Intent(context, CalendarRemoteViewsService.class);
+             } else {
+-                Intent intent = new Intent(context, ScreenshotRemoteViewsService.class);
+-                remoteViews.setRemoteAdapter(R.id.listview, intent);
+-                appWidgetManager.updateAppWidget(widgetId, remoteViews);
++                Log.d(TAG, "wID " + widgetId + " is in Screenshot mode");
++                view_intent = new Intent(context, ScreenshotRemoteViewsService.class);
+             }
++            view_intent.setData(Uri.parse(view_intent.toUri(Intent.URI_INTENT_SCHEME)));
++            view_intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId);
++
++            //LogIntent("onUpdate()", view_intent);
++
++            remoteViews.setRemoteAdapter(R.id.listview, view_intent);
++            remoteViews.setEmptyView(R.id.listview, R.id.empty_view);
+ 
+-            // Log.w(TAG, "finishing widget update for widget ID " + widgetId);
++            // Launch Calendar when clicked
++            Intent launch_calendar_intent = new Intent(context, PolyCalWidgetProvider.class);
++            launch_calendar_intent.setAction(PolyCalWidgetProvider.LAUNCH_CALENDAR);
++            launch_calendar_intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetIds[i]);
++
++            view_intent.setData(Uri.parse(view_intent.toUri(Intent.URI_INTENT_SCHEME)));
++            PendingIntent launchCalPendingIntent = PendingIntent.getBroadcast(context, 0, launch_calendar_intent, PendingIntent.FLAG_UPDATE_CURRENT);
++            remoteViews.setPendingIntentTemplate(R.id.listview, launchCalPendingIntent);
++
++/*
++            //  Launch Setting when clicked
++            Intent settings_intent = new Intent(context, SettingsActivity.class);
++            settings_intent.setData(Uri.parse("wid://" + widgetId)); // Ensures uniqueness when creating PendingIntent
++            settings_intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId);
++            settings_intent.putExtra("from", "Layout.UserClick");
++            Log.d(TAG, "created settings_intent for wID=" + widgetId);
++            PendingIntent pendingIntent = PendingIntent.getActivity(context, 0, settings_intent, PendingIntent.FLAG_UPDATE_CURRENT);
++
++            remoteViews.setOnClickPendingIntent(R.id.layout, pendingIntent);
++            remoteViews.setPendingIntentTemplate(R.id.listview, pendingIntent);
++*/
++            appWidgetManager.updateAppWidget(widgetId, remoteViews);
+         }
++        //Log.d(TAG, "End of OnUpdate()");
++    }
++
++    private boolean CheckScreenshotMode(Context context, int widget_id) {
++        String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++        Log.d(TAG, "Checking screenshot_mode in preference file " + pref_file_name);
++        return context.getSharedPreferences(pref_file_name, 0).getBoolean("screenshot_mode", true);
+     }
+ 
+     @Override
+     public void onReceive(Context context, Intent intent){
+-        if( intent.getAction() == "com.gyorog.polycal.RELOAD_EVENTS"){
++        if( intent.getAction() == RELOAD_EVENTS){
+             AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(context);
+             int[] allWidgetIDs = appWidgetManager.getAppWidgetIds( new ComponentName(context, this.getClass()) );
+             appWidgetManager.notifyAppWidgetViewDataChanged(allWidgetIDs, R.id.listview);
+         }
+-        if( intent.getAction() == "com.gyorog.polycal.CHANGE_SOURCE"){
++        if( intent.getAction() == CHANGE_SOURCE){
+             AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(context);
+             int[] allWidgetIDs = appWidgetManager.getAppWidgetIds( new ComponentName(context, this.getClass()) );
+             onUpdate(context, appWidgetManager, allWidgetIDs);
+         }
+-        // Log.e(TAG, "Received: " + intent.toString());
++        if( intent.getAction() == LAUNCH_CALENDAR){
++            //int appWidgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
++            long event_begin = intent.getLongExtra(EVENT_BEGIN, 0);
++
++            Log.d(TAG, "Launching calendar at timestamp " + event_begin);
++
++            Uri.Builder builder = CalendarContract.CONTENT_URI.buildUpon();
++            builder.appendPath("time");
++            ContentUris.appendId(builder, event_begin);
++            Intent eventbegin_intent = new Intent(Intent.ACTION_VIEW);
++            eventbegin_intent.setData(builder.build());
++            eventbegin_intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            context.startActivity(eventbegin_intent);
++/*
++            // Open a specific event, rather than time
++            Uri uri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, event_id);
++            Intent event_intent = new Intent(Intent.ACTION_VIEW);
++            event_intent.setData(uri);
++            event_intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            context.startActivity(event_intent);
++ */
++        }
++
++        //LogIntent("onReceive()", intent);
+ 
+         super.onReceive(context, intent);
+     }
+ 
+-    private boolean CheckCalendarPermission(Context context) {
+-        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
++    @Override
++    public void onDeleted(Context context, int[] appWidgetIds){
++        for(int i=0; i<appWidgetIds.length; ++i) {
++            Log.d(TAG, "Removed wID " + appWidgetIds[i] + ". Deleting preferences file.");
++            String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", appWidgetIds[i]);
++            context.deleteSharedPreferences(pref_file_name);
++        }
++        super.onDisabled(context);
+     }
+ 
+-    private boolean CheckScreenshotMode(Context context) {
+-        return PreferenceManager.getDefaultSharedPreferences(context).getBoolean("screenshot_mode", false);
++/*
++    public void LogIntent(String extra_tag, Intent intent){
++        Log.d(TAG, extra_tag + " -> " + intent.toString() );
++        for (String key : intent.getExtras().keySet())
++            Log.d(TAG, "(extra) " + key + " = " + intent.getExtras().get(key));
+     }
+-
++*/
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsFactory.java b/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsFactory.java
+index 4733895..642d262 100644
+--- a/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsFactory.java
++++ b/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsFactory.java
+@@ -1,42 +1,87 @@
+ package com.gyorog.polycal;
+ 
++import android.appwidget.AppWidgetManager;
+ import android.content.Context;
+ import android.content.Intent;
++import android.content.SharedPreferences;
+ import android.graphics.Color;
+ import android.os.Binder;
+ import android.util.Log;
++import android.widget.AdapterView;
+ import android.widget.RemoteViews;
+ import android.widget.RemoteViewsService;
+ 
++import java.text.DateFormatSymbols;
++import java.text.ParseException;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
+ public class ScreenshotRemoteViewsFactory implements RemoteViewsService.RemoteViewsFactory {
+     private static final String TAG = "ScreenshotRemoteViewsFactory";
+     private Context mContext;
+-    private static final String events[][] = new String[][] {
+-            {"#ff8888", " Jun 1 | 10:00 pm ", "Date with Sam", ""},
+-            {"#00aaaa", " Jun 3 | 8:00 am ", "Receive award for PolyCal", ""},
+-            {"#00aaaa", " Jun 6 | 2:30 pm ", "Honorary Doctorate review", ""},
+-            {"#00aaaa", " Jun 8 | 10:00 am ", "Nobel Awards ceremony", ""},
+-            {"#ffff00", " Jun 12 ", "Loving Day", ""},
+-            {"#ff8888", " Jun 15 | 8:00 pm ", "Date with Pat", ""},
+-            {"#ffff00", " Jun 19 ", "Juneteenth", ""},
+-            {"#00aaaa", " Jun 25 | 5:00 pm ", "Receive Medal of Honor", ""},
+-            {"#ffff00", " Jun 28", "Stonewall Riots Anniversary", ""},
+-            {"#00aaaa", " Jun 29 | 8:00 am ", "Booker Prize review", ""}
+-    };
++    private int widget_id;
++    private String date_format;
++    private String date_format_allday;
++
++    private static class EventEntry{
++        public String color;
++        public Boolean allday;
++        public Date begin;
++        public String title;
++        public String location;
++        EventEntry(String set_color, Boolean set_allday, Date set_begin, String set_title, String set_location){
++            color = set_color;
++            allday = set_allday;
++            begin = set_begin;
++            title = set_title;
++            location = set_location;
++        }
++    }
++
++    private static SimpleDateFormat formatter = new SimpleDateFormat("MMM dd hh:mm a", Locale.US);
++    private static EventEntry fake_events[] = new EventEntry[0];
++    static {
++        try {
++            fake_events = new EventEntry[]{
++                            new EventEntry("#ff8888", false, formatter.parse("Jun 1 10:00 pm"), "Date with Sam", ""),
++                            new EventEntry("#00aaaa", false, formatter.parse("Jun 3 8:00 am"), "Receive award for PolyCal", ""),
++                            new EventEntry("#00aaaa", false, formatter.parse("Jun 6 2:30 pm"), "Honorary Doctorate review", ""),
++                            new EventEntry("#00aaaa", false, formatter.parse("Jun 8 10:00 am"), "Nobel Awards ceremony", ""),
++                            new EventEntry("#ffff00", true, formatter.parse("Jun 12 12:00 am"), "Loving Day", ""),
++                            new EventEntry("#ff8888", false, formatter.parse("Jun 15 8:00 pm"), "Date with Pat", ""),
++                            new EventEntry("#ffff00", true, formatter.parse("Jun 19 12:00 am"), "Juneteenth", ""),
++                            new EventEntry("#00aaaa", false, formatter.parse("Jun 25 5:00 pm"), "Receive Medal of Honor", ""),
++                            new EventEntry("#ffff00", true, formatter.parse("Jun 28 12:00 am"), "Stonewall Riots Anniversary", ""),
++                            new EventEntry("#00aaaa", false, formatter.parse("Jun 29 8:00 am"), "Booker Prize review", "")
++                    };
++        } catch (ParseException e) {
++            e.printStackTrace();
++        }
++    }
+ 
+     public ScreenshotRemoteViewsFactory(Context applicationContext, Intent intent) {
+         mContext = applicationContext;
++        //LogIntent("ScreenshotRemoteViewsFactoy()", intent);
++        widget_id = intent.getExtras().getInt(AppWidgetManager.EXTRA_APPWIDGET_ID);
++        Log.d(TAG, "wID " + widget_id + " new ScreenshotRemoteViewsFactory()");
+     }
+ 
+     @Override
+-    public void onCreate() {
+-        // Log.e(TAG, "onCreate");
+-    }
++    public void onCreate() { }
+ 
+     @Override
+     public void onDataSetChanged() {
+         final long identityToken = Binder.clearCallingIdentity();
+ 
++        // SharedPreferences SharePref = PreferenceManager.getDefaultSharedPreferences(mContext);
++        String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++        SharedPreferences SharePref = mContext.getSharedPreferences(pref_file_name , 0);
++
++        date_format = SharePref.getString("date_format", (String) PolyCalDateFormats.getFormatsParseable()[0]);
++        date_format_allday = SharePref.getString("date_format_allday", (String) PolyCalDateFormats.getFormatsParseableAllday()[0]);
++        Log.d(TAG, "wID " + widget_id + " got date_format='" + date_format + "' and date_format_allday='" + date_format_allday + "'");
++
+         Binder.restoreCallingIdentity(identityToken);
+     }
+ 
+@@ -45,20 +90,42 @@ public class ScreenshotRemoteViewsFactory implements RemoteViewsService.RemoteVi
+ 
+     @Override
+     public int getCount() {
+-        return events.length;
++        return fake_events.length;
+     }
+ 
+     @Override
+     public RemoteViews getViewAt(int position) {
++        if (position == AdapterView.INVALID_POSITION){
++            return null;
++        }
++
+         int other_color = Color.LTGRAY;
++        EventEntry my_entry = fake_events[position];
++
++        SimpleDateFormat formatter;
++        if ( my_entry.allday ) {
++            formatter = new SimpleDateFormat(date_format_allday, Locale.US);
++        } else {
++            formatter = new SimpleDateFormat(date_format, Locale.US);
++        }
++        DateFormatSymbols symbols = new DateFormatSymbols(Locale.getDefault());
++        symbols.setAmPmStrings(new String[] { "am", "pm" });
++        formatter.setDateFormatSymbols(symbols);
++        
+         RemoteViews rv = new RemoteViews(mContext.getPackageName(), R.layout.appwidget_item);
+-        rv.setTextViewText(R.id.event_time, events[position][1]);
++/*
++        Intent settings_intent = new Intent(mContext, SettingsActivity.class);
++        settings_intent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widget_id);
++        settings_intent.putExtra("from", "Screenshot.UserClick");
++        rv.setOnClickFillInIntent(R.id.item_layout, settings_intent);
++*/
++        rv.setTextViewText(R.id.event_time, formatter.format(my_entry.begin));
+         rv.setTextColor(R.id.event_time, other_color);
+ 
+-        rv.setTextViewText(R.id.event_title, events[position][2]);
+-        rv.setTextColor(R.id.event_title, Color.parseColor(events[position][0]) );
++        rv.setTextViewText(R.id.event_title, my_entry.title);
++        rv.setTextColor(R.id.event_title, Color.parseColor(my_entry.color) );
+ 
+-        rv.setTextViewText(R.id.event_location, events[position][3]);
++        rv.setTextViewText(R.id.event_location, my_entry.location);
+         rv.setTextColor(R.id.event_location, other_color);
+ 
+         return rv;
+@@ -83,5 +150,11 @@ public class ScreenshotRemoteViewsFactory implements RemoteViewsService.RemoteVi
+     public boolean hasStableIds() {
+         return true;
+     }
+-
++/*
++    public void LogIntent(String extra_tag, Intent intent){
++        Log.d(TAG, extra_tag + " -> " + intent.toString() );
++        for (String key : intent.getExtras().keySet())
++            Log.d(TAG, "(extra) " + key + " = " + intent.getExtras().get(key));
++    }
++*/
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsService.java b/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsService.java
+index a2f3f8e..0cdd2a0 100644
+--- a/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsService.java
++++ b/app/src/main/java/com/gyorog/polycal/ScreenshotRemoteViewsService.java
+@@ -1,11 +1,29 @@
+ package com.gyorog.polycal;
+ 
+ import android.content.Intent;
++import android.os.IBinder;
++import android.util.Log;
+ import android.widget.RemoteViewsService;
+ 
+ public class ScreenshotRemoteViewsService extends RemoteViewsService {
++    private static final String TAG = "ScreenshotRemoteViewService";
++
+     @Override
+     public RemoteViewsFactory onGetViewFactory(Intent intent) {
++        //LogIntent("onGetViewFactory()", intent);
+         return new ScreenshotRemoteViewsFactory(this.getApplicationContext(), intent);
+     }
++/*
++    public IBinder onBind(Intent intent) {
++        LogIntent("onBind()", intent);
++        return super.onBind(intent);
++    }
++*/
++/*
++    public void LogIntent(String extra_tag, Intent intent){
++        Log.d(TAG, extra_tag + " Received " + intent.toString() );
++        for (String key : intent.getExtras().keySet())
++            Log.d(TAG, "(extra) " + key + " = " + intent.getExtras().get(key));
++    }
++*/
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/gyorog/polycal/SettingsActivity.java b/app/src/main/java/com/gyorog/polycal/SettingsActivity.java
+index 8ee9e53..9e57c62 100644
+--- a/app/src/main/java/com/gyorog/polycal/SettingsActivity.java
++++ b/app/src/main/java/com/gyorog/polycal/SettingsActivity.java
+@@ -1,6 +1,8 @@
+ package com.gyorog.polycal;
+ 
+ import android.Manifest;
++import android.app.Activity;
++import android.appwidget.AppWidgetManager;
+ import android.content.ContentResolver;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
+@@ -10,46 +12,77 @@ import android.net.Uri;
+ import android.os.Bundle;
+ import android.provider.CalendarContract.Calendars;
+ import android.util.Log;
++import android.view.View;
++import android.widget.Button;
+ 
+-import androidx.appcompat.app.ActionBar;
+ import androidx.appcompat.app.AppCompatActivity;
+ import androidx.core.app.ActivityCompat;
++import androidx.preference.ListPreference;
+ import androidx.preference.MultiSelectListPreference;
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceFragmentCompat;
+-import androidx.preference.PreferenceManager;
+ import androidx.preference.SwitchPreference;
+ 
++import java.util.Arrays;
++import java.util.HashSet;
+ import java.util.LinkedList;
+ import java.util.List;
++import java.util.Set;
+ 
+ public class SettingsActivity extends AppCompatActivity {
+-    private static final String TAG = "SettingsActivity";
+-    private final int READ_CALENDAR_CONSTANT=1;
++    private static final String TAG = "com.gyorog.polycal.SettingsActivity";
+     private List<String> CalendarIDs = new LinkedList<>();
+     private List<String> CalendarDisplayNames = new LinkedList<>();
+-
++    static public int widget_id;
++    Boolean requireReturnCode = false;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
++        Bundle extras = getIntent().getExtras();
++        if ( extras != null ){
++            widget_id = extras.getInt(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID);
++            Log.d(TAG, "wID " + widget_id + " (from " + AppWidgetManager.EXTRA_APPWIDGET_ID + ")");
++
++            String intent_from = extras.getString("from");
++            if (intent_from == null) {
++                Log.d(TAG, "No 'from' extra. Assuming needs return code.");
++                requireReturnCode = true;
++            } else if ( intent_from.equals("WidgetProvider") ){
++                Log.d(TAG, "Detected 'from' extra as 'WidgetProvider'");
++                requireReturnCode = false;
++            } else {
++                Log.d(TAG, "Detected 'from' extra as '" + intent_from + "'");
++                requireReturnCode = false;
++            }
++        } else {
++            finish();
++            Log.e(TAG, "COULD NOT DETERMINE WIDGET ID for SettingsActivity");
++        }
++
+         // Set up preferences screen
+-        setContentView(R.layout.settings_activity);
+-        getSupportFragmentManager()
+-                .beginTransaction()
+-                .replace(R.id.settings, new SettingsFragment())
+-                .commit();
+-        ActionBar actionBar = getSupportActionBar();
+-        if (actionBar != null) {
+-            actionBar.setDisplayShowHomeEnabled(false);
++
++
++        if (! requireReturnCode) {
++            setContentView(R.layout.settings_activity);
++        } else {
++            setContentView(R.layout.settings_activity_button);
++
++            Button accept_button = findViewById(R.id.accept_button);
++            accept_button.setText("Add Widget to Home Screen");
++            accept_button.setOnClickListener(new View.OnClickListener() {
++                public void onClick(View v) {
++                    setResult(Activity.RESULT_OK);
++                    finish();
++                }
++            });
++
+         }
+-    }
+ 
+-    private boolean CheckCalendarPermission() {
+-        return ActivityCompat.checkSelfPermission(SettingsActivity.this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
+     }
+ 
++
+     public static class SettingsFragment extends PreferenceFragmentCompat {
+         private final int READ_CALENDAR_CONSTANT=1;
+ 
+@@ -57,6 +90,8 @@ public class SettingsActivity extends AppCompatActivity {
+         public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+             setPreferencesFromResource(R.xml.preference_screen, rootKey);
+ 
++            Log.d(TAG, "wID " + widget_id + " onCreatePreferences()");
++
+             findPreference("calendar_permission").setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
+                 @Override
+                 public boolean onPreferenceClick(Preference preference){
+@@ -74,6 +109,14 @@ public class SettingsActivity extends AppCompatActivity {
+                         findPreference("calendar_select").setEnabled(true);
+                     }
+ 
++                    Log.d(TAG, "wID " + widget_id + " onPreferenceChange(screenshotmode=" + newSetting + ")");
++
++                    String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++                    SharedPreferences SharePref = preference.getContext().getSharedPreferences(pref_file_name , 0);
++                    SharedPreferences.Editor editor = SharePref.edit();
++                    editor.putBoolean("screenshot_mode", (boolean) newSetting);
++                    editor.apply();
++
+                     Intent redraw = new Intent("com.gyorog.polycal.CHANGE_SOURCE");
+                     redraw.setPackage(getContext().getPackageName());
+                     getContext().sendBroadcast(redraw);
+@@ -82,9 +125,56 @@ public class SettingsActivity extends AppCompatActivity {
+                 }
+             });
+ 
++            //String calendar_select_pref = String.format("%d calendar_select", widget_id);
+             findPreference("calendar_select").setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+                 @Override
+                 public boolean onPreferenceChange(Preference preference, Object newVal) {
++                    Log.d(TAG, "wID " + widget_id + " onPreferenceChange(calendar_selection=" + newVal.toString() + ")");
++
++                    String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++                    SharedPreferences SharePref = preference.getContext().getSharedPreferences(pref_file_name , 0);
++                    SharedPreferences.Editor editor = SharePref.edit();
++                    editor.putStringSet("calendar_selection", (Set) newVal);
++                    editor.apply();
++
++                    Intent redraw = new Intent("com.gyorog.polycal.RELOAD_EVENTS");
++                    redraw.setPackage(getContext().getPackageName());
++                    getContext().sendBroadcast(redraw);
++
++                    return true;
++                }
++            });
++
++            findPreference("date_format").setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
++                @Override
++                public boolean onPreferenceChange(Preference preference, Object newVal) {
++                    Log.d(TAG, "wID " + widget_id + " onPreferenceChange(date_format=" + newVal.toString() + ")");
++
++                    String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++                    SharedPreferences SharePref = preference.getContext().getSharedPreferences(pref_file_name , 0);
++                    SharedPreferences.Editor editor = SharePref.edit();
++                    editor.putString("date_format", (String) newVal);
++                    editor.apply();
++
++                    Intent redraw = new Intent("com.gyorog.polycal.RELOAD_EVENTS");
++                    redraw.setPackage(getContext().getPackageName());
++                    getContext().sendBroadcast(redraw);
++
++                    return true;
++                }
++            });
++
++            findPreference("date_format_allday").setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
++                @Override
++                public boolean onPreferenceChange(Preference preference, Object newVal) {
++                    Log.d(TAG, "wID " + widget_id + " onPreferenceChange(date_format_allday=" + newVal.toString() + ")" );
++
++                    String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++                    SharedPreferences SharePref = preference.getContext().getSharedPreferences(pref_file_name , 0);
++                    SharedPreferences.Editor editor = SharePref.edit();
++                    editor.putString("date_format_allday", (String) newVal);
++                    editor.apply();
++
+                     Intent redraw = new Intent("com.gyorog.polycal.RELOAD_EVENTS");
+                     redraw.setPackage(getContext().getPackageName());
+                     getContext().sendBroadcast(redraw);
+@@ -97,29 +187,60 @@ public class SettingsActivity extends AppCompatActivity {
+         }
+ 
+         public void UpdatePreferences() {
+-            // Log.w(TAG, "Updating Preference Screen");
++            boolean gotCalendarPermission = ActivityCompat.checkSelfPermission(getContext(), Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
+ 
+-            boolean gotCalendarPermission = ((SettingsActivity) getActivity()).CheckCalendarPermission();
++            String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++            SharedPreferences SharePref = getContext().getSharedPreferences(pref_file_name , 0);
+ 
+             if (gotCalendarPermission) {
+                 Preference CalendarPermissionPref = findPreference("calendar_permission");
+                 CalendarPermissionPref.setEnabled(false);
+                 CalendarPermissionPref.setSummary("Calendar permission has been granted.");
+ 
+-                SwitchPreference ScreenshotModePref = findPreference("screenshot_mode");
+-                ScreenshotModePref.setEnabled(true);
+-
+                 ((SettingsActivity) getActivity()).FillCalendarLists();
+                 int CalendarCount = ((SettingsActivity) getActivity()).CalendarDisplayNames.size();
+                 CharSequence[] entries_array = ((SettingsActivity) getActivity()).CalendarDisplayNames.toArray(new CharSequence[CalendarCount]);
+                 CharSequence[] values_array = ((SettingsActivity) getActivity()).CalendarIDs.toArray(new CharSequence[CalendarCount]);
+ 
++                Boolean screenshot_mode = SharePref.getBoolean("screenshot_mode", true);
++                SwitchPreference ScreenshotModePref = findPreference("screenshot_mode");
++                ScreenshotModePref.setEnabled(true);
++                ScreenshotModePref.setChecked(screenshot_mode);
++
++                Set<String> current_calendar_selection = SharePref.getStringSet("calendar_selection", null );
++                if(current_calendar_selection == null){
++                    current_calendar_selection = new HashSet<>();
++                    for(int i=0; i<values_array.length; i++){
++                        current_calendar_selection.add((String)values_array[i]);
++                    }
++                    SharedPreferences.Editor editor = SharePref.edit();
++                    editor.putStringSet("calendar_selection", current_calendar_selection);
++                    editor.apply();
++                }
++
++                Log.d(TAG, "calendar_selection = " + current_calendar_selection);
+                 MultiSelectListPreference CalSelectPref = findPreference("calendar_select");
++
+                 CalSelectPref.setEntries(entries_array);
+                 CalSelectPref.setEntryValues(values_array);
++                CalSelectPref.setValues(current_calendar_selection);
++
+                 CalSelectPref.setEnabled(true);
+             }
+ 
++            String date_format = SharePref.getString("date_format", new String());
++            ListPreference DateFormatPref = findPreference("date_format");
++            DateFormatPref.setEntries(PolyCalDateFormats.getFormatsReadable() );
++            DateFormatPref.setEntryValues(PolyCalDateFormats.getFormatsParseable() );
++            DateFormatPref.setValue(date_format);
++
++            String date_format_allday = SharePref.getString("date_format_allday", new String());
++            ListPreference DateFormatAlldayPref = findPreference("date_format_allday");
++            DateFormatAlldayPref.setEntries(PolyCalDateFormats.getFormatsReadableAllday() );
++            DateFormatAlldayPref.setEntryValues(PolyCalDateFormats.getFormatsParseableAllday() );
++            DateFormatAlldayPref.setValue(date_format_allday);
++
++            Log.d(TAG, "End of UpdatePreferences()");
+         }
+ 
+         @Override
+@@ -129,24 +250,29 @@ public class SettingsActivity extends AppCompatActivity {
+                 for (int i = 0; i < permissions.length; i++) {
+                     if (permissions[i].equals(Manifest.permission.READ_CALENDAR)) {
+                         if (grantResults[i] == PackageManager.PERMISSION_GRANTED) {
+-                            Log.e(TAG, "Permission Granted");
++                            Log.i(TAG, "READ_CALENDAR Permission Granted");
+ 
+-                            SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
++                            //SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
++                            String pref_file_name = String.format("com.gyorog.PolyCal.prefs_for_widget_%d", widget_id);
++                            SharedPreferences preferences = getContext().getSharedPreferences(pref_file_name, MODE_PRIVATE);
+                             SharedPreferences.Editor editor = preferences.edit();
+                             editor.putBoolean("screenshot_mode", false);
+                             editor.apply();
+ 
++                            Intent redraw = new Intent("com.gyorog.polycal.CHANGE_SOURCE");
++                            redraw.setPackage(getContext().getPackageName());
++                            getContext().sendBroadcast(redraw);
++
+                             UpdatePreferences();
+                         }
+                     }
+                 }
+             }
+         }
+-    }
+-
+-
+ 
++    }
+ 
++    // This is for getting the list of available calendars:
+     public static final String[] CALENDAR_COLUMN_LIST = new String[] {
+             Calendars._ID,                          // 0
+             Calendars.CALENDAR_DISPLAY_NAME          // 1
+@@ -170,5 +296,4 @@ public class SettingsActivity extends AppCompatActivity {
+         cur.close();
+     }
+ 
+-
+ }
+\ No newline at end of file

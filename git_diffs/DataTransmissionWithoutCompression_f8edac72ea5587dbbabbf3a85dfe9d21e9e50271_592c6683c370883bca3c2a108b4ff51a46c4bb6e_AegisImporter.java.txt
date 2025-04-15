@@ -1,0 +1,552 @@
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisFileImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisFileImporter.java
+index 10b5de6f..27a0f0a7 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AegisFileImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AegisFileImporter.java
+@@ -2,16 +2,16 @@ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
+ 
++import org.json.JSONArray;
++import org.json.JSONException;
+ import org.json.JSONObject;
+ 
+-import java.util.List;
+-
+-import com.beemdevelopment.aegis.db.Database;
+ import com.beemdevelopment.aegis.db.DatabaseEntry;
+-import com.beemdevelopment.aegis.db.DatabaseException;
+ import com.beemdevelopment.aegis.db.DatabaseFile;
+ import com.beemdevelopment.aegis.db.DatabaseFileCredentials;
+ import com.beemdevelopment.aegis.db.DatabaseFileException;
++import com.beemdevelopment.aegis.encoding.Base64Exception;
++import com.beemdevelopment.aegis.otp.OtpInfoException;
+ import com.beemdevelopment.aegis.util.ByteInputStream;
+ 
+ public class AegisFileImporter extends DatabaseFileImporter {
+@@ -33,7 +33,9 @@ public class AegisFileImporter extends DatabaseFileImporter {
+     }
+ 
+     @Override
+-    public List<DatabaseEntry> convert() throws DatabaseImporterException {
++    public DatabaseImporterResult convert() throws DatabaseImporterException {
++        DatabaseImporterResult result = new DatabaseImporterResult();
++
+         try {
+             JSONObject obj;
+             if (_file.isEncrypted() && _creds != null) {
+@@ -42,11 +44,29 @@ public class AegisFileImporter extends DatabaseFileImporter {
+                 obj = _file.getContent();
+             }
+ 
+-            Database db = Database.fromJson(obj);
+-            return db.getEntries();
+-        } catch (DatabaseException | DatabaseFileException e) {
++            JSONArray array = obj.getJSONArray("entries");
++            for (int i = 0; i < array.length(); i++) {
++                JSONObject entryObj = array.getJSONObject(i);
++                try {
++                    DatabaseEntry entry = convertEntry(entryObj);
++                    result.addEntry(entry);
++                } catch (DatabaseImporterEntryException e) {
++                    result.addError(e);
++                }
++            }
++        } catch (JSONException | DatabaseFileException e) {
+             throw new DatabaseImporterException(e);
+         }
++
++        return result;
++    }
++
++    private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        try {
++            return DatabaseEntry.fromJson(obj);
++        } catch (JSONException | OtpInfoException | Base64Exception e) {
++            throw new DatabaseImporterEntryException(e, obj.toString());
++        }
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpFileImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpFileImporter.java
+index 16f4afeb..ffe63c60 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpFileImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/AndOtpFileImporter.java
+@@ -7,8 +7,6 @@ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
+ import java.nio.charset.StandardCharsets;
+-import java.util.ArrayList;
+-import java.util.List;
+ 
+ import com.beemdevelopment.aegis.db.DatabaseEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+@@ -36,46 +34,55 @@ public class AndOtpFileImporter extends DatabaseFileImporter {
+     }
+ 
+     @Override
+-    public List<DatabaseEntry> convert() throws DatabaseImporterException {
+-        List<DatabaseEntry> entries = new ArrayList<>();
++    public DatabaseImporterResult convert() throws DatabaseImporterException {
++        DatabaseImporterResult result = new DatabaseImporterResult();
+ 
+-        try {
+-            for (int i = 0; i < _obj.length(); i++) {
++        for (int i = 0; i < _obj.length(); i++) {
++            try {
+                 JSONObject obj = _obj.getJSONObject(i);
+-
+-                String type = obj.getString("type").toLowerCase();
+-                String algo = obj.getString("algorithm");
+-                int digits = obj.getInt("digits");
+-                byte[] secret = Base32.decode(obj.getString("secret").toCharArray());
+-
+-                OtpInfo info;
+-                if (type.equals("totp")) {
+-                    info = new TotpInfo(secret, algo, digits, obj.getInt("period"));
+-                } else if (type.equals("hotp")) {
+-                    info = new HotpInfo(secret, algo, digits, obj.getLong("counter"));
+-                } else {
+-                    throw new DatabaseImporterException("unsupported otp type: " + type);
+-                }
+-
+-                String issuer = "";
+-                String name = "";
+-
+-                String[] parts = obj.getString("label").split(" - ");
+-                if (parts.length > 1) {
+-                    issuer = parts[0];
+-                    name = parts[1];
+-                } else {
+-                    name = parts[0];
+-                }
+-
+-                DatabaseEntry entry = new DatabaseEntry(info, name, issuer);
+-                entries.add(entry);
++                DatabaseEntry entry = convertEntry(obj);
++                result.addEntry(entry);
++            } catch (JSONException e) {
++                throw new DatabaseImporterException(e);
++            } catch (DatabaseImporterEntryException e) {
++                result.addError(e);
+             }
+-        } catch (Base32Exception | OtpInfoException | JSONException e) {
+-            throw new DatabaseImporterException(e);
+         }
+ 
+-        return entries;
++        return result;
++    }
++
++    private static DatabaseEntry convertEntry(JSONObject obj) throws DatabaseImporterEntryException {
++        try {
++            String type = obj.getString("type").toLowerCase();
++            String algo = obj.getString("algorithm");
++            int digits = obj.getInt("digits");
++            byte[] secret = Base32.decode(obj.getString("secret").toCharArray());
++
++            OtpInfo info;
++            if (type.equals("totp")) {
++                info = new TotpInfo(secret, algo, digits, obj.getInt("period"));
++            } else if (type.equals("hotp")) {
++                info = new HotpInfo(secret, algo, digits, obj.getLong("counter"));
++            } else {
++                throw new DatabaseImporterException("unsupported otp type: " + type);
++            }
++
++            String name;
++            String issuer = "";
++
++            String[] parts = obj.getString("label").split(" - ");
++            if (parts.length > 1) {
++                issuer = parts[0];
++                name = parts[1];
++            } else {
++                name = parts[0];
++            }
++
++            return new DatabaseEntry(info, name, issuer);
++        } catch (DatabaseImporterException | Base32Exception | OtpInfoException | JSONException e) {
++            throw new DatabaseImporterEntryException(e, obj.toString());
++        }
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseAppImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseAppImporter.java
+index c3e92f79..008d0057 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseAppImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseAppImporter.java
+@@ -27,7 +27,7 @@ public abstract class DatabaseAppImporter implements DatabaseImporter {
+ 
+     public abstract void parse() throws DatabaseImporterException;
+ 
+-    public abstract List<DatabaseEntry> convert() throws DatabaseImporterException;
++    public abstract DatabaseImporterResult convert() throws DatabaseImporterException;
+ 
+     public abstract boolean isEncrypted();
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseFileImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseFileImporter.java
+index 8341529f..bcb96bde 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseFileImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseFileImporter.java
+@@ -32,7 +32,7 @@ public abstract class DatabaseFileImporter implements DatabaseImporter {
+ 
+     public abstract void parse() throws DatabaseImporterException;
+ 
+-    public abstract List<DatabaseEntry> convert() throws DatabaseImporterException;
++    public abstract DatabaseImporterResult convert() throws DatabaseImporterException;
+ 
+     public abstract boolean isEncrypted();
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+index b66bb7e1..baf5614a 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+@@ -8,7 +8,7 @@ import java.util.List;
+ 
+ public interface DatabaseImporter {
+     void parse() throws DatabaseImporterException;
+-    List<DatabaseEntry> convert() throws DatabaseImporterException;
++    DatabaseImporterResult convert() throws DatabaseImporterException;
+     boolean isEncrypted();
+     Context getContext();
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java
+new file mode 100644
+index 00000000..7aff6df4
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java
+@@ -0,0 +1,14 @@
++package com.beemdevelopment.aegis.importers;
++
++public class DatabaseImporterEntryException extends Exception {
++    private String _text;
++
++    public DatabaseImporterEntryException(Throwable cause, String text) {
++        super(cause);
++        _text = text;
++    }
++
++    public String getText() {
++        return _text;
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterResult.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterResult.java
+new file mode 100644
+index 00000000..91fe0132
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterResult.java
+@@ -0,0 +1,27 @@
++package com.beemdevelopment.aegis.importers;
++
++import com.beemdevelopment.aegis.db.DatabaseEntry;
++
++import java.util.ArrayList;
++import java.util.List;
++
++public class DatabaseImporterResult {
++    private List<DatabaseEntry> _entries = new ArrayList<>();
++    private List<DatabaseImporterEntryException> _errors = new ArrayList<>();
++
++    public void addEntry(DatabaseEntry entry) {
++        _entries.add(entry);
++    }
++
++    public void addError(DatabaseImporterEntryException error) {
++        _errors.add(error);
++    }
++
++    public List<DatabaseEntry> getEntries() {
++        return _entries;
++    }
++
++    public List<DatabaseImporterEntryException> getErrors() {
++        return _errors;
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpFileImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpFileImporter.java
+index 3f2f51de..7965e072 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpFileImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/FreeOtpFileImporter.java
+@@ -46,43 +46,48 @@ public class FreeOtpFileImporter extends DatabaseFileImporter {
+     }
+ 
+     @Override
+-    public List<DatabaseEntry> convert() throws DatabaseImporterException {
+-        List<DatabaseEntry> entries = new ArrayList<>();
+-
+-        try {
+-            for (XmlEntry xmlEntry : _xmlEntries) {
+-                if (xmlEntry.Name.equals("tokenOrder")) {
+-                    // TODO: order
+-                    JSONArray array = new JSONArray(xmlEntry.Value);
+-                } else {
+-                    JSONObject obj = new JSONObject(xmlEntry.Value);
+-
+-                    String type = obj.getString("type").toLowerCase();
+-                    String algo = obj.getString("algo");
+-                    int digits = obj.getInt("digits");
+-                    byte[] secret = toBytes(obj.getJSONArray("secret"));
+-
+-                    OtpInfo info;
+-                    if (type.equals("totp")) {
+-                        info = new TotpInfo(secret, algo, digits, obj.getInt("period"));
+-                    } else if (type.equals("hotp")) {
+-                        info = new HotpInfo(secret, algo, digits, obj.getLong("counter"));
+-                    } else {
+-                        throw new DatabaseImporterException("unsupported otp type: " + type);
+-                    }
+-
+-                    String issuer = obj.getString("issuerExt");
+-                    String name = obj.optString("label");
+-
+-                    DatabaseEntry entry = new DatabaseEntry(info, name, issuer);
+-                    entries.add(entry);
++    public DatabaseImporterResult convert() {
++        DatabaseImporterResult result = new DatabaseImporterResult();
++
++        for (XmlEntry xmlEntry : _xmlEntries) {
++            // TODO: order
++            if (!xmlEntry.Name.equals("tokenOrder")) {
++                try {
++                    DatabaseEntry entry = convertEntry(xmlEntry);
++                    result.addEntry(entry);
++                } catch (DatabaseImporterEntryException e) {
++                    result.addError(e);
+                 }
+             }
+-        } catch (OtpInfoException | JSONException e) {
+-            throw new DatabaseImporterException(e);
+         }
+ 
+-        return entries;
++        return result;
++    }
++
++    private static DatabaseEntry convertEntry(XmlEntry xmlEntry) throws DatabaseImporterEntryException {
++        try {
++            JSONObject obj = new JSONObject(xmlEntry.Value);
++
++            String type = obj.getString("type").toLowerCase();
++            String algo = obj.getString("algo");
++            int digits = obj.getInt("digits");
++            byte[] secret = toBytes(obj.getJSONArray("secret"));
++
++            OtpInfo info;
++            if (type.equals("totp")) {
++                info = new TotpInfo(secret, algo, digits, obj.getInt("period"));
++            } else if (type.equals("hotp")) {
++                info = new HotpInfo(secret, algo, digits, obj.getLong("counter"));
++            } else {
++                throw new DatabaseImporterException("unsupported otp type: " + type);
++            }
++
++            String issuer = obj.getString("issuerExt");
++            String name = obj.optString("label");
++            return new DatabaseEntry(info, name, issuer);
++        } catch (DatabaseImporterException | OtpInfoException | JSONException e) {
++            throw new DatabaseImporterEntryException(e, xmlEntry.Value);
++        }
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthAppImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthAppImporter.java
+index cd448cf3..397c2588 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthAppImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthAppImporter.java
+@@ -32,7 +32,7 @@ public class GoogleAuthAppImporter extends DatabaseAppImporter {
+     @SuppressLint("SdCardPath")
+     private static final String _filename = "/data/data/com.google.android.apps.authenticator2/databases/databases";
+ 
+-    private List<DatabaseEntry> _entries = new ArrayList<>();
++    private List<Entry> _entries = new ArrayList<>();
+ 
+     public GoogleAuthAppImporter(Context context) {
+         super(context);
+@@ -61,34 +61,11 @@ public class GoogleAuthAppImporter extends DatabaseAppImporter {
+                 }
+ 
+                 do {
+-                    int type = getInt(cursor, "type");
+-                    byte[] secret = Base32.decode(getString(cursor, "secret").toCharArray());
+-
+-                    OtpInfo info;
+-                    switch (type) {
+-                        case TYPE_TOTP:
+-                            info = new TotpInfo(secret);
+-                            break;
+-                        case TYPE_HOTP:
+-                            info = new HotpInfo(secret, getInt(cursor, "counter"));
+-                            break;
+-                        default:
+-                            throw new DatabaseImporterException("unsupported otp type: " + type);
+-                    }
+-
+-                    String name = getString(cursor, "email", "");
+-                    String issuer = getString(cursor, "issuer", "");
+-
+-                    String[] parts = name.split(":");
+-                    if (parts.length == 2) {
+-                        name = parts[1];
+-                    }
+-
+-                    DatabaseEntry entry = new DatabaseEntry(info, name, issuer);
++                    Entry entry = new Entry(cursor);
+                     _entries.add(entry);
+                 } while(cursor.moveToNext());
+             }
+-        } catch (SQLiteException | OtpInfoException | Base32Exception e) {
++        } catch (SQLiteException e) {
+             throw new DatabaseImporterException(e);
+         } finally {
+             // always delete the temporary file
+@@ -97,8 +74,47 @@ public class GoogleAuthAppImporter extends DatabaseAppImporter {
+     }
+ 
+     @Override
+-    public List<DatabaseEntry> convert() {
+-        return _entries;
++    public DatabaseImporterResult convert() {
++        DatabaseImporterResult result = new DatabaseImporterResult();
++
++        for (Entry sqlEntry : _entries) {
++            try {
++                DatabaseEntry entry = convertEntry(sqlEntry);
++                result.addEntry(entry);
++            } catch (DatabaseImporterEntryException e) {
++                result.addError(e);
++            }
++        }
++
++        return result;
++    }
++
++    private static DatabaseEntry convertEntry(Entry entry) throws DatabaseImporterEntryException {
++        try {
++            byte[] secret = Base32.decode(entry.getSecret().toCharArray());
++
++            OtpInfo info;
++            switch (entry.getType()) {
++                case TYPE_TOTP:
++                    info = new TotpInfo(secret);
++                    break;
++                case TYPE_HOTP:
++                    info = new HotpInfo(secret, entry.getCounter());
++                    break;
++                default:
++                    throw new DatabaseImporterException("unsupported otp type: " + entry.getType());
++            }
++
++            String name = entry.getEmail();
++            String[] parts = name.split(":");
++            if (parts.length == 2) {
++                name = parts[1];
++            }
++
++            return new DatabaseEntry(info, name, entry.getIssuer());
++        } catch (Base32Exception | OtpInfoException | DatabaseImporterException e) {
++            throw new DatabaseImporterEntryException(e, entry.toString());
++        }
+     }
+ 
+     @Override
+@@ -121,4 +137,44 @@ public class GoogleAuthAppImporter extends DatabaseAppImporter {
+     private static int getInt(Cursor cursor, String columnName) {
+         return cursor.getInt(cursor.getColumnIndex(columnName));
+     }
++
++    private static long getLong(Cursor cursor, String columnName) {
++        return cursor.getLong(cursor.getColumnIndex(columnName));
++    }
++
++    private static class Entry {
++        private int _type;
++        private String _secret;
++        private String _email;
++        private String _issuer;
++        private long _counter;
++
++        public Entry(Cursor cursor) {
++            _type = getInt(cursor, "type");
++            _secret = getString(cursor, "secret");
++            _email = getString(cursor, "email", "");
++            _issuer = getString(cursor, "issuer", "");
++            _counter = getLong(cursor, "counter");
++        }
++
++        public int getType() {
++            return _type;
++        }
++
++        public String getSecret() {
++            return _secret;
++        }
++
++        public String getEmail() {
++            return _email;
++        }
++
++        public String getIssuer() {
++            return _issuer;
++        }
++
++        public long getCounter() {
++            return _counter;
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+index 85c48014..4943ba20 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+@@ -37,7 +37,6 @@ import com.beemdevelopment.aegis.db.DatabaseEntry;
+ import com.beemdevelopment.aegis.db.DatabaseManager;
+ 
+ import androidx.coordinatorlayout.widget.CoordinatorLayout;
+-import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
+ 
+ public class MainActivity extends AegisActivity implements EntryListView.Listener {
+     // activity request codes
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+index bf35c99c..74927c7f 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesFragment.java
+@@ -26,9 +26,12 @@ import com.beemdevelopment.aegis.importers.AegisFileImporter;
+ import com.beemdevelopment.aegis.importers.DatabaseAppImporter;
+ import com.beemdevelopment.aegis.importers.DatabaseFileImporter;
+ import com.beemdevelopment.aegis.importers.DatabaseImporter;
++import com.beemdevelopment.aegis.importers.DatabaseImporterEntryException;
+ import com.beemdevelopment.aegis.importers.DatabaseImporterException;
++import com.beemdevelopment.aegis.importers.DatabaseImporterResult;
+ import com.beemdevelopment.aegis.ui.preferences.SwitchPreference;
+ import com.beemdevelopment.aegis.util.ByteInputStream;
++import com.google.android.material.snackbar.Snackbar;
+ import com.takisoft.preferencex.PreferenceFragmentCompat;
+ 
+ import java.io.FileNotFoundException;
+@@ -465,7 +468,10 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+     }
+ 
+     private void importDatabase(DatabaseImporter importer) throws DatabaseImporterException {
+-        List<DatabaseEntry> entries = importer.convert();
++        DatabaseImporterResult result = importer.convert();
++        List<DatabaseEntry> entries = result.getEntries();
++        List<DatabaseImporterEntryException> errors = result.getErrors();
++
+         for (DatabaseEntry entry : entries) {
+             // temporary: randomize the UUID of duplicate entries and add them anyway
+             if (_db.getEntryByUUID(entry.getUUID()) != null) {
+@@ -480,7 +486,13 @@ public class PreferencesFragment extends PreferenceFragmentCompat {
+         }
+ 
+         _result.putExtra("needsRecreate", true);
+-        Toast.makeText(getActivity(), String.format(Locale.getDefault(), getString(R.string.imported_entries_count), entries.size()), Toast.LENGTH_LONG).show();
++        Snackbar bar = Snackbar.make(getView(), String.format(Locale.getDefault(), getString(R.string.imported_entries_count), entries.size(), errors.size()), Snackbar.LENGTH_LONG);
++        if (errors.size() == 0) {
++            bar.setAction(R.string.details, v -> {
++
++            });
++        }
++        bar.show();
+     }
+ 
+     private void onExport() {

@@ -1,0 +1,708 @@
+M	QuoteUnquote.cloudLib
+M	QuoteUnquote.cloudLib.functions
+M	QuoteUnquote.utilsLib
+diff --git a/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelperTest.kt b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelperTest.kt
+new file mode 100644
+index 0000000..f7b4e0e
+--- /dev/null
++++ b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelperTest.kt
+@@ -0,0 +1,97 @@
++package com.github.jameshnsears.quoteunquote
++
++import com.github.jameshnsears.quoteunquote.utils.ContentSelection
++import com.github.jameshnsears.quoteunquote.utils.widget.WidgetIdHelper
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertFalse
++import org.junit.Test
++
++class PackageReplacedHelperTest : QuoteUnquoteModelUtility() {
++    @Test
++    fun alignHistoryWithQuotations() {
++        insertQuotationTestData01()
++
++        confirmPreviousIsEmpty()
++
++        createDigestsNotInQuotationsDatabase()
++
++        val packageReplacedHelper = PackageReplacedHelper(WidgetIdHelper.WIDGET_ID_01, context)
++        packageReplacedHelper.alignHistoryWithQuotations(quoteUnquoteModelDouble)
++
++        confirmPreviousIsEmpty()
++    }
++
++    private fun confirmPreviousIsEmpty() {
++        assertFalse(
++            databaseRepositoryDouble.getPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.ALL
++            ).contains("all-0")
++        )
++
++        assertEquals(
++            0,
++            databaseRepositoryDouble.countPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.AUTHOR,
++            )
++        )
++
++        assertEquals(
++            0,
++            databaseRepositoryDouble.countPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.SEARCH,
++            )
++        )
++
++        assertEquals(
++            0,
++            databaseRepositoryDouble.countFavourites().blockingGet()
++        )
++    }
++
++    private fun createDigestsNotInQuotationsDatabase() {
++        databaseRepositoryDouble.markAsPrevious(
++            WidgetIdHelper.WIDGET_ID_01,
++            ContentSelection.ALL,
++            "all-0"
++        )
++        assertEquals(
++            1,
++            databaseRepositoryDouble.countPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.ALL,
++            )
++        )
++
++        databaseRepositoryDouble.markAsPrevious(
++            WidgetIdHelper.WIDGET_ID_01,
++            ContentSelection.AUTHOR,
++            "author-0"
++        )
++        assertEquals(
++            1,
++            databaseRepositoryDouble.countPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.AUTHOR,
++            )
++        )
++
++        databaseRepositoryDouble.markAsPrevious(
++            WidgetIdHelper.WIDGET_ID_01,
++            ContentSelection.SEARCH,
++            "search-0"
++        )
++        assertEquals(
++            1,
++            databaseRepositoryDouble.countPrevious(
++                WidgetIdHelper.WIDGET_ID_01,
++                ContentSelection.SEARCH,
++            )
++        )
++
++        databaseRepositoryDouble.markAsFavourite("favourite-0")
++        assertEquals(1, databaseRepositoryDouble.countFavourites().blockingGet())
++    }
++}
+diff --git a/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ExportTest.kt b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ExportTest.kt
+new file mode 100644
+index 0000000..1c2ac6e
+--- /dev/null
++++ b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ExportTest.kt
+@@ -0,0 +1,31 @@
++package com.github.jameshnsears.quoteunquote.configure.fragment.content
++
++import com.github.jameshnsears.quoteunquote.QuoteUnquoteModelUtility
++import com.github.jameshnsears.quoteunquote.database.DatabaseRepository
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++
++class ExportTest : QuoteUnquoteModelUtility() {
++    @Test
++    fun exportFavourites() {
++        insertQuotationTestData01()
++        insertQuotationTestData02()
++
++        assertTrue(quoteUnquoteModelDouble.countFavourites().blockingGet() == 0)
++
++        databaseRepositoryDouble.markAsFavourite(DatabaseRepository.DEFAULT_QUOTATION_DIGEST)
++
++        // a digest that doesn't exist - i.e. quotation db migration deleted it
++        databaseRepositoryDouble.markAsFavourite("xx")
++
++        databaseRepositoryDouble.markAsFavourite("d2")
++        databaseRepositoryDouble.markAsFavourite("d4")
++
++        assertTrue(quoteUnquoteModelDouble.countFavourites().blockingGet() == 4)
++
++        val exportedFavourites = quoteUnquoteModelDouble.exportFavourites()
++
++        assertEquals(3, exportedFavourites.size)
++    }
++}
+diff --git a/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabaseMigrationTest.kt b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabaseMigrationTest.kt
+index e1d9b5a..e669a60 100644
+--- a/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabaseMigrationTest.kt
++++ b/app/src/androidTest/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabaseMigrationTest.kt
+@@ -48,8 +48,8 @@ class AbstractHistoryDatabaseMigrationTest {
+             AbstractHistoryDatabase.MIGRATION_1_2
+         )
+ 
+-        // the migration wipes `previous`
++        // the migration keeps `previous`
+         val databaseRepository = DatabaseRepository.getInstance(getApplicationContext())
+-        assertEquals(0, databaseRepository.countPrevious(1, ContentSelection.ALL))
++        assertEquals(1, databaseRepository.countPrevious(1, ContentSelection.ALL))
+     }
+ }
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelper.kt b/app/src/main/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelper.kt
+new file mode 100644
+index 0000000..ed77338
+--- /dev/null
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/PackageReplacedHelper.kt
+@@ -0,0 +1,20 @@
++package com.github.jameshnsears.quoteunquote
++
++import android.content.Context
++import com.github.jameshnsears.quoteunquote.configure.fragment.appearance.AppearancePreferences
++import com.github.jameshnsears.quoteunquote.configure.fragment.content.ContentPreferences
++import com.github.jameshnsears.quoteunquote.configure.fragment.event.EventPreferences
++
++class PackageReplacedHelper(val widgetId: Int, val context: Context) {
++    fun alignHistoryWithQuotations(quoteUnquoteModel: QuoteUnquoteModel) {
++        quoteUnquoteModel.alignHistoryWithQuotations(widgetId)
++        quoteUnquoteModel.alignFavouritesWithQuotations(widgetId)
++        quoteUnquoteModel.markAsCurrentDefault(widgetId)
++    }
++
++    fun migratePreferences() {
++        AppearancePreferences(widgetId, context).performMigration()
++        ContentPreferences(widgetId, context).performMigration()
++        EventPreferences(widgetId, context).performMigration()
++    }
++}
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteInstructions.kt b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteInstructions.kt
+new file mode 100644
+index 0000000..21d81b4
+--- /dev/null
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteInstructions.kt
+@@ -0,0 +1,30 @@
++package com.github.jameshnsears.quoteunquote
++
++import android.os.Bundle
++import android.widget.LinearLayout
++import androidx.appcompat.app.AppCompatActivity
++import com.github.jameshnsears.quoteunquote.databinding.ActivityInstructionsBinding
++import com.github.jameshnsears.quoteunquote.utils.IntentFactoryHelper
++
++class QuoteUnquoteInstructions : AppCompatActivity() {
++    private lateinit var activityInstructionsBinding: ActivityInstructionsBinding
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        activityInstructionsBinding = ActivityInstructionsBinding.inflate(layoutInflater)
++        val view = activityInstructionsBinding.root
++        setContentView(view)
++
++        this.activityInstructionsBinding.textViewVersion.text = this.resources.getString(
++            R.string.activity_instructions_version,
++            BuildConfig.VERSION_NAME, BuildConfig.GIT_HASH
++        )
++
++        val layoutFooter: LinearLayout = this.activityInstructionsBinding.layoutFooter
++        layoutFooter.setOnClickListener {
++            this.startActivity(
++                IntentFactoryHelper.createIntentActionView()
++            )
++        }
++    }
++}
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteModel.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteModel.java
+index b633dff..e6a91a9 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteModel.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteModel.java
+@@ -459,8 +459,6 @@ public class QuoteUnquoteModel {
+         }
+     }
+ 
+-    //////////////////////
+-
+     public boolean isReported(int widgetId) {
+         Future<Boolean> future = QuoteUnquoteWidget.getExecutorService().submit(() -> {
+             final QuotationEntity quotationEntity = this.getCurrentQuotation(
+@@ -564,4 +562,81 @@ public class QuoteUnquoteModel {
+         final ContentPreferences contentPreferences = new ContentPreferences(0, context);
+         return contentPreferences.getContentFavouritesLocalCode();
+     }
++
++    @NonNull
++    public ArrayList<String> exportFavourites() {
++        Future<ArrayList<String>> future = QuoteUnquoteWidget.getExecutorService().submit(() -> {
++            ArrayList<String> exportedFavourites = new ArrayList<String>();
++
++            for (String favouriteDigest : this.databaseRepository.getFavourites()) {
++                QuotationEntity quotationEntity
++                        = this.databaseRepository.getQuotation(favouriteDigest);
++
++                if (quotationEntity != null) {
++                    exportedFavourites.add(
++                            quotationEntity.quotation + "\n" + quotationEntity.author + "\n");
++                } else {
++                    Timber.w("misaligned:%s", favouriteDigest);
++                }
++            }
++
++            return exportedFavourites;
++        });
++
++        ArrayList<String> exportedFavourites = null;
++
++        try {
++            exportedFavourites = future.get();
++        } catch (@NonNull final ExecutionException | InterruptedException e) {
++            Timber.w(e.toString());
++            Thread.currentThread().interrupt();
++        }
++
++        return exportedFavourites;
++    }
++
++    public void alignHistoryWithQuotations(int widgetId) {
++        Future future = QuoteUnquoteWidget.getExecutorService().submit(() -> {
++            List<String> history = new ArrayList<>();
++            history.addAll(this.databaseRepository.getPrevious(widgetId, ContentSelection.ALL));
++            history.addAll(this.databaseRepository.getPrevious(widgetId, ContentSelection.AUTHOR));
++            history.addAll(this.databaseRepository.getPrevious(widgetId, ContentSelection.SEARCH));
++
++            int misalignedCount = 1;
++            for (String digest: history) {
++                if (this.databaseRepository.getQuotation(digest) == null) {
++                    Timber.w("misaligned, previous: %d=%s", misalignedCount, digest);
++                    this.databaseRepository.erasePrevious(widgetId, digest);
++                    misalignedCount++;
++                }
++            }
++        });
++
++        try {
++            future.get();
++        } catch (@NonNull final ExecutionException | InterruptedException e) {
++            Timber.w(e.toString());
++            Thread.currentThread().interrupt();
++        }
++    }
++
++    public void alignFavouritesWithQuotations(int widgetId) {
++        Future future = QuoteUnquoteWidget.getExecutorService().submit(() -> {
++            int misalignedCount = 1;
++            for (String digest: this.databaseRepository.getFavourites()) {
++                if (this.databaseRepository.getQuotation(digest) == null) {
++                    Timber.w("misaligned, favourite: %d=%s", misalignedCount, digest);
++                    this.databaseRepository.eraseFavourite(widgetId, digest);
++                    misalignedCount++;
++                }
++            }
++        });
++
++        try {
++            future.get();
++        } catch (@NonNull final ExecutionException | InterruptedException e) {
++            Timber.w(e.toString());
++            Thread.currentThread().interrupt();
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteWidget.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteWidget.java
+index d71ea7e..618e9b7 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteWidget.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/QuoteUnquoteWidget.java
+@@ -261,19 +261,13 @@ public final class QuoteUnquoteWidget extends AppWidgetProvider {
+ 
+         this.startDatabaseConnectivity(context);
+ 
+-        final AppearancePreferences appearancePreferences = new AppearancePreferences(widgetId, context);
+-        appearancePreferences.performMigration();
+-
+-        final ContentPreferences contentPreferences = new ContentPreferences(widgetId, context);
+-        contentPreferences.performMigration();
+-
+-        final EventPreferences eventPreferences = new EventPreferences(widgetId, context);
+-        eventPreferences.performMigration();
+-
+         for (final int id : appWidgetManager.getAppWidgetIds(new ComponentName(context, QuoteUnquoteWidget.class))) {
+             Timber.d("%d", id);
+-            this.getQuoteUnquoteModel(context).resetPrevious(id, new ContentPreferences(id, context).getContentSelection());
+-            this.getQuoteUnquoteModel(context).markAsCurrentDefault(id);
++            if (id != 0) {
++                PackageReplacedHelper packageReplacedHelper = new PackageReplacedHelper(id, context);
++                packageReplacedHelper.alignHistoryWithQuotations(this.getQuoteUnquoteModel(context));
++                packageReplacedHelper.migratePreferences();
++            }
+             appWidgetManager.notifyAppWidgetViewDataChanged(id, R.id.listViewQuotation);
+         }
+     }
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/cloud/CloudServiceReceive.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/cloud/CloudServiceReceive.java
+index b2dfc29..3598503 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/cloud/CloudServiceReceive.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/cloud/CloudServiceReceive.java
+@@ -85,11 +85,16 @@ public class CloudServiceReceive extends Service {
+                         this.handler.post(() -> ToastHelper.makeToast(
+                                 context, context.getString(R.string.fragment_content_favourites_share_missing), Toast.LENGTH_SHORT));
+                     } else {
++                        DatabaseRepository databaseRepository = getDatabaseRepository(context);
++                        for (String digest: favouritesReceived) {
++                            if (databaseRepository.getQuotation(digest) != null) {
++                                databaseRepository.markAsFavourite(digest);
++                            }
++                        }
++
+                         this.handler.post(() -> ToastHelper.makeToast(
+                                 context, context.getString(R.string.fragment_content_favourites_share_received), Toast.LENGTH_SHORT));
+ 
+-                        favouritesReceived.forEach(this.getDatabaseRepository(context)::markAsFavourite);
+-
+                         if (contentFragment != null) {
+                             contentFragment.setFavouriteCount();
+                         }
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/ConfigureActivity.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/ConfigureActivity.java
+index 91e933c..04638bf 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/ConfigureActivity.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/ConfigureActivity.java
+@@ -12,7 +12,6 @@ import com.github.jameshnsears.quoteunquote.R;
+ import com.github.jameshnsears.quoteunquote.configure.fragment.appearance.AppearanceFragment;
+ import com.github.jameshnsears.quoteunquote.configure.fragment.content.ContentFragment;
+ import com.github.jameshnsears.quoteunquote.configure.fragment.event.EventFragment;
+-import com.github.jameshnsears.quoteunquote.configure.fragment.footer.FooterFragment;
+ import com.github.jameshnsears.quoteunquote.utils.IntentFactoryHelper;
+ import com.github.jameshnsears.quoteunquote.utils.ui.ToastHelper;
+ import com.google.android.material.bottomnavigation.BottomNavigationView;
+@@ -37,9 +36,6 @@ public class ConfigureActivity extends AppCompatActivity {
+             case R.id.navigationBarSchedule:
+                 selectedFragment = EventFragment.newInstance(this.widgetId);
+                 break;
+-            case R.id.navigationBarAbout:
+-                selectedFragment = FooterFragment.newInstance(this.widgetId);
+-                break;
+         }
+ 
+         String activeFragment = selectedFragment.getClass().getSimpleName();
+@@ -59,6 +55,7 @@ public class ConfigureActivity extends AppCompatActivity {
+ 
+     @Override
+     public void finish() {
++        // back pressed
+         if (this.broadcastFinishIntent) {
+             this.broadcastTheFinishIntent();
+         }
+@@ -72,6 +69,12 @@ public class ConfigureActivity extends AppCompatActivity {
+         this.finishAndRemoveTask();
+     }
+ 
++    @Override
++    public void onDestroy() {
++        // back pressed | swipe up | theme change
++        super.onDestroy();
++    }
++
+     public void broadcastTheFinishIntent() {
+         this.sendBroadcast(IntentFactoryHelper.createIntentAction(
+                 this, widgetId, IntentFactoryHelper.ACTIVITY_FINISHED_CONFIGURATION));
+@@ -102,7 +105,7 @@ public class ConfigureActivity extends AppCompatActivity {
+ 
+         this.setContentView(R.layout.activity_configure);
+ 
+-        final BottomNavigationView bottomNavigationView = this.findViewById(R.id.configureNavigation);
++        BottomNavigationView bottomNavigationView = this.findViewById(R.id.configureNavigation);
+         bottomNavigationView.setOnNavigationItemSelectedListener(this.navigationItemSelectedListener);
+ 
+         setActiveFragment();
+@@ -116,19 +119,21 @@ public class ConfigureActivity extends AppCompatActivity {
+         String activeFragment = configurePreferences.getActiveFragment();
+         Timber.d("activeFragment=%s", activeFragment);
+ 
++        BottomNavigationView bottomNavigationView = this.findViewById(R.id.configureNavigation);
++
+         Fragment fragment;
+         switch (activeFragment) {
+             default:
+                 fragment = AppearanceFragment.newInstance(this.widgetId);
++                bottomNavigationView.setSelectedItemId(R.id.navigationBarAppearance);
+                 break;
+             case "ContentFragment":
+                 fragment = getFragmentContentNewInstance();
++                bottomNavigationView.setSelectedItemId(R.id.navigationBarQuotations);
+                 break;
+             case "EventFragment":
+                 fragment = EventFragment.newInstance(this.widgetId);
+-                break;
+-            case "FooterFragment":
+-                fragment = FooterFragment.newInstance(this.widgetId);
++                bottomNavigationView.setSelectedItemId(R.id.navigationBarSchedule);
+                 break;
+         }
+ 
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/appearance/AppearancePreferences.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/appearance/AppearancePreferences.java
+index f57b540..0597905 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/appearance/AppearancePreferences.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/appearance/AppearancePreferences.java
+@@ -183,7 +183,7 @@ public class AppearancePreferences extends PreferencesFacade {
+             if (entry.getKey().contains("FragmentAppearance:spinnerColour")) {
+                 final String spinnerColour = (String) entry.getValue();
+                 Timber.d("%d: spinnerColour=%s", this.widgetId, spinnerColour);
+-                this.setAppearanceColour(spinnerColour);
++                this.setAppearanceTextColour(spinnerColour);
+             }
+ 
+             if (entry.getKey().contains("FragmentAppearance:spinnerSize")) {
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ContentFragment.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ContentFragment.java
+index 64120ca..17f2d21 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ContentFragment.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/content/ContentFragment.java
+@@ -1,8 +1,10 @@
+ package com.github.jameshnsears.quoteunquote.configure.fragment.content;
+ 
++import android.app.Activity;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.os.Bundle;
++import android.os.ParcelFileDescriptor;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -13,6 +15,8 @@ import android.widget.EditText;
+ import android.widget.RadioGroup;
+ import android.widget.Toast;
+ 
++import androidx.activity.result.ActivityResultLauncher;
++import androidx.activity.result.contract.ActivityResultContracts;
+ import androidx.annotation.Keep;
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+@@ -31,6 +35,10 @@ import com.github.jameshnsears.quoteunquote.utils.audit.AuditEventHelper;
+ import com.github.jameshnsears.quoteunquote.utils.ui.ToastHelper;
+ import com.jakewharton.rxbinding2.widget.RxTextView;
+ 
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.Collections;
+ import java.util.List;
+ import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.CountDownLatch;
+@@ -63,6 +71,8 @@ public class ContentFragment extends FragmentCommon {
+     protected ContentCloud contentCloud;
+     @Nullable
+     private DisposableObserver<Integer> disposableObserver;
++    @Nullable
++    private ActivityResultLauncher<Intent> activityResultLauncher;
+ 
+     public ContentFragment() {
+         // dark mode support
+@@ -214,9 +224,12 @@ public class ContentFragment extends FragmentCommon {
+ 
+         this.createListenerRadioGroup();
+         this.createListenerAuthor();
++        this.createListenerFavouriteButtonExport();
+         this.createListenerFavouriteButtonSend();
+         this.createListenerFavouriteButtonReceive();
+ 
++        this.handleStorageAccessFrameworkResult();
++
+         this.setSelection();
+         this.setFavouriteLocalCode();
+     }
+@@ -424,12 +437,14 @@ public class ContentFragment extends FragmentCommon {
+ 
+     private void enableAuthor(boolean enable) {
+         this.fragmentContentBinding.spinnerAuthors.setEnabled(enable);
+-        this.fragmentContentBinding.textViewAuthorInstructions.setEnabled(enable);
+     }
+ 
+     private void enableFavourites(boolean enable) {
+-        this.fragmentContentBinding.textViewLocalCodeValue.setEnabled(enable);
++        this.fragmentContentBinding.buttonExport.setEnabled(enable);
++        this.makeButtonAlpha(this.fragmentContentBinding.buttonExport, enable);
++        this.fragmentContentBinding.textViewLocalStorageInstructions.setEnabled(enable);
+ 
++        this.fragmentContentBinding.textViewLocalCodeValue.setEnabled(enable);
+         this.fragmentContentBinding.buttonSend.setEnabled(enable);
+         this.makeButtonAlpha(this.fragmentContentBinding.buttonSend, enable);
+         this.fragmentContentBinding.buttonSend.setClickable(enable);
+@@ -469,6 +484,57 @@ public class ContentFragment extends FragmentCommon {
+         });
+     }
+ 
++    protected void createListenerFavouriteButtonExport() {
++        // invoke Storage Access Framework
++        this.fragmentContentBinding.buttonExport.setOnClickListener(v -> {
++            if (this.fragmentContentBinding.buttonExport.isEnabled()) {
++                Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
++                intent.addCategory(Intent.CATEGORY_OPENABLE);
++                intent.setType("text/plain");
++                intent.putExtra(Intent.EXTRA_TITLE, "Favourites.txt");
++                this.activityResultLauncher.launch(intent);
++            }
++        });
++    }
++
++    protected final void handleStorageAccessFrameworkResult() {
++        // default: /storage/emulated/0/Download/Favourites.txt
++        this.activityResultLauncher = registerForActivityResult(
++                new ActivityResultContracts.StartActivityForResult(),
++                activityResult -> {
++                    if (activityResult.getResultCode() == Activity.RESULT_OK) {
++
++                        try {
++                            ParcelFileDescriptor parcelFileDescriptor
++                                    = this.getContext().getContentResolver().openFileDescriptor(
++                                    activityResult.getData().getData(), "w");
++                            FileOutputStream fileOutputStream
++                                    = new FileOutputStream(parcelFileDescriptor.getFileDescriptor());
++
++                            ArrayList<String> exportableFavourites = quoteUnquoteModel.exportFavourites();
++                            Collections.reverse(exportableFavourites);
++
++                            int favouriteIndex = 1;
++                            for (String exportFavourite : exportableFavourites) {
++                                String exportableString = "" + favouriteIndex + "\n" + exportFavourite;
++                                fileOutputStream.write(exportableString.getBytes());
++                                favouriteIndex++;
++                            }
++
++                            fileOutputStream.close();
++                            parcelFileDescriptor.close();
++
++                            ToastHelper.makeToast(
++                                    this.getContext(),
++                                    this.getContext().getString(R.string.fragment_content_favourites_export_success),
++                                    Toast.LENGTH_SHORT);
++                        } catch (IOException e) {
++                            Timber.e(e.getMessage());
++                        }
++                    }
++                });
++    }
++
+     protected void createListenerFavouriteButtonSend() {
+         this.fragmentContentBinding.buttonSend.setOnClickListener(v -> {
+             if (this.fragmentContentBinding.buttonSend.isEnabled()) {
+@@ -512,7 +578,6 @@ public class ContentFragment extends FragmentCommon {
+                     return;
+                 }
+ 
+-
+                 if (this.contentCloud.isServiceReceiveBound) {
+                     this.contentCloud.cloudServiceReceive.receive(this, this.fragmentContentBinding.editTextRemoteCodeValue.getText().toString());
+                 }
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/footer/FooterFragment.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/footer/FooterFragment.java
+deleted file mode 100644
+index 2146ee6..0000000
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/configure/fragment/footer/FooterFragment.java
++++ /dev/null
+@@ -1,65 +0,0 @@
+-package com.github.jameshnsears.quoteunquote.configure.fragment.footer;
+-
+-import android.os.Bundle;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.LinearLayout;
+-
+-import androidx.annotation.Keep;
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-
+-import com.github.jameshnsears.quoteunquote.BuildConfig;
+-import com.github.jameshnsears.quoteunquote.R;
+-import com.github.jameshnsears.quoteunquote.configure.fragment.FragmentCommon;
+-import com.github.jameshnsears.quoteunquote.databinding.FragmentFooterBinding;
+-import com.github.jameshnsears.quoteunquote.utils.IntentFactoryHelper;
+-
+-@Keep
+-public final class FooterFragment extends FragmentCommon {
+-    @Nullable
+-    private FragmentFooterBinding fragmentFooterBinding;
+-
+-    public FooterFragment() {
+-        // dark mode support
+-    }
+-
+-    public FooterFragment(int widgetId) {
+-        super(widgetId);
+-    }
+-
+-    @NonNull
+-    public static FooterFragment newInstance(int widgetId) {
+-        FooterFragment fragment = new FooterFragment(widgetId);
+-        fragment.setArguments(null);
+-        return fragment;
+-    }
+-
+-    @Override
+-    @NonNull
+-    public View onCreateView(
+-            @NonNull LayoutInflater inflater,
+-            ViewGroup container,
+-            Bundle savedInstanceState) {
+-        this.fragmentFooterBinding = FragmentFooterBinding.inflate(this.getLayoutInflater());
+-        return this.fragmentFooterBinding.getRoot();
+-    }
+-
+-    @Override
+-    public void onDestroyView() {
+-        super.onDestroyView();
+-        this.fragmentFooterBinding = null;
+-    }
+-
+-    @Override
+-    public void onViewCreated(
+-            @NonNull View view, Bundle savedInstanceState) {
+-        this.fragmentFooterBinding.textViewVersion.setText(
+-                this.getResources().getString(R.string.fragment_footer_version,
+-                        BuildConfig.VERSION_NAME, BuildConfig.GIT_HASH));
+-
+-        LinearLayout layoutFooter = this.fragmentFooterBinding.layoutFooter;
+-        layoutFooter.setOnClickListener(v -> this.startActivity(IntentFactoryHelper.createIntentActionView()));
+-    }
+-}
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/database/DatabaseRepository.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/database/DatabaseRepository.java
+index 2c8d890..3c32b28 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/database/DatabaseRepository.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/database/DatabaseRepository.java
+@@ -306,6 +306,13 @@ public class DatabaseRepository {
+         return this.secureRandom.nextInt(availableNextQuotations.size());
+     }
+ 
++    public void erasePrevious(int widgetId, @NonNull String digest) {
++        Timber.d("digest=%s", digest);
++        this.previousDAO.erase(widgetId, ContentSelection.ALL, digest);
++        this.previousDAO.erase(widgetId, ContentSelection.AUTHOR, digest);
++        this.previousDAO.erase(widgetId, ContentSelection.SEARCH, digest);
++    }
++
+     public void eraseFavourite(int widgetId, @NonNull String digest) {
+         Timber.d("digest=%s", digest);
+         this.favouriteDAO.deleteFavourite(digest);
+diff --git a/app/src/main/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabase.java b/app/src/main/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabase.java
+index 4d8acf8..8d590c7 100644
+--- a/app/src/main/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabase.java
++++ b/app/src/main/java/com/github/jameshnsears/quoteunquote/database/history/AbstractHistoryDatabase.java
+@@ -23,9 +23,6 @@ public abstract class AbstractHistoryDatabase extends RoomDatabase {
+         public void migrate(@NonNull final SupportSQLiteDatabase database) {
+             Timber.d(AbstractHistoryDatabase.DATABASE_NAME);
+             database.execSQL("CREATE TABLE IF NOT EXISTS `current` (`widget_id` INTEGER NOT NULL, `digest` TEXT NOT NULL, PRIMARY KEY(`widget_id`))");
+-
+-            database.execSQL("DELETE FROM `previous`");
+-
+             database.execSQL("CREATE INDEX IF NOT EXISTS `index_previous_digest` ON `previous` (`digest`)");
+             database.execSQL("CREATE INDEX IF NOT EXISTS `index_previous_widget_id_content_type_digest` ON `previous` (`widget_id`, `content_type`, `digest`)");
+         }
+@@ -40,7 +37,6 @@ public abstract class AbstractHistoryDatabase extends RoomDatabase {
+             if (AbstractHistoryDatabase.historyDatabase == null) {
+                 AbstractHistoryDatabase.historyDatabase = Room.databaseBuilder(context,
+                         AbstractHistoryDatabase.class, AbstractHistoryDatabase.DATABASE_NAME)
+-//                        .createFromAsset(DATABASE_NAME)
+                         .addMigrations(AbstractHistoryDatabase.MIGRATION_1_2)
+                         .fallbackToDestructiveMigration()
+                         .build();

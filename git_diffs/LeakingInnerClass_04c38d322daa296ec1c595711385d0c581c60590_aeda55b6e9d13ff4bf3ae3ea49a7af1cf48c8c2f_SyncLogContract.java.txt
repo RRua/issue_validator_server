@@ -1,0 +1,1735 @@
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.java
+deleted file mode 100644
+index 211b7a6..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.java
++++ /dev/null
+@@ -1,81 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import android.content.res.Resources;
+-import android.os.Bundle;
+-
+-import androidx.annotation.Nullable;
+-import androidx.appcompat.app.ActionBar;
+-import androidx.appcompat.app.AppCompatActivity;
+-import androidx.databinding.DataBindingUtil;
+-
+-import com.bytesforge.linkasanote.LaanoApplication;
+-import com.bytesforge.linkasanote.R;
+-import com.bytesforge.linkasanote.databinding.ActivitySyncLogBinding;
+-import com.bytesforge.linkasanote.settings.Settings;
+-import com.bytesforge.linkasanote.utils.ActivityUtils;
+-
+-import javax.inject.Inject;
+-
+-public class SyncLogActivity extends AppCompatActivity {
+-
+-    @Inject
+-    SyncLogPresenter presenter;
+-
+-    @Override
+-    protected void onCreate(@Nullable Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        ActivitySyncLogBinding binding =
+-                DataBindingUtil.setContentView(this, R.layout.activity_sync_log);
+-        // Toolbar
+-        setSupportActionBar(binding.toolbar);
+-        ActionBar actionBar = getSupportActionBar();
+-        if (actionBar != null) {
+-            Resources resources = getResources();
+-            actionBar.setTitle(resources.getQuantityString(
+-                    R.plurals.actionbar_title_sync_log,
+-                    Settings.GLOBAL_SYNC_LOG_KEEPING_PERIOD_DAYS,
+-                    Settings.GLOBAL_SYNC_LOG_KEEPING_PERIOD_DAYS));
+-            actionBar.setDisplayHomeAsUpEnabled(true);
+-            actionBar.setDisplayShowHomeEnabled(true);
+-        }
+-        // Fragment
+-        SyncLogFragment fragment = (SyncLogFragment) getSupportFragmentManager()
+-                .findFragmentById(R.id.content_frame);
+-        if (fragment == null) {
+-            fragment = SyncLogFragment.newInstance();
+-            ActivityUtils.addFragmentToActivity(
+-                    getSupportFragmentManager(), fragment, R.id.content_frame);
+-        }
+-        // Presenter
+-        LaanoApplication application = (LaanoApplication) getApplication();
+-        application.getApplicationComponent()
+-                .getSyncLogComponent(new SyncLogPresenterModule(this, fragment))
+-                .inject(this);
+-    }
+-
+-    @Override
+-    public boolean onSupportNavigateUp() {
+-        onBackPressed();
+-        return true;
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.kt
+new file mode 100644
+index 0000000..17c8149
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogActivity.kt
+@@ -0,0 +1,100 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.bytesforge.linkasanote.databinding.ActivitySyncLogBinding
++import com.bytesforge.linkasanote.settings.Settings
++import com.google.android.material.snackbar.Snackbar
++import dagger.Provides
++
++class SyncLogActivity : AppCompatActivity() {
++    @Inject
++    var presenter: SyncLogPresenter? = null
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        val binding: ActivitySyncLogBinding =
++            DataBindingUtil.setContentView(this, R.layout.activity_sync_log)
++        // Toolbar
++        setSupportActionBar(binding.toolbar)
++        val actionBar = supportActionBar
++        if (actionBar != null) {
++            val resources = resources
++            actionBar.setTitle(
++                resources.getQuantityString(
++                    R.plurals.actionbar_title_sync_log,
++                    Settings.GLOBAL_SYNC_LOG_KEEPING_PERIOD_DAYS,
++                    Settings.GLOBAL_SYNC_LOG_KEEPING_PERIOD_DAYS
++                )
++            )
++            actionBar.setDisplayHomeAsUpEnabled(true)
++            actionBar.setDisplayShowHomeEnabled(true)
++        }
++        // Fragment
++        var fragment = supportFragmentManager
++            .findFragmentById(R.id.content_frame) as SyncLogFragment?
++        if (fragment == null) {
++            fragment = SyncLogFragment.Companion.newInstance()
++            ActivityUtils.addFragmentToActivity(
++                supportFragmentManager, fragment, R.id.content_frame
++            )
++        }
++        // Presenter
++        val application = application as LaanoApplication
++        application.applicationComponent
++            .getSyncLogComponent(SyncLogPresenterModule(this, fragment))
++            .inject(this)
++    }
++
++    override fun onSupportNavigateUp(): Boolean {
++        onBackPressed()
++        return true
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.java
+deleted file mode 100644
+index 2fd1488..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.java
++++ /dev/null
+@@ -1,117 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-import android.view.LayoutInflater;
+-import android.view.ViewGroup;
+-
+-import androidx.annotation.NonNull;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-import com.bytesforge.linkasanote.data.SyncResult;
+-import com.bytesforge.linkasanote.databinding.ItemSyncLogBinding;
+-
+-import java.util.List;
+-
+-public class SyncLogAdapter extends RecyclerView.Adapter<SyncLogAdapter.ViewHolder> {
+-
+-    private static final String TAG = SyncLogAdapter.class.getSimpleName();
+-
+-    private final SyncLogViewModel viewModel;
+-
+-    private List<SyncResult> syncResults;
+-
+-    public SyncLogAdapter(
+-            @NonNull List<SyncResult> syncResults,
+-            @NonNull SyncLogViewModel viewModel) {
+-        this.syncResults = checkNotNull(syncResults);
+-        this.viewModel = checkNotNull(viewModel);
+-        setHasStableIds(true);
+-    }
+-
+-    public static class ViewHolder extends RecyclerView.ViewHolder {
+-
+-        private final ItemSyncLogBinding binding;
+-
+-        public ViewHolder(ItemSyncLogBinding binding) {
+-            super(binding.getRoot());
+-            this.binding = binding;
+-        }
+-
+-        public void bind(
+-                int position, boolean showStarted,
+-                SyncResult syncResult, SyncLogViewModel viewModel) {
+-            binding.setPosition(position);
+-            binding.setShowStarted(showStarted);
+-            binding.setSyncResult(syncResult);
+-            binding.setViewModel(viewModel); // NOTE: global viewModel for fragment and all items
+-
+-            binding.executePendingBindings();
+-        }
+-    }
+-
+-    @Override
+-    public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+-        LayoutInflater inflater = LayoutInflater.from(parent.getContext());
+-        ItemSyncLogBinding binding = ItemSyncLogBinding.inflate(inflater, parent, false);
+-        return new ViewHolder(binding);
+-    }
+-
+-    @Override
+-    public void onBindViewHolder(ViewHolder holder, int position) {
+-        SyncResult syncResult = syncResults.get(position);
+-        boolean showStarted = false;
+-        if (position <= 0) {
+-            showStarted = true;
+-        } else {
+-            SyncResult prevSyncResult = syncResults.get(position - 1);
+-            if (syncResult.getStarted() != prevSyncResult.getStarted()) {
+-                showStarted = true;
+-            }
+-        }
+-        holder.bind(position, showStarted, syncResult, viewModel);
+-    }
+-
+-    @Override
+-    public int getItemCount() {
+-        return syncResults.size();
+-    }
+-
+-    @Override
+-    public long getItemId(int position) {
+-        return syncResults.get(position).getRowId();
+-    }
+-
+-    // Items
+-
+-    @NonNull
+-    public List<SyncResult> getSyncResults() {
+-        return syncResults;
+-    }
+-
+-    public void swapItems(@NonNull List<SyncResult> syncResults) {
+-        checkNotNull(syncResults);
+-        this.syncResults = syncResults;
+-        notifyDataSetChanged();
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.kt
+new file mode 100644
+index 0000000..4433118
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogAdapter.kt
+@@ -0,0 +1,127 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.bytesforge.linkasanote.data.SyncResult
++import com.bytesforge.linkasanote.databinding.ItemSyncLogBinding
++import com.google.android.material.snackbar.Snackbar
++import com.google.common.base.Preconditions
++import dagger.Provides
++
++class SyncLogAdapter(
++    syncResults: List<SyncResult>,
++    viewModel: SyncLogViewModel
++) : RecyclerView.Adapter<SyncLogAdapter.ViewHolder>() {
++    private val viewModel: SyncLogViewModel
++
++    // Items
++    var syncResults: List<SyncResult>
++        private set
++
++    class ViewHolder(private val binding: ItemSyncLogBinding) : RecyclerView.ViewHolder(
++        binding.root
++    ) {
++        fun bind(
++            position: Int, showStarted: Boolean,
++            syncResult: SyncResult?, viewModel: SyncLogViewModel?
++        ) {
++            binding.position = position
++            binding.showStarted = showStarted
++            binding.syncResult = syncResult
++            binding.viewModel = viewModel // NOTE: global viewModel for fragment and all items
++            binding.executePendingBindings()
++        }
++    }
++
++    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
++        val inflater = LayoutInflater.from(parent.context)
++        val binding = ItemSyncLogBinding.inflate(inflater, parent, false)
++        return ViewHolder(binding)
++    }
++
++    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
++        val syncResult = syncResults[position]
++        var showStarted = false
++        if (position <= 0) {
++            showStarted = true
++        } else {
++            val prevSyncResult = syncResults[position - 1]
++            if (syncResult.started != prevSyncResult.started) {
++                showStarted = true
++            }
++        }
++        holder.bind(position, showStarted, syncResult, viewModel)
++    }
++
++    override fun getItemCount(): Int {
++        return syncResults.size
++    }
++
++    override fun getItemId(position: Int): Long {
++        return syncResults[position].rowId
++    }
++
++    fun swapItems(syncResults: List<SyncResult>) {
++        Preconditions.checkNotNull(syncResults)
++        this.syncResults = syncResults
++        notifyDataSetChanged()
++    }
++
++    companion object {
++        private val TAG = SyncLogAdapter::class.java.simpleName
++    }
++
++    init {
++        this.syncResults = Preconditions.checkNotNull(syncResults)
++        this.viewModel = Preconditions.checkNotNull(viewModel)
++        setHasStableIds(true)
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.java
+deleted file mode 100644
+index fff6e96..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.java
++++ /dev/null
+@@ -1,32 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import com.bytesforge.linkasanote.FragmentScoped;
+-
+-import dagger.Subcomponent;
+-
+-@FragmentScoped
+-@Subcomponent(modules = {SyncLogPresenterModule.class})
+-public interface SyncLogComponent {
+-
+-    void inject(SyncLogActivity syncLogActivity);
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.kt
+new file mode 100644
+index 0000000..755c4a7
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogComponent.kt
+@@ -0,0 +1,60 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.google.android.material.snackbar.Snackbar
++import dagger.Provides
++
++@FragmentScoped
++@Subcomponent(modules = [SyncLogPresenterModule::class])
++interface SyncLogComponent {
++    fun inject(syncLogActivity: SyncLogActivity?)
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.java
+deleted file mode 100644
+index 17b678e..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.java
++++ /dev/null
+@@ -1,62 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import android.os.Bundle;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-
+-import com.bytesforge.linkasanote.BasePresenter;
+-import com.bytesforge.linkasanote.BaseView;
+-import com.bytesforge.linkasanote.data.SyncResult;
+-
+-import java.util.List;
+-
+-public interface SyncLogContract {
+-
+-    interface View extends BaseView<Presenter> {
+-
+-        void setViewModel(@NonNull SyncLogContract.ViewModel viewModel);
+-        boolean isActive();
+-
+-        void showSyncResults(@NonNull List<SyncResult> syncResults);
+-    }
+-
+-    interface ViewModel extends BaseView<Presenter> {
+-
+-        void setInstanceState(@Nullable Bundle savedInstanceState);
+-        void saveInstanceState(Bundle outState);
+-        void applyInstanceState(@NonNull Bundle state);
+-        Bundle getDefaultInstanceState();
+-
+-        int getListSize();
+-        boolean setListSize(int listSize);
+-
+-        void showProgressOverlay();
+-        void hideProgressOverlay();
+-
+-        void showDatabaseErrorSnackbar();
+-    }
+-
+-    interface Presenter extends BasePresenter {
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.kt
+new file mode 100644
+index 0000000..138b438
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogContract.kt
+@@ -0,0 +1,77 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.bytesforge.linkasanote.data.SyncResult
++import com.google.android.material.snackbar.Snackbar
++import dagger.Provides
++
++interface SyncLogContract {
++    interface View : BaseView<Presenter?> {
++        fun setViewModel(viewModel: ViewModel)
++        val isActive: Boolean
++        fun showSyncResults(syncResults: List<SyncResult>)
++    }
++
++    interface ViewModel : BaseView<Presenter?> {
++        fun setInstanceState(savedInstanceState: Bundle?)
++        fun saveInstanceState(outState: Bundle)
++        fun applyInstanceState(state: Bundle)
++        val defaultInstanceState: Bundle
++        val listSize: Int
++        fun setListSize(listSize: Int): Boolean
++        fun showProgressOverlay()
++        fun hideProgressOverlay()
++        fun showDatabaseErrorSnackbar()
++    }
++
++    interface Presenter : BasePresenter
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.java
+deleted file mode 100644
+index 49af995..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.java
++++ /dev/null
+@@ -1,138 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-import android.os.Bundle;
+-import android.os.Parcelable;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-import androidx.fragment.app.Fragment;
+-import androidx.recyclerview.widget.LinearLayoutManager;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-import com.bytesforge.linkasanote.data.SyncResult;
+-import com.bytesforge.linkasanote.databinding.FragmentSyncLogBinding;
+-
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-public class SyncLogFragment extends Fragment implements SyncLogContract.View {
+-
+-    private static final String TAG = SyncLogFragment.class.getSimpleName();
+-
+-    private SyncLogContract.Presenter presenter;
+-    private SyncLogContract.ViewModel viewModel;
+-    SyncLogAdapter adapter;
+-    LinearLayoutManager rvLayoutManager;
+-    private Parcelable rvLayoutState;
+-
+-    public static SyncLogFragment newInstance() {
+-        return new SyncLogFragment();
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        presenter.subscribe();
+-    }
+-
+-    @Override
+-    public void onPause() {
+-        super.onPause();
+-        presenter.unsubscribe();
+-    }
+-
+-    @Override
+-    public boolean isActive() {
+-        return isAdded();
+-    }
+-
+-    @Override
+-    public void setPresenter(@NonNull SyncLogContract.Presenter presenter) {
+-        this.presenter = checkNotNull(presenter);
+-    }
+-
+-    @Override
+-    public void setViewModel(@NonNull SyncLogContract.ViewModel viewModel) {
+-        this.viewModel = checkNotNull(viewModel);
+-    }
+-
+-    @Nullable
+-    @Override
+-    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+-        FragmentSyncLogBinding binding = FragmentSyncLogBinding.inflate(inflater, container, false);
+-        viewModel.setInstanceState(savedInstanceState);
+-        setRvLayoutState(savedInstanceState);
+-        binding.setViewModel((SyncLogViewModel) viewModel);
+-        setupSyncLogRecyclerView(binding.rvSyncLog);
+-        return binding.getRoot();
+-    }
+-
+-    private void setupSyncLogRecyclerView(RecyclerView rvSyncLog) {
+-        List<SyncResult> syncResults = new ArrayList<>();
+-        adapter = new SyncLogAdapter(syncResults, (SyncLogViewModel) viewModel);
+-        rvSyncLog.setAdapter(adapter);
+-        rvLayoutManager = new LinearLayoutManager(getContext());
+-        rvSyncLog.setLayoutManager(rvLayoutManager);
+-    }
+-
+-    private void setRvLayoutState(@Nullable Bundle savedInstanceState) {
+-        if (savedInstanceState != null) {
+-            rvLayoutState = savedInstanceState.getParcelable(
+-                    SyncLogViewModel.STATE_RECYCLER_LAYOUT);
+-        }
+-    }
+-
+-    private void saveRvLayoutState(@NonNull Bundle outState) {
+-        checkNotNull(outState);
+-        outState.putParcelable(SyncLogViewModel.STATE_RECYCLER_LAYOUT,
+-                rvLayoutManager.onSaveInstanceState());
+-    }
+-
+-    private void applyRvLayoutState() {
+-        if (rvLayoutManager != null && rvLayoutState != null) {
+-            rvLayoutManager.onRestoreInstanceState(rvLayoutState);
+-            rvLayoutState = null;
+-        }
+-    }
+-
+-    @Override
+-    public void onSaveInstanceState(Bundle outState) {
+-        super.onSaveInstanceState(outState);
+-        viewModel.saveInstanceState(outState);
+-        saveRvLayoutState(outState);
+-    }
+-
+-    @Override
+-    public void showSyncResults(@NonNull List<SyncResult> syncResults) {
+-        checkNotNull(syncResults);
+-        adapter.swapItems(syncResults);
+-
+-        viewModel.setListSize(syncResults.size());
+-        applyRvLayoutState();
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.kt
+new file mode 100644
+index 0000000..4321886
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogFragment.kt
+@@ -0,0 +1,152 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import android.view.View
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import androidx.fragment.app.Fragment
++import com.bytesforge.linkasanote.data.SyncResult
++import com.bytesforge.linkasanote.databinding.FragmentSyncLogBinding
++import com.google.android.material.snackbar.Snackbar
++import com.google.common.base.Preconditions
++import dagger.Provides
++import java.util.ArrayList
++
++class SyncLogFragment : Fragment(), SyncLogContract.View {
++    private var presenter: SyncLogContract.Presenter? = null
++    private var viewModel: SyncLogContract.ViewModel? = null
++    var adapter: SyncLogAdapter? = null
++    var rvLayoutManager: LinearLayoutManager? = null
++    private var rvLayoutState: Parcelable? = null
++    override fun onResume() {
++        super.onResume()
++        presenter!!.subscribe()
++    }
++
++    override fun onPause() {
++        super.onPause()
++        presenter!!.unsubscribe()
++    }
++
++    override val isActive: Boolean
++        get() = isAdded
++
++    override fun setPresenter(presenter: SyncLogContract.Presenter) {
++        this.presenter = Preconditions.checkNotNull(presenter)
++    }
++
++    override fun setViewModel(viewModel: SyncLogContract.ViewModel) {
++        this.viewModel = Preconditions.checkNotNull(viewModel)
++    }
++
++    override fun onCreateView(
++        inflater: LayoutInflater,
++        container: ViewGroup?,
++        savedInstanceState: Bundle?
++    ): View? {
++        val binding = FragmentSyncLogBinding.inflate(inflater, container, false)
++        viewModel!!.setInstanceState(savedInstanceState)
++        setRvLayoutState(savedInstanceState)
++        binding.viewModel = viewModel as SyncLogViewModel?
++        setupSyncLogRecyclerView(binding.rvSyncLog)
++        return binding.root
++    }
++
++    private fun setupSyncLogRecyclerView(rvSyncLog: RecyclerView) {
++        val syncResults: List<SyncResult> = ArrayList()
++        adapter = SyncLogAdapter(syncResults, (viewModel as SyncLogViewModel?)!!)
++        rvSyncLog.adapter = adapter
++        rvLayoutManager = LinearLayoutManager(context)
++        rvSyncLog.layoutManager = rvLayoutManager
++    }
++
++    private fun setRvLayoutState(savedInstanceState: Bundle?) {
++        if (savedInstanceState != null) {
++            rvLayoutState = savedInstanceState.getParcelable(
++                SyncLogViewModel.Companion.STATE_RECYCLER_LAYOUT
++            )
++        }
++    }
++
++    private fun saveRvLayoutState(outState: Bundle) {
++        Preconditions.checkNotNull(outState)
++        outState.putParcelable(
++            SyncLogViewModel.Companion.STATE_RECYCLER_LAYOUT,
++            rvLayoutManager!!.onSaveInstanceState()
++        )
++    }
++
++    private fun applyRvLayoutState() {
++        if (rvLayoutManager != null && rvLayoutState != null) {
++            rvLayoutManager!!.onRestoreInstanceState(rvLayoutState)
++            rvLayoutState = null
++        }
++    }
++
++    override fun onSaveInstanceState(outState: Bundle) {
++        super.onSaveInstanceState(outState)
++        viewModel!!.saveInstanceState(outState)
++        saveRvLayoutState(outState)
++    }
++
++    override fun showSyncResults(syncResults: List<SyncResult>) {
++        Preconditions.checkNotNull(syncResults)
++        adapter!!.swapItems(syncResults)
++        viewModel!!.listSize = syncResults.size
++        applyRvLayoutState()
++    }
++
++    companion object {
++        private val TAG = SyncLogFragment::class.java.simpleName
++        fun newInstance(): SyncLogFragment {
++            return SyncLogFragment()
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.java
+deleted file mode 100644
+index fb1d48a..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.java
++++ /dev/null
+@@ -1,95 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import androidx.annotation.NonNull;
+-
+-import com.bytesforge.linkasanote.data.source.Repository;
+-import com.bytesforge.linkasanote.utils.CommonUtils;
+-import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+-
+-import javax.inject.Inject;
+-
+-import io.reactivex.disposables.CompositeDisposable;
+-import io.reactivex.disposables.Disposable;
+-
+-public final class SyncLogPresenter implements SyncLogContract.Presenter {
+-
+-    private static final String TAG = SyncLogPresenter.class.getSimpleName();
+-    private static final String TAG_E = SyncLogPresenter.class.getCanonicalName();
+-
+-    private final Repository repository;
+-    private final SyncLogContract.View view;
+-    private final SyncLogContract.ViewModel viewModel;
+-    private final BaseSchedulerProvider schedulerProvider;
+-
+-    @NonNull
+-    private final CompositeDisposable compositeDisposable;
+-
+-    @Inject
+-    public SyncLogPresenter(
+-            Repository repository, SyncLogContract.View view,
+-            SyncLogContract.ViewModel viewModel, BaseSchedulerProvider schedulerProvider) {
+-        this.repository = repository;
+-        this.view = view;
+-        this.viewModel = viewModel;
+-        this.schedulerProvider = schedulerProvider;
+-        compositeDisposable = new CompositeDisposable();
+-    }
+-
+-    @Inject
+-    void setupView() {
+-        view.setPresenter(this);
+-        view.setViewModel(viewModel);
+-        viewModel.setPresenter(this);
+-    }
+-
+-    @Override
+-    public void subscribe() {
+-        loadSyncLog(true);
+-    }
+-
+-    @Override
+-    public void unsubscribe() {
+-        compositeDisposable.clear();
+-    }
+-
+-    private void loadSyncLog(final boolean showLoading) {
+-        compositeDisposable.clear();
+-        if (showLoading) {
+-            viewModel.showProgressOverlay();
+-        }
+-        Disposable disposable = repository.getFreshSyncResults()
+-                .subscribeOn(schedulerProvider.computation())
+-                .toList()
+-                .observeOn(schedulerProvider.ui())
+-                .doFinally(() -> {
+-                    if (showLoading) {
+-                        viewModel.hideProgressOverlay();
+-                    }
+-                })
+-                .subscribe(view::showSyncResults, throwable -> {
+-                    CommonUtils.logStackTrace(TAG_E, throwable);
+-                    viewModel.showDatabaseErrorSnackbar();
+-                });
+-        compositeDisposable.add(disposable);
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.kt
+new file mode 100644
+index 0000000..68ebf85
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenter.kt
+@@ -0,0 +1,109 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.bytesforge.linkasanote.data.SyncResult
++import com.bytesforge.linkasanote.data.source.Repository
++import com.google.android.material.snackbar.Snackbar
++import dagger.Provides
++
++class SyncLogPresenter @Inject constructor(
++    private val repository: Repository,
++    private val view: SyncLogContract.View,
++    private val viewModel: SyncLogContract.ViewModel,
++    private val schedulerProvider: BaseSchedulerProvider
++) : SyncLogContract.Presenter {
++    private val compositeDisposable: CompositeDisposable
++    @Inject
++    fun setupView() {
++        view.setPresenter(this)
++        view.setViewModel(viewModel)
++        viewModel.setPresenter(this)
++    }
++
++    override fun subscribe() {
++        loadSyncLog(true)
++    }
++
++    override fun unsubscribe() {
++        compositeDisposable.clear()
++    }
++
++    private fun loadSyncLog(showLoading: Boolean) {
++        compositeDisposable.clear()
++        if (showLoading) {
++            viewModel.showProgressOverlay()
++        }
++        val disposable = repository.freshSyncResults
++            .subscribeOn(schedulerProvider.computation())
++            .toList()
++            .observeOn(schedulerProvider.ui())
++            .doFinally {
++                if (showLoading) {
++                    viewModel.hideProgressOverlay()
++                }
++            }
++            .subscribe({ syncResults: List<SyncResult> -> view.showSyncResults(syncResults) }) { throwable: Throwable? ->
++                CommonUtils.logStackTrace(TAG_E, throwable!!)
++                viewModel.showDatabaseErrorSnackbar()
++            }
++        compositeDisposable.add(disposable)
++    }
++
++    companion object {
++        private val TAG = SyncLogPresenter::class.java.simpleName
++        private val TAG_E = SyncLogPresenter::class.java.canonicalName
++    }
++
++    init {
++        compositeDisposable = CompositeDisposable()
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.java
+deleted file mode 100644
+index 0566900..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.java
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import android.content.Context;
+-
+-import dagger.Module;
+-import dagger.Provides;
+-
+-@Module
+-public class SyncLogPresenterModule {
+-
+-    private final Context context;
+-    private SyncLogContract.View view;
+-
+-    public SyncLogPresenterModule(Context context, SyncLogContract.View view) {
+-        this.context = context;
+-        this.view = view;
+-    }
+-
+-    @Provides
+-    public SyncLogContract.View provideSyncLogContractView() {
+-        return view;
+-    }
+-
+-    @Provides
+-    public SyncLogContract.ViewModel provideSyncLogContractViewModel() {
+-        return new SyncLogViewModel(context);
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.kt
+new file mode 100644
+index 0000000..4abef3e
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogPresenterModule.kt
+@@ -0,0 +1,72 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import android.content.Context
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import androidx.databinding.DataBindingUtil
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import androidx.databinding.BaseObservable
++import androidx.databinding.ObservableInt
++import com.bytesforge.linkasanote.BR
++import androidx.databinding.BindingAdapter
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import com.google.android.material.snackbar.Snackbar
++import dagger.Module
++import dagger.Provides
++
++@Module
++class SyncLogPresenterModule(
++    private val context: Context,
++    private val view: SyncLogContract.View?
++) {
++    @Provides
++    fun provideSyncLogContractView(): SyncLogContract.View? {
++        return view
++    }
++
++    @Provides
++    fun provideSyncLogContractViewModel(): SyncLogContract.ViewModel {
++        return SyncLogViewModel(context)
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.java
+deleted file mode 100644
+index 427c3c7..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.java
++++ /dev/null
+@@ -1,182 +0,0 @@
+-/*
+- * LaaNo Android application
+- *
+- * @author Aleksandr Borisenko <developer@laano.net>
+- * Copyright (C) 2017 Aleksandr Borisenko
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.bytesforge.linkasanote.synclog;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-import android.content.Context;
+-import android.os.Bundle;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-import androidx.coordinatorlayout.widget.CoordinatorLayout;
+-import androidx.databinding.BaseObservable;
+-import androidx.databinding.Bindable;
+-import androidx.databinding.BindingAdapter;
+-import androidx.databinding.ObservableInt;
+-
+-import com.bytesforge.linkasanote.BR;
+-import com.bytesforge.linkasanote.R;
+-import com.bytesforge.linkasanote.data.SyncResult;
+-import com.bytesforge.linkasanote.utils.CommonUtils;
+-import com.google.android.material.snackbar.Snackbar;
+-
+-import java.util.Date;
+-
+-public class SyncLogViewModel extends BaseObservable implements SyncLogContract.ViewModel {
+-
+-    private static final String STATE_LIST_SIZE = "LIST_SIZE";
+-    private static final String STATE_PROGRESS_OVERLAY = "PROGRESS_OVERLAY";
+-
+-    public static final String STATE_RECYCLER_LAYOUT = "RECYCLER_LAYOUT";
+-
+-    public final ObservableInt listSize = new ObservableInt();
+-
+-    @Bindable
+-    public boolean progressOverlay;
+-
+-    private Context context;
+-
+-    public enum SnackbarId {
+-        DATABASE_ERROR}
+-
+-    public SyncLogViewModel(@NonNull Context context) {
+-        this.context = checkNotNull(context);
+-    }
+-
+-    @Bindable
+-    public SnackbarId snackbarId;
+-
+-    @Bindable
+-    public boolean isListEmpty() {
+-        return listSize.get() <= 0;
+-    }
+-
+-    @BindingAdapter({"snackbarId"})
+-    public static void showSnackbar(CoordinatorLayout view, SnackbarId snackbarId) {
+-        if (snackbarId == null) return;
+-
+-        switch (snackbarId) {
+-            case DATABASE_ERROR:
+-                Snackbar.make(view, R.string.error_database, Snackbar.LENGTH_INDEFINITE)
+-                        .setAction(R.string.snackbar_button_ok, v -> { /* just inform */ })
+-                        .show();
+-                break;
+-            default:
+-                throw new IllegalArgumentException("Unexpected snackbar has been requested");
+-        }
+-    }
+-
+-    @Override
+-    public void setPresenter(@NonNull SyncLogContract.Presenter presenter) {
+-    }
+-
+-    @Override
+-    public void setInstanceState(@Nullable Bundle savedInstanceState) {
+-        if (savedInstanceState == null) {
+-            applyInstanceState(getDefaultInstanceState());
+-        } else {
+-            applyInstanceState(savedInstanceState);
+-        }
+-    }
+-
+-    @Override
+-    public void saveInstanceState(@NonNull Bundle outState) {
+-        checkNotNull(outState);
+-        outState.putInt(STATE_LIST_SIZE, listSize.get());
+-        outState.putBoolean(STATE_PROGRESS_OVERLAY, progressOverlay);
+-    }
+-
+-    @Override
+-    public void applyInstanceState(@NonNull Bundle state) {
+-        checkNotNull(state);
+-        listSize.set(state.getInt(STATE_LIST_SIZE));
+-        progressOverlay = state.getBoolean(STATE_PROGRESS_OVERLAY);
+-
+-        notifyChange();
+-    }
+-
+-    @Override
+-    public Bundle getDefaultInstanceState() {
+-        Bundle defaultState = new Bundle();
+-        // NOTE: do not show empty list warning if empty state is not confirmed
+-        defaultState.putInt(STATE_LIST_SIZE, Integer.MAX_VALUE);
+-        defaultState.putBoolean(STATE_PROGRESS_OVERLAY, false);
+-
+-        return defaultState;
+-    }
+-
+-    @Override
+-    public int getListSize() {
+-        return listSize.get();
+-    }
+-
+-    public String getSyncResult(int position, @NonNull SyncResult syncResult) {
+-        checkNotNull(syncResult);
+-        return position + ". " + syncResult.toString();
+-    }
+-
+-    public String getStarted(long started) {
+-        Date date = new Date(started);
+-        return CommonUtils.formatDateTime(context, date);
+-    }
+-
+-    public boolean isLast(int position) {
+-        return (position + 1 >= getListSize());
+-    }
+-
+-    /**
+-     * @return Returns true if listSize has never been set before
+-     */
+-    @Override
+-    public boolean setListSize(int listSize) {
+-        boolean firstLoad = (this.listSize.get() == Integer.MAX_VALUE);
+-        this.listSize.set(listSize);
+-        notifyPropertyChanged(BR.listEmpty);
+-        return firstLoad;
+-    }
+-
+-    // Progress
+-
+-    @Override
+-    public void showProgressOverlay() {
+-        if (!progressOverlay) {
+-            progressOverlay = true;
+-            notifyPropertyChanged(BR.progressOverlay);
+-        }
+-    }
+-
+-    @Override
+-    public void hideProgressOverlay() {
+-        if (progressOverlay) {
+-            progressOverlay = false;
+-            notifyPropertyChanged(BR.progressOverlay);
+-        }
+-    }
+-
+-    // Snackbar
+-
+-    @Override
+-    public void showDatabaseErrorSnackbar() {
+-        snackbarId = SnackbarId.DATABASE_ERROR;
+-        notifyPropertyChanged(BR.snackbarId);
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.kt b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.kt
+new file mode 100644
+index 0000000..8b567d7
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/synclog/SyncLogViewModel.kt
+@@ -0,0 +1,179 @@
++/*
++ * LaaNo Android application
++ *
++ * @author Aleksandr Borisenko <developer@laano.net>
++ * Copyright (C) 2017 Aleksandr Borisenko
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++package com.bytesforge.linkasanote.synclog
++
++import android.content.Context
++import com.bytesforge.linkasanote.synclog.SyncLogViewModel
++import androidx.recyclerview.widget.RecyclerView
++import android.view.ViewGroup
++import android.view.LayoutInflater
++import com.bytesforge.linkasanote.synclog.SyncLogAdapter
++import androidx.appcompat.app.AppCompatActivity
++import javax.inject.Inject
++import com.bytesforge.linkasanote.synclog.SyncLogPresenter
++import android.os.Bundle
++import com.bytesforge.linkasanote.R
++import com.bytesforge.linkasanote.synclog.SyncLogFragment
++import com.bytesforge.linkasanote.utils.ActivityUtils
++import com.bytesforge.linkasanote.LaanoApplication
++import com.bytesforge.linkasanote.synclog.SyncLogPresenterModule
++import com.bytesforge.linkasanote.BaseView
++import com.bytesforge.linkasanote.BasePresenter
++import androidx.recyclerview.widget.LinearLayoutManager
++import android.os.Parcelable
++import android.view.View
++import com.bytesforge.linkasanote.FragmentScoped
++import dagger.Subcomponent
++import com.bytesforge.linkasanote.synclog.SyncLogActivity
++import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.disposables.Disposable
++import com.bytesforge.linkasanote.utils.CommonUtils
++import com.bytesforge.linkasanote.BR
++import androidx.coordinatorlayout.widget.CoordinatorLayout
++import androidx.databinding.*
++import com.bytesforge.linkasanote.data.SyncResult
++import com.google.android.material.snackbar.Snackbar
++import com.google.common.base.Preconditions
++import dagger.Provides
++import java.lang.IllegalArgumentException
++import java.util.*
++
++class SyncLogViewModel(context: Context) : BaseObservable(), SyncLogContract.ViewModel {
++    override val listSize = ObservableInt()
++
++    @Bindable
++    var progressOverlay = false
++    private val context: Context
++
++    enum class SnackbarId {
++        DATABASE_ERROR
++    }
++
++    @Bindable
++    var snackbarId: SnackbarId? = null
++
++    @get:Bindable
++    val isListEmpty: Boolean
++        get() = listSize.get() <= 0
++
++    override fun setPresenter(presenter: SyncLogContract.Presenter) {}
++    override fun setInstanceState(savedInstanceState: Bundle?) {
++        if (savedInstanceState == null) {
++            applyInstanceState(defaultInstanceState)
++        } else {
++            applyInstanceState(savedInstanceState)
++        }
++    }
++
++    override fun saveInstanceState(outState: Bundle) {
++        Preconditions.checkNotNull(outState)
++        outState.putInt(STATE_LIST_SIZE, listSize.get())
++        outState.putBoolean(STATE_PROGRESS_OVERLAY, progressOverlay)
++    }
++
++    override fun applyInstanceState(state: Bundle) {
++        Preconditions.checkNotNull(state)
++        listSize.set(state.getInt(STATE_LIST_SIZE))
++        progressOverlay = state.getBoolean(STATE_PROGRESS_OVERLAY)
++        notifyChange()
++    }
++
++    // NOTE: do not show empty list warning if empty state is not confirmed
++    override val defaultInstanceState: Bundle
++        get() {
++            val defaultState = Bundle()
++            // NOTE: do not show empty list warning if empty state is not confirmed
++            defaultState.putInt(STATE_LIST_SIZE, Int.MAX_VALUE)
++            defaultState.putBoolean(STATE_PROGRESS_OVERLAY, false)
++            return defaultState
++        }
++
++    override fun getListSize(): Int {
++        return listSize.get()
++    }
++
++    fun getSyncResult(position: Int, syncResult: SyncResult): String {
++        Preconditions.checkNotNull(syncResult)
++        return "$position. $syncResult"
++    }
++
++    fun getStarted(started: Long): String {
++        val date = Date(started)
++        return CommonUtils.formatDateTime(context, date)
++    }
++
++    fun isLast(position: Int): Boolean {
++        return position + 1 >= getListSize()
++    }
++
++    /**
++     * @return Returns true if listSize has never been set before
++     */
++    override fun setListSize(listSize: Int): Boolean {
++        val firstLoad = this.listSize.get() == Int.MAX_VALUE
++        this.listSize.set(listSize)
++        notifyPropertyChanged(BR.listEmpty)
++        return firstLoad
++    }
++
++    // Progress
++    override fun showProgressOverlay() {
++        if (!progressOverlay) {
++            progressOverlay = true
++            notifyPropertyChanged(BR.progressOverlay)
++        }
++    }
++
++    override fun hideProgressOverlay() {
++        if (progressOverlay) {
++            progressOverlay = false
++            notifyPropertyChanged(BR.progressOverlay)
++        }
++    }
++
++    // Snackbar
++    override fun showDatabaseErrorSnackbar() {
++        snackbarId = SnackbarId.DATABASE_ERROR
++        notifyPropertyChanged(BR.snackbarId)
++    }
++
++    companion object {
++        private const val STATE_LIST_SIZE = "LIST_SIZE"
++        private const val STATE_PROGRESS_OVERLAY = "PROGRESS_OVERLAY"
++        const val STATE_RECYCLER_LAYOUT = "RECYCLER_LAYOUT"
++        @BindingAdapter("snackbarId")
++        fun showSnackbar(view: CoordinatorLayout?, snackbarId: SnackbarId?) {
++            if (snackbarId == null) return
++            when (snackbarId) {
++                SnackbarId.DATABASE_ERROR -> Snackbar.make(
++                    view!!, R.string.error_database, Snackbar.LENGTH_INDEFINITE
++                )
++                    .setAction(R.string.snackbar_button_ok) { v: View? -> }
++                    .show()
++                else -> throw IllegalArgumentException("Unexpected snackbar has been requested")
++            }
++        }
++    }
++
++    init {
++        this.context = Preconditions.checkNotNull(context)
++    }
++}
+\ No newline at end of file

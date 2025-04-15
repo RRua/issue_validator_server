@@ -1,0 +1,921 @@
+diff --git a/app/src/main/java/com/commit451/gitlab/activity/MergeRequestActivity.java b/app/src/main/java/com/commit451/gitlab/activity/MergeRequestActivity.java
+index a5644977..6c0d883b 100644
+--- a/app/src/main/java/com/commit451/gitlab/activity/MergeRequestActivity.java
++++ b/app/src/main/java/com/commit451/gitlab/activity/MergeRequestActivity.java
+@@ -2,39 +2,22 @@ package com.commit451.gitlab.activity;
+ 
+ import android.content.Context;
+ import android.content.Intent;
+-import android.net.Uri;
+ import android.os.Bundle;
+-import android.support.annotation.NonNull;
+-import android.support.design.widget.Snackbar;
+-import android.support.v4.widget.SwipeRefreshLayout;
+-import android.support.v7.widget.LinearLayoutManager;
+-import android.support.v7.widget.RecyclerView;
++import android.support.design.widget.TabLayout;
++import android.support.v4.view.ViewPager;
+ import android.support.v7.widget.Toolbar;
+-import android.view.KeyEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.EditText;
+-import android.widget.TextView;
+ 
+ import com.commit451.gitlab.R;
+-import com.commit451.gitlab.adapter.MergeRequestDetailAdapter;
+-import com.commit451.gitlab.api.EasyCallback;
+-import com.commit451.gitlab.api.GitLabClient;
++import com.commit451.gitlab.adapter.MergeRequestSectionsPagerAdapter;
+ import com.commit451.gitlab.model.api.MergeRequest;
+-import com.commit451.gitlab.model.api.Note;
+ import com.commit451.gitlab.model.api.Project;
+-import com.commit451.gitlab.util.KeyboardUtil;
+-import com.commit451.gitlab.util.PaginationUtil;
+ 
+ import org.parceler.Parcels;
+ 
+-import java.util.List;
+-
+ import butterknife.Bind;
+ import butterknife.ButterKnife;
+-import butterknife.OnClick;
+-import retrofit.Callback;
+-import timber.log.Timber;
+ 
+ /**
+  * Shows the details of a merge request
+@@ -55,100 +38,13 @@ public class MergeRequestActivity extends BaseActivity {
+     ViewGroup mRoot;
+     @Bind(R.id.toolbar)
+     Toolbar mToolbar;
+-    @Bind(R.id.merge_request_title)
+-    TextView mMergeRequestTitle;
+-    @Bind(R.id.swipe_layout)
+-    SwipeRefreshLayout mSwipeRefreshLayout;
+-    @Bind(R.id.list)
+-    RecyclerView mNotesRecyclerView;
+-    @Bind(R.id.new_note_edit)
+-    EditText mNewNoteEdit;
+-    @Bind(R.id.progress)
+-    View mProgress;
+-
+-    @OnClick(R.id.new_note_button)
+-    public void onNewNoteClick() {
+-        postNote();
+-    }
+-
+-    private MergeRequestDetailAdapter mMergeRequestDetailAdapter;
+-    private LinearLayoutManager mNotesLinearLayoutManager;
+-
+-    private Project mProject;
+-    private MergeRequest mMergeRequest;
+-    private Uri mNextPageUrl;
+-    private boolean mLoading;
+-
+-    private final RecyclerView.OnScrollListener mOnScrollListener = new RecyclerView.OnScrollListener() {
+-        @Override
+-        public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+-            super.onScrolled(recyclerView, dx, dy);
+-            int visibleItemCount = mNotesLinearLayoutManager.getChildCount();
+-            int totalItemCount = mNotesLinearLayoutManager.getItemCount();
+-            int firstVisibleItem = mNotesLinearLayoutManager.findFirstVisibleItemPosition();
+-            if (firstVisibleItem + visibleItemCount >= totalItemCount && !mLoading && mNextPageUrl != null) {
+-                loadMoreNotes();
+-            }
+-        }
+-    };
+-
+-    private Callback<List<Note>> mNotesCallback = new EasyCallback<List<Note>>() {
+-
+-        @Override
+-        public void onResponse(@NonNull List<Note> response) {
+-            mSwipeRefreshLayout.setRefreshing(false);
+-            mLoading = false;
+-            mNextPageUrl = PaginationUtil.parse(getResponse()).getNext();
+-            mMergeRequestDetailAdapter.setNotes(response);
+-        }
++    @Bind(R.id.tabs)
++    TabLayout mTabLayout;
++    @Bind(R.id.pager)
++    ViewPager mViewPager;
+ 
+-        @Override
+-        public void onAllFailure(Throwable t) {
+-            mLoading = false;
+-            Timber.e(t, null);
+-            mSwipeRefreshLayout.setRefreshing(false);
+-            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
+-                    .show();
+-        }
+-    };
+-
+-    private Callback<List<Note>> mMoreNotesCallback = new EasyCallback<List<Note>>() {
+-
+-        @Override
+-        public void onResponse(@NonNull List<Note> response) {
+-            mMergeRequestDetailAdapter.setLoading(false);
+-            mLoading = false;
+-            mNextPageUrl = PaginationUtil.parse(getResponse()).getNext();
+-            mMergeRequestDetailAdapter.addNotes(response);
+-        }
+-
+-        @Override
+-        public void onAllFailure(Throwable t) {
+-            mLoading = false;
+-            Timber.e(t, null);
+-            mMergeRequestDetailAdapter.setLoading(false);
+-            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
+-                    .show();
+-        }
+-    };
+-
+-    private Callback<Note> mPostNoteCallback = new EasyCallback<Note>() {
+-
+-        @Override
+-        public void onResponse(@NonNull Note response) {
+-            mProgress.setVisibility(View.GONE);
+-            mMergeRequestDetailAdapter.addNote(response);
+-            mNotesRecyclerView.smoothScrollToPosition(MergeRequestDetailAdapter.getHeaderCount());
+-        }
+-
+-        @Override
+-        public void onAllFailure(Throwable t) {
+-            Timber.e(t, null);
+-            mProgress.setVisibility(View.GONE);
+-            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
+-                    .show();
+-        }
+-    };
++    Project mProject;
++    MergeRequest mMergeRequest;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -168,62 +64,17 @@ public class MergeRequestActivity extends BaseActivity {
+             }
+         });
+         mToolbar.setSubtitle(mProject.getNameWithNamespace());
+-        mMergeRequestTitle.setText(mMergeRequest.getTitle());
+-
+-        mMergeRequestDetailAdapter = new MergeRequestDetailAdapter(MergeRequestActivity.this, mMergeRequest);
+-        mNotesLinearLayoutManager = new LinearLayoutManager(this);
+-        mNotesRecyclerView.setLayoutManager(mNotesLinearLayoutManager);
+-        mNotesRecyclerView.setAdapter(mMergeRequestDetailAdapter);
+-        mNotesRecyclerView.addOnScrollListener(mOnScrollListener);
+-
+-        mNewNoteEdit.setOnEditorActionListener(new TextView.OnEditorActionListener() {
+-            @Override
+-            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
+-                postNote();
+-                return true;
+-            }
+-        });
+-
+-        mSwipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
+-            @Override
+-            public void onRefresh() {
+-                loadNotes();
+-            }
+-        });
+-        loadNotes();
+-    }
+-
+-    private void loadNotes() {
+-        mSwipeRefreshLayout.post(new Runnable() {
+-            @Override
+-            public void run() {
+-                if (mSwipeRefreshLayout != null) {
+-                    mSwipeRefreshLayout.setRefreshing(true);
+-                }
+-            }
+-        });
+-        GitLabClient.instance().getMergeRequestNotes(mProject.getId(), mMergeRequest.getId()).enqueue(mNotesCallback);
++        setupTabs();
+     }
+ 
+-    private void loadMoreNotes() {
+-        mMergeRequestDetailAdapter.setLoading(true);
+-        GitLabClient.instance().getMergeRequestNotes(mNextPageUrl.toString()).enqueue(mMoreNotesCallback);
+-    }
+-
+-    private void postNote() {
+-        String body = mNewNoteEdit.getText().toString();
+-
+-        if (body.length() < 1) {
+-            return;
+-        }
+-
+-        mProgress.setVisibility(View.VISIBLE);
+-        mProgress.setAlpha(0.0f);
+-        mProgress.animate().alpha(1.0f);
+-        // Clear text & collapse keyboard
+-        KeyboardUtil.hideKeyboard(this);
+-        mNewNoteEdit.setText("");
++    private void setupTabs() {
++        MergeRequestSectionsPagerAdapter sectionsPagerAdapter = new MergeRequestSectionsPagerAdapter(
++                this,
++                getSupportFragmentManager(),
++                mProject,
++                mMergeRequest);
+ 
+-        GitLabClient.instance().addMergeRequestNote(mProject.getId(), mMergeRequest.getId(), body).enqueue(mPostNoteCallback);
++        mViewPager.setAdapter(sectionsPagerAdapter);
++        mTabLayout.setupWithViewPager(mViewPager);
+     }
+ }
+diff --git a/app/src/main/java/com/commit451/gitlab/adapter/IssueLabelsAdapter.java b/app/src/main/java/com/commit451/gitlab/adapter/IssueLabelsAdapter.java
+index 2c6e8e08..ad443338 100644
+--- a/app/src/main/java/com/commit451/gitlab/adapter/IssueLabelsAdapter.java
++++ b/app/src/main/java/com/commit451/gitlab/adapter/IssueLabelsAdapter.java
+@@ -5,7 +5,6 @@ import android.view.View;
+ import android.view.ViewGroup;
+ 
+ import com.commit451.gitlab.R;
+-import com.commit451.gitlab.viewHolder.IssueLabelsViewHolder;
+ import com.commit451.gitlab.viewHolder.LabelViewHolder;
+ 
+ import java.util.ArrayList;
+@@ -17,7 +16,7 @@ import java.util.Collection;
+ public class IssueLabelsAdapter extends RecyclerView.Adapter<LabelViewHolder> {
+ 
+     public interface Listener {
+-        void onLabelClicked(String label, IssueLabelsViewHolder viewHolder);
++        void onLabelClicked(String label, LabelViewHolder viewHolder);
+     }
+     private Listener mListener;
+ 
+@@ -32,7 +31,7 @@ public class IssueLabelsAdapter extends RecyclerView.Adapter<LabelViewHolder> {
+         @Override
+         public void onClick(View v) {
+             int position = (int) v.getTag(R.id.list_position);
+-            IssueLabelsViewHolder holder = (IssueLabelsViewHolder) v.getTag(R.id.list_view_holder);
++            LabelViewHolder holder = (LabelViewHolder) v.getTag(R.id.list_view_holder);
+             mListener.onLabelClicked(getEntry(position), holder);
+         }
+     };
+diff --git a/app/src/main/java/com/commit451/gitlab/adapter/MergeRequestSectionsPagerAdapter.java b/app/src/main/java/com/commit451/gitlab/adapter/MergeRequestSectionsPagerAdapter.java
+new file mode 100644
+index 00000000..52a9a743
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/adapter/MergeRequestSectionsPagerAdapter.java
+@@ -0,0 +1,53 @@
++package com.commit451.gitlab.adapter;
++
++import android.content.Context;
++import android.support.v4.app.Fragment;
++import android.support.v4.app.FragmentManager;
++import android.support.v4.app.FragmentPagerAdapter;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.fragment.MergeRequestCommitsFragment;
++import com.commit451.gitlab.fragment.MergeRequestDiscussionFragment;
++import com.commit451.gitlab.model.api.MergeRequest;
++import com.commit451.gitlab.model.api.Project;
++
++/**
++ * Projects Pager Adapter
++ */
++public class MergeRequestSectionsPagerAdapter extends FragmentPagerAdapter {
++    private static final int SECTION_COUNT = 2;
++
++    private Project mProject;
++    private MergeRequest mMergeRequest;
++    private String[] mTitles;
++
++    public MergeRequestSectionsPagerAdapter(Context context, FragmentManager fm, Project project, MergeRequest mergeRequest) {
++        super(fm);
++        mProject = project;
++        mMergeRequest = mergeRequest;
++        mTitles = context.getResources().getStringArray(R.array.merge_request_tabs);
++    }
++
++    @Override
++    public Fragment getItem(int position) {
++
++        switch(position) {
++            case 0:
++                return MergeRequestDiscussionFragment.newInstance(mProject, mMergeRequest);
++            case 1:
++                return MergeRequestCommitsFragment.newInstance(mProject, mMergeRequest);
++        }
++
++        throw new IllegalStateException("Position exceeded on view pager");
++    }
++
++    @Override
++    public int getCount() {
++        return SECTION_COUNT;
++    }
++
++    @Override
++    public CharSequence getPageTitle(int position) {
++        return mTitles[position];
++    }
++}
+diff --git a/app/src/main/java/com/commit451/gitlab/adapter/ProjectsPagerAdapter.java b/app/src/main/java/com/commit451/gitlab/adapter/ProjectsPagerAdapter.java
+index de2168b1..ff5b3135 100644
+--- a/app/src/main/java/com/commit451/gitlab/adapter/ProjectsPagerAdapter.java
++++ b/app/src/main/java/com/commit451/gitlab/adapter/ProjectsPagerAdapter.java
+@@ -10,7 +10,6 @@ import com.commit451.gitlab.fragment.ProjectsFragment;
+ 
+ /**
+  * Projects Pager Adapter
+- * Created by Jawn on 9/21/2015.
+  */
+ public class ProjectsPagerAdapter extends FragmentPagerAdapter {
+     private static final int SECTION_COUNT = 3;
+diff --git a/app/src/main/java/com/commit451/gitlab/api/GitLab.java b/app/src/main/java/com/commit451/gitlab/api/GitLab.java
+index bbc2856d..201667ec 100644
+--- a/app/src/main/java/com/commit451/gitlab/api/GitLab.java
++++ b/app/src/main/java/com/commit451/gitlab/api/GitLab.java
+@@ -204,6 +204,14 @@ public interface GitLab {
+     Call<List<Note>> getMergeRequestNotes(@Path("id") long projectId,
+                                           @Path("merge_request_id") long mergeRequestId);
+ 
++    @GET(API_VERSION + "/projects/{id}/merge_requests/{merge_request_id}/commits")
++    Call<List<RepositoryCommit>> getMergeRequestCommits(@Path("id") long projectId,
++                                          @Path("merge_request_id") long mergeRequestId);
++
++    @GET(API_VERSION + "/projects/{id}/merge_requests/{merge_request_id}/changes")
++    Call<MergeRequest> getMergeRequestChanges(@Path("id") long projectId,
++                                                        @Path("merge_request_id") long mergeRequestId);
++
+     @GET
+     Call<List<Note>> getMergeRequestNotes(@Url String url);
+ 
+diff --git a/app/src/main/java/com/commit451/gitlab/fragment/CommitsFragment.java b/app/src/main/java/com/commit451/gitlab/fragment/CommitsFragment.java
+index d4b68615..89f29193 100644
+--- a/app/src/main/java/com/commit451/gitlab/fragment/CommitsFragment.java
++++ b/app/src/main/java/com/commit451/gitlab/fragment/CommitsFragment.java
+@@ -204,7 +204,7 @@ public class CommitsFragment extends BaseFragment {
+         mLoading = true;
+         mCommitsAdapter.setLoading(true);
+ 
+-        Timber.d("loadMore called for " + mPage);
++        Timber.d("loadMore called for %s", mPage);
+         GitLabClient.instance().getCommits(mProject.getId(), mBranchName, mPage).enqueue(mMoreCommitsCallback);
+     }
+ 
+diff --git a/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestCommitsFragment.java b/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestCommitsFragment.java
+new file mode 100644
+index 00000000..b30232dc
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestCommitsFragment.java
+@@ -0,0 +1,206 @@
++package com.commit451.gitlab.fragment;
++
++import android.os.Bundle;
++import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
++import android.support.v4.widget.SwipeRefreshLayout;
++import android.support.v7.widget.LinearLayoutManager;
++import android.support.v7.widget.RecyclerView;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.TextView;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.adapter.CommitsAdapter;
++import com.commit451.gitlab.api.EasyCallback;
++import com.commit451.gitlab.api.GitLabClient;
++import com.commit451.gitlab.model.api.MergeRequest;
++import com.commit451.gitlab.model.api.Project;
++import com.commit451.gitlab.model.api.RepositoryCommit;
++import com.commit451.gitlab.util.NavigationManager;
++
++import org.parceler.Parcels;
++
++import java.util.List;
++
++import butterknife.Bind;
++import butterknife.ButterKnife;
++import retrofit.Callback;
++import timber.log.Timber;
++
++/**
++ * Like {@link CommitsFragment} but showing commits for a merge request
++ */
++public class MergeRequestCommitsFragment extends BaseFragment {
++
++    private static final String KEY_PROJECT = "project";
++    private static final String KEY_MERGE_REQUEST = "merge_request";
++
++    public static MergeRequestCommitsFragment newInstance(Project project, MergeRequest mergeRequest) {
++        MergeRequestCommitsFragment fragment = new MergeRequestCommitsFragment();
++        Bundle args = new Bundle();
++        args.putParcelable(KEY_PROJECT, Parcels.wrap(project));
++        args.putParcelable(KEY_MERGE_REQUEST, Parcels.wrap(mergeRequest));
++        fragment.setArguments(args);
++        return fragment;
++    }
++
++    @Bind(R.id.swipe_layout) SwipeRefreshLayout mSwipeRefreshLayout;
++    @Bind(R.id.list) RecyclerView mCommitsListView;
++    @Bind(R.id.message_text) TextView mMessageView;
++
++    private Project mProject;
++    private MergeRequest mMergeRequest;
++    private LinearLayoutManager mCommitsLayoutManager;
++    private CommitsAdapter mCommitsAdapter;
++    private int mPage = -1;
++    private boolean mLoading = false;
++
++    private final RecyclerView.OnScrollListener mOnScrollListener = new RecyclerView.OnScrollListener() {
++        @Override
++        public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
++            super.onScrolled(recyclerView, dx, dy);
++            int visibleItemCount = mCommitsLayoutManager.getChildCount();
++            int totalItemCount = mCommitsLayoutManager.getItemCount();
++            int firstVisibleItem = mCommitsLayoutManager.findFirstVisibleItemPosition();
++            if (firstVisibleItem + visibleItemCount >= totalItemCount && !mLoading && mPage >= 0) {
++                loadMore();
++            }
++        }
++    };
++
++    private final Callback<List<RepositoryCommit>> mCommitsCallback = new EasyCallback<List<RepositoryCommit>>() {
++        @Override
++        public void onResponse(@NonNull List<RepositoryCommit> response) {
++            mLoading = false;
++            if (getView() == null) {
++                return;
++            }
++            mSwipeRefreshLayout.setRefreshing(false);
++            if (!response.isEmpty()) {
++                mMessageView.setVisibility(View.GONE);
++            } else {
++                mMessageView.setVisibility(View.VISIBLE);
++                mMessageView.setText(R.string.no_commits_found);
++            }
++            mCommitsAdapter.setData(response);
++            if (response.isEmpty()) {
++                mPage = -1;
++            }
++        }
++
++        @Override
++        public void onAllFailure(Throwable t) {
++            mLoading = false;
++            Timber.e(t, null);
++            if (getView() == null) {
++                return;
++            }
++            mSwipeRefreshLayout.setRefreshing(false);
++            mMessageView.setVisibility(View.VISIBLE);
++            mMessageView.setText(R.string.connection_error_commits);
++            mCommitsAdapter.setData(null);
++            mPage = -1;
++        }
++    };
++
++    private final Callback<List<RepositoryCommit>> mMoreCommitsCallback = new EasyCallback<List<RepositoryCommit>>() {
++        @Override
++        public void onResponse(@NonNull List<RepositoryCommit> response) {
++            mLoading = false;
++            mCommitsAdapter.setLoading(false);
++            if (response.isEmpty()) {
++                mPage = -1;
++                return;
++            }
++            mCommitsAdapter.addData(response);
++        }
++
++        @Override
++        public void onAllFailure(Throwable t) {
++            mLoading = false;
++            Timber.e(t, null);
++            mCommitsAdapter.setLoading(false);
++        }
++    };
++
++    private final CommitsAdapter.Listener mCommitsAdapterListener = new CommitsAdapter.Listener() {
++        @Override
++        public void onCommitClicked(RepositoryCommit commit) {
++            NavigationManager.navigateToDiffActivity(getActivity(), mProject, commit);
++        }
++    };
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mProject = Parcels.unwrap(getArguments().getParcelable(KEY_PROJECT));
++        mMergeRequest = Parcels.unwrap(getArguments().getParcelable(KEY_MERGE_REQUEST));
++    }
++
++    @Override
++    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
++        return inflater.inflate(R.layout.fragment_merge_request_commits, container, false);
++    }
++
++    @Override
++    public void onViewCreated(View view, Bundle savedInstanceState) {
++        super.onViewCreated(view, savedInstanceState);
++        ButterKnife.bind(this, view);
++
++        mCommitsAdapter = new CommitsAdapter(mCommitsAdapterListener);
++        mCommitsLayoutManager = new LinearLayoutManager(getActivity());
++        mCommitsListView.setLayoutManager(mCommitsLayoutManager);
++        mCommitsListView.setAdapter(mCommitsAdapter);
++        mCommitsListView.addOnScrollListener(mOnScrollListener);
++
++        mSwipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
++            @Override
++            public void onRefresh() {
++                loadData();
++            }
++        });
++        loadData();
++    }
++
++    @Override
++    public void onDestroyView() {
++        super.onDestroyView();
++        ButterKnife.unbind(this);
++    }
++
++    @Override
++    protected void loadData() {
++        if (getView() == null) {
++            return;
++        }
++
++        mSwipeRefreshLayout.post(new Runnable() {
++            @Override
++            public void run() {
++                if (mSwipeRefreshLayout != null) {
++                    mSwipeRefreshLayout.setRefreshing(true);
++                }
++            }
++        });
++
++        mPage = 0;
++        mLoading = true;
++
++        GitLabClient.instance().getMergeRequestCommits(mProject.getId(), mMergeRequest.getId()).enqueue(mCommitsCallback);
++    }
++
++    private void loadMore() {
++        if (getView() == null) {
++            return;
++        }
++
++        mPage++;
++        mLoading = true;
++        //mCommitsAdapter.setLoading(true);
++
++        Timber.d("loadMore called for %s", mPage);
++        //TODO is this even a thing?
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestDiscussionFragment.java b/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestDiscussionFragment.java
+new file mode 100644
+index 00000000..42c72d9c
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/fragment/MergeRequestDiscussionFragment.java
+@@ -0,0 +1,224 @@
++package com.commit451.gitlab.fragment;
++
++import android.net.Uri;
++import android.os.Bundle;
++import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
++import android.support.design.widget.Snackbar;
++import android.support.v4.widget.SwipeRefreshLayout;
++import android.support.v7.widget.LinearLayoutManager;
++import android.support.v7.widget.RecyclerView;
++import android.view.KeyEvent;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.EditText;
++import android.widget.TextView;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.adapter.MergeRequestDetailAdapter;
++import com.commit451.gitlab.api.EasyCallback;
++import com.commit451.gitlab.api.GitLabClient;
++import com.commit451.gitlab.model.api.MergeRequest;
++import com.commit451.gitlab.model.api.Note;
++import com.commit451.gitlab.model.api.Project;
++import com.commit451.gitlab.util.KeyboardUtil;
++import com.commit451.gitlab.util.PaginationUtil;
++
++import org.parceler.Parcels;
++
++import java.util.List;
++
++import butterknife.Bind;
++import butterknife.ButterKnife;
++import butterknife.OnClick;
++import retrofit.Callback;
++import timber.log.Timber;
++
++/**
++ * Shows the discussion of a merge request
++ */
++public class MergeRequestDiscussionFragment extends BaseFragment {
++
++    private static final String KEY_PROJECT = "project";
++    private static final String KEY_MERGE_REQUEST = "merge_request";
++
++    public static MergeRequestDiscussionFragment newInstance(Project project, MergeRequest mergeRequest) {
++        MergeRequestDiscussionFragment fragment = new MergeRequestDiscussionFragment();
++        Bundle args = new Bundle();
++        args.putParcelable(KEY_PROJECT, Parcels.wrap(project));
++        args.putParcelable(KEY_MERGE_REQUEST, Parcels.wrap(mergeRequest));
++        fragment.setArguments(args);
++        return fragment;
++    }
++
++    @Bind(R.id.root)
++    ViewGroup mRoot;
++    @Bind(R.id.swipe_layout)
++    SwipeRefreshLayout mSwipeRefreshLayout;
++    @Bind(R.id.list)
++    RecyclerView mNotesRecyclerView;
++    @Bind(R.id.new_note_edit)
++    EditText mNewNoteEdit;
++    @Bind(R.id.progress)
++    View mProgress;
++
++    MergeRequestDetailAdapter mMergeRequestDetailAdapter;
++    LinearLayoutManager mNotesLinearLayoutManager;
++
++    Project mProject;
++    MergeRequest mMergeRequest;
++    Uri mNextPageUrl;
++    boolean mLoading;
++
++    @OnClick(R.id.new_note_button)
++    public void onNewNoteClick() {
++        postNote();
++    }
++
++    private final RecyclerView.OnScrollListener mOnScrollListener = new RecyclerView.OnScrollListener() {
++        @Override
++        public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
++            super.onScrolled(recyclerView, dx, dy);
++            int visibleItemCount = mNotesLinearLayoutManager.getChildCount();
++            int totalItemCount = mNotesLinearLayoutManager.getItemCount();
++            int firstVisibleItem = mNotesLinearLayoutManager.findFirstVisibleItemPosition();
++            if (firstVisibleItem + visibleItemCount >= totalItemCount && !mLoading && mNextPageUrl != null) {
++                loadMoreNotes();
++            }
++        }
++    };
++
++    private Callback<List<Note>> mNotesCallback = new EasyCallback<List<Note>>() {
++
++        @Override
++        public void onResponse(@NonNull List<Note> response) {
++            mSwipeRefreshLayout.setRefreshing(false);
++            mLoading = false;
++            mNextPageUrl = PaginationUtil.parse(getResponse()).getNext();
++            mMergeRequestDetailAdapter.setNotes(response);
++        }
++
++        @Override
++        public void onAllFailure(Throwable t) {
++            mLoading = false;
++            Timber.e(t, null);
++            mSwipeRefreshLayout.setRefreshing(false);
++            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
++                    .show();
++        }
++    };
++
++    private Callback<List<Note>> mMoreNotesCallback = new EasyCallback<List<Note>>() {
++
++        @Override
++        public void onResponse(@NonNull List<Note> response) {
++            mMergeRequestDetailAdapter.setLoading(false);
++            mLoading = false;
++            mNextPageUrl = PaginationUtil.parse(getResponse()).getNext();
++            mMergeRequestDetailAdapter.addNotes(response);
++        }
++
++        @Override
++        public void onAllFailure(Throwable t) {
++            mLoading = false;
++            Timber.e(t, null);
++            mMergeRequestDetailAdapter.setLoading(false);
++            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
++                    .show();
++        }
++    };
++
++    private Callback<Note> mPostNoteCallback = new EasyCallback<Note>() {
++
++        @Override
++        public void onResponse(@NonNull Note response) {
++            mProgress.setVisibility(View.GONE);
++            mMergeRequestDetailAdapter.addNote(response);
++            mNotesRecyclerView.smoothScrollToPosition(MergeRequestDetailAdapter.getHeaderCount());
++        }
++
++        @Override
++        public void onAllFailure(Throwable t) {
++            Timber.e(t, null);
++            mProgress.setVisibility(View.GONE);
++            Snackbar.make(mRoot, getString(R.string.connection_error), Snackbar.LENGTH_SHORT)
++                    .show();
++        }
++    };
++
++    @Override
++    public void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        mProject = Parcels.unwrap(getArguments().getParcelable(KEY_PROJECT));
++        mMergeRequest = Parcels.unwrap(getArguments().getParcelable(KEY_MERGE_REQUEST));
++    }
++
++    @Override
++    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
++        return inflater.inflate(R.layout.fragment_merge_request_discussion, container, false);
++    }
++
++    @Override
++    public void onViewCreated(View view, Bundle savedInstanceState) {
++        super.onViewCreated(view, savedInstanceState);
++        ButterKnife.bind(this, view);
++
++        mMergeRequestDetailAdapter = new MergeRequestDetailAdapter(getActivity(), mMergeRequest);
++        mNotesLinearLayoutManager = new LinearLayoutManager(getActivity());
++        mNotesRecyclerView.setLayoutManager(mNotesLinearLayoutManager);
++        mNotesRecyclerView.setAdapter(mMergeRequestDetailAdapter);
++        mNotesRecyclerView.addOnScrollListener(mOnScrollListener);
++
++        mNewNoteEdit.setOnEditorActionListener(new TextView.OnEditorActionListener() {
++            @Override
++            public boolean onEditorAction(TextView v, int actionId, KeyEvent event) {
++                postNote();
++                return true;
++            }
++        });
++
++        mSwipeRefreshLayout.setOnRefreshListener(new SwipeRefreshLayout.OnRefreshListener() {
++            @Override
++            public void onRefresh() {
++                loadNotes();
++            }
++        });
++        loadNotes();
++    }
++
++    private void loadNotes() {
++        mSwipeRefreshLayout.post(new Runnable() {
++            @Override
++            public void run() {
++                if (mSwipeRefreshLayout != null) {
++                    mSwipeRefreshLayout.setRefreshing(true);
++                }
++            }
++        });
++        GitLabClient.instance().getMergeRequestNotes(mProject.getId(), mMergeRequest.getId()).enqueue(mNotesCallback);
++    }
++
++    private void loadMoreNotes() {
++        mMergeRequestDetailAdapter.setLoading(true);
++        GitLabClient.instance().getMergeRequestNotes(mNextPageUrl.toString()).enqueue(mMoreNotesCallback);
++    }
++
++    private void postNote() {
++        String body = mNewNoteEdit.getText().toString();
++
++        if (body.length() < 1) {
++            return;
++        }
++
++        mProgress.setVisibility(View.VISIBLE);
++        mProgress.setAlpha(0.0f);
++        mProgress.animate().alpha(1.0f);
++        // Clear text & collapse keyboard
++        KeyboardUtil.hideKeyboard(getActivity());
++        mNewNoteEdit.setText("");
++
++        GitLabClient.instance().addMergeRequestNote(mProject.getId(), mMergeRequest.getId(), body).enqueue(mPostNoteCallback);
++    }
++
++}
+diff --git a/app/src/main/java/com/commit451/gitlab/model/api/MergeRequest.java b/app/src/main/java/com/commit451/gitlab/model/api/MergeRequest.java
+index 8957a59c..03771192 100644
+--- a/app/src/main/java/com/commit451/gitlab/model/api/MergeRequest.java
++++ b/app/src/main/java/com/commit451/gitlab/model/api/MergeRequest.java
+@@ -1,5 +1,7 @@
+ package com.commit451.gitlab.model.api;
+ 
++import android.support.annotation.Nullable;
++
+ import com.google.gson.annotations.SerializedName;
+ 
+ import org.parceler.Parcel;
+@@ -49,6 +51,11 @@ public class MergeRequest {
+     Milestone mMilestone;
+     @SerializedName("merge_when_build_succeeds")
+     boolean mMergeWhenBuildSucceeds;
++    @SerializedName("merge_status")
++    String mMergeStatus;
++    @SerializedName("changes")
++    @Nullable
++    List<Diff> mChanges;
+ 
+     public MergeRequest() {}
+ 
+@@ -132,6 +139,19 @@ public class MergeRequest {
+         return mMergeWhenBuildSucceeds;
+     }
+ 
++    public String getMergeStatus() {
++        return mMergeStatus;
++    }
++
++    /**
++     * Get the changes. Only not null if this merge request was retrieved via {@link com.commit451.gitlab.api.GitLab#getMergeRequestChanges(long, long)}
++     * @return the changes
++     */
++    @Nullable
++    public List<Diff> getChanges() {
++        return mChanges;
++    }
++
+     @Override
+     public boolean equals(Object o) {
+         if (!(o instanceof MergeRequest)) {
+diff --git a/app/src/main/java/com/commit451/gitlab/util/DateUtils.java b/app/src/main/java/com/commit451/gitlab/util/DateUtils.java
+index 8b637f9c..c0addb4e 100644
+--- a/app/src/main/java/com/commit451/gitlab/util/DateUtils.java
++++ b/app/src/main/java/com/commit451/gitlab/util/DateUtils.java
+@@ -9,7 +9,6 @@ import java.util.Date;
+ /**
+  * Our own DateUtils, which call forwards to {@link android.text.format.DateUtils} with some
+  * nice defaults
+- * Created by Jawnnypoo on 11/17/2015.
+  */
+ public class DateUtils {
+ 
+diff --git a/app/src/main/java/com/commit451/gitlab/util/NavigationManager.java b/app/src/main/java/com/commit451/gitlab/util/NavigationManager.java
+index 4867b047..f877f3cc 100644
+--- a/app/src/main/java/com/commit451/gitlab/util/NavigationManager.java
++++ b/app/src/main/java/com/commit451/gitlab/util/NavigationManager.java
+@@ -35,8 +35,6 @@ import com.commit451.gitlab.model.api.Project;
+ import com.commit451.gitlab.model.api.RepositoryCommit;
+ import com.commit451.gitlab.model.api.UserBasic;
+ 
+-import java.util.List;
+-
+ import timber.log.Timber;
+ 
+ /**
+@@ -188,21 +186,21 @@ public class NavigationManager {
+      */
+     private static boolean navigateToUrl(Activity activity, Uri uri) {
+         //TODO figure out the url to activity mapping
+-        if (uri.getPath().contains("issues")) {
+-            List<String> pathSegments = uri.getPathSegments();
+-            for (int i=0; i<pathSegments.size(); i++) {
+-                //segment == issues, and there is one more segment in the path
+-                if (pathSegments.get(i).equals("issues") && i != pathSegments.size()-1) {
+-                    //TODO this would probably break if we had query params or anything else in the url
+-                    String issueId = pathSegments.get(i+1);
+-                    //TODO actually navigate to issue activity which will load the needed project and issue
+-                    //navigateToIssue(activity, null, issueId);
+-                    return true;
+-                }
+-            }
+-            navigateToProject(activity, -1);
+-            return true;
+-        }
++//        if (uri.getPath().contains("issues")) {
++//            List<String> pathSegments = uri.getPathSegments();
++//            for (int i=0; i<pathSegments.size(); i++) {
++//                //segment == issues, and there is one more segment in the path
++//                if (pathSegments.get(i).equals("issues") && i != pathSegments.size()-1) {
++//                    //TODO this would probably break if we had query params or anything else in the url
++//                    String issueId = pathSegments.get(i+1);
++//                    //TODO actually navigate to issue activity which will load the needed project and issue
++//                    //navigateToIssue(activity, null, issueId);
++//                    return true;
++//                }
++//            }
++//            navigateToProject(activity, -1);
++//            return true;
++//        }
+         return false;
+     }
+ }
+diff --git a/app/src/main/java/com/commit451/gitlab/viewHolder/IssueLabelsViewHolder.java b/app/src/main/java/com/commit451/gitlab/viewHolder/IssueLabelsViewHolder.java
+index 4813fc59..9f16161d 100644
+--- a/app/src/main/java/com/commit451/gitlab/viewHolder/IssueLabelsViewHolder.java
++++ b/app/src/main/java/com/commit451/gitlab/viewHolder/IssueLabelsViewHolder.java
+@@ -31,7 +31,7 @@ public class IssueLabelsViewHolder extends RecyclerView.ViewHolder {
+ 
+     private final IssueLabelsAdapter.Listener mListener = new IssueLabelsAdapter.Listener() {
+         @Override
+-        public void onLabelClicked(String label, IssueLabelsViewHolder viewHolder) {
++        public void onLabelClicked(String label, LabelViewHolder viewHolder) {
+ 
+         }
+     };

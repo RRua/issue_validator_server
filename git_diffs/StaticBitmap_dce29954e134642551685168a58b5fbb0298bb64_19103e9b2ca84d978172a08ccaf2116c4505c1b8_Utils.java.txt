@@ -1,0 +1,2160 @@
+diff --git a/app/src/main/java/acr/browser/lightning/activity/BrowserActivity.java b/app/src/main/java/acr/browser/lightning/activity/BrowserActivity.java
+index 9d8c0465..ce9eaeee 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/BrowserActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/BrowserActivity.java
+@@ -8,13 +8,13 @@ import android.animation.ArgbEvaluator;
+ import android.animation.LayoutTransition;
+ import android.animation.ValueAnimator;
+ import android.animation.ValueAnimator.AnimatorUpdateListener;
+-import android.annotation.SuppressLint;
+ import android.app.Activity;
+ import android.content.ClipData;
+ import android.content.ClipboardManager;
+ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.Intent;
++import android.content.IntentFilter;
+ import android.content.res.Configuration;
+ import android.content.res.Resources.Theme;
+ import android.database.Cursor;
+@@ -25,6 +25,7 @@ import android.graphics.Canvas;
+ import android.graphics.ColorMatrix;
+ import android.graphics.ColorMatrixColorFilter;
+ import android.graphics.Paint;
++import android.graphics.PorterDuff;
+ import android.graphics.drawable.ColorDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.media.MediaPlayer;
+@@ -36,6 +37,7 @@ import android.os.Handler;
+ import android.os.Message;
+ import android.provider.Browser;
+ import android.provider.MediaStore;
++import android.support.annotation.IdRes;
+ import android.support.annotation.NonNull;
+ import android.support.v4.view.GravityCompat;
+ import android.support.v4.view.ViewCompat;
+@@ -49,6 +51,7 @@ import android.text.TextUtils;
+ import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.LayoutInflater;
++import android.view.Menu;
+ import android.view.MenuItem;
+ import android.view.MotionEvent;
+ import android.view.View;
+@@ -61,6 +64,7 @@ import android.view.ViewGroup;
+ import android.view.ViewGroup.LayoutParams;
+ import android.view.Window;
+ import android.view.WindowManager;
++import android.view.animation.AccelerateInterpolator;
+ import android.view.animation.Animation;
+ import android.view.animation.Animation.AnimationListener;
+ import android.view.animation.DecelerateInterpolator;
+@@ -121,12 +125,14 @@ import acr.browser.lightning.object.ClickHandler;
+ import acr.browser.lightning.object.DrawerArrowDrawable;
+ import acr.browser.lightning.object.SearchAdapter;
+ import acr.browser.lightning.preference.PreferenceManager;
++import acr.browser.lightning.receiver.NetworkReceiver;
+ import acr.browser.lightning.utils.ProxyUtils;
++import acr.browser.lightning.utils.ThemeUtils;
+ import acr.browser.lightning.utils.Utils;
+ import acr.browser.lightning.view.AnimatedProgressBar;
+ import acr.browser.lightning.view.LightningView;
+ 
+-public abstract class BrowserActivity extends ThemableActivity implements BrowserController, OnClickListener {
++public abstract class BrowserActivity extends ThemableActivity implements BrowserController, OnClickListener, OnLongClickListener {
+ 
+     // Layout
+     private DrawerLayout mDrawerLayout;
+@@ -144,7 +150,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+     private AnimatedProgressBar mProgressBar;
+     private AutoCompleteTextView mSearch;
+-    private ImageView mArrowImage;
++    private ImageView mArrowImage, mBookmarkTitleImage, mBookmarkImage;
+     private VideoView mVideoView;
+     private View mCustomView, mVideoProgressView;
+ 
+@@ -164,7 +170,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+     // Primatives
+     private boolean mSystemBrowser = false, mIsNewIntent = false, mFullScreen, mColorMode, mDarkTheme;
+-    private int mOriginalOrientation, mBackgroundColor, mIdGenerator;
++    private int mOriginalOrientation, mBackgroundColor, mIdGenerator, mIconColor;
+     private String mSearchText, mUntitledTitle, mHomepage, mCameraPhotoPath;
+ 
+     // Storage
+@@ -173,7 +179,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+     private PreferenceManager mPreferences;
+ 
+     // Image
+-    private Bitmap mDefaultVideoPoster, mWebpageBitmap;
++    private Bitmap mDefaultVideoPoster, mWebpageBitmap, mFolderBitmap;
+     private final ColorDrawable mBackground = new ColorDrawable();
+     private Drawable mDeleteIcon, mRefreshIcon, mCopyIcon, mIcon;
+     private DrawerArrowDrawable mArrowDrawable;
+@@ -183,6 +189,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+     // Constant
+     private static final int API = android.os.Build.VERSION.SDK_INT;
++    private static final String NETWORK_BROADCAST_ACTION = "android.net.conn.CONNECTIVITY_CHANGE";
+     private static final LayoutParams MATCH_PARENT = new LayoutParams(LayoutParams.MATCH_PARENT,
+             LayoutParams.MATCH_PARENT);
+     private static final FrameLayout.LayoutParams COVER_SCREEN_PARAMS = new FrameLayout.LayoutParams(
+@@ -216,6 +223,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         mPreferences = PreferenceManager.getInstance();
+         //TODO make sure dark theme flag gets set correctly
+         mDarkTheme = mPreferences.getUseTheme() != 0 || isIncognito();
++        mIconColor = mDarkTheme ? ThemeUtils.getIconDarkThemeColor(this) : ThemeUtils.getIconLightThemeColor(this);
+         mActivity = this;
+         mWebViewList.clear();
+ 
+@@ -227,7 +235,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+         mUiLayout = (LinearLayout) findViewById(R.id.ui_layout);
+         mProgressBar = (AnimatedProgressBar) findViewById(R.id.progress_view);
+-        RelativeLayout newTab = (RelativeLayout) findViewById(R.id.new_tab_button);
++        setupFrameLayoutButton(R.id.new_tab_button, R.id.icon_plus);
+         mDrawerLeft = (LinearLayout) findViewById(R.id.left_drawer);
+         // Drawer stutters otherwise
+         mDrawerLeft.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+@@ -236,11 +244,16 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         mDrawerRight = (LinearLayout) findViewById(R.id.right_drawer);
+         mDrawerRight.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+         mDrawerListRight = (ListView) findViewById(R.id.right_drawer_list);
++        mBookmarkTitleImage = (ImageView) findViewById(R.id.starIcon);
++        mBookmarkTitleImage.setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
++        ImageView tabTitleImage = (ImageView) findViewById(R.id.plusIcon);
++        tabTitleImage.setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
+ 
+         setNavigationDrawerWidth();
+         mDrawerLayout.setDrawerListener(new DrawerLocker());
+ 
+-        mWebpageBitmap = Utils.getWebpageBitmap(getResources(), mDarkTheme);
++        mWebpageBitmap = ThemeUtils.getThemedBitmap(this, R.drawable.ic_webpage, mDarkTheme);
++        mFolderBitmap = ThemeUtils.getThemedBitmap(this, R.drawable.ic_folder, mDarkTheme);
+ 
+         mHomepage = mPreferences.getHomepage();
+ 
+@@ -273,34 +286,29 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         // Use hardware acceleration for the animation
+         mArrowImage.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+         mArrowImage.setImageDrawable(mArrowDrawable);
+-        LinearLayout arrowButton = (LinearLayout) actionBar.getCustomView().findViewById(
++        FrameLayout arrowButton = (FrameLayout) actionBar.getCustomView().findViewById(
+                 R.id.arrow_button);
+         arrowButton.setOnClickListener(this);
+ 
+         mProxyUtils = ProxyUtils.getInstance(this);
+ 
+-        RelativeLayout back = (RelativeLayout) findViewById(R.id.action_back);
+-        back.setOnClickListener(this);
++        setupFrameLayoutButton(R.id.action_back, R.id.icon_back);
++        setupFrameLayoutButton(R.id.action_forward, R.id.icon_forward);
++        setupFrameLayoutButton(R.id.action_add_bookmark, R.id.icon_star);
++        setupFrameLayoutButton(R.id.action_toggle_desktop, R.id.icon_desktop);
++        setupFrameLayoutButton(R.id.action_reading, R.id.icon_reading);
+ 
+-        RelativeLayout forward = (RelativeLayout) findViewById(R.id.action_forward);
+-        forward.setOnClickListener(this);
++        mBookmarkImage = (ImageView) findViewById(R.id.icon_star);
+ 
+         // create the search EditText in the ToolBar
+         mSearch = (AutoCompleteTextView) actionBar.getCustomView().findViewById(R.id.search);
+         mUntitledTitle = getString(R.string.untitled);
+         mBackgroundColor = getResources().getColor(R.color.primary_color);
+-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+-            mDeleteIcon = getResources().getDrawable(R.drawable.ic_action_delete);
+-            mRefreshIcon = getResources().getDrawable(R.drawable.ic_action_refresh);
+-            mCopyIcon = getResources().getDrawable(R.drawable.ic_action_copy);
+-        } else {
+-            Theme theme = getTheme();
+-            mDeleteIcon = getResources().getDrawable(R.drawable.ic_action_delete, theme);
+-            mRefreshIcon = getResources().getDrawable(R.drawable.ic_action_refresh, theme);
+-            mCopyIcon = getResources().getDrawable(R.drawable.ic_action_copy, theme);
+-        }
++        mDeleteIcon = ThemeUtils.getLightThemedDrawable(this, R.drawable.ic_action_delete);
++        mRefreshIcon = ThemeUtils.getLightThemedDrawable(this, R.drawable.ic_action_refresh);
++        mCopyIcon = ThemeUtils.getLightThemedDrawable(this, R.drawable.ic_action_copy);
+ 
+-        int iconBounds = Utils.convertDpToPixels(24);
++        int iconBounds = Utils.convertDpToPixels(30);
+         mDeleteIcon.setBounds(0, 0, iconBounds, iconBounds);
+         mRefreshIcon.setBounds(0, 0, iconBounds, iconBounds);
+         mCopyIcon.setBounds(0, 0, iconBounds, iconBounds);
+@@ -318,8 +326,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             @Override
+             public void run() {
+                 mBookmarkManager = BookmarkManager.getInstance(mActivity.getApplicationContext());
+-                mBookmarkList.clear();
+-                mBookmarkList.addAll(mBookmarkManager.getBookmarks(true));
++                setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(null, true), false);
+                 if (mBookmarkList.size() == 0 && mPreferences.getDefaultBookmarks()) {
+                     for (String[] array : BookmarkManager.DEFAULT_BOOKMARKS) {
+                         HistoryItem bookmark = new HistoryItem(array[0], array[1]);
+@@ -339,20 +346,16 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         });
+         initialize.run();
+ 
+-        newTab.setOnClickListener(this);
+-        newTab.setOnLongClickListener(new OnLongClickListener() {
+-
++        View view = findViewById(R.id.bookmark_back_button);
++        view.setOnClickListener(new OnClickListener() {
+             @Override
+-            public boolean onLongClick(View v) {
+-                String url = mPreferences.getSavedUrl();
+-                if (url != null) {
+-                    newTab(url, true);
+-                    Utils.showSnackbar(mActivity, R.string.deleted_tab);
++            public void onClick(View v) {
++                if (mBookmarkManager == null)
++                    return;
++                if (!mBookmarkManager.isRootFolder()) {
++                    setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(null, true), true);
+                 }
+-                mPreferences.setSavedUrl(null);
+-                return true;
+             }
+-
+         });
+ 
+         mDrawerLayout.setDrawerShadow(R.drawable.drawer_right_shadow, GravityCompat.END);
+@@ -492,7 +495,6 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+         public class TouchListener implements OnTouchListener {
+ 
+-            @SuppressLint("ClickableViewAccessibility")
+             @Override
+             public boolean onTouch(View v, MotionEvent event) {
+                 if (mSearch.getCompoundDrawables()[2] != null) {
+@@ -791,14 +793,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                 return true;
+             case R.id.action_add_bookmark:
+                 if (mCurrentView != null && !mCurrentView.getUrl().startsWith(Constants.FILE)) {
+-                    HistoryItem bookmark = new HistoryItem(mCurrentView.getUrl(),
+-                            mCurrentView.getTitle());
+-                    if (mBookmarkManager.addBookmark(bookmark)) {
+-                        mBookmarkList.add(bookmark);
+-                        Collections.sort(mBookmarkList, new SortIgnoreCase());
+-                        notifyBookmarkDataSetChanged();
+-                        mSearchAdapter.refreshBookmarks();
+-                    }
++                    addBookmark(mCurrentView.getTitle(), mCurrentView.getUrl());
+                 }
+                 return true;
+             case R.id.action_find:
+@@ -819,9 +814,71 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+      * adapter doesn't always change when notifyDataChanged gets called.
+      */
+     private void notifyBookmarkDataSetChanged() {
++        if (mBookmarkAdapter == null)
++            return;
+         mBookmarkAdapter.notifyDataSetChanged();
+     }
+ 
++    private void addBookmark(String title, String url) {
++        HistoryItem bookmark = new HistoryItem(url, title);
++        if (mBookmarkManager.addBookmark(bookmark)) {
++            mBookmarkList.add(bookmark);
++            Collections.sort(mBookmarkList, new SortIgnoreCase());
++            notifyBookmarkDataSetChanged();
++            mSearchAdapter.refreshBookmarks();
++            updateBookmarkIndicator(mCurrentView.getUrl());
++        }
++    }
++
++    private void setBookmarkDataSet(List<HistoryItem> items, boolean animate) {
++        mBookmarkList.clear();
++        mBookmarkList.addAll(items);
++        if (mBookmarkAdapter != null)
++            mBookmarkAdapter.notifyDataSetChanged();
++        final int resource;
++        if (mBookmarkManager.isRootFolder())
++            resource = R.drawable.ic_action_star;
++        else
++            resource = R.drawable.ic_action_back;
++
++        final Animation startRotation = new Animation() {
++            @Override
++            protected void applyTransformation(float interpolatedTime, Transformation t) {
++                mBookmarkTitleImage.setRotationY(90 * interpolatedTime);
++            }
++        };
++        final Animation finishRotation = new Animation() {
++            @Override
++            protected void applyTransformation(float interpolatedTime, Transformation t) {
++                mBookmarkTitleImage.setRotationY((-90) + (90 * interpolatedTime));
++            }
++        };
++        startRotation.setAnimationListener(new AnimationListener() {
++            @Override
++            public void onAnimationStart(Animation animation) {
++            }
++
++            @Override
++            public void onAnimationEnd(Animation animation) {
++                mBookmarkTitleImage.setImageResource(resource);
++                mBookmarkTitleImage.startAnimation(finishRotation);
++            }
++
++            @Override
++            public void onAnimationRepeat(Animation animation) {
++            }
++        });
++        startRotation.setInterpolator(new AccelerateInterpolator());
++        finishRotation.setInterpolator(new DecelerateInterpolator());
++        startRotation.setDuration(250);
++        finishRotation.setDuration(250);
++
++        if (animate)
++            mBookmarkTitleImage.startAnimation(startRotation);
++        else
++            mBookmarkTitleImage.setImageResource(resource);
++    }
++
+     /**
+      * method that shows a dialog asking what string the user wishes to search
+      * for. It highlights the text entered.
+@@ -918,6 +975,10 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+         @Override
+         public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
++            if (mBookmarkList.get(position).getIsFolder()) {
++                setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(mBookmarkList.get(position).getUrl(), true), true);
++                return;
++            }
+             if (mCurrentView != null) {
+                 mCurrentView.loadUrl(mBookmarkList.get(position).getUrl());
+             }
+@@ -938,6 +999,8 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         @Override
+         public boolean onItemLongClick(AdapterView<?> arg0, View arg1, final int position, long arg3) {
+ 
++            if (mBookmarkList.get(position).getIsFolder())
++                return true;
+             AlertDialog.Builder builder = new AlertDialog.Builder(mActivity);
+             builder.setTitle(mActivity.getResources().getString(R.string.action_bookmarks));
+             builder.setMessage(getResources().getString(R.string.dialog_bookmark))
+@@ -955,12 +1018,14 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+ 
+                                 @Override
+                                 public void onClick(DialogInterface dialog, int which) {
+-                                    if (mBookmarkManager.deleteBookmark(mBookmarkList.get(position)
+-                                            .getUrl())) {
++                                    if (mBookmarkManager.deleteBookmark(mBookmarkList.get(position))) {
+                                         mBookmarkList.remove(position);
+                                         notifyBookmarkDataSetChanged();
+                                         mSearchAdapter.refreshBookmarks();
+                                         openBookmarks();
++                                        if (mCurrentView != null) {
++                                            updateBookmarkIndicator(mCurrentView.getUrl());
++                                        }
+                                     }
+                                 }
+                             })
+@@ -985,38 +1050,58 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+      * @param id which id in the list was chosen
+      */
+     private synchronized void editBookmark(final int id) {
+-        final AlertDialog.Builder homePicker = new AlertDialog.Builder(mActivity);
+-        homePicker.setTitle(getResources().getString(R.string.title_edit_bookmark));
++        final AlertDialog.Builder editBookmarkDialog = new AlertDialog.Builder(mActivity);
++        editBookmarkDialog.setTitle(R.string.title_edit_bookmark);
+         final EditText getTitle = new EditText(mActivity);
+-        getTitle.setHint(getResources().getString(R.string.hint_title));
++        getTitle.setHint(R.string.hint_title);
+         getTitle.setText(mBookmarkList.get(id).getTitle());
+         getTitle.setSingleLine();
+         final EditText getUrl = new EditText(mActivity);
+-        getUrl.setHint(getResources().getString(R.string.hint_url));
++        getUrl.setHint(R.string.hint_url);
+         getUrl.setText(mBookmarkList.get(id).getUrl());
+         getUrl.setSingleLine();
++        final EditText getFolder = new EditText(mActivity);
++        getFolder.setHint(R.string.folder);
++        getFolder.setText(mBookmarkList.get(id).getFolder());
++        getFolder.setSingleLine();
+         LinearLayout layout = new LinearLayout(mActivity);
+         layout.setOrientation(LinearLayout.VERTICAL);
++        int padding = Utils.convertDpToPixels(10);
++        layout.setPadding(padding, padding, padding, padding);
+         layout.addView(getTitle);
+         layout.addView(getUrl);
+-        homePicker.setView(layout);
+-        homePicker.setPositiveButton(getResources().getString(R.string.action_ok),
++        layout.addView(getFolder);
++        editBookmarkDialog.setView(layout);
++        editBookmarkDialog.setPositiveButton(getResources().getString(R.string.action_ok),
+                 new DialogInterface.OnClickListener() {
+ 
+                     @Override
+                     public void onClick(DialogInterface dialog, int which) {
+-                        mBookmarkList.get(id).setTitle(getTitle.getText().toString());
+-                        mBookmarkList.get(id).setUrl(getUrl.getText().toString());
+-                        mBookmarkManager.overwriteBookmarks(mBookmarkList);
++                        HistoryItem item = new HistoryItem();
++                        String currentFolder = mBookmarkList.get(id).getFolder();
++                        item.setTitle(getTitle.getText().toString());
++                        item.setUrl(getUrl.getText().toString());
++                        item.setFolder(getFolder.getText().toString());
++                        mBookmarkManager.editBookmark(mBookmarkList.get(id), item);
++
++                        List<HistoryItem> list = mBookmarkManager.getBookmarksFromFolder(currentFolder, true);
++                        if (list.size() == 0) {
++                            setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(null, true), true);
++                        } else {
++                            setBookmarkDataSet(list, false);
++                        }
++
+                         Collections.sort(mBookmarkList, new SortIgnoreCase());
+-                        notifyBookmarkDataSetChanged();
+                         if (mCurrentView != null && mCurrentView.getUrl().startsWith(Constants.FILE)
+                                 && mCurrentView.getUrl().endsWith("bookmarks.html")) {
+                             openBookmarkPage(mWebView);
+                         }
++                        if (mCurrentView != null) {
++                            updateBookmarkIndicator(mCurrentView.getUrl());
++                        }
+                     }
+                 });
+-        homePicker.show();
++        editBookmarkDialog.show();
+     }
+ 
+     /**
+@@ -1080,6 +1165,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             }
+         }, 150);
+ 
++        updateBookmarkIndicator(mWebView.getUrl());
+ 
+ //        new Handler().postDelayed(new Runnable() {
+ //            @Override
+@@ -1296,7 +1382,6 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         Utils.trimCache(this);
+     }
+ 
+-    @SuppressLint("NewApi")
+     @SuppressWarnings("deprecation")
+     private void clearCookies() {
+         // TODO Break out web storage deletion into its own option/action
+@@ -1317,7 +1402,11 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         if (mDrawerLayout.isDrawerOpen(mDrawerLeft)) {
+             mDrawerLayout.closeDrawer(mDrawerLeft);
+         } else if (mDrawerLayout.isDrawerOpen(mDrawerRight)) {
+-            mDrawerLayout.closeDrawer(mDrawerRight);
++            if (!mBookmarkManager.isRootFolder()) {
++                setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(null, true), true);
++            } else {
++                mDrawerLayout.closeDrawer(mDrawerRight);
++            }
+         } else {
+             if (mCurrentView != null) {
+                 Log.d(Constants.TAG, "onBackPressed");
+@@ -1347,6 +1436,11 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             mCurrentView.pauseTimers();
+             mCurrentView.onPause();
+         }
++        try {
++            unregisterReceiver(mNetworkReceiver);
++        } catch (IllegalArgumentException e) {
++            e.printStackTrace();
++        }
+     }
+ 
+     void saveOpenTabs() {
+@@ -1372,6 +1466,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         Log.d(Constants.TAG, "onDestroy");
+         if (mHistoryDatabase != null) {
+             mHistoryDatabase.close();
++            mHistoryDatabase = null;
+         }
+         super.onDestroy();
+     }
+@@ -1395,9 +1490,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             mCurrentView.onResume();
+         }
+         mHistoryDatabase = HistoryDatabase.getInstance(getApplicationContext());
+-        mBookmarkList.clear();
+-        mBookmarkList.addAll(mBookmarkManager.getBookmarks(true));
+-        notifyBookmarkDataSetChanged();
++        setBookmarkDataSet(mBookmarkManager.getBookmarksFromFolder(null, true), false);
+         initializePreferences();
+         for (int n = 0; n < mWebViewList.size(); n++) {
+             if (mWebViewList.get(n) != null) {
+@@ -1408,6 +1501,10 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         }
+ 
+         supportInvalidateOptionsMenu();
++
++        IntentFilter filter = new IntentFilter();
++        filter.addAction(NETWORK_BROADCAST_ACTION);
++        registerReceiver(mNetworkReceiver, filter);
+     }
+ 
+     /**
+@@ -1486,14 +1583,15 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                 holder.txtTitle = (TextView) row.findViewById(R.id.textTab);
+                 holder.favicon = (ImageView) row.findViewById(R.id.faviconTab);
+                 holder.exit = (ImageView) row.findViewById(R.id.deleteButton);
+-                holder.exit.setTag(position);
++                holder.exitButton = (FrameLayout) row.findViewById(R.id.deleteAction);
++                holder.exit.setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
+                 row.setTag(holder);
+             } else {
+                 holder = (LightningViewHolder) row.getTag();
+             }
+ 
+-            holder.exit.setTag(position);
+-            holder.exit.setOnClickListener(mExitListener);
++            holder.exitButton.setTag(position);
++            holder.exitButton.setOnClickListener(mExitListener);
+ 
+             ViewCompat.jumpDrawablesToCurrentState(holder.exit);
+ 
+@@ -1534,6 +1632,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             TextView txtTitle;
+             ImageView favicon;
+             ImageView exit;
++            FrameLayout exitButton;
+         }
+     }
+ 
+@@ -1592,12 +1691,14 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         final Context context;
+         List<HistoryItem> data = null;
+         final int layoutResourceId;
++        final Bitmap folderIcon;
+ 
+         public BookmarkViewAdapter(Context context, int layoutResourceId, List<HistoryItem> data) {
+             super(context, layoutResourceId, data);
+             this.layoutResourceId = layoutResourceId;
+             this.context = context;
+             this.data = data;
++            this.folderIcon = mFolderBitmap;
+         }
+ 
+         @Override
+@@ -1617,10 +1718,14 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                 holder = (BookmarkViewHolder) row.getTag();
+             }
+ 
++            ViewCompat.jumpDrawablesToCurrentState(row);
++
+             HistoryItem web = data.get(position);
+             holder.txtTitle.setText(web.getTitle());
+             holder.favicon.setImageBitmap(mWebpageBitmap);
+-            if (web.getBitmap() == null) {
++            if (web.getIsFolder()) {
++                holder.favicon.setImageBitmap(this.folderIcon);
++            } else if (web.getBitmap() == null) {
+                 getImage(holder.favicon, web);
+             } else {
+                 holder.favicon.setImageBitmap(web.getBitmap());
+@@ -1663,34 +1768,40 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             }
+             // checks to see if the image exists
+             if (!image.exists()) {
++                FileOutputStream fos = null;
++                InputStream in = null;
+                 try {
+                     // if not, download it...
+                     URL urlDownload = new URL(urldisplay);
+                     HttpURLConnection connection = (HttpURLConnection) urlDownload.openConnection();
+                     connection.setDoInput(true);
+                     connection.connect();
+-                    InputStream in = connection.getInputStream();
++                    in = connection.getInputStream();
+ 
+                     if (in != null) {
+                         mIcon = BitmapFactory.decodeStream(in);
+                     }
+                     // ...and cache it
+                     if (mIcon != null) {
+-                        FileOutputStream fos = new FileOutputStream(image);
++                        fos = new FileOutputStream(image);
+                         mIcon.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                         fos.flush();
+-                        fos.close();
+                         Log.d(Constants.TAG, "Downloaded: " + urldisplay);
+                     }
+ 
+                 } catch (Exception e) {
+                     e.printStackTrace();
++                } finally {
++                    Utils.close(in);
++                    Utils.close(fos);
+                 }
+             } else {
+                 // if it exists, retrieve it from the cache
+                 mIcon = BitmapFactory.decodeFile(image.getPath());
+             }
+             if (mIcon == null) {
++                InputStream in = null;
++                FileOutputStream fos = null;
+                 try {
+                     // if not, download it...
+                     URL urlDownload = new URL("https://www.google.com/s2/favicons?domain_url="
+@@ -1698,21 +1809,23 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                     HttpURLConnection connection = (HttpURLConnection) urlDownload.openConnection();
+                     connection.setDoInput(true);
+                     connection.connect();
+-                    InputStream in = connection.getInputStream();
++                    in = connection.getInputStream();
+ 
+                     if (in != null) {
+                         mIcon = BitmapFactory.decodeStream(in);
+                     }
+                     // ...and cache it
+                     if (mIcon != null) {
+-                        FileOutputStream fos = new FileOutputStream(image);
++                        fos = new FileOutputStream(image);
+                         mIcon.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                         fos.flush();
+-                        fos.close();
+                     }
+ 
+                 } catch (Exception e) {
+                     e.printStackTrace();
++                } finally {
++                    Utils.close(in);
++                    Utils.close(fos);
+                 }
+             }
+             if (mIcon == null) {
+@@ -1793,7 +1906,7 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                 }
+                 try {
+                     if (mHistoryDatabase == null) {
+-                        mHistoryDatabase = HistoryDatabase.getInstance(mActivity);
++                        mHistoryDatabase = HistoryDatabase.getInstance(mActivity.getApplicationContext());
+                     }
+                     mHistoryDatabase.visitHistoryItem(url, title);
+                 } catch (IllegalStateException e) {
+@@ -1916,9 +2029,20 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+     }
+ 
+     @Override
++    public boolean onCreateOptionsMenu(Menu menu) {
++        MenuItem back = menu.findItem(R.id.action_back);
++        MenuItem forward = menu.findItem(R.id.action_forward);
++        if (back != null && back.getIcon() != null)
++            back.getIcon().setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
++        if (forward != null && forward.getIcon() != null)
++            forward.getIcon().setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
++        return super.onCreateOptionsMenu(menu);
++    }
++
+     /**
+      * open the HTML bookmarks page, parameter view is the WebView that should show the page
+      */
++    @Override
+     public void openBookmarkPage(WebView view) {
+         StringBuilder bookmarkBuilder = new StringBuilder();
+         bookmarkBuilder.append(BookmarkPage.HEADING);
+@@ -1936,12 +2060,14 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         }
+         bookmarkBuilder.append(BookmarkPage.END);
+         File bookmarkWebPage = new File(mActivity.getFilesDir(), BookmarkPage.FILENAME);
++        FileWriter bookWriter = null;
+         try {
+-            FileWriter bookWriter = new FileWriter(bookmarkWebPage, false);
++            bookWriter = new FileWriter(bookmarkWebPage, false);
+             bookWriter.write(bookmarkBuilder.toString());
+-            bookWriter.close();
+         } catch (IOException e) {
+             e.printStackTrace();
++        } finally {
++            Utils.close(bookWriter);
+         }
+ 
+         view.loadUrl(Constants.FILE + bookmarkWebPage);
+@@ -2187,7 +2313,6 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+             setBackgroundColor(ctx.getResources().getColor(android.R.color.black));
+         }
+ 
+-        @SuppressLint("ClickableViewAccessibility")
+         @Override
+         public boolean onTouchEvent(@NonNull MotionEvent evt) {
+             return true;
+@@ -2208,7 +2333,6 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         return mDefaultVideoPoster;
+     }
+ 
+-    @SuppressLint("InflateParams")
+     @Override
+     /**
+      * dumb method that returns the loading progress for a video
+@@ -2558,6 +2682,17 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+         }
+     }
+ 
++    @Override
++    public void updateBookmarkIndicator(String url) {
++        if (url == null || !mBookmarkManager.isBookmark(url)) {
++            mBookmarkImage.setImageResource(R.drawable.ic_action_star);
++            mBookmarkImage.setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
++        } else {
++            mBookmarkImage.setImageResource(R.drawable.ic_bookmark);
++            mBookmarkImage.setColorFilter(ThemeUtils.getAccentColor(this), PorterDuff.Mode.SRC_IN);
++        }
++    }
++
+     private class SortIgnoreCase implements Comparator<HistoryItem> {
+ 
+         public int compare(HistoryItem o1, HistoryItem o2) {
+@@ -2606,6 +2741,58 @@ public abstract class BrowserActivity extends ThemableActivity implements Browse
+                 mWebView.clearMatches();
+                 mSearchBar.setVisibility(View.GONE);
+                 break;
++            case R.id.action_reading:
++                Intent read = new Intent(this, ReadingActivity.class);
++                read.putExtra(Constants.LOAD_READING_URL, mCurrentView.getUrl());
++                startActivity(read);
++                break;
++            case R.id.action_toggle_desktop:
++                mCurrentView.toggleDesktopUA(this);
++                mCurrentView.reload();
++                closeDrawers();
++                break;
++            case R.id.action_add_bookmark:
++                if (mCurrentView != null && !mCurrentView.getUrl().startsWith(Constants.FILE)) {
++                    addBookmark(mCurrentView.getTitle(), mCurrentView.getUrl());
++                }
++                break;
+         }
+     }
++
++    @Override
++    public boolean onLongClick(View view) {
++        switch (view.getId()) {
++            case R.id.new_tab_button:
++                String url = mPreferences.getSavedUrl();
++                if (url != null) {
++                    newTab(url, true);
++                    Utils.showSnackbar(mActivity, R.string.deleted_tab);
++                }
++                mPreferences.setSavedUrl(null);
++                break;
++        }
++        return true;
++    }
++
++    private void setupFrameLayoutButton(@IdRes int buttonId, @IdRes int imageId) {
++        FrameLayout frameButton = (FrameLayout) findViewById(buttonId);
++        frameButton.setOnClickListener(this);
++        frameButton.setOnLongClickListener(this);
++        ImageView buttonImage = (ImageView) findViewById(imageId);
++        buttonImage.setColorFilter(mIconColor, PorterDuff.Mode.SRC_IN);
++    }
++
++    private NetworkReceiver mNetworkReceiver = new NetworkReceiver() {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            super.onReceive(context, intent);
++            boolean isConnected = isConnected(context);
++            Log.d("Lightning", "Network Connected: " + String.valueOf(isConnected));
++            for (int n = 0; n < mWebViewList.size(); n++) {
++                WebView view = mWebViewList.get(n).getWebView();
++                if (view != null)
++                    view.setNetworkAvailable(isConnected);
++            }
++        }
++    };
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/activity/IncognitoActivity.java b/app/src/main/java/acr/browser/lightning/activity/IncognitoActivity.java
+index 9b59c76c..46a4f15b 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/IncognitoActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/IncognitoActivity.java
+@@ -2,13 +2,12 @@ package acr.browser.lightning.activity;
+ 
+ import android.content.Intent;
+ import android.os.Build;
+-import android.os.Bundle;
+ import android.view.Menu;
+ import android.webkit.CookieManager;
+ import android.webkit.CookieSyncManager;
+ 
+-import acr.browser.lightning.preference.PreferenceManager;
+ import acr.browser.lightning.R;
++import acr.browser.lightning.preference.PreferenceManager;
+ 
+ @SuppressWarnings("deprecation")
+ public class IncognitoActivity extends BrowserActivity {
+diff --git a/app/src/main/java/acr/browser/lightning/activity/MainActivity.java b/app/src/main/java/acr/browser/lightning/activity/MainActivity.java
+index 2c08b495..59d1f421 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/MainActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/MainActivity.java
+@@ -2,13 +2,12 @@ package acr.browser.lightning.activity;
+ 
+ import android.content.Intent;
+ import android.os.Build;
+-import android.os.Bundle;
+ import android.view.Menu;
+ import android.webkit.CookieManager;
+ import android.webkit.CookieSyncManager;
+ 
+-import acr.browser.lightning.preference.PreferenceManager;
+ import acr.browser.lightning.R;
++import acr.browser.lightning.preference.PreferenceManager;
+ 
+ @SuppressWarnings("deprecation")
+ public class MainActivity extends BrowserActivity {
+diff --git a/app/src/main/java/acr/browser/lightning/activity/ReadingActivity.java b/app/src/main/java/acr/browser/lightning/activity/ReadingActivity.java
+index a96d3215..b6892699 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/ReadingActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/ReadingActivity.java
+@@ -1,11 +1,13 @@
+ package acr.browser.lightning.activity;
+ 
+ import android.animation.ObjectAnimator;
++import android.app.Activity;
+ import android.app.ProgressDialog;
+-import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.DialogInterface.OnClickListener;
+ import android.content.Intent;
++import android.graphics.PorterDuff;
++import android.graphics.drawable.ColorDrawable;
+ import android.os.AsyncTask;
+ import android.os.Bundle;
+ import android.support.v7.app.AlertDialog;
+@@ -27,6 +29,7 @@ import acr.browser.lightning.constant.Constants;
+ import acr.browser.lightning.preference.PreferenceManager;
+ import acr.browser.lightning.reading.HtmlFetcher;
+ import acr.browser.lightning.reading.JResult;
++import acr.browser.lightning.utils.ThemeUtils;
+ import acr.browser.lightning.utils.Utils;
+ 
+ public class ReadingActivity extends AppCompatActivity {
+@@ -37,6 +40,8 @@ public class ReadingActivity extends AppCompatActivity {
+     private String mUrl = null;
+     private PreferenceManager mPreferences;
+     private int mTextSize;
++    private ProgressDialog mProgressDialog;
++
+     private static final float XXLARGE = 30.0f;
+     private static final float XLARGE = 26.0f;
+     private static final float LARGE = 22.0f;
+@@ -48,11 +53,19 @@ public class ReadingActivity extends AppCompatActivity {
+     protected void onCreate(Bundle savedInstanceState) {
+         mPreferences = PreferenceManager.getInstance();
+         mInvert = mPreferences.getInvertColors();
++        final int color;
+         if (mInvert) {
+-            this.setTheme(R.style.Theme_SettingsTheme_Dark);
++            setTheme(R.style.Theme_SettingsTheme_Dark);
++            color = ThemeUtils.getPrimaryColorDark(this);
++            getWindow().setBackgroundDrawable(new ColorDrawable(color));
++        } else {
++            setTheme(R.style.Theme_SettingsTheme);
++            color = ThemeUtils.getPrimaryColor(this);
++            getWindow().setBackgroundDrawable(new ColorDrawable(color));
+         }
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.reading_view);
++
+         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
+         setSupportActionBar(toolbar);
+ 
+@@ -98,6 +111,13 @@ public class ReadingActivity extends AppCompatActivity {
+     @Override
+     public boolean onCreateOptionsMenu(Menu menu) {
+         getMenuInflater().inflate(R.menu.reading, menu);
++        MenuItem invert = menu.findItem(R.id.invert_item);
++        MenuItem textSize = menu.findItem(R.id.text_size_item);
++        int iconColor = mInvert ? ThemeUtils.getIconDarkThemeColor(this) : ThemeUtils.getIconLightThemeColor(this);
++        if (invert != null && invert.getIcon() != null)
++            invert.getIcon().setColorFilter(iconColor, PorterDuff.Mode.SRC_IN);
++        if (textSize != null && textSize.getIcon() != null)
++            textSize.getIcon().setColorFilter(iconColor, PorterDuff.Mode.SRC_IN);
+         return super.onCreateOptionsMenu(menu);
+     }
+ 
+@@ -117,23 +137,22 @@ public class ReadingActivity extends AppCompatActivity {
+ 
+     private class PageLoader extends AsyncTask<String, Void, Void> {
+ 
+-        private final Context mContext;
+-        private ProgressDialog mProgressDialog;
++        private final Activity mActivity;
+         private String mTitleText;
+         private List<String> mBodyText;
+ 
+-        public PageLoader(Context context) {
+-            mContext = context;
++        public PageLoader(Activity activity) {
++            mActivity = activity;
+         }
+ 
+         @Override
+         protected void onPreExecute() {
+             super.onPreExecute();
+-            mProgressDialog = new ProgressDialog(mContext);
++            mProgressDialog = new ProgressDialog(mActivity);
+             mProgressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER);
+             mProgressDialog.setCancelable(false);
+             mProgressDialog.setIndeterminate(true);
+-            mProgressDialog.setMessage(mContext.getString(R.string.loading));
++            mProgressDialog.setMessage(mActivity.getString(R.string.loading));
+             mProgressDialog.show();
+         }
+ 
+@@ -160,7 +179,10 @@ public class ReadingActivity extends AppCompatActivity {
+ 
+         @Override
+         protected void onPostExecute(Void result) {
+-            mProgressDialog.dismiss();
++            if (mProgressDialog != null && mProgressDialog.isShowing()) {
++                mProgressDialog.dismiss();
++                mProgressDialog = null;
++            }
+             if (mTitleText.isEmpty() || mBodyText.isEmpty()) {
+                 setText(getString(R.string.untitled), getString(R.string.loading_failed));
+             } else {
+@@ -176,6 +198,8 @@ public class ReadingActivity extends AppCompatActivity {
+     }
+ 
+     private void setText(String title, String body) {
++        if (mTitle == null || mBody == null)
++            return;
+         if (mTitle.getVisibility() == View.INVISIBLE) {
+             mTitle.setAlpha(0.0f);
+             mTitle.setVisibility(View.VISIBLE);
+@@ -199,6 +223,15 @@ public class ReadingActivity extends AppCompatActivity {
+         }
+     }
+ 
++    @Override
++    protected void onDestroy() {
++        if (mProgressDialog != null && mProgressDialog.isShowing()) {
++            mProgressDialog.dismiss();
++            mProgressDialog = null;
++        }
++        super.onDestroy();
++    }
++
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+         switch (item.getItemId()) {
+diff --git a/app/src/main/java/acr/browser/lightning/activity/ThemableActivity.java b/app/src/main/java/acr/browser/lightning/activity/ThemableActivity.java
+index 18130a8c..443baab0 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/ThemableActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/ThemableActivity.java
+@@ -33,9 +33,6 @@ public abstract class ThemableActivity extends AppCompatActivity {
+     }
+ 
+     private void restart() {
+-        Intent intent = getIntent();
+-        finish();
+-        overridePendingTransition(0, 0);
+-        startActivity(intent);
++        recreate();
+     }
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/activity/ThemableSettingsActivity.java b/app/src/main/java/acr/browser/lightning/activity/ThemableSettingsActivity.java
+index 12009c0f..ebcb0fe8 100644
+--- a/app/src/main/java/acr/browser/lightning/activity/ThemableSettingsActivity.java
++++ b/app/src/main/java/acr/browser/lightning/activity/ThemableSettingsActivity.java
+@@ -39,11 +39,6 @@ public abstract class ThemableSettingsActivity extends AppCompatPreferenceActivi
+     }
+ 
+     private void restart() {
+-        final Bundle outState = new Bundle();
+-        onSaveInstanceState(outState);
+-        final Intent intent = new Intent(this, getClass());
+-        finish();
+-        overridePendingTransition(0, 0);
+-        startActivity(intent);
++        recreate();
+     }
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/constant/HistoryPage.java b/app/src/main/java/acr/browser/lightning/constant/HistoryPage.java
+index 45f07a77..b3b5f505 100644
+--- a/app/src/main/java/acr/browser/lightning/constant/HistoryPage.java
++++ b/app/src/main/java/acr/browser/lightning/constant/HistoryPage.java
+@@ -15,6 +15,7 @@ import acr.browser.lightning.activity.BrowserApp;
+ import acr.browser.lightning.database.HistoryItem;
+ import acr.browser.lightning.R;
+ import acr.browser.lightning.database.HistoryDatabase;
++import acr.browser.lightning.utils.Utils;
+ 
+ public class HistoryPage {
+ 
+@@ -53,12 +54,14 @@ public class HistoryPage {
+ 
+         historyBuilder.append(HistoryPage.END);
+         File historyWebPage = new File(context.getFilesDir(), FILENAME);
++        FileWriter historyWriter = null;
+         try {
+-            FileWriter historyWriter = new FileWriter(historyWebPage, false);
++            historyWriter = new FileWriter(historyWebPage, false);
+             historyWriter.write(historyBuilder.toString());
+-            historyWriter.close();
+         } catch (IOException e) {
+             e.printStackTrace();
++        } finally {
++            Utils.close(historyWriter);
+         }
+         return Constants.FILE + historyWebPage;
+     }
+diff --git a/app/src/main/java/acr/browser/lightning/controller/BrowserController.java b/app/src/main/java/acr/browser/lightning/controller/BrowserController.java
+index 072648c4..b76a7b15 100644
+--- a/app/src/main/java/acr/browser/lightning/controller/BrowserController.java
++++ b/app/src/main/java/acr/browser/lightning/controller/BrowserController.java
+@@ -54,4 +54,6 @@ public interface BrowserController {
+ 
+     boolean proxyIsNotReady();
+ 
++    void updateBookmarkIndicator(String url);
++
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/database/BookmarkManager.java b/app/src/main/java/acr/browser/lightning/database/BookmarkManager.java
+index 57e541ab..89052da5 100644
+--- a/app/src/main/java/acr/browser/lightning/database/BookmarkManager.java
++++ b/app/src/main/java/acr/browser/lightning/database/BookmarkManager.java
+@@ -18,13 +18,12 @@ import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Comparator;
++import java.util.HashSet;
+ import java.util.List;
+ import java.util.Locale;
+-import java.util.SortedMap;
+-import java.util.TreeMap;
++import java.util.Set;
+ 
+ import acr.browser.lightning.R;
+-import acr.browser.lightning.constant.Constants;
+ import acr.browser.lightning.preference.PreferenceManager;
+ import acr.browser.lightning.utils.Utils;
+ 
+@@ -36,8 +35,9 @@ public class BookmarkManager {
+     private static final String FOLDER = "folder";
+     private static final String ORDER = "order";
+     private static final String FILE_BOOKMARKS = "bookmarks.dat";
+-    private static SortedMap<String, Integer> mBookmarkMap = new TreeMap<>(
+-            String.CASE_INSENSITIVE_ORDER);
++    private static Set<String> mBookmarkSearchSet = new HashSet<>();
++    private static final List<HistoryItem> mBookmarkList = new ArrayList<>();
++    private static String mCurrentFolder = "";
+     private static BookmarkManager mInstance;
+ 
+     public static BookmarkManager getInstance(Context context) {
+@@ -49,19 +49,27 @@ public class BookmarkManager {
+ 
+     private BookmarkManager(Context context) {
+         mContext = context;
+-        mBookmarkMap = getBookmarkUrls();
++        mBookmarkList.clear();
++        mBookmarkList.addAll(getAllBookmarks(true));
++        mBookmarkSearchSet = getBookmarkUrls(mBookmarkList);
++    }
++
++    public boolean isBookmark(String url) {
++        return mBookmarkSearchSet.contains(url);
+     }
+ 
+     /**
+-     * This method adds the the HistoryItem item to permanent bookmark storage
++     * This method adds the the HistoryItem item to permanent bookmark storage.
++     * It returns true if the operation was successful.
+      *
+      * @param item the item to add
+      */
+     public synchronized boolean addBookmark(HistoryItem item) {
+         File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+-        if (item.getUrl() == null || mBookmarkMap.containsKey(item.getUrl())) {
++        if (item.getUrl() == null || mBookmarkSearchSet.contains(item.getUrl())) {
+             return false;
+         }
++        mBookmarkList.add(item);
+         BufferedWriter bookmarkWriter = null;
+         try {
+             bookmarkWriter = new BufferedWriter(new FileWriter(bookmarksFile, true));
+@@ -72,8 +80,7 @@ public class BookmarkManager {
+             object.put(ORDER, item.getOrder());
+             bookmarkWriter.write(object.toString());
+             bookmarkWriter.newLine();
+-            bookmarkWriter.close();
+-            mBookmarkMap.put(item.getUrl(), 1);
++            mBookmarkSearchSet.add(item.getUrl());
+         } catch (IOException | JSONException e) {
+             e.printStackTrace();
+         } finally {
+@@ -94,14 +101,15 @@ public class BookmarkManager {
+             bookmarkWriter = new BufferedWriter(new FileWriter(bookmarksFile, true));
+             JSONObject object = new JSONObject();
+             for (HistoryItem item : list) {
+-                if (item.getUrl() != null && !mBookmarkMap.containsKey(item.getUrl())) {
++                if (item.getUrl() != null && !mBookmarkSearchSet.contains(item.getUrl())) {
+                     object.put(TITLE, item.getTitle());
+                     object.put(URL, item.getUrl());
+                     object.put(FOLDER, item.getFolder());
+                     object.put(ORDER, item.getOrder());
+                     bookmarkWriter.write(object.toString());
+                     bookmarkWriter.newLine();
+-                    mBookmarkMap.put(item.getUrl(), 1);
++                    mBookmarkSearchSet.add(item.getUrl());
++                    mBookmarkList.add(item);
+                 }
+             }
+         } catch (IOException | JSONException e) {
+@@ -112,20 +120,23 @@ public class BookmarkManager {
+     }
+ 
+     /**
+-     * This method deletes the bookmark with the given url
++     * This method deletes the bookmark with the given url. It returns
++     * true if the deletion was successful.
+      *
+-     * @param url the url of the bookmark to delete
++     * @param deleteItem the bookmark item to delete
+      */
+-    public synchronized boolean deleteBookmark(String url) {
++    public synchronized boolean deleteBookmark(HistoryItem deleteItem) {
+         List<HistoryItem> list;
+-        if (url == null) {
++        if (deleteItem == null || deleteItem.getIsFolder()) {
+             return false;
+         }
+-        mBookmarkMap.remove(url);
+-        list = getBookmarks(false);
++        mBookmarkSearchSet.remove(deleteItem.getUrl());
++        mBookmarkList.remove(deleteItem);
++        list = getAllBookmarks(false);
+         File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+         boolean bookmarkDeleted = false;
+         BufferedWriter fileWriter = null;
++        String url = deleteItem.getUrl();
+         try {
+             fileWriter = new BufferedWriter(new FileWriter(bookmarksFile, false));
+             JSONObject object = new JSONObject();
+@@ -149,12 +160,66 @@ public class BookmarkManager {
+         return bookmarkDeleted;
+     }
+ 
++    /**
++     * This method edits a particular bookmark in the bookmark database
++     *
++     * @param oldItem This is the old item that you wish to edit
++     * @param newItem This is the new item that will overwrite the old item
++     */
++    public synchronized void editBookmark(HistoryItem oldItem, HistoryItem newItem) {
++        List<HistoryItem> list;
++        if (oldItem == null || newItem == null || oldItem.getIsFolder()) {
++            return;
++        }
++        mBookmarkList.remove(oldItem);
++        mBookmarkList.add(newItem);
++        if (!oldItem.getUrl().equals(newItem.getUrl())) {
++            // Update the BookmarkMap if the URL has been changed
++            mBookmarkSearchSet.remove(oldItem.getUrl());
++            mBookmarkSearchSet.add(newItem.getUrl());
++        }
++        if (newItem.getUrl().length() == 0) {
++            deleteBookmark(oldItem);
++            return;
++        }
++        if (newItem.getTitle().length() == 0) {
++            newItem.setTitle(mContext.getString(R.string.untitled));
++        }
++        list = getAllBookmarks(false);
++        File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
++        BufferedWriter fileWriter = null;
++        try {
++            fileWriter = new BufferedWriter(new FileWriter(bookmarksFile, false));
++            JSONObject object = new JSONObject();
++            final String url = oldItem.getUrl();
++            for (HistoryItem item : list) {
++                if (!item.getUrl().equalsIgnoreCase(url)) {
++                    object.put(TITLE, item.getTitle());
++                    object.put(URL, item.getUrl());
++                    object.put(FOLDER, item.getFolder());
++                    object.put(ORDER, item.getOrder());
++                } else {
++                    object.put(TITLE, newItem.getTitle());
++                    object.put(URL, newItem.getUrl());
++                    object.put(FOLDER, newItem.getFolder());
++                    object.put(ORDER, newItem.getOrder());
++                }
++                fileWriter.write(object.toString());
++                fileWriter.newLine();
++            }
++        } catch (IOException | JSONException e) {
++            e.printStackTrace();
++        } finally {
++            Utils.close(fileWriter);
++        }
++    }
++
+     /**
+      * This method exports the stored bookmarks to a text file in the device's
+      * external download directory
+      */
+     public synchronized void exportBookmarks(Activity activity) {
+-        List<HistoryItem> bookmarkList = getBookmarks(true);
++        List<HistoryItem> bookmarkList = getAllBookmarks(true);
+         File bookmarksExport = new File(
+                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                 "BookmarksExport.txt");
+@@ -189,11 +254,13 @@ public class BookmarkManager {
+     }
+ 
+     /**
+-     * This method returns a list of all stored bookmarks
++     * This method returns a list of ALL stored bookmarks.
++     * This is a disk-bound operation and should not be
++     * done very frequently.
+      *
+      * @return returns a list of bookmarks that can be sorted
+      */
+-    public synchronized List<HistoryItem> getBookmarks(boolean sort) {
++    public synchronized List<HistoryItem> getAllBookmarks(boolean sort) {
+         List<HistoryItem> bookmarks = new ArrayList<>();
+         File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+         BufferedReader bookmarksReader = null;
+@@ -222,73 +289,86 @@ public class BookmarkManager {
+     }
+ 
+     /**
+-     * This method returns a list of bookmarks located in the specified folder
++     * This method returns a list of bookmarks and folders located in the specified folder.
++     * This method should generally be used by the UI when it needs a list to display to the
++     * user as it returns a subset of all bookmarks and includes folders as well which are
++     * really 'fake' bookmarks.
+      *
+      * @param folder the name of the folder to retrieve bookmarks from
+      * @return a list of bookmarks found in that folder
+      */
+-    public synchronized List<HistoryItem> getBookmarksFromFolder(String folder) {
++    public synchronized List<HistoryItem> getBookmarksFromFolder(String folder, boolean sort) {
+         List<HistoryItem> bookmarks = new ArrayList<>();
+-        File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+-        BufferedReader bookmarksReader = null;
+-        try {
+-            bookmarksReader = new BufferedReader(new FileReader(bookmarksFile));
+-            String line;
+-            while ((line = bookmarksReader.readLine()) != null) {
+-                JSONObject object = new JSONObject(line);
+-                if (object.getString(FOLDER).equals(folder)) {
+-                    HistoryItem item = new HistoryItem();
+-                    item.setTitle(object.getString(TITLE));
+-                    item.setUrl(object.getString(URL));
+-                    item.setFolder(object.getString(FOLDER));
+-                    item.setOrder(object.getInt(ORDER));
+-                    item.setImageId(R.drawable.ic_bookmark);
+-                    bookmarks.add(item);
+-                }
+-            }
+-            bookmarksReader.close();
+-        } catch (IOException | JSONException e) {
+-            e.printStackTrace();
+-        } finally {
+-            Utils.close(bookmarksReader);
++//        File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
++//        BufferedReader bookmarksReader = null;
++        if (folder == null || folder.length() == 0) {
++            bookmarks.addAll(getFolders(sort));
++            folder = "";
++        }
++        mCurrentFolder = folder;
++        for (int n = 0; n < mBookmarkList.size(); n++) {
++            if (mBookmarkList.get(n).getFolder().equals(folder))
++                bookmarks.add(mBookmarkList.get(n));
++        }
++//        try {
++//            bookmarksReader = new BufferedReader(new FileReader(bookmarksFile));
++//            String line;
++//            while ((line = bookmarksReader.readLine()) != null) {
++//                JSONObject object = new JSONObject(line);
++//                if (object.getString(FOLDER).equals(folder)) {
++//                    HistoryItem item = new HistoryItem();
++//                    item.setTitle(object.getString(TITLE));
++//                    item.setUrl(object.getString(URL));
++//                    item.setFolder(object.getString(FOLDER));
++//                    item.setOrder(object.getInt(ORDER));
++//                    item.setImageId(R.drawable.ic_bookmark);
++//                    bookmarks.add(item);
++//                }
++//            }
++//        } catch (IOException | JSONException e) {
++//            e.printStackTrace();
++//        } finally {
++//            Utils.close(bookmarksReader);
++//        }
++        if (sort) {
++            Collections.sort(bookmarks, new SortIgnoreCase());
+         }
+         return bookmarks;
+     }
+ 
++    /**
++     * Tells you if you are at the root folder or in a subfolder
++     *
++     * @return returns true if you are in the root folder
++     */
++    public boolean isRootFolder() {
++        return mCurrentFolder.length() == 0;
++    }
++
+     /**
+      * Method is used internally for searching the bookmarks
+      *
+      * @return a sorted map of all bookmarks, useful for seeing if a bookmark exists
+      */
+-    private synchronized SortedMap<String, Integer> getBookmarkUrls() {
+-        SortedMap<String, Integer> map = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+-        File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+-        BufferedReader bookmarksReader = null;
+-        try {
+-            bookmarksReader = new BufferedReader(new FileReader(bookmarksFile));
+-            String line;
+-            while ((line = bookmarksReader.readLine()) != null) {
+-                JSONObject object = new JSONObject(line);
+-                map.put(object.getString(URL), 1);
+-            }
+-            bookmarksReader.close();
+-        } catch (JSONException | IOException e) {
+-            e.printStackTrace();
+-        } finally {
+-            Utils.close(bookmarksReader);
++    private static Set<String> getBookmarkUrls(List<HistoryItem> list) {
++        Set<String> set = new HashSet<>();
++        for (int n = 0; n < list.size(); n++) {
++            if (!mBookmarkList.get(n).getIsFolder())
++                set.add(mBookmarkList.get(n).getUrl());
+         }
+-        return map;
++        return set;
+     }
+ 
+     /**
+-     * This method returns a list of all folders
++     * This method returns a list of all folders.
++     * Folders cannot be empty as they are generated from
++     * the list of bookmarks that have non-empty folder fields.
+      *
+      * @return a list of all folders
+      */
+-    public synchronized List<HistoryItem> getFolders() {
++    public synchronized List<HistoryItem> getFolders(boolean sort) {
+         List<HistoryItem> folders = new ArrayList<>();
+-        SortedMap<String, Integer> folderMap = new TreeMap<>(
+-                String.CASE_INSENSITIVE_ORDER);
++        Set<String> folderMap = new HashSet<>();
+         File bookmarksFile = new File(mContext.getFilesDir(), FILE_BOOKMARKS);
+         BufferedReader bookmarksReader = null;
+         try {
+@@ -297,11 +377,12 @@ public class BookmarkManager {
+             while ((line = bookmarksReader.readLine()) != null) {
+                 JSONObject object = new JSONObject(line);
+                 String folderName = object.getString(FOLDER);
+-                if (!folderName.isEmpty() && !folderMap.containsKey(folderName)) {
++                if (!folderName.isEmpty() && !folderMap.contains(folderName)) {
+                     HistoryItem item = new HistoryItem();
+                     item.setTitle(folderName);
+-                    item.setUrl(Constants.FOLDER + folderName);
+-                    folderMap.put(folderName, 1);
++                    item.setUrl(folderName);
++                    item.setIsFolder(true);
++                    folderMap.add(folderName);
+                     folders.add(item);
+                 }
+             }
+@@ -310,6 +391,9 @@ public class BookmarkManager {
+         } finally {
+             Utils.close(bookmarksReader);
+         }
++        if (sort) {
++            Collections.sort(folders, new SortIgnoreCase());
++        }
+         return folders;
+     }
+ 
+@@ -406,12 +490,14 @@ public class BookmarkManager {
+             bookmarkWriter = new BufferedWriter(new FileWriter(bookmarksFile, false));
+             JSONObject object = new JSONObject();
+             for (HistoryItem item : list) {
+-                object.put(TITLE, item.getTitle());
+-                object.put(URL, item.getUrl());
+-                object.put(FOLDER, item.getFolder());
+-                object.put(ORDER, item.getOrder());
+-                bookmarkWriter.write(object.toString());
+-                bookmarkWriter.newLine();
++                if (!item.getIsFolder()) {
++                    object.put(TITLE, item.getTitle());
++                    object.put(URL, item.getUrl());
++                    object.put(FOLDER, item.getFolder());
++                    object.put(ORDER, item.getOrder());
++                    bookmarkWriter.write(object.toString());
++                    bookmarkWriter.newLine();
++                }
+             }
+         } catch (IOException | JSONException e) {
+             e.printStackTrace();
+diff --git a/app/src/main/java/acr/browser/lightning/database/HistoryItem.java b/app/src/main/java/acr/browser/lightning/database/HistoryItem.java
+index 2078b9d6..6bb3c009 100644
+--- a/app/src/main/java/acr/browser/lightning/database/HistoryItem.java
++++ b/app/src/main/java/acr/browser/lightning/database/HistoryItem.java
+@@ -16,12 +16,21 @@ public class HistoryItem implements Comparable<HistoryItem> {
+     private Bitmap mBitmap = null;
+     private int mImageId = 0;
+     private int mOrder = 0;
++    private boolean mIsFolder = false;
+ 
+     // Empty constructor
+     public HistoryItem() {
+ 
+     }
+ 
++    public HistoryItem(HistoryItem item) {
++        this.mUrl = item.mUrl;
++        this.mTitle = item.mTitle;
++        this.mFolder = item.mFolder;
++        this.mOrder = item.mOrder;
++        this.mIsFolder = item.mIsFolder;
++    }
++
+     // constructor
+     public HistoryItem(int id, String url, String title) {
+         this.mId = id;
+@@ -107,6 +116,14 @@ public class HistoryItem implements Comparable<HistoryItem> {
+         this.mTitle = (title == null) ? "" : title;
+     }
+ 
++    public void setIsFolder(boolean isFolder) {
++        mIsFolder = isFolder;
++    }
++
++    public boolean getIsFolder() {
++        return mIsFolder;
++    }
++
+     @Override
+     public String toString() {
+         return mTitle;
+diff --git a/app/src/main/java/acr/browser/lightning/fragment/DisplaySettingsFragment.java b/app/src/main/java/acr/browser/lightning/fragment/DisplaySettingsFragment.java
+index bc06e046..7285cc8a 100644
+--- a/app/src/main/java/acr/browser/lightning/fragment/DisplaySettingsFragment.java
++++ b/app/src/main/java/acr/browser/lightning/fragment/DisplaySettingsFragment.java
+@@ -10,6 +10,14 @@ import android.preference.CheckBoxPreference;
+ import android.preference.Preference;
+ import android.preference.PreferenceFragment;
+ import android.support.v7.app.AlertDialog;
++import android.view.Gravity;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.view.WindowManager;
++import android.widget.LinearLayout;
++import android.widget.SeekBar;
++import android.widget.TextView;
+ 
+ import acr.browser.lightning.R;
+ import acr.browser.lightning.preference.PreferenceManager;
+@@ -23,6 +31,12 @@ public class DisplaySettingsFragment extends PreferenceFragment implements Prefe
+     private static final String SETTINGS_REFLOW = "text_reflow";
+     private static final String SETTINGS_THEME = "app_theme";
+     private static final String SETTINGS_TEXTSIZE = "text_size";
++    private static final float XXLARGE = 30.0f;
++    private static final float XLARGE = 26.0f;
++    private static final float LARGE = 22.0f;
++    private static final float MEDIUM = 18.0f;
++    private static final float SMALL = 14.0f;
++    private static final float XSMALL = 10.0f;
+ 
+     private Activity mActivity;
+     private PreferenceManager mPreferences;
+@@ -117,28 +131,64 @@ public class DisplaySettingsFragment extends PreferenceFragment implements Prefe
+     }
+ 
+     private void textSizePicker() {
+-        AlertDialog.Builder picker = new AlertDialog.Builder(mActivity);
+-        picker.setTitle(getResources().getString(R.string.title_text_size));
++        AlertDialog.Builder builder = new AlertDialog.Builder(getActivity());
++        LayoutInflater inflater = getActivity().getLayoutInflater();
++        LinearLayout view = (LinearLayout) inflater.inflate(R.layout.seek_layout, null);
++        final SeekBar bar = (SeekBar) view.findViewById(R.id.text_size_seekbar);
++        final TextView sample = new TextView(getActivity());
++        sample.setText(R.string.untitled);
++        sample.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT));
++        sample.setGravity(Gravity.CENTER_HORIZONTAL);
++        view.addView(sample);
++        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+ 
+-        int n = mPreferences.getTextSize();
++            @Override
++            public void onProgressChanged(SeekBar view, int size, boolean user) {
++                sample.setTextSize(getTextSize(size));
++            }
+ 
+-        picker.setSingleChoiceItems(R.array.text_size, n - 1,
+-                new DialogInterface.OnClickListener() {
++            @Override
++            public void onStartTrackingTouch(SeekBar arg0) {
++            }
+ 
+-                    @Override
+-                    public void onClick(DialogInterface dialog, int which) {
+-                        mPreferences.setTextSize(which + 1);
+-                    }
+-                });
+-        picker.setNeutralButton(getResources().getString(R.string.action_ok),
+-                new DialogInterface.OnClickListener() {
++            @Override
++            public void onStopTrackingTouch(SeekBar arg0) {
++            }
+ 
+-                    @Override
+-                    public void onClick(DialogInterface dialog, int which) {
++        });
++        final int MAX = 5;
++        bar.setMax(MAX);
++        bar.setProgress(MAX - mPreferences.getTextSize());
++        builder.setView(view);
++        builder.setTitle(R.string.title_text_size);
++        builder.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+ 
+-                    }
+-                });
+-        picker.show();
++            @Override
++            public void onClick(DialogInterface arg0, int arg1) {
++                mPreferences.setTextSize(MAX - bar.getProgress());
++            }
++
++        });
++        builder.show();
++    }
++
++    private float getTextSize(int size) {
++        switch (size) {
++            case 0:
++                return XSMALL;
++            case 1:
++                return SMALL;
++            case 2:
++                return MEDIUM;
++            case 3:
++                return LARGE;
++            case 4:
++                return XLARGE;
++            case 5:
++                return XXLARGE;
++            default:
++                return MEDIUM;
++        }
+     }
+ 
+     private void themePicker() {
+diff --git a/app/src/main/java/acr/browser/lightning/object/SearchAdapter.java b/app/src/main/java/acr/browser/lightning/object/SearchAdapter.java
+index 7fd38652..750ae679 100644
+--- a/app/src/main/java/acr/browser/lightning/object/SearchAdapter.java
++++ b/app/src/main/java/acr/browser/lightning/object/SearchAdapter.java
+@@ -1,10 +1,10 @@
+ package acr.browser.lightning.object;
+ 
+-import android.annotation.SuppressLint;
+ import android.app.Activity;
+ import android.content.Context;
+-import android.content.res.Resources.Theme;
+ import android.graphics.Color;
++import android.graphics.PorterDuff;
++import android.graphics.drawable.Drawable;
+ import android.net.ConnectivityManager;
+ import android.net.NetworkInfo;
+ import android.os.AsyncTask;
+@@ -40,6 +40,7 @@ import acr.browser.lightning.database.BookmarkManager;
+ import acr.browser.lightning.database.HistoryDatabase;
+ import acr.browser.lightning.database.HistoryItem;
+ import acr.browser.lightning.preference.PreferenceManager;
++import acr.browser.lightning.utils.ThemeUtils;
+ import acr.browser.lightning.utils.Utils;
+ 
+ public class SearchAdapter extends BaseAdapter implements Filterable {
+@@ -59,15 +60,15 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+     private static final String ENCODING = "ISO-8859-1";
+     private static final long INTERVAL_DAY = 86400000;
+     private final String mSearchSubtitle;
+-    private static final int API = Build.VERSION.SDK_INT;
+-    private final Theme mTheme;
+     private SearchFilter mFilter;
++    private final Drawable mSearchDrawable;
++    private final Drawable mHistoryDrawable;
++    private final Drawable mBookmarkDrawable;
+ 
+     public SearchAdapter(Context context, boolean dark, boolean incognito) {
+         mDatabaseHandler = HistoryDatabase.getInstance(context.getApplicationContext());
+-        mTheme = context.getTheme();
+         mBookmarkManager = BookmarkManager.getInstance(context.getApplicationContext());
+-        mAllBookmarks.addAll(mBookmarkManager.getBookmarks(true));
++        mAllBookmarks.addAll(mBookmarkManager.getAllBookmarks(true));
+         mUseGoogle = PreferenceManager.getInstance().getGoogleSearchSuggestionsEnabled();
+         mContext = context;
+         mSearchSubtitle = mContext.getString(R.string.suggestion);
+@@ -81,6 +82,21 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+             }
+ 
+         });
++        int color = mDarkTheme ? ThemeUtils.getIconDarkThemeColor(context) : ThemeUtils.getIconLightThemeColor(context);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++            mSearchDrawable = context.getDrawable(R.drawable.ic_search);
++            mBookmarkDrawable = context.getDrawable(R.drawable.ic_bookmark);
++            mHistoryDrawable = context.getDrawable(R.drawable.ic_history);
++        } else {
++            mSearchDrawable = context.getResources().getDrawable(R.drawable.ic_search);
++            mBookmarkDrawable = context.getResources().getDrawable(R.drawable.ic_bookmark);
++            mHistoryDrawable = context.getResources().getDrawable(R.drawable.ic_history);
++        }
++        if (mSearchDrawable != null && mBookmarkDrawable != null && mHistoryDrawable != null) {
++            mSearchDrawable.setColorFilter(color, PorterDuff.Mode.SRC_IN);
++            mBookmarkDrawable.setColorFilter(color, PorterDuff.Mode.SRC_IN);
++            mHistoryDrawable.setColorFilter(color, PorterDuff.Mode.SRC_IN);
++        }
+         delete.start();
+     }
+ 
+@@ -117,7 +133,7 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+ 
+     public void refreshBookmarks() {
+         mAllBookmarks.clear();
+-        mAllBookmarks.addAll(mBookmarkManager.getBookmarks(true));
++        mAllBookmarks.addAll(mBookmarkManager.getAllBookmarks(true));
+     }
+ 
+     @Override
+@@ -135,8 +151,6 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+         return 0;
+     }
+ 
+-    @SuppressWarnings("deprecation")
+-    @SuppressLint("NewApi")
+     @Override
+     public View getView(int position, View convertView, ViewGroup parent) {
+         SuggestionHolder holder;
+@@ -158,42 +172,34 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+         holder.mTitle.setText(web.getTitle());
+         holder.mUrl.setText(web.getUrl());
+ 
+-        int imageId = R.drawable.ic_bookmark;
++        Drawable image;
+         switch (web.getImageId()) {
+             case R.drawable.ic_bookmark: {
+-                if (!mDarkTheme) {
+-                    imageId = R.drawable.ic_bookmark;
+-                } else {
++                if (mDarkTheme)
+                     holder.mTitle.setTextColor(Color.WHITE);
+-                    imageId = R.drawable.ic_bookmark_dark;
+-                }
++                image = mBookmarkDrawable;
+                 break;
+             }
+             case R.drawable.ic_search: {
+-                if (!mDarkTheme) {
+-                    imageId = R.drawable.ic_search;
+-                } else {
++                if (mDarkTheme)
+                     holder.mTitle.setTextColor(Color.WHITE);
+-                    imageId = R.drawable.ic_search_dark;
+-                }
++                image = mSearchDrawable;
+                 break;
+             }
+             case R.drawable.ic_history: {
+-                if (!mDarkTheme) {
+-                    imageId = R.drawable.ic_history;
+-                } else {
++                if (mDarkTheme)
+                     holder.mTitle.setTextColor(Color.WHITE);
+-                    imageId = R.drawable.ic_history_dark;
+-                }
++                image = mHistoryDrawable;
+                 break;
+             }
++            default:
++                if (mDarkTheme)
++                    holder.mTitle.setTextColor(Color.WHITE);
++                image = mSearchDrawable;
++                break;
+         }
+ 
+-        if (API < Build.VERSION_CODES.LOLLIPOP) {
+-            holder.mImage.setImageDrawable(mContext.getResources().getDrawable(imageId));
+-        } else {
+-            holder.mImage.setImageDrawable(mContext.getResources().getDrawable(imageId, mTheme));
+-        }
++        holder.mImage.setImageDrawable(image);
+ 
+         return convertView;
+     }
+@@ -339,26 +345,30 @@ public class SearchAdapter extends BaseAdapter implements Filterable {
+         if (!isNetworkConnected(mContext)) {
+             return cacheFile;
+         }
++        InputStream in = null;
++        FileOutputStream fos = null;
+         try {
+             URL url = new URL("http://google.com/complete/search?q=" + query
+                     + "&output=toolbar&hl=en");
+             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+             connection.setDoInput(true);
+             connection.connect();
+-            InputStream in = connection.getInputStream();
++            in = connection.getInputStream();
+ 
+             if (in != null) {
+-                FileOutputStream fos = new FileOutputStream(cacheFile);
++                fos = new FileOutputStream(cacheFile);
+                 int buffer;
+                 while ((buffer = in.read()) != -1) {
+                     fos.write(buffer);
+                 }
+                 fos.flush();
+-                fos.close();
+             }
+             cacheFile.setLastModified(System.currentTimeMillis());
+         } catch (Exception e) {
+             e.printStackTrace();
++        } finally {
++            Utils.close(in);
++            Utils.close(fos);
+         }
+         return cacheFile;
+     }
+diff --git a/app/src/main/java/acr/browser/lightning/reading/ArticleTextExtractor.java b/app/src/main/java/acr/browser/lightning/reading/ArticleTextExtractor.java
+index 0bc9a4e8..ae22cd36 100644
+--- a/app/src/main/java/acr/browser/lightning/reading/ArticleTextExtractor.java
++++ b/app/src/main/java/acr/browser/lightning/reading/ArticleTextExtractor.java
+@@ -19,7 +19,7 @@ import org.jsoup.select.Elements;
+ 
+ /**
+  * This class is thread safe.
+- * 
++ *
+  * @author Alex P (ifesdjeen from jreadability)
+  * @author Peter Karich
+  */
+@@ -246,7 +246,7 @@ public class ArticleTextExtractor {
+     /**
+      * Tries to extract an image url from metadata if determineImageSource
+      * failed
+-     * 
++     *
+      * @return image url or empty str
+      */
+     protected String extractImageUrl(Document doc) {
+@@ -291,7 +291,7 @@ public class ArticleTextExtractor {
+      * weighting child nodes. Since it's impossible to predict which exactly
+      * names, ids or class names will be used in HTML, major role is played by
+      * child nodes
+-     * 
++     *
+      * @param e
+      *            Element to weight, along with child nodes
+      */
+@@ -311,7 +311,7 @@ public class ArticleTextExtractor {
+      * 3 points for every element that's nested 2 levels deep. This way we give
+      * more chances to extract the element that has less nested levels,
+      * increasing probability of the correct extraction.
+-     * 
++     *
+      * @param rootEl
+      *            Element, who's child nodes will be weighted
+      */
+@@ -493,7 +493,7 @@ public class ArticleTextExtractor {
+      * Prepares document. Currently only stipping unlikely candidates, since
+      * from time to time they're getting more score than good ones especially in
+      * cases when major text is short.
+-     * 
++     *
+      * @param doc
+      *            document to prepare. Passed as reference, and changed inside
+      *            of function
+@@ -506,7 +506,7 @@ public class ArticleTextExtractor {
+     /**
+      * Removes unlikely candidates from HTML. Currently takes id and class name
+      * and matches them against list of patterns
+-     * 
++     *
+      * @param doc
+      *            document to strip unlikely candidates from
+      */
+@@ -601,9 +601,9 @@ public class ArticleTextExtractor {
+ 
+     /**
+      * Comparator for Image by weight
+-     * 
++     *
+      * @author Chris Alexander, chris@chris-alexander.co.uk
+-     * 
++     *
+      */
+     public class ImageComparator implements Comparator<ImageResult> {
+ 
+diff --git a/app/src/main/java/acr/browser/lightning/receiver/NetworkReceiver.java b/app/src/main/java/acr/browser/lightning/receiver/NetworkReceiver.java
+new file mode 100644
+index 00000000..3c394751
+--- /dev/null
++++ b/app/src/main/java/acr/browser/lightning/receiver/NetworkReceiver.java
+@@ -0,0 +1,22 @@
++package acr.browser.lightning.receiver;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.net.ConnectivityManager;
++import android.net.NetworkInfo;
++
++public class NetworkReceiver extends BroadcastReceiver {
++
++    @Override
++    public void onReceive(Context context, Intent intent) {
++    }
++
++    public static boolean isConnected(Context context) {
++        ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
++        if (cm == null)
++            return false;
++        NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
++        return activeNetwork != null && activeNetwork.isConnected();
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/acr/browser/lightning/utils/ThemeUtils.java b/app/src/main/java/acr/browser/lightning/utils/ThemeUtils.java
+index 36ca4fba..ad1084c0 100644
+--- a/app/src/main/java/acr/browser/lightning/utils/ThemeUtils.java
++++ b/app/src/main/java/acr/browser/lightning/utils/ThemeUtils.java
+@@ -1,10 +1,24 @@
+ package acr.browser.lightning.utils;
+ 
+ import android.content.Context;
++import android.content.res.Resources;
+ import android.content.res.TypedArray;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.graphics.Canvas;
++import android.graphics.ColorFilter;
++import android.graphics.Paint;
++import android.graphics.PorterDuff;
++import android.graphics.PorterDuffColorFilter;
++import android.graphics.drawable.BitmapDrawable;
++import android.graphics.drawable.Drawable;
++import android.os.Build;
+ import android.support.annotation.AttrRes;
++import android.support.annotation.DrawableRes;
+ import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
+ import android.util.TypedValue;
++import android.widget.ImageView;
+ 
+ import acr.browser.lightning.R;
+ 
+@@ -31,4 +45,44 @@ public class ThemeUtils {
+         return color;
+     }
+ 
++    public static int getIconLightThemeColor(@NonNull Context context) {
++        return context.getResources().getColor(R.color.icon_light_theme);
++    }
++
++    public static int getIconDarkThemeColor(@NonNull Context context) {
++        return context.getResources().getColor(R.color.icon_dark_theme);
++    }
++
++    public static void themeImageView(ImageView icon, Context context, boolean dark) {
++        int color = dark ? getIconDarkThemeColor(context) : getIconLightThemeColor(context);
++        icon.setColorFilter(color, PorterDuff.Mode.SRC_IN);
++    }
++
++    public static Bitmap getThemedBitmap(Context context, @DrawableRes int res, boolean dark) {
++        int color = dark ? getIconDarkThemeColor(context) : getIconLightThemeColor(context);
++        Bitmap sourceBitmap = BitmapFactory.decodeResource(context.getResources(), res);
++        Bitmap resultBitmap = Bitmap.createBitmap(sourceBitmap.getWidth(), sourceBitmap.getHeight(), Bitmap.Config.ARGB_8888);
++        Paint p = new Paint();
++        ColorFilter filter = new PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN);
++        p.setColorFilter(filter);
++        Canvas canvas = new Canvas(resultBitmap);
++        canvas.drawBitmap(sourceBitmap, 0, 0, p);
++        sourceBitmap.recycle();
++        return resultBitmap;
++    }
++
++    @Nullable
++    public static Drawable getLightThemedDrawable(@NonNull Context context, @DrawableRes int res){
++        final Drawable drawable;
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
++            drawable = context.getResources().getDrawable(res);
++        } else {
++            drawable = context.getDrawable(res);
++        }
++        if (drawable == null)
++            return null;
++        drawable.mutate();
++        drawable.setColorFilter(getIconLightThemeColor(context), PorterDuff.Mode.SRC_IN);
++        return drawable;
++    }
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/utils/Utils.java b/app/src/main/java/acr/browser/lightning/utils/Utils.java
+index 5b208e30..6ef4f22e 100644
+--- a/app/src/main/java/acr/browser/lightning/utils/Utils.java
++++ b/app/src/main/java/acr/browser/lightning/utils/Utils.java
+@@ -15,7 +15,12 @@ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+ import android.graphics.Canvas;
+ import android.graphics.Paint;
++import android.graphics.drawable.Drawable;
++import android.os.Build;
+ import android.os.Environment;
++import android.support.annotation.DrawableRes;
++import android.support.annotation.IntegerRes;
++import android.support.annotation.NonNull;
+ import android.support.annotation.StringRes;
+ import android.support.design.widget.Snackbar;
+ import android.support.v7.app.AlertDialog;
+@@ -38,9 +43,6 @@ import acr.browser.lightning.download.DownloadHandler;
+ 
+ public final class Utils {
+ 
+-    private Utils() {
+-    }
+-
+     public static void downloadFile(final Activity activity, final String url,
+                                     final String userAgent, final String contentDisposition) {
+         String fileName = URLUtil.guessFileName(url, null, null);
+@@ -75,15 +77,13 @@ public final class Utils {
+         alert.show();
+     }
+ 
+-    public static void showSnackbar(Activity activity, @StringRes int resource) {
+-        if (activity == null) return;
++    public static void showSnackbar(@NonNull Activity activity, @StringRes int resource) {
+         View view = activity.findViewById(android.R.id.content);
+         if (view == null) return;
+         Snackbar.make(view, resource, Snackbar.LENGTH_SHORT).show();
+     }
+ 
+-    public static void showSnackbar(Activity activity, String message) {
+-        if (activity == null) return;
++    public static void showSnackbar(@NonNull Activity activity, String message) {
+         View view = activity.findViewById(android.R.id.content);
+         if (view == null) return;
+         Snackbar.make(view, message, Snackbar.LENGTH_SHORT).show();
+@@ -232,23 +232,6 @@ public final class Utils {
+         return false;
+     }
+ 
+-    public static Bitmap getWebpageBitmap(Resources resources, boolean dark) {
+-        if (dark) {
+-            if (mWebIconDark == null) {
+-                mWebIconDark = BitmapFactory.decodeResource(resources, R.drawable.ic_webpage_dark);
+-            }
+-            return mWebIconDark;
+-        } else {
+-            if (mWebIconLight == null) {
+-                mWebIconLight = BitmapFactory.decodeResource(resources, R.drawable.ic_webpage);
+-            }
+-            return mWebIconLight;
+-        }
+-    }
+-
+-    private static Bitmap mWebIconLight;
+-    private static Bitmap mWebIconDark;
+-
+     public static void close(Closeable closeable) {
+         if (closeable == null)
+             return;
+@@ -258,4 +241,13 @@ public final class Utils {
+             e.printStackTrace();
+         }
+     }
++
++    public static Drawable getDrawable(Context context, @DrawableRes int res) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++            return context.getDrawable(res);
++        } else {
++            return context.getResources().getDrawable(res);
++        }
++    }
++
+ }
+diff --git a/app/src/main/java/acr/browser/lightning/view/LightningView.java b/app/src/main/java/acr/browser/lightning/view/LightningView.java
+index 953837f6..a82a7a6b 100644
+--- a/app/src/main/java/acr/browser/lightning/view/LightningView.java
++++ b/app/src/main/java/acr/browser/lightning/view/LightningView.java
+@@ -62,6 +62,7 @@ import acr.browser.lightning.download.LightningDownloadListener;
+ import acr.browser.lightning.preference.PreferenceManager;
+ import acr.browser.lightning.utils.AdBlock;
+ import acr.browser.lightning.utils.IntentUtils;
++import acr.browser.lightning.utils.ThemeUtils;
+ import acr.browser.lightning.utils.Utils;
+ 
+ public class LightningView {
+@@ -82,6 +83,7 @@ public class LightningView {
+     private boolean isForegroundTab;
+     private boolean mTextReflow = false;
+     private boolean mInvertPage = false;
++    private boolean mToggleDesktop = false;
+     private static float mMaxFling;
+     private static final int API = android.os.Build.VERSION.SDK_INT;
+     private static final int SCROLL_UP_THRESHOLD = Utils.convertDpToPixels(10);
+@@ -91,8 +93,6 @@ public class LightningView {
+             0, 0, 0, 1.0f, 0 // alpha
+     };
+ 
+-    @SuppressWarnings("deprecation")
+-    @SuppressLint("NewApi")
+     public LightningView(Activity activity, String url, boolean darkTheme) {
+ 
+         mActivity = activity;
+@@ -100,7 +100,7 @@ public class LightningView {
+         mTitle = new Title(activity, darkTheme);
+         mAdBlock = AdBlock.getInstance(activity.getApplicationContext());
+ 
+-        mWebpageBitmap = Utils.getWebpageBitmap(activity.getResources(), darkTheme);
++        mWebpageBitmap = mTitle.mDefaultIcon;
+ 
+         mMaxFling = ViewConfiguration.get(activity).getScaledMaximumFlingVelocity();
+ 
+@@ -119,7 +119,7 @@ public class LightningView {
+         mWebView.setAlwaysDrawnWithCacheEnabled(false);
+         mWebView.setBackgroundColor(0);
+ 
+-        if (API > 15) {
++        if (API >= Build.VERSION_CODES.JELLY_BEAN) {
+             mWebView.setBackground(null);
+             mWebView.getRootView().setBackground(null);
+         } else if (mWebView.getRootView() != null) {
+@@ -127,6 +127,7 @@ public class LightningView {
+         }
+         mWebView.setScrollbarFadingEnabled(true);
+         mWebView.setSaveEnabled(true);
++        mWebView.setNetworkAvailable(true);
+         mWebView.setWebChromeClient(new LightningChromeClient(activity));
+         mWebView.setWebViewClient(new LightningWebClient(activity));
+         mWebView.setDownloadListener(new LightningDownloadListener(activity));
+@@ -238,12 +239,14 @@ public class LightningView {
+         homepageBuilder.append(StartPage.END);
+ 
+         File homepage = new File(mActivity.getFilesDir(), "homepage.html");
++        FileWriter hWriter = null;
+         try {
+-            FileWriter hWriter = new FileWriter(homepage, false);
++            hWriter = new FileWriter(homepage, false);
+             hWriter.write(homepageBuilder.toString());
+-            hWriter.close();
+         } catch (IOException e) {
+             e.printStackTrace();
++        } finally {
++            Utils.close(hWriter);
+         }
+ 
+         return Constants.FILE + homepage;
+@@ -284,24 +287,7 @@ public class LightningView {
+             }
+         }
+ 
+-        switch (mPreferences.getUserAgentChoice()) {
+-            case 1:
+-                if (API > 16) {
+-                    mSettings.setUserAgentString(WebSettings.getDefaultUserAgent(context));
+-                } else {
+-                    mSettings.setUserAgentString(mDefaultUserAgent);
+-                }
+-                break;
+-            case 2:
+-                mSettings.setUserAgentString(Constants.DESKTOP_USER_AGENT);
+-                break;
+-            case 3:
+-                mSettings.setUserAgentString(Constants.MOBILE_USER_AGENT);
+-                break;
+-            case 4:
+-                mSettings.setUserAgentString(mPreferences.getUserAgentString(mDefaultUserAgent));
+-                break;
+-        }
++        setUserAgent(context, mPreferences.getUserAgentChoice());
+ 
+         if (mPreferences.getSavePasswordsEnabled() && !mBrowserController.isIncognito()) {
+             if (API < 18) {
+@@ -342,12 +328,15 @@ public class LightningView {
+         mSettings.setUseWideViewPort(mPreferences.getUseWideViewportEnabled());
+         mSettings.setLoadWithOverviewMode(mPreferences.getOverviewModeEnabled());
+         switch (mPreferences.getTextSize()) {
+-            case 1:
++            case 0:
+                 mSettings.setTextZoom(200);
+                 break;
+-            case 2:
++            case 1:
+                 mSettings.setTextZoom(150);
+                 break;
++            case 2:
++                mSettings.setTextZoom(125);
++                break;
+             case 3:
+                 mSettings.setTextZoom(100);
+                 break;
+@@ -404,6 +393,37 @@ public class LightningView {
+         }
+     }
+ 
++    public void toggleDesktopUA(@NonNull Context context) {
++        if (mWebView == null)
++            return;
++        if (!mToggleDesktop)
++            mWebView.getSettings().setUserAgentString(Constants.DESKTOP_USER_AGENT);
++        else
++            setUserAgent(context, mPreferences.getUserAgentChoice());
++        mToggleDesktop = !mToggleDesktop;
++    }
++
++    public void setUserAgent(Context context, int choice) {
++        switch (choice) {
++            case 1:
++                if (API > 16) {
++                    mSettings.setUserAgentString(WebSettings.getDefaultUserAgent(context));
++                } else {
++                    mSettings.setUserAgentString(mDefaultUserAgent);
++                }
++                break;
++            case 2:
++                mSettings.setUserAgentString(Constants.DESKTOP_USER_AGENT);
++                break;
++            case 3:
++                mSettings.setUserAgentString(Constants.MOBILE_USER_AGENT);
++                break;
++            case 4:
++                mSettings.setUserAgentString(mPreferences.getUserAgentString(mDefaultUserAgent));
++                break;
++        }
++    }
++
+     public boolean isShown() {
+         return mWebView != null && mWebView.isShown();
+     }
+@@ -685,6 +705,7 @@ public class LightningView {
+         public void onPageFinished(WebView view, String url) {
+             if (view.isShown()) {
+                 mBrowserController.updateUrl(url, true);
++                mBrowserController.updateBookmarkIndicator(url);
+                 view.postInvalidate();
+             }
+             if (view.getTitle() == null || view.getTitle().isEmpty()) {
+@@ -702,6 +723,7 @@ public class LightningView {
+         public void onPageStarted(WebView view, String url, Bitmap favicon) {
+             if (isShown()) {
+                 mBrowserController.updateUrl(url, false);
++                mBrowserController.updateBookmarkIndicator(url);
+                 mBrowserController.showActionBar();
+             }
+             mTitle.setFavicon(mWebpageBitmap);
+@@ -1042,7 +1064,7 @@ public class LightningView {
+         private final Bitmap mDefaultIcon;
+ 
+         public Title(Context context, boolean darkTheme) {
+-            mDefaultIcon = Utils.getWebpageBitmap(context.getResources(), darkTheme);
++            mDefaultIcon = ThemeUtils.getThemedBitmap(context, R.drawable.ic_webpage, darkTheme);
+             mFavicon = mDefaultIcon;
+             mTitle = mActivity.getString(R.string.action_new_tab);
+         }

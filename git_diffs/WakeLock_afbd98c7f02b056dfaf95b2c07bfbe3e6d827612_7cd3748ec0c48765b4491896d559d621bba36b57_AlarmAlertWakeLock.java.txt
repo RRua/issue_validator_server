@@ -1,0 +1,196 @@
+diff --git a/src/com/better/alarm/model/AlarmApplication.java b/src/com/better/alarm/model/AlarmApplication.java
+index 178a79d8..c0b683a8 100644
+--- a/src/com/better/alarm/model/AlarmApplication.java
++++ b/src/com/better/alarm/model/AlarmApplication.java
+@@ -15,6 +15,8 @@
+  */
+ package com.better.alarm.model;
+ 
++import com.better.wakelock.WakeLockManager;
++
+ import android.app.Application;
+ 
+ public class AlarmApplication extends Application {
+@@ -22,6 +24,7 @@ public class AlarmApplication extends Application {
+     @Override
+     public void onCreate() {
+         AlarmsManager.init(getApplicationContext());
++        WakeLockManager.init(getApplicationContext(), true);
+         super.onCreate();
+     }
+ 
+diff --git a/src/com/better/alarm/model/AlarmReceiver.java b/src/com/better/alarm/model/AlarmReceiver.java
+index a3a963a2..cafb0c98 100644
+--- a/src/com/better/alarm/model/AlarmReceiver.java
++++ b/src/com/better/alarm/model/AlarmReceiver.java
+@@ -15,6 +15,8 @@
+  */
+ package com.better.alarm.model;
+ 
++import com.better.wakelock.WakeLockManager;
++
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -34,11 +36,12 @@ public class AlarmReceiver extends BroadcastReceiver {
+ 
+     @Override
+     public void onReceive(Context context, Intent intent) {
+-        //TODO wakelock
++
+         final String action = intent.getAction();
+         if (DBG) Log.d(TAG, "Forwarding to the service: " + action);
+         Intent serviceIntent = new Intent(action);
+         serviceIntent.putExtras(intent);
++        WakeLockManager.getWakeLockManager().acquirePartialWakeLock(serviceIntent, "ForAlarmService");
+         context.startService(serviceIntent);
+     }
+ }
+diff --git a/src/com/better/alarm/model/AlarmsService.java b/src/com/better/alarm/model/AlarmsService.java
+index a86241f4..05e20512 100644
+--- a/src/com/better/alarm/model/AlarmsService.java
++++ b/src/com/better/alarm/model/AlarmsService.java
+@@ -15,6 +15,8 @@
+  */
+ package com.better.alarm.model;
+ 
++import com.better.wakelock.WakeLockManager;
++
+ import android.app.Service;
+ import android.content.Intent;
+ import android.os.IBinder;
+@@ -53,6 +55,9 @@ public class AlarmsService extends Service {
+         } else if (action.equals(Intent.ACTION_LOCALE_CHANGED)) {
+             // TODO
+         }
++
++        WakeLockManager.getWakeLockManager().releasePartialWakeLock(intent);
++
+         return START_NOT_STICKY;
+     }
+ 
+diff --git a/src/com/better/alarm/presenter/AlarmAlertWakeLock.java b/src/com/better/alarm/presenter/AlarmAlertWakeLock.java
+deleted file mode 100644
+index d767958e..00000000
+--- a/src/com/better/alarm/presenter/AlarmAlertWakeLock.java
++++ /dev/null
+@@ -1,54 +0,0 @@
+-/*
+- * Copyright (C) 2008 The Android Open Source Project
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm.presenter;
+-
+-import android.content.Context;
+-import android.os.PowerManager;
+-import android.util.Log;
+-
+-/**
+- * Hold a wakelock that can be acquired in the AlarmReceiver and released in the
+- * AlarmAlert activity
+- */
+-public class AlarmAlertWakeLock {
+-    private static final String TAG = "AlarmAlertWakeLock";
+-    private static final boolean DBG = true;
+-    private static PowerManager.WakeLock sCpuWakeLock;
+-
+-    public static PowerManager.WakeLock createPartialWakeLock(Context context) {
+-        PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+-        return pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
+-    }
+-
+-    static void acquireCpuWakeLock(Context context) {
+-        if (sCpuWakeLock != null) {
+-            return;
+-        }
+-
+-        sCpuWakeLock = createPartialWakeLock(context);
+-        sCpuWakeLock.acquire();
+-        if (DBG) Log.d(TAG, "WakeLock acquired");
+-    }
+-
+-    static void releaseCpuLock() {
+-        if (sCpuWakeLock != null) {
+-            sCpuWakeLock.release();
+-            sCpuWakeLock = null;
+-        }
+-        if (DBG) Log.d(TAG, "WakeLock released");
+-    }
+-}
+diff --git a/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java b/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java
+index edc88060..547fd67b 100644
+--- a/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java
++++ b/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java
+@@ -22,6 +22,7 @@ import android.content.Context;
+ import android.content.Intent;
+ 
+ import com.better.alarm.model.Intents;
++import com.better.wakelock.WakeLockManager;
+ 
+ /**
+  * Dispatches intents to the KlaxonService
+@@ -32,13 +33,10 @@ public class AlarmKlaxonReceiver extends BroadcastReceiver {
+     public void onReceive(final Context context, final Intent intent) {
+         int id = intent.getIntExtra(Intents.EXTRA_ID, -1);
+ 
+-        // Maintain a cpu wake lock until the and AlarmKlaxonService can pick it
+-        // up.
+-        AlarmAlertWakeLock.acquireCpuWakeLock(context);
+-
+         // Dispatch intent to the service
+         Intent playAlarm = new Intent(intent.getAction());
+         playAlarm.putExtra(Intents.EXTRA_ID, id);
++        WakeLockManager.getWakeLockManager().acquirePartialWakeLock(playAlarm, "ForAlarmKlaxonService");
+         context.startService(playAlarm);
+     }
+ }
+diff --git a/src/com/better/alarm/presenter/AlarmKlaxonService.java b/src/com/better/alarm/presenter/AlarmKlaxonService.java
+index 4cfae457..7d557662 100644
+--- a/src/com/better/alarm/presenter/AlarmKlaxonService.java
++++ b/src/com/better/alarm/presenter/AlarmKlaxonService.java
+@@ -37,6 +37,7 @@ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+ import com.better.alarm.model.AlarmsManager;
+ import com.better.alarm.model.Intents;
++import com.better.wakelock.WakeLockManager;
+ 
+ /**
+  * Manages alarms and vibe. Runs as a service so that it can continue to play if
+@@ -52,6 +53,8 @@ public class AlarmKlaxonService extends Service {
+     private MediaPlayer mMediaPlayer;
+     private TelephonyManager mTelephonyManager;
+ 
++    private Intent mIntent;
++
+     private PhoneStateListener mPhoneStateListener = new PhoneStateListener() {
+         @Override
+         public void onCallStateChanged(int state, String ignored) {
+@@ -75,7 +78,7 @@ public class AlarmKlaxonService extends Service {
+         stop();
+         // Stop listening for incoming calls.
+         mTelephonyManager.listen(mPhoneStateListener, 0);
+-        AlarmAlertWakeLock.releaseCpuLock();
++        WakeLockManager.getWakeLockManager().releasePartialWakeLock(mIntent);
+         if (DBG) Log.d(TAG, "Service destroyed");
+     }
+ 
+@@ -86,6 +89,7 @@ public class AlarmKlaxonService extends Service {
+ 
+     @Override
+     public int onStartCommand(Intent intent, int flags, int startId) {
++        mIntent = intent;
+         int id = intent.getIntExtra(Intents.EXTRA_ID, -1);
+         String action = intent.getAction();
+ 

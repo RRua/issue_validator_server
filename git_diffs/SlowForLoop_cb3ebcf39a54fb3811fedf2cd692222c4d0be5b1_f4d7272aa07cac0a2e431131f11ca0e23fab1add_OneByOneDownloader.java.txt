@@ -1,0 +1,884 @@
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java b/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java
+new file mode 100644
+index 0000000..d94407c
+--- /dev/null
++++ b/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java
+@@ -0,0 +1,129 @@
++package com.example.halftough.webcomreader;
++
++import android.app.IntentService;
++import android.arch.lifecycle.LiveData;
++import android.content.Intent;
++import android.content.Context;
++
++import com.example.halftough.webcomreader.activities.ChapterList.ChapterListActivity;
++import com.example.halftough.webcomreader.database.AppDatabase;
++import com.example.halftough.webcomreader.database.Chapter;
++import com.example.halftough.webcomreader.database.ChaptersDAO;
++import com.example.halftough.webcomreader.webcoms.Webcom;
++
++import java.io.BufferedInputStream;
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.FileOutputStream;
++import java.io.IOException;
++
++/**
++ * Subclass for handling downloads of webcomics in the background
++ */
++public class DownloaderService extends IntentService {
++    private static final String ACTION_FOO = "com.example.halftough.webcomreader.action.FOO";
++    private static final String ACTION_ENQUEUE_CHAPTER = "ACTION_ENQUEUE_CHAPTER";
++
++    private static final String EXTRA_PARAM1 = "com.example.halftough.webcomreader.extra.PARAM1";
++    private static final String EXTRA_PARAM2 = "com.example.halftough.webcomreader.extra.PARAM2";
++
++    OneByOneUrlDownloader downloader;
++    private ChaptersDAO chaptersDAO;
++
++    public DownloaderService() {
++        super("DownloaderService");
++        downloader = new ChapterDownloader();
++        AppDatabase db = AppDatabase.getDatabase(this);
++        chaptersDAO = db.chaptersDAO();
++    }
++
++    public static void startActionFoo(Context context, String param1, String param2) {
++        Intent intent = new Intent(context, DownloaderService.class);
++        intent.setAction(ACTION_FOO);
++        intent.putExtra(EXTRA_PARAM1, param1);
++        intent.putExtra(EXTRA_PARAM2, param2);
++        context.startService(intent);
++    }
++
++    public static void enqueueChapter(Context context, Chapter chapter) {
++        Intent intent = new Intent(context, DownloaderService.class);
++        intent.setAction(ACTION_ENQUEUE_CHAPTER);
++        intent.putExtra(ChapterListActivity.CHAPTER_WID, chapter.getWid());
++        intent.putExtra(ChapterListActivity.CHAPTER_NUMBER, chapter.getChapter());
++        context.startService(intent);
++    }
++
++    @Override
++    protected void onHandleIntent(Intent intent) {
++        if (intent != null) {
++            final String action = intent.getAction();
++            if (ACTION_FOO.equals(action)) {
++                final String param1 = intent.getStringExtra(EXTRA_PARAM1);
++                final String param2 = intent.getStringExtra(EXTRA_PARAM2);
++                handleActionFoo(param1, param2);
++            } else if (ACTION_ENQUEUE_CHAPTER.equals(action)) {
++                final String wid = intent.getStringExtra(ChapterListActivity.CHAPTER_WID);
++                final String chapter = intent.getStringExtra(ChapterListActivity.CHAPTER_NUMBER);
++                handleEnqueueChapter(wid, chapter);
++            }
++        }
++    }
++
++    private void handleActionFoo(String wid, String chapter) {
++        // TODO: Handle action Foo
++        throw new UnsupportedOperationException("Not yet implemented");
++    }
++
++    private void handleEnqueueChapter(final String wid, final String chapter) {
++        try {
++            Webcom webcom = UserRepository.getWebcomInstance(wid);
++            LiveData<String> url = webcom.getChapterUrl(chapter);
++            new OnLiveDataReady<String>(){
++                @Override
++                public void onReady(String value) {
++                    downloader.enqueue(value, new Chapter(wid, chapter));
++                }
++            }.run(url);
++        } catch (NoWebcomClassException e) {
++            e.printStackTrace();
++        }
++    }
++
++    class ChapterDownloader extends OneByOneUrlDownloader<Chapter> {
++        @Override
++        void onResponse(BufferedInputStream bufferInStream, Chapter extra, String extentsion) {
++            // TODO option to save internal or external
++            saveBufferToFile(bufferInStream, extra, extentsion);
++        }
++
++        private void saveBufferToFile(BufferedInputStream bufferedInputStream, Chapter chapter, String extension){
++            File root = android.os.Environment.getExternalStorageDirectory();
++            File dir = new File(root.getAbsolutePath()+"/webcom/"+chapter.getWid());
++            if(!dir.exists()){
++                dir.mkdirs();
++            }
++            File file = new File(dir, chapter.getChapter()+extension);
++            if(file.exists()){
++                file.delete();
++            }
++            try {
++                file.createNewFile();
++
++                FileOutputStream fos = new FileOutputStream(file);
++                int cur;
++                while( (cur = bufferedInputStream.read()) != -1){
++                    fos.write(cur);
++                }
++                fos.flush();
++                fos.close();
++                chaptersDAO.setDownloadStatus(chapter.getWid(), chapter.getChapter(), Chapter.DownloadStatus.DOWNLOADED);
++            } catch (FileNotFoundException e) {
++                chaptersDAO.setDownloadStatus(chapter.getWid(), chapter.getChapter(), Chapter.DownloadStatus.UNDOWNLOADED);
++                e.printStackTrace();
++            } catch (IOException e) {
++                chaptersDAO.setDownloadStatus(chapter.getWid(), chapter.getChapter(), Chapter.DownloadStatus.UNDOWNLOADED);
++                e.printStackTrace();
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OnLiveDataReady.java b/app/src/main/java/com/example/halftough/webcomreader/OnLiveDataReady.java
+new file mode 100644
+index 0000000..1289939
+--- /dev/null
++++ b/app/src/main/java/com/example/halftough/webcomreader/OnLiveDataReady.java
+@@ -0,0 +1,24 @@
++package com.example.halftough.webcomreader;
++
++import android.arch.lifecycle.LiveData;
++import android.arch.lifecycle.Observer;
++import android.support.annotation.Nullable;
++
++public abstract class OnLiveDataReady<T> {
++    public abstract void onReady(T value);
++
++    public void run(final LiveData<T> data) {
++        if(data.getValue() != null){
++            onReady(data.getValue());
++        }
++        else{
++            data.observeForever(new Observer<T>() {
++                @Override
++                public void onChanged(@Nullable T t) {
++                    data.removeObserver(this);
++                    onReady(t);
++                }
++            });
++        }
++    }
++}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OneByOneCallDownloader.java b/app/src/main/java/com/example/halftough/webcomreader/OneByOneCallDownloader.java
+new file mode 100644
+index 0000000..121dd6e
+--- /dev/null
++++ b/app/src/main/java/com/example/halftough/webcomreader/OneByOneCallDownloader.java
+@@ -0,0 +1,51 @@
++package com.example.halftough.webcomreader;
++
++import java.util.ArrayList;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Queue;
++
++import retrofit2.Call;
++import retrofit2.Callback;
++import retrofit2.Response;
++
++//Class preventing app from asking server for huge number of calls at once
++public abstract class OneByOneCallDownloader<CallClass, Extra> extends OneByOneDownloader<Call<CallClass>, Extra> {
++
++    public OneByOneCallDownloader(){ this(new LinkedList<Call<CallClass>>(), new LinkedList<Extra>()); }
++
++    public OneByOneCallDownloader(Queue<Call<CallClass>> calls){
++        this(calls,1);
++    }
++
++    public OneByOneCallDownloader(Queue<Call<CallClass>> calls, int slots){
++        this(calls, null, slots);
++    }
++
++    public OneByOneCallDownloader(Queue<Call<CallClass>> calls, Queue<Extra> extras){
++        this(calls, extras, 1);
++    }
++
++    public OneByOneCallDownloader(Queue<Call<CallClass>> calls, Queue<Extra> extras, int slots){
++        free = capacity = slots;
++        queue = calls;
++        this.extras = extras;
++    }
++
++    public abstract void onResponse(Call<CallClass> call, Response<CallClass> response, Extra extra);
++
++    protected void downloadElement(Call<CallClass> element, final Extra extra){
++        element.enqueue(new Callback<CallClass>() {
++            @Override
++            public void onResponse(Call<CallClass> call, Response<CallClass> response) {
++                OneByOneCallDownloader.this.onResponse(call, response, extra);
++                elementDownloaded();
++            }
++
++            @Override
++            public void onFailure(Call<CallClass> call, Throwable t) {
++
++            }
++        });
++    }
++}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java b/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
+index 62890e1..c869958 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
+@@ -1,78 +1,55 @@
+ package com.example.halftough.webcomreader;
+ 
+-import java.util.List;
+-
+-import retrofit2.Call;
+-import retrofit2.Callback;
+-import retrofit2.Response;
+-
+-//Class preventing app from asking server for huge number of calls at once
+-public abstract class OneByOneDownloader<T, K> {
+-    int free;
+-    List<Call<T>> calls;
+-    List<K> extra;
+-
+-    public OneByOneDownloader(List<Call<T>> calls){
+-        this(calls,1);
+-    }
+-
+-    public OneByOneDownloader(List<Call<T>> calls, int slots){
+-        this(calls, null, slots);
++import java.util.Queue;
++
++public abstract class OneByOneDownloader<ElementType, Extra> {
++    protected int capacity;
++    protected int free;
++    protected boolean downloading = false;
++    Queue<ElementType> queue;
++    Queue<Extra> extras;
++
++    public void add(ElementType element, Extra extra){
++        queue.add(element);
++        if(extras != null){
++            extras.add(extra);
++        }
+     }
+-
+-    public OneByOneDownloader(List<Call<T>> calls, List<K> extra){
+-        this(calls, extra, 1);
++    // Add to the list and start downloading, if it wasn't before
++    public void enqueue(ElementType element, Extra extra){
++        add(element, extra);
++        download();
+     }
+ 
+-    public OneByOneDownloader(List<Call<T>> calls, List<K> extra, int slots){
+-        free = slots;
+-        this.calls = calls;
+-        this.extra = extra;
+-    }
+ 
+-    private void markDone(){
+-        if(calls.size()>0) {
+-            calls.get(0).enqueue(new Callback<T>() {
+-                K ex = extra!=null?extra.get(0):null;
+-                @Override
+-                public void onResponse(Call<T> call, Response<T> response) {
+-                    OneByOneDownloader.this.onResponse(call, response, ex);
+-                    markDone();
+-                }
++    public void download(){
++        if (!downloading) {
++            while (free > 0 && !queue.isEmpty()) {
++                downloading = true;
++                free--;
++                ElementType element  = queue.remove();
++                Extra extra = extras!=null?extras.remove():null;
+ 
+-                @Override
+-                public void onFailure(Call<T> call, Throwable t) {
+-                    markDone();
+-                }
+-            });
+-            calls.remove(0);
+-            if(extra!=null)
+-                extra.remove(0);
++                downloadElement(element, extra);
++            }
+         }
+     }
+ 
+-    public abstract void onResponse(Call<T> call, Response<T> response, K extra);
++    protected abstract void downloadElement(ElementType element, final Extra extra);
+ 
+-    public void download() {
+-        for (int i = 0; i < free && i < calls.size(); i++) {
+-            Call call = calls.get(0);
+-            final K ex = extra!=null?extra.get(0):null;
+-            calls.remove(0);
+-            if(extra!=null)
+-                extra.remove(0);
++    // Method that should be called on success of downloadElement.
++    // Because ways of doing that may vary, extension of this class should remember to call it.
++    protected void elementDownloaded(){
++        if(!queue.isEmpty()) {
++            ElementType element = queue.remove();
++            Extra extra = extras!=null?extras.remove():null;
+ 
+-            call.enqueue(new Callback<T>() {
+-                @Override
+-                public void onResponse(Call<T> call, Response<T> response) {
+-                    OneByOneDownloader.this.onResponse(call, response, ex);
+-                    markDone();
+-                }
+-
+-                @Override
+-                public void onFailure(Call<T> call, Throwable t) {
+-                    markDone();
+-                }
+-            });
++            downloadElement(element, extra);
++        }
++        else{
++            free++;
++            if(free==capacity)
++                downloading = false;
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OneByOneUrlDownloader.java b/app/src/main/java/com/example/halftough/webcomreader/OneByOneUrlDownloader.java
+new file mode 100644
+index 0000000..e77eef3
+--- /dev/null
++++ b/app/src/main/java/com/example/halftough/webcomreader/OneByOneUrlDownloader.java
+@@ -0,0 +1,61 @@
++package com.example.halftough.webcomreader;
++
++import android.os.AsyncTask;
++
++import java.io.BufferedInputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.util.LinkedList;
++import java.util.Queue;
++
++public abstract class OneByOneUrlDownloader<Extra> extends OneByOneDownloader<String, Extra> {
++
++    public OneByOneUrlDownloader(){
++        this(new LinkedList<String>(), new LinkedList<Extra>());
++    }
++
++    public OneByOneUrlDownloader(Queue<String> urls){
++        this(urls, null);
++    }
++
++    public OneByOneUrlDownloader(Queue<String> urls, Queue<Extra>extras){
++        this(urls, extras, 1);
++    }
++
++    public OneByOneUrlDownloader(Queue<String> urls, Queue<Extra>extras, int capacity){
++        free = this.capacity = capacity;
++        queue = urls;
++        this.extras = extras;
++    }
++
++    abstract void onResponse(BufferedInputStream bufferinstream, Extra extra, String extentsion);
++
++    protected void downloadElement(String element, final Extra extra){
++        new asyncDownload(element).execute(extra);
++    }
++
++    private class asyncDownload extends AsyncTask<Extra, Void, Void>{
++        String url;
++        public asyncDownload(String url){
++            this.url = url;
++        }
++        @Override
++        protected Void doInBackground(Extra... extras) {
++            int dot = url.lastIndexOf(".");
++            String ext = (dot>=0)?url.substring(dot):"";
++            try {
++                URL url = new URL(this.url);
++                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
++                InputStream is = connection.getInputStream();
++                BufferedInputStream bufferInStream = new BufferedInputStream(is);
++                onResponse(bufferInStream, extras[0], ext);
++                elementDownloaded();
++            } catch (IOException e) {
++                e.printStackTrace();
++            }
++            return null;
++        }
++    }
++}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListActivity.java b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListActivity.java
+index 8b0eede..8a8272a 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListActivity.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListActivity.java
+@@ -13,6 +13,7 @@ import android.support.v7.widget.RecyclerView;
+ import android.support.v7.widget.Toolbar;
+ import android.view.View;
+ 
++import com.example.halftough.webcomreader.DownloaderService;
+ import com.example.halftough.webcomreader.NoWebcomClassException;
+ import com.example.halftough.webcomreader.R;
+ import com.example.halftough.webcomreader.UserRepository;
+@@ -23,6 +24,7 @@ import com.example.halftough.webcomreader.database.Chapter;
+ import java.util.List;
+ 
+ public class ChapterListActivity extends AppCompatActivity {
++    public static String CHAPTER_WID = "CHAPTER_WID";
+     public static String CHAPTER_NUMBER = "CHAPTER_NUMBER";
+     public static int READ_CHAPTER_RESULT = 3;
+     public static String UPDATE_LIST = "UPDATE_LIST";
+@@ -96,4 +98,8 @@ public class ChapterListActivity extends AppCompatActivity {
+     public ChapterListViewModel getViewModel() {
+         return viewModel;
+     }
++
++    public void downloadChapter(Chapter chapter) {
++        viewModel.downloadChapter(chapter);
++    }
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListAdapter.java b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListAdapter.java
+index a0df945..0b9ede2 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListAdapter.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListAdapter.java
+@@ -23,6 +23,7 @@ public class ChapterListAdapter extends RecyclerView.Adapter<ChapterListAdapter.
+         public View item;
+         public TextView chapterNumber;
+         public TextView chapterTitle;
++        public TextView downloadedText;
+         public ImageButton menuButton;
+ 
+         public ViewHolder(View itemView) {
+@@ -30,6 +31,7 @@ public class ChapterListAdapter extends RecyclerView.Adapter<ChapterListAdapter.
+             chapterNumber = (TextView)itemView.findViewById(R.id.chapterListItemNumber);
+             chapterTitle = (TextView)itemView.findViewById(R.id.chapterListItemTitle);
+             menuButton = (ImageButton)itemView.findViewById(R.id.chapterListItemMenuButton);
++            downloadedText = (TextView)itemView.findViewById(R.id.chapterListItemDownloaded);
+             item = itemView;
+         }
+     }
+@@ -62,6 +64,16 @@ public class ChapterListAdapter extends RecyclerView.Adapter<ChapterListAdapter.
+                 holder.chapterNumber.setTextColor(ContextCompat.getColor(context, R.color.chapterUnread));
+                 holder.chapterTitle.setTextColor(ContextCompat.getColor(context, R.color.chapterUnread));
+             }
++            switch (chapter.getDownloadStatus()){
++                case DOWNLOADED:
++                    holder.downloadedText.setText(R.string.chapter_item_downloaded);
++                    break;
++                case DOWNLOADING:
++                    holder.downloadedText.setText(R.string.chapter_item_downloading);
++                    break;
++                case UNDOWNLOADED:
++                    holder.downloadedText.setText("");
++            }
+             holder.chapterNumber.setText(chapter.getChapter());
+             holder.chapterTitle.setText(chapter.getTitle());
+             holder.menuButton.setOnClickListener(new View.OnClickListener() {
+@@ -76,8 +88,10 @@ public class ChapterListAdapter extends RecyclerView.Adapter<ChapterListAdapter.
+                         public boolean onMenuItemClick(MenuItem item) {
+                             switch (item.getItemId()){
+                                 case R.id.chapterItemMenuDownload:
++                                    context.downloadChapter(chap);
++                                    return true;
+                                 case R.id.chapterItemMenuRemove:
+-                                    return false;
++                                    return true;
+                                 case R.id.chapterItemMenuMarkRead:
+                                     context.getViewModel().markRead(chap);
+                                     return true;
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListViewModel.java b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListViewModel.java
+index f41f454..c5d9f2b 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListViewModel.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/ChapterList/ChapterListViewModel.java
+@@ -5,6 +5,7 @@ import android.arch.lifecycle.AndroidViewModel;
+ import android.arch.lifecycle.LiveData;
+ import android.arch.lifecycle.MutableLiveData;
+ 
++import com.example.halftough.webcomreader.DownloaderService;
+ import com.example.halftough.webcomreader.database.Chapter;
+ import com.example.halftough.webcomreader.database.ChaptersRepository;
+ 
+@@ -14,7 +15,6 @@ public class ChapterListViewModel extends AndroidViewModel {
+     private ChaptersRepository chaptersRepository;
+     private MutableLiveData<List<Chapter>> chapters;
+     private Application application;
+-    //private String wid;
+ 
+     public ChapterListViewModel(Application application) {
+         super(application);
+@@ -31,6 +31,10 @@ public class ChapterListViewModel extends AndroidViewModel {
+         return chapters;
+     }
+ 
++    public void downloadChapter(Chapter chapter){
++        chaptersRepository.downloadChapter(chapter);
++    }
++
+     public void update() {
+         chaptersRepository.update();
+     }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java b/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
+index 26cf8a9..3c4da25 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
+@@ -6,7 +6,9 @@ import android.support.annotation.NonNull;
+ 
+ @Entity(tableName = "chapters", primaryKeys = {"wid", "chapter"})
+ public class Chapter implements Comparable<Chapter> {
+-    public enum Status{ UNREAD, READ, READING }
++    public enum Status { UNREAD, READ, READING }
++    public enum DownloadStatus { UNDOWNLOADED, DOWNLOADING, DOWNLOADED }
++
+     @NonNull
+     private String wid;
+     @NonNull
+@@ -16,6 +18,10 @@ public class Chapter implements Comparable<Chapter> {
+     @TypeConverters(StatusConverter.class)
+     private Status status = Status.UNREAD;
+ 
++    @NonNull
++    @TypeConverters(DownloadStatusConverter.class)
++    private DownloadStatus downloadStatus = DownloadStatus.UNDOWNLOADED;
++
+     public Chapter(String wid, String chapter){
+         this.wid = wid;
+         this.chapter = chapter;
+@@ -40,13 +46,22 @@ public class Chapter implements Comparable<Chapter> {
+         this.status = status;
+     }
+ 
++    @NonNull
++    public DownloadStatus getDownloadStatus() {
++        return downloadStatus;
++    }
++
++    public void setDownloadStatus(@NonNull DownloadStatus downloadStatus) {
++        this.downloadStatus = downloadStatus;
++    }
++
+     @Override
+     public int compareTo(@NonNull Chapter o) {
+-        return new Float(Float.parseFloat(chapter)).compareTo(Float.parseFloat(o.getChapter()));
++        return Float.valueOf(Float.parseFloat(chapter)).compareTo(Float.parseFloat(o.getChapter()));
+     }
+ 
+     @Override
+-    public boolean equals(Object o){
++    public boolean equals(Object o) {
+         if (o == null || !Chapter.class.isAssignableFrom(o.getClass())) {
+             return false;
+         }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
+index d9f4749..30357ab 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
+@@ -5,6 +5,7 @@ import android.arch.persistence.room.Dao;
+ import android.arch.persistence.room.Insert;
+ import android.arch.persistence.room.OnConflictStrategy;
+ import android.arch.persistence.room.Query;
++import android.arch.persistence.room.TypeConverters;
+ import android.arch.persistence.room.Update;
+ 
+ import java.util.List;
+@@ -30,6 +31,19 @@ public interface ChaptersDAO {
+     @Update
+     void update(List<Chapter> chapters);
+ 
++//    @Query("UPDATE chapters SET DownloadStatus=0 WHERE wid=:wid AND chapter=:chapter")
++//    void setUndownloaded(String wid, String chapter);
++//
++//    @Query("UPDATE chapters SET DownloadStatus=1 WHERE wid=:wid AND chapter=:chapter")
++//    void setDownloading(String wid, String chapter);
++//
++//    @Query("UPDATE chapters SET DownloadStatus=2 WHERE wid=:wid AND chapter=:chapter")
++//    void setDownloaded(String wid, String chapter);
++
++    @Query("UPDATE chapters SET DownloadStatus=:status WHERE wid=:wid AND chapter=:chapter")
++    @TypeConverters(DownloadStatusConverter.class)
++    void setDownloadStatus(String wid, String chapter, Chapter.DownloadStatus status);
++
+     @Query("SELECT * FROM chapters WHERE wid LIKE :wid AND chapter LIKE :number")
+     LiveData<Chapter> getChapter(String wid, String number);
+ 
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersRepository.java b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersRepository.java
+index 6fe5238..e65ee32 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersRepository.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersRepository.java
+@@ -6,25 +6,24 @@ import android.arch.lifecycle.MutableLiveData;
+ import android.arch.lifecycle.Observer;
+ import android.os.AsyncTask;
+ import android.support.annotation.Nullable;
+-import android.util.Log;
+ 
++import com.example.halftough.webcomreader.DownloaderService;
+ import com.example.halftough.webcomreader.NoWebcomClassException;
+-import com.example.halftough.webcomreader.OneByOneDownloader;
++import com.example.halftough.webcomreader.OneByOneCallDownloader;
+ import com.example.halftough.webcomreader.UserRepository;
+ import com.example.halftough.webcomreader.webcoms.ComicPage;
+ import com.example.halftough.webcomreader.webcoms.Webcom;
+ 
+ import java.util.ArrayList;
+-import java.util.Comparator;
+ import java.util.Iterator;
++import java.util.LinkedList;
+ import java.util.List;
+ import java.util.ListIterator;
++import java.util.Queue;
+ import java.util.Set;
+ import java.util.TreeSet;
+-import java.util.concurrent.Semaphore;
+ 
+ import retrofit2.Call;
+-import retrofit2.Callback;
+ import retrofit2.Response;
+ 
+ public class ChaptersRepository {
+@@ -32,8 +31,10 @@ public class ChaptersRepository {
+     private MutableLiveData<List<Chapter>> chapters;
+     private LiveData<Integer> chapterCount;
+     private Webcom webcom;
++    private Application application;
+ 
+     public ChaptersRepository(Application application, final String wid){
++        this.application = application;
+         AppDatabase db = AppDatabase.getDatabase(application);
+         chaptersDAO = db.chaptersDAO();
+         chapters = new MutableLiveData<>();
+@@ -81,8 +82,8 @@ public class ChaptersRepository {
+         List<Chapter> dbChapters = chapters.getValue();
+ 
+         final List<Chapter> chapterList = new ArrayList<>();
+-        List<Call<ComicPage>> calls = new ArrayList<>();
+-        List<Chapter> extra = new ArrayList<>(); // References to chapters that will be downloaded
++        Queue<Call<ComicPage>> calls = new LinkedList<>();
++        Queue<Chapter> extra = new LinkedList<>(); // References to chapters that will be downloaded
+ 
+         Iterator<String> allIt = allChapters.iterator();
+         Iterator<Chapter> dbIt = dbChapters.iterator();
+@@ -100,7 +101,7 @@ public class ChaptersRepository {
+             if(b==null || (a!=null && Float.parseFloat(a) < Float.parseFloat(b.getChapter())) ){
+                 Chapter chapter = new Chapter(webcom.getId(), a);
+                 chapterList.add(chapter);
+-                calls.add(webcom.getPageCall(a));
++                calls.add(webcom.getChapterMetaCall(a));
+                 extra.add(chapter);
+                 a = allIt.hasNext()?allIt.next():null;
+             }
+@@ -116,7 +117,7 @@ public class ChaptersRepository {
+         }
+         chapters.postValue(chapterList);
+ 
+-        new OneByOneDownloader<ComicPage, Chapter>(calls, extra, 5){
++        new OneByOneCallDownloader<ComicPage, Chapter>(calls, extra, 5){
+             @Override
+             public void onResponse(Call<ComicPage> call, Response<ComicPage> response, Chapter extra) {
+                 if(response.body() != null) {
+@@ -137,6 +138,12 @@ public class ChaptersRepository {
+         new insertAsyncTask(chaptersDAO).execute(chapter);
+     }
+ 
++    public void downloadChapter(Chapter chapter){
++        chapter.setDownloadStatus(Chapter.DownloadStatus.DOWNLOADING);
++        new setDownloadStatusAsyncTask(chaptersDAO).execute(chapter);
++        DownloaderService.enqueueChapter(application, chapter);
++    }
++
+     public void update() {
+         final LiveData<List<Chapter>> dbChapters = chaptersDAO.getChapters(webcom.getId());
+         dbChapters.observeForever(new Observer<List<Chapter>>() {
+@@ -268,7 +275,7 @@ public class ChaptersRepository {
+         }
+     }
+ 
+-    private static  class updateListAsyncTask extends AsyncTask<List<Chapter>, Void, Void>{
++    private static class updateListAsyncTask extends AsyncTask<List<Chapter>, Void, Void>{
+         private ChaptersDAO mAsyncTaskDao;
+         updateListAsyncTask(ChaptersDAO dao){ mAsyncTaskDao = dao; }
+         @Override
+@@ -277,4 +284,16 @@ public class ChaptersRepository {
+             return null;
+         }
+     }
++
++    private static class setDownloadStatusAsyncTask extends AsyncTask<Chapter, Void, Void>{
++        private ChaptersDAO mAsyncTaskDao;
++        public setDownloadStatusAsyncTask(ChaptersDAO dao) {
++            mAsyncTaskDao = dao;
++        }
++        @Override
++        protected Void doInBackground(Chapter... chapters) {
++            mAsyncTaskDao.setDownloadStatus(chapters[0].getWid(), chapters[0].getChapter(), chapters[0].getDownloadStatus());
++            return null;
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/DownloadStatusConverter.java b/app/src/main/java/com/example/halftough/webcomreader/database/DownloadStatusConverter.java
+new file mode 100644
+index 0000000..de12e71
+--- /dev/null
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/DownloadStatusConverter.java
+@@ -0,0 +1,32 @@
++package com.example.halftough.webcomreader.database;
++
++import android.arch.persistence.room.TypeConverter;
++
++class DownloadStatusConverter {
++    @TypeConverter
++    public static Chapter.DownloadStatus toDownloadStatus(int downloadStatus){
++        switch(downloadStatus){
++            case 0:
++            default:
++                return Chapter.DownloadStatus.UNDOWNLOADED;
++            case 1:
++                return Chapter.DownloadStatus.DOWNLOADING;
++            case 2:
++                return Chapter.DownloadStatus.DOWNLOADED;
++        }
++    }
++
++    @TypeConverter
++    public static Integer toInteger(Chapter.DownloadStatus downloadStatus){
++        switch(downloadStatus){
++            case UNDOWNLOADED:
++                return 0;
++            case DOWNLOADING:
++                return 1;
++            case DOWNLOADED:
++                return 2;
++            default:
++                throw new IllegalArgumentException("Could not recognize status");
++        }
++    }
++}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java b/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
+index bf521bd..00776c9 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ReadChapterRepository.java
+@@ -1,16 +1,10 @@
+ package com.example.halftough.webcomreader.database;
+ 
+ import android.app.Activity;
+-import android.app.Application;
+ import android.arch.lifecycle.LiveData;
+ import android.arch.lifecycle.Observer;
+-import android.content.Context;
+-import android.content.Intent;
+ import android.os.AsyncTask;
+ import android.support.annotation.Nullable;
+-import android.support.v7.app.AppCompatActivity;
+-import android.util.Log;
+-import android.widget.ImageView;
+ 
+ 
+ import com.example.halftough.webcomreader.activities.ReadChapter.ComicPageView;
+@@ -46,11 +40,11 @@ public class ReadChapterRepository {
+     private void getImage() {
+         if(chapter.getValue()==null)
+             return;
+-        Call<ComicPage> call = webcom.getPageCall(chapter.getValue().getChapter());
++        Call<ComicPage> call = webcom.getChapterMetaCall(chapter.getValue().getChapter());
+         call.enqueue(new Callback<ComicPage>() {
+             @Override
+             public void onResponse(Call<ComicPage> call, Response<ComicPage> response) {
+-                Picasso.get().load(response.body().getImg()).into(imageView);
++                Picasso.get().load(response.body().getUrl()).into(imageView);
+             }
+             @Override
+             public void onFailure(Call<ComicPage> call, Throwable t) {
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/ComicPage.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/ComicPage.java
+index 7a2db77..44ccee9 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/ComicPage.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/ComicPage.java
+@@ -15,7 +15,7 @@ public class ComicPage {
+         this.title = title;
+     }
+ 
+-    public String getNum() {
++    public String getChapterNumber() {
+         return num;
+     }
+     public void setNum(String num) {
+@@ -29,6 +29,6 @@ public class ComicPage {
+         this.title = title;
+     }
+ 
+-    public String getImg() { return img; }
++    public String getUrl() { return img; }
+     public void setImg(String img) { this.img = img; }
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/DilbertWebcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/DilbertWebcom.java
+index 02ec001..9996757 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/DilbertWebcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/DilbertWebcom.java
+@@ -47,7 +47,7 @@ public class DilbertWebcom extends Webcom {
+     }
+ 
+     @Override
+-    public Call<ComicPage> getPageCall(String number) {
++    public Call<ComicPage> getChapterMetaCall(String number) {
+         return null;
+     }
+ 
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
+index b514729..93853b7 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
+@@ -9,6 +9,8 @@ import com.example.halftough.webcomreader.database.Chapter;
+ import java.util.List;
+ 
+ import retrofit2.Call;
++import retrofit2.Callback;
++import retrofit2.Response;
+ 
+ public abstract class Webcom {
+ 
+@@ -21,7 +23,23 @@ public abstract class Webcom {
+     public abstract format getFormat();
+     public abstract MutableLiveData<Integer> getChapterCount(); //Returns number of all available pages/chapters of comic
+     public abstract String[] getTags();
+-    public abstract Call<ComicPage> getPageCall(String number);
++    public LiveData<String> getChapterUrl(String chapter){
++        final MutableLiveData<String> chapterUrl = new MutableLiveData<>();
++        Call<ComicPage> call = getChapterMetaCall(chapter);
++        call.enqueue(new Callback<ComicPage>() {
++            @Override
++            public void onResponse(Call<ComicPage> call, Response<ComicPage> response) {
++                chapterUrl.setValue(response.body().getUrl());
++            }
++
++            @Override
++            public void onFailure(Call<ComicPage> call, Throwable t) {
++                chapterUrl.setValue("");
++            }
++        });
++        return chapterUrl;
++    }
++    public abstract Call<ComicPage> getChapterMetaCall(String number);
+     public abstract List<String> getChapterList();
+     public abstract String[] getLanguages();
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
+index 7d8d9b0..7c037f3 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
+@@ -78,7 +78,7 @@ public class XkcdWebcom extends Webcom {
+         call.enqueue(new Callback<ComicPage>() {
+             @Override
+             public void onResponse(Call<ComicPage> call, Response<ComicPage> response) {
+-                chapterCount.postValue( Integer.parseInt(response.body().getNum()) -1); // We subtract 1, because comic nr 404 doesn't exist
++                chapterCount.postValue( Integer.parseInt(response.body().getChapterNumber()) -1); // We subtract 1, because comic nr 404 doesn't exist
+             }
+ 
+             @Override
+@@ -89,7 +89,7 @@ public class XkcdWebcom extends Webcom {
+     }
+ 
+     @Override
+-    public Call<ComicPage> getPageCall(String number) {
++    public Call<ComicPage> getChapterMetaCall(String number) {
+         initService();
+         return service.getChapter(number);
+     }

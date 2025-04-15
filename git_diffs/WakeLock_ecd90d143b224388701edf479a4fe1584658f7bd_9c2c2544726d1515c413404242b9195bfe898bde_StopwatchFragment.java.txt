@@ -1,0 +1,658 @@
+diff --git a/src/com/android/deskclock/AlarmInitReceiver.java b/src/com/android/deskclock/AlarmInitReceiver.java
+index fcfaefb9f..a5dc04e5b 100644
+--- a/src/com/android/deskclock/AlarmInitReceiver.java
++++ b/src/com/android/deskclock/AlarmInitReceiver.java
+@@ -63,7 +63,6 @@ public class AlarmInitReceiver extends BroadcastReceiver {
+         // Clear stopwatch data and reset timers because they rely on elapsed real-time values
+         // which are meaningless after a device reboot.
+         if (ACTION_BOOT_COMPLETED.equals(action)) {
+-            DataModel.getDataModel().clearLaps();
+             DataModel.getDataModel().resetStopwatch();
+             Events.sendStopwatchEvent(R.string.action_reset, R.string.label_reboot);
+             DataModel.getDataModel().resetTimers(R.string.label_reboot);
+diff --git a/src/com/android/deskclock/HandleDeskClockApiCalls.java b/src/com/android/deskclock/HandleDeskClockApiCalls.java
+index ee3f4334b..f1d413125 100644
+--- a/src/com/android/deskclock/HandleDeskClockApiCalls.java
++++ b/src/com/android/deskclock/HandleDeskClockApiCalls.java
+@@ -145,7 +145,6 @@ public class HandleDeskClockApiCalls extends Activity {
+                     break;
+                 }
+                 case ACTION_RESET_STOPWATCH: {
+-                    DataModel.getDataModel().clearLaps();
+                     DataModel.getDataModel().resetStopwatch();
+                     Events.sendStopwatchEvent(R.string.action_reset, eventLabel);
+                     reason = getString(R.string.stopwatch_reset);
+diff --git a/src/com/android/deskclock/data/DataModel.java b/src/com/android/deskclock/data/DataModel.java
+index 7d7da1bc9..18b2bbd07 100644
+--- a/src/com/android/deskclock/data/DataModel.java
++++ b/src/com/android/deskclock/data/DataModel.java
+@@ -501,6 +501,22 @@ public final class DataModel {
+     // Stopwatch
+     //
+ 
++    /**
++     * @param stopwatchListener to be notified when stopwatch changes or laps are added
++     */
++    public void addStopwatchListener(StopwatchListener stopwatchListener) {
++        enforceMainLooper();
++        mStopwatchModel.addStopwatchListener(stopwatchListener);
++    }
++
++    /**
++     * @param stopwatchListener to no longer be notified when stopwatch changes or laps are added
++     */
++    public void removeStopwatchListener(StopwatchListener stopwatchListener) {
++        enforceMainLooper();
++        mStopwatchModel.removeStopwatchListener(stopwatchListener);
++    }
++
+     /**
+      * @return the current state of the stopwatch
+      */
+@@ -549,14 +565,6 @@ public final class DataModel {
+         return mStopwatchModel.addLap();
+     }
+ 
+-    /**
+-     * Clears the laps recorded for this stopwatch.
+-     */
+-    public void clearLaps() {
+-        enforceMainLooper();
+-        mStopwatchModel.clearLaps();
+-    }
+-
+     /**
+      * @return {@code true} iff more laps can be recorded
+      */
+diff --git a/src/com/android/deskclock/data/StopwatchListener.java b/src/com/android/deskclock/data/StopwatchListener.java
+new file mode 100644
+index 000000000..838dfab31
+--- /dev/null
++++ b/src/com/android/deskclock/data/StopwatchListener.java
+@@ -0,0 +1,34 @@
++/*
++ * Copyright (C) 2016 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.deskclock.data;
++
++/**
++ * The interface through which interested parties are notified of changes to the stopwatch or laps.
++ */
++public interface StopwatchListener {
++
++    /**
++     * @param before the stopwatch state before the update
++     * @param after the stopwatch state after the update
++     */
++    void stopwatchUpdated(Stopwatch before, Stopwatch after);
++
++    /**
++     * @param lap the lap that was added
++     */
++    void lapAdded(Lap lap);
++}
+\ No newline at end of file
+diff --git a/src/com/android/deskclock/data/StopwatchModel.java b/src/com/android/deskclock/data/StopwatchModel.java
+index a536c1fb4..f12a4fdfa 100644
+--- a/src/com/android/deskclock/data/StopwatchModel.java
++++ b/src/com/android/deskclock/data/StopwatchModel.java
+@@ -26,6 +26,7 @@ import android.content.res.Resources;
+ import android.os.SystemClock;
+ import android.support.annotation.IdRes;
+ import android.support.annotation.StringRes;
++import android.support.annotation.VisibleForTesting;
+ import android.support.v4.app.NotificationCompat;
+ import android.support.v4.app.NotificationManagerCompat;
+ import android.widget.RemoteViews;
+@@ -34,6 +35,7 @@ import com.android.deskclock.HandleDeskClockApiCalls;
+ import com.android.deskclock.R;
+ import com.android.deskclock.stopwatch.StopwatchService;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+ 
+@@ -58,6 +60,9 @@ final class StopwatchModel {
+     /** Update stopwatch notification when locale changes. */
+     private final BroadcastReceiver mLocaleChangedReceiver = new LocaleChangedReceiver();
+ 
++    /** The listeners to notify when the stopwatch or its laps change. */
++    private final List<StopwatchListener> mStopwatchListeners = new ArrayList<>();
++
+     /** The current state of the stopwatch. */
+     private Stopwatch mStopwatch;
+ 
+@@ -74,6 +79,20 @@ final class StopwatchModel {
+         mContext.registerReceiver(mLocaleChangedReceiver, localeBroadcastFilter);
+     }
+ 
++    /**
++     * @param stopwatchListener to be notified when stopwatch changes or laps are added
++     */
++    void addStopwatchListener(StopwatchListener stopwatchListener) {
++        mStopwatchListeners.add(stopwatchListener);
++    }
++
++    /**
++     * @param stopwatchListener to no longer be notified when stopwatch changes or laps are added
++     */
++    void removeStopwatchListener(StopwatchListener stopwatchListener) {
++        mStopwatchListeners.remove(stopwatchListener);
++    }
++
+     /**
+      * @return the current state of the stopwatch
+      */
+@@ -89,7 +108,8 @@ final class StopwatchModel {
+      * @param stopwatch the new state of the stopwatch
+      */
+     Stopwatch setStopwatch(Stopwatch stopwatch) {
+-        if (mStopwatch != stopwatch) {
++        final Stopwatch before = getStopwatch();
++        if (before != stopwatch) {
+             StopwatchDAO.setStopwatch(mContext, stopwatch);
+             mStopwatch = stopwatch;
+ 
+@@ -97,6 +117,16 @@ final class StopwatchModel {
+             if (!mNotificationModel.isApplicationInForeground()) {
+                 updateNotification();
+             }
++
++            // Resetting the stopwatch implicitly clears the recorded laps.
++            if (stopwatch.isReset()) {
++                clearLaps();
++            }
++
++            // Notify listeners of the stopwatch change.
++            for (StopwatchListener stopwatchListener : mStopwatchListeners) {
++                stopwatchListener.stopwatchUpdated(before, stopwatch);
++            }
+         }
+ 
+         return stopwatch;
+@@ -134,12 +164,18 @@ final class StopwatchModel {
+             updateNotification();
+         }
+ 
++        // Notify listeners of the new lap.
++        for (StopwatchListener stopwatchListener : mStopwatchListeners) {
++            stopwatchListener.lapAdded(lap);
++        }
++
+         return lap;
+     }
+ 
+     /**
+      * Clears the laps recorded for this stopwatch.
+      */
++    @VisibleForTesting
+     void clearLaps() {
+         StopwatchDAO.clearLaps(mContext);
+         getMutableLaps().clear();
+diff --git a/src/com/android/deskclock/stopwatch/LapsAdapter.java b/src/com/android/deskclock/stopwatch/LapsAdapter.java
+index 7592935fd..00141a61d 100644
+--- a/src/com/android/deskclock/stopwatch/LapsAdapter.java
++++ b/src/com/android/deskclock/stopwatch/LapsAdapter.java
+@@ -32,6 +32,7 @@ import com.android.deskclock.data.Stopwatch;
+ 
+ import java.text.DecimalFormatSymbols;
+ import java.util.List;
++import java.util.Locale;
+ 
+ /**
+  * Displays a list of lap times in reverse order. That is, the newest lap is at the top, the oldest
+@@ -155,8 +156,6 @@ class LapsAdapter extends RecyclerView.Adapter<LapsAdapter.LapItemHolder> {
+      * Remove all recorded laps and update this adapter.
+      */
+     void clearLaps() {
+-        DataModel.getDataModel().clearLaps();
+-
+         // Clear the computed time lengths related to the old recorded laps.
+         mLastFormattedLapTimeLength = 0;
+         mLastFormattedAccumulatedTimeLength = 0;
+@@ -207,10 +206,10 @@ class LapsAdapter extends RecyclerView.Adapter<LapsAdapter.LapItemHolder> {
+     @VisibleForTesting
+     String formatLapNumber(int lapCount, int lapNumber) {
+         if (lapCount < 10) {
+-            return String.format("# %d", lapNumber);
++            return String.format(Locale.getDefault(), "# %d", lapNumber);
+         }
+ 
+-        return String.format("# %02d", lapNumber);
++        return String.format(Locale.getDefault(), "# %02d", lapNumber);
+     }
+ 
+     /**
+@@ -232,20 +231,20 @@ class LapsAdapter extends RecyclerView.Adapter<LapsAdapter.LapItemHolder> {
+         final char decimalSeparator = DecimalFormatSymbols.getInstance().getDecimalSeparator();
+ 
+         if (maxTime < 10 * DateUtils.MINUTE_IN_MILLIS) {
+-            return String.format("%d%s%02d%s%02d",
++            return String.format(Locale.getDefault(), "%d%s%02d%s%02d",
+                     minutes, separator, seconds, decimalSeparator, hundredths);
+         } else if (maxTime < 60 * DateUtils.MINUTE_IN_MILLIS) {
+-            return String.format("%02d%s%02d%s%02d",
++            return String.format(Locale.getDefault(), "%02d%s%02d%s%02d",
+                     minutes, separator, seconds, decimalSeparator, hundredths);
+         } else if (maxTime < 10 * DateUtils.HOUR_IN_MILLIS) {
+-            return String.format("%d%s%02d%s%02d%s%02d",
++            return String.format(Locale.getDefault(), "%d%s%02d%s%02d%s%02d",
+                     hours, separator, minutes, separator, seconds, decimalSeparator, hundredths);
+         } else if (maxTime < 100 * DateUtils.HOUR_IN_MILLIS) {
+-            return String.format("%02d%s%02d%s%02d%s%02d",
++            return String.format(Locale.getDefault(), "%02d%s%02d%s%02d%s%02d",
+                     hours, separator, minutes, separator, seconds, decimalSeparator, hundredths);
+         }
+ 
+-        return String.format("%03d%s%02d%s%02d%s%02d",
++        return String.format(Locale.getDefault(), "%03d%s%02d%s%02d%s%02d",
+                 hours, separator, minutes, separator, seconds, decimalSeparator, hundredths);
+     }
+ 
+diff --git a/src/com/android/deskclock/stopwatch/StopwatchFragment.java b/src/com/android/deskclock/stopwatch/StopwatchFragment.java
+index 15f589176..1ad655500 100644
+--- a/src/com/android/deskclock/stopwatch/StopwatchFragment.java
++++ b/src/com/android/deskclock/stopwatch/StopwatchFragment.java
+@@ -44,6 +44,7 @@ import com.android.deskclock.Utils;
+ import com.android.deskclock.data.DataModel;
+ import com.android.deskclock.data.Lap;
+ import com.android.deskclock.data.Stopwatch;
++import com.android.deskclock.data.StopwatchListener;
+ import com.android.deskclock.events.Events;
+ import com.android.deskclock.timer.CountingTimerView;
+ import com.android.deskclock.uidata.TabListener;
+@@ -62,56 +63,34 @@ import static com.android.deskclock.uidata.UiDataModel.Tab.STOPWATCH;
+  */
+ public final class StopwatchFragment extends DeskClockFragment {
+ 
+-    private static final String TAG = "StopwatchFragment";
+-
+-    /**
+-     * Keep the screen on when this tab is selected.
+-     */
++    /** Keep the screen on when this tab is selected. */
+     private final TabListener mTabWatcher = new TabWatcher();
+ 
+-    /**
+-     * Scheduled to update the stopwatch time and current lap time while stopwatch is running.
+-     */
++    /** Scheduled to update the stopwatch time and current lap time while stopwatch is running. */
+     private final Runnable mTimeUpdateRunnable = new TimeUpdateRunnable();
+ 
+-    /**
+-     * Used to determine when talk back is on in order to lower the time update rate.
+-     */
+-    private AccessibilityManager mAccessibilityManager;
++    /** Updates the user interface in response to stopwatch changes. */
++    private final StopwatchListener mStopwatchWatcher = new StopwatchWatcher();
+ 
+-    /**
+-     * {@code true} while the {@link #mLapsList} is transitioning between shown and hidden.
+-     */
+-    private boolean mLapsListIsTransitioning;
++    /** Used to determine when talk back is on in order to lower the time update rate. */
++    private AccessibilityManager mAccessibilityManager;
+ 
+-    /**
+-     * The data source for {@link #mLapsList}.
+-     */
++    /** The data source for {@link #mLapsList}. */
+     private LapsAdapter mLapsAdapter;
+ 
+-    /**
+-     * The layout manager for the {@link #mLapsAdapter}.
+-     */
++    /** The layout manager for the {@link #mLapsAdapter}. */
+     private LinearLayoutManager mLapsLayoutManager;
+ 
+-    /**
+-     * Draws the reference lap while the stopwatch is running.
+-     */
++    /** Draws the reference lap while the stopwatch is running. */
+     private StopwatchCircleView mTime;
+ 
+-    /**
+-     * Displays the recorded lap times.
+-     */
++    /** Displays the recorded lap times. */
+     private RecyclerView mLapsList;
+ 
+-    /**
+-     * Displays the current stopwatch time.
+-     */
++    /** Displays the current stopwatch time. */
+     private CountingTimerView mTimeText;
+ 
+-    /**
+-     * The public no-arg constructor required by all fragments.
+-     */
++    /** The public no-arg constructor required by all fragments. */
+     public StopwatchFragment() {
+         super(STOPWATCH);
+     }
+@@ -133,6 +112,8 @@ public final class StopwatchFragment extends DeskClockFragment {
+         mTimeText.setVirtualButtonEnabled(true);
+         mTimeText.registerVirtualButtonAction(new ToggleStopwatchRunnable());
+ 
++        DataModel.getDataModel().addStopwatchListener(mStopwatchWatcher);
++
+         return v;
+     }
+ 
+@@ -151,46 +132,17 @@ public final class StopwatchFragment extends DeskClockFragment {
+         // Conservatively assume the data in the adapter has changed while the fragment was paused.
+         mLapsAdapter.notifyDataSetChanged();
+ 
+-        // Draw the current stopwatch and lap times.
+-        updateTime();
+-
+-        // Start updates if the stopwatch is running; blink text if it is paused.
+-        switch (getStopwatch().getState()) {
+-            case RUNNING:
+-                acquireWakeLock();
+-                mTime.update();
+-                startUpdatingTime();
+-                break;
+-            case PAUSED:
+-                mTimeText.blinkTimeStr(true);
+-                break;
+-        }
+-
+-        // Adjust the visibility of the list of laps.
+-        showOrHideLaps(false);
++        // Synchronize the user interface with the data model.
++        updateUI();
+ 
+         // Start watching for page changes away from this fragment.
+         UiDataModel.getUiDataModel().addTabListener(mTabWatcher);
+-
+-        // View is hidden in onPause, make sure it is visible now.
+-        final View view = getView();
+-        if (view != null) {
+-            view.setVisibility(VISIBLE);
+-        }
+     }
+ 
+     @Override
+     public void onPause() {
+         super.onPause();
+ 
+-        final View view = getView();
+-        if (view != null) {
+-            // Make the view invisible because when the lock screen is activated, the window stays
+-            // active under it. Later, when unlocking the screen, we see the old stopwatch time for
+-            // a fraction of a second.
+-            getView().setVisibility(INVISIBLE);
+-        }
+-
+         // Stop all updates while the fragment is not visible.
+         stopUpdatingTime();
+         mTimeText.blinkTimeStr(false);
+@@ -202,6 +154,13 @@ public final class StopwatchFragment extends DeskClockFragment {
+         releaseWakeLock();
+     }
+ 
++    @Override
++    public void onDestroyView() {
++        super.onDestroyView();
++
++        DataModel.getDataModel().removeStopwatchListener(mStopwatchWatcher);
++    }
++
+     @Override
+     public void onFabClick(@NonNull ImageView fab) {
+         toggleStopwatchState();
+@@ -269,20 +228,7 @@ public final class StopwatchFragment extends DeskClockFragment {
+      */
+     private void doStart() {
+         Events.sendStopwatchEvent(R.string.action_start, R.string.label_deskclock);
+-
+-        // Update the stopwatch state.
+         DataModel.getDataModel().startStopwatch();
+-
+-        // Start UI updates.
+-        startUpdatingTime();
+-        mTime.update();
+-        mTimeText.blinkTimeStr(false);
+-
+-        // Update button states.
+-        updateFab(FAB_AND_BUTTONS_IMMEDIATE);
+-
+-        // Acquire the wake lock.
+-        acquireWakeLock();
+     }
+ 
+     /**
+@@ -290,22 +236,7 @@ public final class StopwatchFragment extends DeskClockFragment {
+      */
+     private void doPause() {
+         Events.sendStopwatchEvent(R.string.action_pause, R.string.label_deskclock);
+-
+-        // Update the stopwatch state
+         DataModel.getDataModel().pauseStopwatch();
+-
+-        // Redraw the paused stopwatch time.
+-        updateTime();
+-
+-        // Stop UI updates.
+-        stopUpdatingTime();
+-        mTimeText.blinkTimeStr(true);
+-
+-        // Update button states.
+-        updateFab(FAB_AND_BUTTONS_IMMEDIATE);
+-
+-        // Release the wake lock.
+-        releaseWakeLock();
+     }
+ 
+     /**
+@@ -313,23 +244,7 @@ public final class StopwatchFragment extends DeskClockFragment {
+      */
+     private void doReset() {
+         Events.sendStopwatchEvent(R.string.action_reset, R.string.label_deskclock);
+-
+-        // Update the stopwatch state.
+         DataModel.getDataModel().resetStopwatch();
+-
+-        // Clear the laps.
+-        showOrHideLaps(true);
+-
+-        // Clear the times.
+-        mTime.postInvalidateOnAnimation();
+-        mTimeText.setTime(0, true, true);
+-        mTimeText.blinkTimeStr(false);
+-
+-        // Update button states.
+-        updateFab(FAB_AND_BUTTONS_IMMEDIATE);
+-
+-        // Release the wake lock.
+-        releaseWakeLock();
+     }
+ 
+     /**
+@@ -395,33 +310,8 @@ public final class StopwatchFragment extends DeskClockFragment {
+      * Show or hide the list of laps.
+      */
+     private void showOrHideLaps(boolean clearLaps) {
+-        final Transition transition = new AutoTransition()
+-                .addListener(new Transition.TransitionListener() {
+-                    @Override
+-                    public void onTransitionStart(Transition transition) {
+-                        mLapsListIsTransitioning = true;
+-                    }
+-
+-                    @Override
+-                    public void onTransitionEnd(Transition transition) {
+-                        mLapsListIsTransitioning = false;
+-                    }
+-
+-                    @Override
+-                    public void onTransitionCancel(Transition transition) {
+-                    }
+-
+-                    @Override
+-                    public void onTransitionPause(Transition transition) {
+-                    }
+-
+-                    @Override
+-                    public void onTransitionResume(Transition transition) {
+-                    }
+-                });
+-
+         final ViewGroup sceneRoot = (ViewGroup) getView();
+-        TransitionManager.beginDelayedTransition(sceneRoot, transition);
++        TransitionManager.beginDelayedTransition(sceneRoot);
+ 
+         if (clearLaps) {
+             mLapsAdapter.clearLaps();
+@@ -431,16 +321,17 @@ public final class StopwatchFragment extends DeskClockFragment {
+         mLapsList.setVisibility(lapsVisible ? VISIBLE : GONE);
+     }
+ 
+-    private void acquireWakeLock() {
+-        if (isTabSelected()) {
+-            getActivity().getWindow()
+-                    .addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++    private void adjustWakeLock() {
++        final boolean appInForeground = DataModel.getDataModel().isApplicationInForeground();
++        if (getStopwatch().isRunning() && isTabSelected() && appInForeground) {
++            getActivity().getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++        } else {
++            releaseWakeLock();
+         }
+     }
+ 
+     private void releaseWakeLock() {
+-        getActivity().getWindow()
+-                .clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++        getActivity().getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+     }
+ 
+     /**
+@@ -485,18 +376,46 @@ public final class StopwatchFragment extends DeskClockFragment {
+      */
+     private void updateTime() {
+         // Compute the total time of the stopwatch.
+-        final long totalTime = getStopwatch().getTotalTime();
++        final Stopwatch stopwatch = getStopwatch();
++        final long totalTime = stopwatch.getTotalTime();
+ 
+         // Update the total time display.
+         mTimeText.setTime(totalTime, true, true);
+ 
+         // Update the current lap.
+         final boolean currentLapIsVisible = mLapsLayoutManager.findFirstVisibleItemPosition() == 0;
+-        if (!mLapsListIsTransitioning && currentLapIsVisible) {
++        if (!stopwatch.isReset() && currentLapIsVisible) {
+             mLapsAdapter.updateCurrentLap(mLapsList, totalTime);
+         }
+     }
+ 
++    /**
++     * Synchronize the UI state with the model data.
++     */
++    private void updateUI() {
++        adjustWakeLock();
++
++        // Draw the latest stopwatch and current lap times.
++        updateTime();
++
++        mTime.update();
++
++        // Start updates if the stopwatch is running.
++        final Stopwatch stopwatch = getStopwatch();
++        if (stopwatch.isRunning()) {
++            startUpdatingTime();
++        }
++
++        // Blink text iff the stopwatch is paused.
++        mTimeText.blinkTimeStr(stopwatch.isPaused());
++
++        // Adjust the visibility of the list of laps.
++        showOrHideLaps(stopwatch.isReset());
++
++        // Update button states.
++        updateFab(FAB_AND_BUTTONS_IMMEDIATE);
++    }
++
+     /**
+      * This runnable periodically updates times throughout the UI. It stops these updates when the
+      * stopwatch is no longer running.
+@@ -535,17 +454,27 @@ public final class StopwatchFragment extends DeskClockFragment {
+     }
+ 
+     /**
+-     * Acquire the wake lock if the stopwatch tab is selected and the stopwatch is running; release
+-     * it otherwise.
++     * Acquire or release the wake lock based on the tab state.
+      */
+     private final class TabWatcher implements TabListener {
+         @Override
+         public void selectedTabChanged(Tab oldSelectedTab, Tab newSelectedTab) {
+-            if (isTabSelected() && getStopwatch().isRunning()) {
+-                acquireWakeLock();
+-            } else {
+-                releaseWakeLock();
++            adjustWakeLock();
++        }
++    }
++
++    /**
++     * Update the user interface in response to a stopwatch change.
++     */
++    private class StopwatchWatcher implements StopwatchListener {
++        @Override
++        public void stopwatchUpdated(Stopwatch before, Stopwatch after) {
++            if (DataModel.getDataModel().isApplicationInForeground()) {
++                updateUI();
+             }
+         }
++
++        @Override
++        public void lapAdded(Lap lap) {}
+     }
+ }
+diff --git a/src/com/android/deskclock/stopwatch/StopwatchService.java b/src/com/android/deskclock/stopwatch/StopwatchService.java
+index 07714e899..53fcd0555 100644
+--- a/src/com/android/deskclock/stopwatch/StopwatchService.java
++++ b/src/com/android/deskclock/stopwatch/StopwatchService.java
+@@ -52,19 +52,18 @@ public final class StopwatchService extends Service {
+                 Events.sendStopwatchEvent(R.string.action_pause, R.string.label_notification);
+                 break;
+             }
+-            case HandleDeskClockApiCalls.ACTION_LAP_STOPWATCH: {
+-                DataModel.getDataModel().addLap();
+-                Events.sendStopwatchEvent(R.string.action_lap, R.string.label_notification);
+-                break;
+-            }
+             case HandleDeskClockApiCalls.ACTION_RESET_STOPWATCH: {
+-                DataModel.getDataModel().clearLaps();
+                 DataModel.getDataModel().resetStopwatch();
+                 Events.sendStopwatchEvent(R.string.action_reset, R.string.label_notification);
+                 break;
+             }
++            case HandleDeskClockApiCalls.ACTION_LAP_STOPWATCH: {
++                DataModel.getDataModel().addLap();
++                Events.sendStopwatchEvent(R.string.action_lap, R.string.label_notification);
++                break;
++            }
+         }
+ 
+-        return Service.START_NOT_STICKY;
++        return START_NOT_STICKY;
+     }
+ }
+\ No newline at end of file

@@ -1,0 +1,1607 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/AppsRecyclerAdapter.kt b/app/src/main/java/com/amaze/filemanager/adapters/AppsRecyclerAdapter.kt
+index f04cdc3b6..c28cf6f9b 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/AppsRecyclerAdapter.kt
++++ b/app/src/main/java/com/amaze/filemanager/adapters/AppsRecyclerAdapter.kt
+@@ -36,6 +36,7 @@ import android.view.View
+ import android.view.ViewGroup
+ import android.widget.PopupMenu
+ import android.widget.Toast
++import androidx.annotation.IntDef
+ import androidx.appcompat.view.ContextThemeWrapper
+ import androidx.fragment.app.Fragment
+ import androidx.recyclerview.widget.RecyclerView
+@@ -45,6 +46,8 @@ import com.amaze.filemanager.R
+ import com.amaze.filemanager.adapters.data.AppDataParcelable
+ import com.amaze.filemanager.adapters.glide.AppsAdapterPreloadModel
+ import com.amaze.filemanager.adapters.holders.AppHolder
++import com.amaze.filemanager.adapters.holders.EmptyViewHolder
++import com.amaze.filemanager.adapters.holders.SpecialViewHolder
+ import com.amaze.filemanager.asynchronous.asynctasks.DeleteTask
+ import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil
+ import com.amaze.filemanager.asynchronous.services.CopyService
+@@ -66,6 +69,8 @@ import com.amaze.filemanager.utils.Utils
+ import com.amaze.filemanager.utils.safeLet
+ import java.io.File
+ import java.util.*
++import kotlin.collections.ArrayList
++import kotlin.math.roundToInt
+ 
+ class AppsRecyclerAdapter(
+     private val fragment: Fragment,
+@@ -74,59 +79,128 @@ class AppsRecyclerAdapter(
+     private val adjustListViewCallback: AdjustListViewForTv<AppHolder>,
+     private val appDataParcelableList: MutableList<AppDataParcelable>
+ ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
++
+     private val myChecked = SparseBooleanArray()
++    private var appDataListItem: MutableList<ListItem> = mutableListOf()
++        set(value) {
++            value.clear()
++            val headerFlags = BooleanArray(2)
++            appDataParcelableList.forEach {
++                if (!isBottomSheet && it.isSystemApp && !headerFlags[0]) {
++                    value.add(ListItem(TYPE_HEADER_SYSTEM))
++                    modelProvider.addItem("")
++                    headerFlags[0] = true
++                } else if (!isBottomSheet && !it.isSystemApp && !headerFlags[1]) {
++                    value.add(ListItem(TYPE_HEADER_THIRD_PARTY))
++                    modelProvider.addItem("")
++                    headerFlags[1] = true
++                }
++                modelProvider.addItem(it.path)
++                value.add(ListItem(it))
++            }
++            if (!isBottomSheet) {
++                modelProvider.addItem("")
++                value.add(ListItem(EMPTY_LAST_ITEM))
++            }
++            field = value
++        }
++
++    init {
++        appDataListItem = mutableListOf()
++    }
++
+     private val mInflater: LayoutInflater get() = fragment.requireActivity()
+         .getSystemService(Activity.LAYOUT_INFLATER_SERVICE) as LayoutInflater
+ 
++    companion object {
++        const val TYPE_ITEM = 0
++        const val TYPE_HEADER_SYSTEM = 1
++        const val TYPE_HEADER_THIRD_PARTY = 2
++        const val EMPTY_LAST_ITEM = 3
++    }
++
+     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+-        val view = mInflater.inflate(R.layout.rowlayout, parent, false)
+-        return AppHolder(view)
++        var view = View(fragment.requireContext())
++        when (viewType) {
++            TYPE_ITEM -> {
++                view = mInflater.inflate(R.layout.rowlayout, parent, false)
++                return AppHolder(view)
++            }
++            TYPE_HEADER_SYSTEM, TYPE_HEADER_THIRD_PARTY -> {
++                view = mInflater.inflate(R.layout.list_header, parent, false)
++                return SpecialViewHolder(
++                    fragment.requireContext(), view,
++                    (fragment.requireActivity() as MainActivity).utilsProvider,
++                    if (viewType == TYPE_HEADER_SYSTEM)
++                        SpecialViewHolder.HEADER_SYSTEM_APP
++                    else
++                        SpecialViewHolder.HEADER_THIRD_PARTY_APP
++                )
++            }
++            EMPTY_LAST_ITEM -> {
++                view.minimumHeight =
++                    (
++                        fragment.requireActivity().resources.getDimension(R.dimen.fab_height) +
++                            fragment.requireContext().resources
++                                .getDimension(R.dimen.fab_margin)
++                        ).roundToInt()
++                return EmptyViewHolder(view)
++            }
++            else -> {
++                throw IllegalStateException("Illegal $viewType in apps adapter")
++            }
++        }
++    }
++
++    override fun getItemViewType(position: Int): Int {
++        return appDataListItem[position].listItemType
+     }
+ 
+     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+         if (holder is AppHolder) {
+-            val rowItem: AppDataParcelable = appDataParcelableList[position]
+-            if (isBottomSheet) {
+-                holder.about.visibility = View.GONE
+-                holder.txtDesc.text = rowItem.openFileParcelable?.className
+-                holder.txtDesc.isSingleLine = true
+-                holder.txtDesc.ellipsize = TextUtils.TruncateAt.MIDDLE
+-                modelProvider.loadApkImage(rowItem.packageName, holder.apkIcon)
+-            } else {
+-                modelProvider.loadApkImage(rowItem.path, holder.apkIcon)
+-            }
+-            if (holder.about != null && !isBottomSheet) {
+-                if ((fragment.requireActivity() as MainActivity).appTheme == AppTheme.LIGHT) {
+-                    holder.about.setColorFilter(
+-                        Color.parseColor("#ff666666")
++            appDataListItem[position].appDataParcelable?.let { rowItem ->
++                if (isBottomSheet) {
++                    holder.about.visibility = View.GONE
++                    holder.txtDesc.text = rowItem.openFileParcelable?.className
++                    holder.txtDesc.isSingleLine = true
++                    holder.txtDesc.ellipsize = TextUtils.TruncateAt.MIDDLE
++                    modelProvider.loadApkImage(rowItem.packageName, holder.apkIcon)
++                } else {
++                    modelProvider.loadApkImage(rowItem.path, holder.apkIcon)
++                }
++                if (holder.about != null && !isBottomSheet) {
++                    if ((fragment.requireActivity() as MainActivity).appTheme == AppTheme.LIGHT) {
++                        holder.about.setColorFilter(
++                            Color.parseColor("#ff666666")
++                        )
++                    }
++                    showPopup(holder.about, rowItem)
++                }
++                holder.rl.setOnFocusChangeListener { _, _ ->
++                    adjustListViewCallback.adjustListViewForTv(
++                        holder,
++                        fragment.requireActivity() as MainActivity
+                     )
+                 }
+-                showPopup(holder.about, rowItem)
+-            }
+-            holder.rl.setOnFocusChangeListener { _, _ ->
+-                adjustListViewCallback.adjustListViewForTv(
+-                    holder,
+-                    fragment.requireActivity() as MainActivity
+-                )
+-            }
+-            holder.txtTitle.text = rowItem.label
+-            val enableMarqueeFilename =
+-                (fragment.requireActivity() as MainActivity)
+-                    .getBoolean(PreferencesConstants.PREFERENCE_ENABLE_MARQUEE_FILENAME)
+-            if (enableMarqueeFilename) {
+-                holder.txtTitle.ellipsize = if (enableMarqueeFilename)
+-                    TextUtils.TruncateAt.MARQUEE else TextUtils.TruncateAt.MIDDLE
+-                marqueeAfterDelay(2000, holder.txtTitle)
+-            }
++                holder.txtTitle.text = rowItem.label
++                val enableMarqueeFilename =
++                    (fragment.requireActivity() as MainActivity)
++                        .getBoolean(PreferencesConstants.PREFERENCE_ENABLE_MARQUEE_FILENAME)
++                if (enableMarqueeFilename) {
++                    holder.txtTitle.ellipsize = if (enableMarqueeFilename)
++                        TextUtils.TruncateAt.MARQUEE else TextUtils.TruncateAt.MIDDLE
++                    marqueeAfterDelay(2000, holder.txtTitle)
++                }
+ 
+-            // 	File f = new File(rowItem.getDesc());
+-            if (!isBottomSheet) {
+-                holder.txtDesc.text = rowItem.fileSize
+-            }
+-            holder.rl.isClickable = true
+-            holder.rl.nextFocusRightId = holder.about.id
+-            holder.rl.setOnClickListener {
+-                startActivityForRowItem(rowItem)
++                // 	File f = new File(rowItem.getDesc());
++                if (!isBottomSheet) {
++                    holder.txtDesc.text = rowItem.fileSize
++                }
++                holder.rl.isClickable = true
++                holder.rl.nextFocusRightId = holder.about.id
++                holder.rl.setOnClickListener {
++                    startActivityForRowItem(rowItem)
++                }
+             }
+             if (myChecked[position]) {
+                 holder.rl.setBackgroundColor(
+@@ -143,7 +217,7 @@ class AppsRecyclerAdapter(
+     }
+ 
+     override fun getItemCount(): Int {
+-        return appDataParcelableList.size
++        return appDataListItem.size
+     }
+ 
+     /**
+@@ -155,7 +229,7 @@ class AppsRecyclerAdapter(
+             clear()
+             val list = if (!showSystemApps) data.filter { !it.isSystemApp } else data
+             addAll(list)
+-            modelProvider.setItemList(list.map { it.path })
++            appDataListItem = mutableListOf()
+             notifyDataSetChanged()
+         }
+     }
+@@ -424,4 +498,20 @@ class AppsRecyclerAdapter(
+             .build()
+             .show()
+     }
++
++    @Target(AnnotationTarget.TYPE)
++    @IntDef(
++        TYPE_ITEM,
++        TYPE_HEADER_SYSTEM,
++        TYPE_HEADER_THIRD_PARTY,
++        EMPTY_LAST_ITEM,
++    )
++    annotation class ListItemType
++
++    data class ListItem(
++        var appDataParcelable: AppDataParcelable?,
++        var listItemType: @ListItemType Int = TYPE_ITEM
++    ) {
++        constructor(listItemType: @ListItemType Int) : this(null, listItemType)
++    }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+index 1738d0126..0d0568690 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/RecyclerAdapter.java
+@@ -53,6 +53,7 @@ import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConsta
+ import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+ import com.amaze.filemanager.ui.provider.UtilitiesProvider;
++import com.amaze.filemanager.ui.selection.SelectionPopupMenu;
+ import com.amaze.filemanager.ui.theme.AppTheme;
+ import com.amaze.filemanager.ui.views.CircleGradientDrawable;
+ import com.amaze.filemanager.utils.AnimUtils;
+@@ -256,15 +257,31 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+     }
+   }
+ 
+-  public void toggleChecked(boolean b, String path) {
++  public void toggleChecked(boolean selectAll, String path) {
+     int i = path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 0 : 1;
+ 
+     for (; i < itemsDigested.size(); i++) {
+       ListItem item = itemsDigested.get(i);
+-      if (b && item.getChecked() != ListItem.CHECKED) {
++      if (selectAll && item.getChecked() != ListItem.CHECKED) {
+         item.setChecked(true);
+         notifyItemChanged(i);
+-      } else if (!b && item.getChecked() == ListItem.CHECKED) {
++      } else if (!selectAll && item.getChecked() == ListItem.CHECKED) {
++        item.setChecked(false);
++        notifyItemChanged(i);
++      }
++    }
++    invalidateActionMode();
++  }
++
++  public void toggleInverse(String path) {
++    int i = path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON) ? 0 : 1;
++
++    for (; i < itemsDigested.size(); i++) {
++      ListItem item = itemsDigested.get(i);
++      if (item.getChecked() != ListItem.CHECKED) {
++        item.setChecked(true);
++        notifyItemChanged(i);
++      } else if (item.getChecked() == ListItem.CHECKED) {
+         item.setChecked(false);
+         notifyItemChanged(i);
+       }
+@@ -272,6 +289,99 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+     invalidateActionMode();
+   }
+ 
++  public void toggleSameTypes() {
++    ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
++    for (int i = 0; i < checkedItemsIndexes.size(); i++) {
++      LayoutElementParcelable selectedElement =
++          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
++      for (int z = 0; z < itemsDigested.size(); z++) {
++        ListItem currentItem = itemsDigested.get(z);
++        if (currentItem.getElem() == null) {
++          // header type list item ('Files' / 'Folders')
++          continue;
++        }
++        if (selectedElement.isDirectory || currentItem.getElem().isDirectory) {
++          if (selectedElement.isDirectory && currentItem.getElem().isDirectory) {
++            if (currentItem.getChecked() != ListItem.CHECKED) {
++              currentItem.setChecked(true);
++              notifyItemChanged(z);
++            }
++          }
++        } else {
++          String mimeTypeCurrentItem = MimeTypes.getExtension(currentItem.getElem().desc);
++          String mimeTypeSelectedElement = MimeTypes.getExtension(selectedElement.desc);
++          if (mimeTypeCurrentItem.equalsIgnoreCase(mimeTypeSelectedElement)
++              && currentItem.getChecked() != ListItem.CHECKED) {
++            currentItem.setChecked(true);
++            notifyItemChanged(z);
++          }
++        }
++      }
++    }
++    invalidateActionMode();
++  }
++
++  public void toggleSameDates() {
++    ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
++    for (int i = 0; i < checkedItemsIndexes.size(); i++) {
++      LayoutElementParcelable selectedElement =
++          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
++      for (int z = 0; z < itemsDigested.size(); z++) {
++        ListItem currentItem = itemsDigested.get(z);
++        if (currentItem.getElem() == null) {
++          // header type list item ('Files' / 'Folders')
++          continue;
++        }
++        String dateModifiedCurrentItem = currentItem.getElem().dateModification.split("\\|")[0];
++        String dateModifiedSelectedElement = selectedElement.dateModification.split("\\|")[0];
++        if (dateModifiedCurrentItem.trim().equalsIgnoreCase(dateModifiedSelectedElement.trim())
++            && currentItem.getChecked() != ListItem.CHECKED) {
++          currentItem.setChecked(true);
++          notifyItemChanged(z);
++        }
++      }
++    }
++    invalidateActionMode();
++  }
++
++  public void toggleSimilarNames() {
++    ArrayList<Integer> checkedItemsIndexes = getCheckedItemsIndex();
++    for (int i = 0; i < checkedItemsIndexes.size(); i++) {
++      LayoutElementParcelable selectedElement =
++          itemsDigested.get(checkedItemsIndexes.get(i)).getElem();
++      int fuzzinessFactor = selectedElement.title.length() / SelectionPopupMenu.FUZZYNESS_FACTOR;
++      if (fuzzinessFactor >= 1) {
++        for (int z = 0; z < itemsDigested.size(); z++) {
++          ListItem currentItem = itemsDigested.get(z);
++          if (currentItem.getElem() == null) {
++            // header type list item ('Files' / 'Folders')
++            continue;
++          }
++          int remainingFuzzyness = fuzzinessFactor;
++
++          char[] currentItemName = currentItem.getElem().title.toCharArray();
++          char[] selectedElementName = selectedElement.title.toCharArray();
++          boolean isSimilar = true;
++          for (int j = 0; j < Math.min(currentItemName.length, selectedElementName.length); j++) {
++            if (currentItemName[j] != selectedElementName[j] && remainingFuzzyness-- < 0) {
++              isSimilar = false;
++              break;
++            }
++          }
++          if (isSimilar
++              && Math.abs(currentItemName.length - selectedElementName.length)
++                  <= remainingFuzzyness) {
++            if (currentItem.getChecked() != ListItem.CHECKED) {
++              currentItem.setChecked(true);
++              notifyItemChanged(z);
++            }
++          }
++        }
++      }
++    }
++    invalidateActionMode();
++  }
++
+   /**
+    * called when we would want to toggle check for all items in the adapter
+    *
+@@ -308,16 +418,14 @@ public class RecyclerAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
+   }
+ 
+   public boolean areAllChecked(String path) {
+-    boolean allChecked = true;
+     int i = (path.equals("/") || !getBoolean(PREFERENCE_SHOW_GOBACK_BUTTON)) ? 0 : 1;
+ 
+     for (; i < itemsDigested.size(); i++) {
+       if (itemsDigested.get(i).getChecked() == ListItem.NOT_CHECKED) {
+-        allChecked = false;
++        return false;
+       }
+     }
+-
+-    return allChecked;
++    return true;
+   }
+ 
+   public ArrayList<Integer> getCheckedItemsIndex() {
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataSorter.kt b/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataSorter.kt
+index d03f37c2e..e7a8918ad 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataSorter.kt
++++ b/app/src/main/java/com/amaze/filemanager/adapters/data/AppDataSorter.kt
+@@ -34,6 +34,10 @@ class AppDataSorter(var sort: Int, isAscending: Boolean) :
+     override fun compare(file1: AppDataParcelable?, file2: AppDataParcelable?): Int {
+         safeLet(file1, file2) {
+             f1, f2 ->
++            if (f1.isSystemApp != f2.isSystemApp) {
++                return if (f1.isSystemApp) -1 else 1
++            }
++
+             when (sort) {
+                 SORT_NAME -> {
+                     // sort by name
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java b/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java
+index 6e37631ff..83cd6b664 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/glide/AppsAdapterPreloadModel.java
+@@ -20,6 +20,7 @@
+ 
+ package com.amaze.filemanager.adapters.glide;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+ 
+@@ -54,8 +55,11 @@ public class AppsAdapterPreloadModel implements ListPreloader.PreloadModelProvid
+     this.isBottomSheet = isBottomSheet;
+   }
+ 
+-  public void setItemList(List<String> items) {
+-    this.items = items;
++  public void addItem(String item) {
++    if (items == null) {
++      items = new ArrayList<>();
++    }
++    items.add(item);
+   }
+ 
+   @NonNull
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/holders/SpecialViewHolder.kt b/app/src/main/java/com/amaze/filemanager/adapters/holders/SpecialViewHolder.kt
+index ed09671fe..7c771eec5 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/holders/SpecialViewHolder.kt
++++ b/app/src/main/java/com/amaze/filemanager/adapters/holders/SpecialViewHolder.kt
+@@ -44,12 +44,16 @@ class SpecialViewHolder(
+     companion object {
+         const val HEADER_FILES = 0
+         const val HEADER_FOLDERS = 1
++        const val HEADER_SYSTEM_APP = 2
++        const val HEADER_THIRD_PARTY_APP = 3
+     }
+ 
+     init {
+         when (type) {
+             HEADER_FILES -> txtTitle.setText(R.string.files)
+             HEADER_FOLDERS -> txtTitle.setText(R.string.folders)
++            HEADER_SYSTEM_APP -> txtTitle.setText(R.string.system_apps)
++            HEADER_THIRD_PARTY_APP -> txtTitle.setText(R.string.third_party_apps)
+             else -> throw IllegalStateException(": $type")
+         }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java b/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
+index cb3e88eeb..bb59c0827 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/loaders/AppListLoader.java
+@@ -36,7 +36,6 @@ import android.content.pm.PackageInfo;
+ import android.content.pm.PackageManager;
+ import android.text.format.Formatter;
+ 
+-import androidx.core.util.Pair;
+ import androidx.loader.content.AsyncTaskLoader;
+ 
+ /**
+@@ -44,11 +43,11 @@ import androidx.loader.content.AsyncTaskLoader;
+  *
+  * <p>Class loads all the packages installed
+  */
+-public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
++public class AppListLoader extends AsyncTaskLoader<List<AppDataParcelable>> {
+ 
+   private PackageManager packageManager;
+   private PackageReceiver packageReceiver;
+-  private AppsDataPair mApps;
++  private List<AppDataParcelable> mApps;
+   private final int sortBy;
+   private final boolean isAscending;
+ 
+@@ -66,15 +65,14 @@ public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+   }
+ 
+   @Override
+-  public AppsDataPair loadInBackground() {
++  public List<AppDataParcelable> loadInBackground() {
+     List<ApplicationInfo> apps =
+         packageManager.getInstalledApplications(
+             PackageManager.MATCH_UNINSTALLED_PACKAGES
+                 | PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS);
+ 
+-    if (apps == null) return new AppsDataPair(Collections.emptyList(), Collections.emptyList());
+-
+-    mApps = new AppsDataPair(new ArrayList<>(apps.size()), new ArrayList<>(apps.size()));
++    if (apps == null) return Collections.emptyList();
++    mApps = new ArrayList<>(apps.size());
+     PackageInfo androidInfo = null;
+     try {
+       androidInfo = packageManager.getPackageInfo("android", PackageManager.GET_SIGNATURES);
+@@ -110,27 +108,22 @@ public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+               isSystemApp,
+               null);
+ 
+-      mApps.first.add(elem);
+-    }
+-
+-    Collections.sort(mApps.first, new AppDataSorter(sortBy, isAscending));
+-
+-    for (AppDataParcelable p : mApps.first) {
+-      mApps.second.add(p.getPath());
++      mApps.add(elem);
+     }
+ 
++    Collections.sort(mApps, new AppDataSorter(sortBy, isAscending));
+     return mApps;
+   }
+ 
+   @Override
+-  public void deliverResult(AppsDataPair data) {
++  public void deliverResult(List<AppDataParcelable> data) {
+     if (isReset()) {
+ 
+       if (data != null) onReleaseResources(data); // TODO onReleaseResources() is empty
+     }
+ 
+     // preserving old data for it to be closed
+-    AppsDataPair oldData = mApps;
++    List<AppDataParcelable> oldData = mApps;
+     mApps = data;
+     if (isStarted()) {
+       // loader has been started, if we have data, return immediately
+@@ -168,7 +161,7 @@ public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+   }
+ 
+   @Override
+-  public void onCanceled(AppsDataPair data) {
++  public void onCanceled(List<AppDataParcelable> data) {
+     super.onCanceled(data);
+ 
+     onReleaseResources(data); // TODO onReleaseResources() is empty
+@@ -197,7 +190,7 @@ public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+ 
+   /** We would want to release resources here List is nothing we would want to close */
+   // TODO do something
+-  private void onReleaseResources(AppsDataPair layoutElementList) {}
++  private void onReleaseResources(List<AppDataParcelable> layoutElementList) {}
+ 
+   /**
+    * Check if an App is under /system or has been installed as an update to a built-in system
+@@ -216,18 +209,4 @@ public class AppListLoader extends AsyncTaskLoader<AppListLoader.AppsDataPair> {
+         && piApp.signatures != null
+         && piSys.signatures[0].equals(piApp.signatures[0]));
+   }
+-
+-  /** typedef Pair<List<AppDataParcelable>, List<String>> AppsDataPair */
+-  public static class AppsDataPair extends Pair<List<AppDataParcelable>, List<String>> {
+-
+-    /**
+-     * Constructor for a Pair.
+-     *
+-     * @param first the first object in the Pair
+-     * @param second the second object in the pair
+-     */
+-    public AppsDataPair(List<AppDataParcelable> first, List<String> second) {
+-      super(first, second);
+-    }
+-  }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt b/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
+index 5b176c170..18f18983b 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/root/ListFilesCommand.kt
+@@ -57,8 +57,9 @@ object ListFilesCommand : IRootCommand() {
+             result.first.forEach {
+                 if (!it.contains("Permission denied")) {
+                     parseStringForHybridFile(
+-                        it, path,
+-                        !result.second
++                        rawFile = it,
++                        path = path,
++                        isStat = !result.second
+                     )
+                         ?.let(onFileFoundCallback)
+                 }
+@@ -101,40 +102,44 @@ object ListFilesCommand : IRootCommand() {
+ 
+             val command = "stat -c '%A %h %G %U %B %Y %N' " +
+                 "$appendedPath*" + (if (showHidden) " $appendedPath.* " else "")
+-            return if (!retryWithLs &&
+-                !PreferenceManager.getDefaultSharedPreferences(AppConfig.getInstance())
++            val enforceLegacyFileListing: Boolean =
++                PreferenceManager.getDefaultSharedPreferences(AppConfig.getInstance())
+                     .getBoolean(
+-                            PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING,
+-                            false
+-                        )
+-            ) {
+-                Log.i(javaClass.simpleName, "Using stat for list parsing")
++                        PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING,
++                        false
++                    )
++            return if (!retryWithLs && !enforceLegacyFileListing) {
++                Log.i(TAG, "Using stat for list parsing")
+                 Pair(
+                     first = runShellCommandToList(command).map {
+                         it.replace(appendedPath, "")
+                     },
+-                    second = retryWithLs
++                    second = enforceLegacyFileListing
+                 )
+             } else {
+-                Log.i(javaClass.simpleName, "Using ls for list parsing")
++                Log.i(TAG, "Using ls for list parsing")
+                 Pair(
+                     first = runShellCommandToList(
+                         "ls -l " + (if (showHidden) "-a " else "") +
+                             "\"$sanitizedPath\""
+                     ),
+-                    second = retryWithLs
++                    second = if (retryWithLs) {
++                        true
++                    } else {
++                        enforceLegacyFileListing
++                    }
+                 )
+             }
+         } catch (invalidCommand: ShellCommandInvalidException) {
+-            Log.w(javaClass.simpleName, "Command not found - ${invalidCommand.message}")
++            Log.w(TAG, "Command not found - ${invalidCommand.message}")
+             return if (retryWithLs) {
+-                Pair(first = ArrayList(), second = true)
++                Pair(first = emptyList(), second = true)
+             } else {
+                 executeRootCommand(path, showHidden, true)
+             }
+         } catch (exception: ShellNotRunningException) {
+             exception.printStackTrace()
+-            return Pair(first = ArrayList(), second = false)
++            return Pair(first = emptyList(), second = false)
+         }
+     }
+ 
+@@ -234,4 +239,6 @@ object ListFilesCommand : IRootCommand() {
+             }
+         }
+     }
++
++    data class ExecuteRootCommandResult(val lines: List<String>, val forcedLs: Boolean)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+index e7c0eeb57..574d6b4c5 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+@@ -177,6 +177,7 @@ import androidx.annotation.Nullable;
+ import androidx.annotation.RequiresApi;
+ import androidx.annotation.StringRes;
+ import androidx.arch.core.util.Function;
++import androidx.coordinatorlayout.widget.CoordinatorLayout;
+ import androidx.fragment.app.Fragment;
+ import androidx.fragment.app.FragmentTransaction;
+ import androidx.loader.app.LoaderManager;
+@@ -1443,6 +1444,24 @@ public class MainActivity extends PermissionsActivity
+     return floatingActionButton;
+   }
+ 
++  public void showFab() {
++    getFAB().setVisibility(View.VISIBLE);
++    getFAB().show();
++    CoordinatorLayout.LayoutParams params =
++        (CoordinatorLayout.LayoutParams) getFAB().getLayoutParams();
++    params.setBehavior(new SpeedDialView.ScrollingViewSnackbarBehavior());
++    getFAB().requestLayout();
++  }
++
++  public void hideFab() {
++    getFAB().setVisibility(View.GONE);
++    getFAB().hide();
++    CoordinatorLayout.LayoutParams params =
++        (CoordinatorLayout.LayoutParams) getFAB().getLayoutParams();
++    params.setBehavior(new SpeedDialView.NoBehavior());
++    getFAB().requestLayout();
++  }
++
+   public AppBar getAppbar() {
+     return appbar;
+   }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/OpenFileDialogFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/dialogs/OpenFileDialogFragment.kt
+index e6cb93981..4ae8ae29c 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/OpenFileDialogFragment.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/OpenFileDialogFragment.kt
+@@ -310,11 +310,6 @@ class OpenFileDialogFragment : BaseBottomSheetFragment(), AdjustListViewForTv<Ap
+             modelProvider,
+             true, this, appDataParcelableList
+         )
+-        modelProvider.setItemList(
+-            appDataParcelableList.map { appDataParcelable ->
+-                appDataParcelable.packageName
+-            }
+-        )
+         loadViews(lastAppData)
+ 
+         viewBinding.appsRecyclerView.addOnScrollListener(preloader)
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/AppsListFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/AppsListFragment.java
+index 268682327..f6c792b38 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/AppsListFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/AppsListFragment.java
+@@ -40,6 +40,7 @@ import com.amaze.filemanager.asynchronous.loaders.AppListLoader;
+ import com.amaze.filemanager.ui.activities.MainActivity;
+ import com.amaze.filemanager.ui.provider.UtilitiesProvider;
+ import com.amaze.filemanager.ui.theme.AppTheme;
++import com.amaze.filemanager.ui.views.FastScroller;
+ import com.amaze.filemanager.utils.GlideConstants;
+ import com.amaze.filemanager.utils.Utils;
+ import com.bumptech.glide.integration.recyclerview.RecyclerViewPreloader;
+@@ -68,7 +69,7 @@ import androidx.recyclerview.widget.RecyclerView;
+ import me.zhanghai.android.materialprogressbar.MaterialProgressBar;
+ 
+ public class AppsListFragment extends Fragment
+-    implements LoaderManager.LoaderCallbacks<AppListLoader.AppsDataPair>,
++    implements LoaderManager.LoaderCallbacks<List<AppDataParcelable>>,
+         AdjustListViewForTv<AppHolder> {
+ 
+   public static final int ID_LOADER_APP_LIST = 0;
+@@ -82,6 +83,8 @@ public class AppsListFragment extends Fragment
+   private LinearLayoutManager linearLayoutManager;
+   private RecyclerViewPreloader<String> preloader;
+   private List<AppDataParcelable> appDataParcelableList;
++  private FastScroller fastScroller;
++  private boolean showSystemApps = true;
+ 
+   @Override
+   public void onCreate(Bundle savedInstanceState) {
+@@ -101,6 +104,7 @@ public class AppsListFragment extends Fragment
+ 
+   @Override
+   public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
++    super.onViewCreated(view, savedInstanceState);
+     final MainActivity mainActivity = (MainActivity) getActivity();
+     Objects.requireNonNull(mainActivity);
+ 
+@@ -119,9 +123,17 @@ public class AppsListFragment extends Fragment
+     sharedPreferences = PreferenceManager.getDefaultSharedPreferences(getActivity());
+     isAscending = sharedPreferences.getBoolean(PREFERENCE_APPLIST_ISASCENDING, true);
+     sortby = sharedPreferences.getInt(PREFERENCE_APPLIST_SORTBY, 0);
+-
++    fastScroller = rootView.findViewById(R.id.fastscroll);
++    fastScroller.setPressedHandleColor(mainActivity.getAccent());
++    fastScroller.setRecyclerView(getRecyclerView(), 1);
++    mainActivity
++        .getAppbar()
++        .getAppbarLayout()
++        .addOnOffsetChangedListener(
++            (appBarLayout, verticalOffset) -> {
++              fastScroller.updateHandlePosition(verticalOffset, 112);
++            });
+     LoaderManager.getInstance(this).initLoader(ID_LOADER_APP_LIST, null, this);
+-    super.onViewCreated(view, savedInstanceState);
+   }
+ 
+   @Override
+@@ -141,8 +153,9 @@ public class AppsListFragment extends Fragment
+         requireActivity().finish();
+         return true;
+       case R.id.checkbox_system_apps:
+-        adapter.setData(appDataParcelableList, !item.isChecked());
+         item.setChecked(!item.isChecked());
++        adapter.setData(appDataParcelableList, item.isChecked());
++        showSystemApps = item.isChecked();
+         return true;
+       default:
+         return super.onOptionsItemSelected(item);
+@@ -151,7 +164,7 @@ public class AppsListFragment extends Fragment
+ 
+   private void updateViews(MainActivity mainActivity, UtilitiesProvider utilsProvider) {
+     mainActivity.getAppbar().setTitle(R.string.apps);
+-    mainActivity.getFAB().hide();
++    mainActivity.hideFab();
+     mainActivity.getAppbar().getBottomBar().setVisibility(View.GONE);
+     mainActivity.supportInvalidateOptionsMenu();
+ 
+@@ -233,28 +246,34 @@ public class AppsListFragment extends Fragment
+ 
+   @NonNull
+   @Override
+-  public Loader<AppListLoader.AppsDataPair> onCreateLoader(int id, Bundle args) {
++  public Loader<List<AppDataParcelable>> onCreateLoader(int id, Bundle args) {
+     return new AppListLoader(getContext(), sortby, isAscending);
+   }
+ 
+   @Override
+   public void onLoadFinished(
+-      @NonNull Loader<AppListLoader.AppsDataPair> loader, AppListLoader.AppsDataPair data) {
++      @NonNull Loader<List<AppDataParcelable>> loader, List<AppDataParcelable> data) {
+     getSpinner().setVisibility(View.GONE);
+-    if (data.first.isEmpty()) {
++    if (data.isEmpty()) {
+       getRecyclerView().setVisibility(View.GONE);
+       rootView.findViewById(R.id.empty_text_view).setVisibility(View.VISIBLE);
+     } else {
+-      modelProvider.setItemList(data.second);
+-      appDataParcelableList = new ArrayList<>(data.first);
+-      adapter = new AppsRecyclerAdapter(this, modelProvider, false, this, data.first);
++      appDataParcelableList = new ArrayList<>(data);
++      List<AppDataParcelable> adapterList = new ArrayList<>();
++      for (AppDataParcelable appDataParcelable : data) {
++        if (!showSystemApps && appDataParcelable.isSystemApp()) {
++          continue;
++        }
++        adapterList.add(appDataParcelable);
++      }
++      adapter = new AppsRecyclerAdapter(this, modelProvider, false, this, adapterList);
+       getRecyclerView().setVisibility(View.VISIBLE);
+       getRecyclerView().setAdapter(adapter);
+     }
+   }
+ 
+   @Override
+-  public void onLoaderReset(@NonNull Loader<AppListLoader.AppsDataPair> loader) {
++  public void onLoaderReset(@NonNull Loader<List<AppDataParcelable>> loader) {
+     adapter.setData(Collections.emptyList(), true);
+   }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
+index 0212b7a5e..fb9d0bfa5 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/CompressedExplorerFragment.kt
+@@ -480,7 +480,7 @@ class CompressedExplorerFragment : Fragment(), BottomBarButtonPath {
+ 
+     override fun onResume() {
+         super.onResume()
+-        requireMainActivity().fab.hide()
++        requireMainActivity().hideFab()
+         val intent = Intent(activity, ExtractService::class.java)
+         requireActivity().bindService(intent, mServiceConnection, 0)
+     }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+index e81ef0334..c4f78f39c 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/FtpServerFragment.kt
+@@ -636,7 +636,7 @@ class FtpServerFragment : Fragment(R.layout.fragment_ftp) {
+ 
+     private fun updateViews(mainActivity: MainActivity, binding: FragmentFtpBinding) {
+         mainActivity.appbar.setTitle(R.string.ftp)
+-        mainActivity.fab.hide()
++        mainActivity.hideFab()
+         mainActivity.appbar.bottomBar.setVisibility(View.GONE)
+         mainActivity.invalidateOptionsMenu()
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+index 39665056f..3ce1ef58e 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+@@ -69,6 +69,7 @@ import com.amaze.filemanager.ui.drag.TabFragmentBottomDragListener;
+ import com.amaze.filemanager.ui.fragments.data.MainFragmentViewModel;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+ import com.amaze.filemanager.ui.provider.UtilitiesProvider;
++import com.amaze.filemanager.ui.selection.SelectionPopupMenu;
+ import com.amaze.filemanager.ui.theme.AppTheme;
+ import com.amaze.filemanager.ui.views.CustomScrollGridLayoutManager;
+ import com.amaze.filemanager.ui.views.CustomScrollLinearLayoutManager;
+@@ -417,7 +418,7 @@ public class MainFragment extends Fragment
+           mode.setCustomView(actionModeView);
+ 
+           getMainActivity().setPagingEnabled(false);
+-          getMainActivity().getFAB().hide();
++          getMainActivity().hideFab();
+ 
+           // translates the drawable content down
+           // if (getMainActivity().isDrawerLocked) getMainActivity().translateDrawerList(true);
+@@ -448,10 +449,15 @@ public class MainFragment extends Fragment
+          */
+         public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+           ArrayList<LayoutElementParcelable> checkedItems = adapter.getCheckedItems();
+-          TextView textView1 = actionModeView.findViewById(R.id.item_count);
+-          textView1.setText(String.valueOf(checkedItems.size()));
+-          textView1.setOnClickListener(null);
+-          mode.setTitle(checkedItems.size() + "");
++          actionModeView.setOnClickListener(
++              v ->
++                  SelectionPopupMenu.Companion.invokeSelectionDropdown(
++                      adapter,
++                      actionModeView,
++                      mainFragmentViewModel.getCurrentPath(),
++                      getMainActivity()));
++          TextView textView = actionModeView.findViewById(R.id.item_count);
++          textView.setText(String.valueOf(checkedItems.size()));
+           hideOption(R.id.openmulti, menu);
+           menu.findItem(R.id.all)
+               .setTitle(
+@@ -711,7 +717,7 @@ public class MainFragment extends Fragment
+           // translates the drawer content up
+           // if (getMainActivity().isDrawerLocked) getMainActivity().translateDrawerList(false);
+ 
+-          getMainActivity().getFAB().show();
++          getMainActivity().showFab();
+           if (!mainFragmentViewModel.getResults())
+             adapter.toggleChecked(false, mainFragmentViewModel.getCurrentPath());
+           else adapter.toggleChecked(false);
+@@ -991,8 +997,6 @@ public class MainFragment extends Fragment
+                         == DataUtils.GRID;
+                 setListElements(
+                     data.second, back, providedPath, data.first, false, isPathLayoutGrid);
+-                setListElements(
+-                    data.second, back, providedPath, data.first, false, isPathLayoutGrid);
+               } else {
+                 Log.w(getClass().getSimpleName(), "Load list operation cancelled");
+               }
+@@ -1196,7 +1200,7 @@ public class MainFragment extends Fragment
+       }
+ 
+       getMainActivity().updatePaths(mainFragmentViewModel.getNo());
+-      getMainActivity().getFAB().show();
++      getMainActivity().showFab();
+       getMainActivity().getAppbar().getAppbarLayout().setExpanded(true);
+       listView.stopScroll();
+       fastScroller.setRecyclerView(
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/ProcessViewerFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/ProcessViewerFragment.java
+index a84fc1c5f..339a76fd0 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/ProcessViewerFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/ProcessViewerFragment.java
+@@ -148,7 +148,7 @@ public class ProcessViewerFragment extends Fragment {
+ 
+     setRetainInstance(true);
+     mainActivity.getAppbar().setTitle(R.string.process_viewer);
+-    mainActivity.getFAB().hide();
++    mainActivity.hideFab();
+     mainActivity.getAppbar().getBottomBar().setVisibility(View.GONE);
+     mainActivity.supportInvalidateOptionsMenu();
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt b/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt
+new file mode 100644
+index 000000000..054910d4b
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/ui/selection/SelectionPopupMenu.kt
+@@ -0,0 +1,104 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.ui.selection
++
++import android.content.Context
++import android.view.MenuItem
++import android.view.View
++import android.widget.PopupMenu
++import android.widget.TextView
++import androidx.appcompat.view.ContextThemeWrapper
++import com.amaze.filemanager.R
++import com.amaze.filemanager.adapters.RecyclerAdapter
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.ui.theme.AppTheme
++import java.util.*
++
++class SelectionPopupMenu(
++    private val recyclerAdapter: RecyclerAdapter,
++    private val actionModeView: View,
++    private val currentPath: String,
++    context: Context
++) :
++    PopupMenu(context, actionModeView), PopupMenu.OnMenuItemClickListener {
++
++    companion object {
++
++        private const val SIMILARITY_THRESHOLD = 500
++        const val FUZZYNESS_FACTOR = 4
++
++        fun invokeSelectionDropdown(
++            recyclerAdapter: RecyclerAdapter,
++            actionModeView: View,
++            currentPath: String,
++            mainActivity: MainActivity?
++        ) {
++            mainActivity?.also {
++                var currentContext: Context = mainActivity.applicationContext
++                if (mainActivity.appTheme.simpleTheme == AppTheme.BLACK) {
++                    currentContext = ContextThemeWrapper(
++                        mainActivity.applicationContext,
++                        R.style.overflow_black
++                    )
++                }
++                val popupMenu = SelectionPopupMenu(
++                    recyclerAdapter, actionModeView,
++                    currentPath, currentContext
++                )
++                popupMenu.inflate(R.menu.selection_criteria)
++                if (recyclerAdapter.itemsDigested.size > SIMILARITY_THRESHOLD) {
++                    popupMenu.menu.findItem(R.id.select_similar).isVisible = false
++                }
++                popupMenu.setOnMenuItemClickListener(popupMenu)
++                popupMenu.show()
++            }
++        }
++    }
++
++    override fun onMenuItemClick(item: MenuItem?): Boolean {
++        when (item?.itemId) {
++            R.id.select_all -> {
++                // select_all
++                recyclerAdapter.toggleChecked(
++                    !recyclerAdapter
++                        .areAllChecked(currentPath),
++                    currentPath
++                )
++            }
++            R.id.select_inverse -> {
++                recyclerAdapter.toggleInverse(currentPath)
++            }
++            R.id.select_by_type -> {
++                recyclerAdapter.toggleSameTypes()
++            }
++            R.id.select_by_date -> {
++                recyclerAdapter.toggleSameDates()
++            }
++            R.id.select_similar -> {
++                recyclerAdapter.toggleSimilarNames()
++            }
++        }
++        actionModeView.invalidate()
++        actionModeView.findViewById<TextView>(R.id.item_count).text = recyclerAdapter
++            .checkedItems.size.toString()
++        return true
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt
+index b72c5903f..2a35eed87 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedHelperTaskTest.kt
+@@ -147,7 +147,9 @@ abstract class AbstractCompressedHelperTaskTest {
+     protected abstract fun createTask(relativePath: String): CompressedHelperTask
+ 
+     private fun copyArchivesToStorage() {
+-        File("src/test/resources").listFiles()?.forEach {
++        File("src/test/resources").listFiles()?.filter {
++            it.isFile
++        }?.forEach {
+             FileInputStream(it).copyTo(
+                 FileOutputStream(
+                     File(Environment.getExternalStorageDirectory(), it.name)
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/AbstractExtractorTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/AbstractExtractorTest.kt
+index a2faf6111..fa5b8fe3f 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/AbstractExtractorTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/AbstractExtractorTest.kt
+@@ -226,7 +226,9 @@ abstract class AbstractExtractorTest {
+     }
+ 
+     private fun copyArchivesToStorage() {
+-        File("src/test/resources").listFiles()?.forEach {
++        File("src/test/resources").listFiles()?.filter {
++            it.isFile
++        }?.forEach {
+             FileInputStream(it).copyTo(
+                 FileOutputStream(
+                     File(Environment.getExternalStorageDirectory(), it.name)
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/MultipartRarExtractorTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/MultipartRarExtractorTest.kt
+index 27d0ae39e..00ee84c52 100644
+--- a/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/MultipartRarExtractorTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/compressed/extractcontents/MultipartRarExtractorTest.kt
+@@ -115,7 +115,9 @@ class MultipartRarExtractorTest {
+     }
+ 
+     private fun copyArchivesToStorage() {
+-        File("src/test/resources").listFiles()?.forEach {
++        File("src/test/resources").listFiles()?.filter {
++            it.isFile
++        }?.forEach {
+             FileInputStream(it)
+                 .copyTo(FileOutputStream(File(Environment.getExternalStorageDirectory(), it.name)))
+         }
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt
+new file mode 100644
+index 000000000..cca30ca2f
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest.kt
+@@ -0,0 +1,129 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.root
++
++import android.content.SharedPreferences
++import android.os.Build.VERSION_CODES.JELLY_BEAN
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Build.VERSION_CODES.P
++import androidx.preference.PreferenceManager
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.TestUtils
++import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.mockito.ArgumentMatchers.anyBoolean
++import org.mockito.ArgumentMatchers.anyString
++import org.mockito.Mockito.`when`
++import org.mockito.Mockito.mock
++import org.mockito.kotlin.argumentCaptor
++import org.robolectric.annotation.Config
++import java.io.InputStreamReader
++
++@RunWith(AndroidJUnit4::class)
++@Config(
++    shadows = [ShadowMultiDex::class],
++    sdk = [JELLY_BEAN, KITKAT, P]
++)
++/**
++ * Unit test for [ListFilesCommand].
++ *
++ * stat and ls outputs are captured from busybox, and used as fixed outputs from mocked object
++ * to ensure command output.
++ *
++ * FIXME: add toybox outputs, just to be sure?
++ */
++class ListFilesCommandTest {
++
++    val sharedPreferences: SharedPreferences =
++        PreferenceManager.getDefaultSharedPreferences(ApplicationProvider.getApplicationContext())
++    val statLines =
++        InputStreamReader(javaClass.getResourceAsStream("/rootCommands/stat-bin.txt"))
++            .readLines()
++    val lsLines =
++        InputStreamReader(javaClass.getResourceAsStream("/rootCommands/ls-bin.txt"))
++            .readLines()
++
++    /**
++     * test setup.
++     */
++    @Before
++    fun setUp() {
++        val mockCommand = mock(ListFilesCommand.javaClass)
++        `when`(
++            mockCommand.listFiles(
++                anyString(),
++                anyBoolean(),
++                anyBoolean(),
++                argumentCaptor<(OpenMode) -> Unit>().capture(),
++                argumentCaptor<(HybridFileParcelable) -> Unit>().capture()
++            )
++        ).thenCallRealMethod()
++        `when`(
++            mockCommand.executeRootCommand(
++                anyString(), anyBoolean(), anyBoolean()
++            )
++        ).thenCallRealMethod()
++        `when`(mockCommand.runShellCommandToList("ls -l \"/bin\"")).thenReturn(lsLines)
++        `when`(
++            mockCommand.runShellCommandToList(
++                "stat -c '%A %h %G %U %B %Y %N' /bin/*"
++            )
++        ).thenReturn(statLines)
++        TestUtils.replaceObjectInstance(ListFilesCommand.javaClass, mockCommand)
++    }
++
++    /**
++     * Post test cleanup.
++     */
++    @After
++    fun tearDown() {
++        TestUtils.replaceObjectInstance(ListFilesCommand.javaClass, null)
++    }
++
++    /**
++     * Test command run.
++     *
++     * FIXME: Due to some (mysterious) limitations on mocking singletons, have to make both
++     * conditions run in one go.
++     */
++    @Test
++    fun testCommandRun() {
++        sharedPreferences.edit()
++            .putBoolean(PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING, false).commit()
++        var statCount = 0
++        ListFilesCommand.listFiles("/bin", true, false, {}, { ++statCount })
++        assertEquals(statLines.size, statCount)
++
++        sharedPreferences.edit()
++            .putBoolean(PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING, true).commit()
++        var lsCount = 0
++        ListFilesCommand.listFiles("/bin", true, false, {}, { ++lsCount })
++        assertEquals(lsLines.size - 1, lsCount)
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt
+new file mode 100644
+index 000000000..dac4aa83d
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/root/ListFilesCommandTest2.kt
+@@ -0,0 +1,127 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.root
++
++import android.content.SharedPreferences
++import android.os.Build.VERSION_CODES.JELLY_BEAN
++import android.os.Build.VERSION_CODES.KITKAT
++import android.os.Build.VERSION_CODES.P
++import androidx.preference.PreferenceManager
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.exceptions.ShellCommandInvalidException
++import com.amaze.filemanager.file_operations.filesystem.OpenMode
++import com.amaze.filemanager.filesystem.HybridFileParcelable
++import com.amaze.filemanager.shadows.ShadowMultiDex
++import com.amaze.filemanager.test.TestUtils
++import com.amaze.filemanager.ui.fragments.preference_fragments.PreferencesConstants
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.mockito.ArgumentMatchers.anyBoolean
++import org.mockito.ArgumentMatchers.anyString
++import org.mockito.Mockito.`when`
++import org.mockito.Mockito.mock
++import org.mockito.kotlin.argumentCaptor
++import org.robolectric.annotation.Config
++import java.io.InputStreamReader
++
++@RunWith(AndroidJUnit4::class)
++@Config(
++    shadows = [ShadowMultiDex::class],
++    sdk = [JELLY_BEAN, KITKAT, P]
++)
++/**
++ * Unit test for [ListFilesCommand]. This is to test the case when stat command fails.
++ *
++ * ls output is captured from busybox, and used as fixed outputs from mocked object
++ * to ensure command output.
++ *
++ * FIXME: add toybox outputs, just to be sure?
++ */
++class ListFilesCommandTest2 {
++
++    val sharedPreferences: SharedPreferences =
++        PreferenceManager.getDefaultSharedPreferences(ApplicationProvider.getApplicationContext())
++    val lsLines =
++        InputStreamReader(javaClass.getResourceAsStream("/rootCommands/ls-bin.txt"))
++            .readLines()
++
++    /**
++     * test setup.
++     */
++    @Before
++    fun setUp() {
++        val mockCommand = mock(ListFilesCommand.javaClass)
++        `when`(
++            mockCommand.listFiles(
++                anyString(),
++                anyBoolean(),
++                anyBoolean(),
++                argumentCaptor<(OpenMode) -> Unit>().capture(),
++                argumentCaptor<(HybridFileParcelable) -> Unit>().capture()
++            )
++        ).thenCallRealMethod()
++        `when`(
++            mockCommand.executeRootCommand(
++                anyString(), anyBoolean(), anyBoolean()
++            )
++        ).thenCallRealMethod()
++        `when`(mockCommand.runShellCommandToList("ls -l \"/bin\"")).thenReturn(lsLines)
++        `when`(
++            mockCommand.runShellCommandToList(
++                "stat -c '%A %h %G %U %B %Y %N' /bin/*"
++            )
++        ).thenThrow(ShellCommandInvalidException("Intentional exception"))
++        TestUtils.replaceObjectInstance(ListFilesCommand.javaClass, mockCommand)
++    }
++
++    /**
++     * Post test cleanup.
++     */
++    @After
++    fun tearDown() {
++        TestUtils.replaceObjectInstance(ListFilesCommand.javaClass, null)
++    }
++
++    /**
++     * Test command run.
++     *
++     * FIXME: Due to some (mysterious) limitations on mocking singletons, have to make both
++     * conditions run in one go.
++     */
++    @Test
++    fun testCommandRun() {
++        sharedPreferences.edit()
++            .putBoolean(PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING, false).commit()
++        var statCount = 0
++        ListFilesCommand.listFiles("/bin", true, false, {}, { ++statCount })
++        assertEquals(lsLines.size - 1, statCount)
++
++        sharedPreferences.edit()
++            .putBoolean(PreferencesConstants.PREFERENCE_ROOT_LEGACY_LISTING, true).commit()
++        var lsCount = 0
++        ListFilesCommand.listFiles("/bin", true, false, {}, { ++lsCount })
++        assertEquals(lsLines.size - 1, lsCount)
++    }
++}
+diff --git a/app/src/test/java/com/amaze/filemanager/test/TestUtils.java b/app/src/test/java/com/amaze/filemanager/test/TestUtils.java
+deleted file mode 100644
+index a2c8f025d..000000000
+--- a/app/src/test/java/com/amaze/filemanager/test/TestUtils.java
++++ /dev/null
+@@ -1,100 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.test;
+-
+-import static android.os.Build.VERSION_CODES.P;
+-import static org.robolectric.Shadows.shadowOf;
+-
+-import java.io.File;
+-
+-import org.robolectric.shadows.ShadowStorageManager;
+-
+-import android.os.Build;
+-import android.os.Environment;
+-import android.os.Parcel;
+-import android.os.UserHandle;
+-import android.os.storage.StorageManager;
+-import android.os.storage.StorageVolume;
+-
+-import androidx.annotation.NonNull;
+-import androidx.test.core.app.ApplicationProvider;
+-
+-public class TestUtils {
+-
+-  /**
+-   * Populate "internal device storage" to StorageManager with directory as provided by Robolectric.
+-   *
+-   * <p>Tests need storage access must call this on test case setup for SDK >= N to work.
+-   */
+-  public static void initializeInternalStorage() {
+-    Parcel parcel = Parcel.obtain();
+-    File dir = Environment.getExternalStorageDirectory();
+-    parcel.writeString("FS-internal");
+-    if (Build.VERSION.SDK_INT < P) parcel.writeInt(0);
+-    parcel.writeString(dir.getAbsolutePath());
+-    if (Build.VERSION.SDK_INT >= P) parcel.writeString(dir.getAbsolutePath());
+-    parcel.writeString("robolectric internal storage");
+-    parcel.writeInt(1);
+-    parcel.writeInt(0);
+-    parcel.writeInt(1);
+-    if (Build.VERSION.SDK_INT < P) parcel.writeLong(1024 * 1024);
+-    parcel.writeInt(0);
+-    parcel.writeLong(1024 * 1024);
+-    parcel.writeParcelable(UserHandle.getUserHandleForUid(0), 0);
+-    parcel.writeString("1234-5678");
+-    parcel.writeString(Environment.MEDIA_MOUNTED);
+-    addVolumeToStorageManager(parcel);
+-  }
+-
+-  /**
+-   * Populate "external device storage" to StorageManager with directory as provided by Robolectric.
+-   *
+-   * <p>Tests need storage access must call this on test case setup for SDK >= N to work.
+-   */
+-  public static void initializeExternalStorage() {
+-    Parcel parcel = Parcel.obtain();
+-    File dir = Environment.getExternalStoragePublicDirectory("external");
+-    parcel.writeString("FS-external");
+-    if (Build.VERSION.SDK_INT < P) parcel.writeInt(0);
+-    parcel.writeString(dir.getAbsolutePath());
+-    if (Build.VERSION.SDK_INT >= P) parcel.writeString(dir.getAbsolutePath());
+-    parcel.writeString("robolectric external storage");
+-    parcel.writeInt(0);
+-    parcel.writeInt(1);
+-    parcel.writeInt(0);
+-    if (Build.VERSION.SDK_INT < P) parcel.writeLong(1024 * 1024);
+-    parcel.writeInt(0);
+-    parcel.writeLong(1024 * 1024);
+-    parcel.writeParcelable(UserHandle.getUserHandleForUid(0), 0);
+-    parcel.writeString("ABCD-EFGH");
+-    parcel.writeString(Environment.MEDIA_MOUNTED);
+-    addVolumeToStorageManager(parcel);
+-  }
+-
+-  private static void addVolumeToStorageManager(@NonNull Parcel parcel) {
+-    parcel.setDataPosition(0);
+-    ShadowStorageManager storageManager =
+-        shadowOf(
+-            ApplicationProvider.getApplicationContext().getSystemService(StorageManager.class));
+-    StorageVolume volume = StorageVolume.CREATOR.createFromParcel(parcel);
+-    storageManager.addStorageVolume(volume);
+-  }
+-}
+diff --git a/app/src/test/java/com/amaze/filemanager/test/TestUtils.kt b/app/src/test/java/com/amaze/filemanager/test/TestUtils.kt
+new file mode 100644
+index 000000000..fb21b57a1
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/test/TestUtils.kt
+@@ -0,0 +1,130 @@
++/*
++ * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.test
++
++import android.content.Context
++import android.os.Build
++import android.os.Environment
++import android.os.Parcel
++import android.os.UserHandle
++import android.os.storage.StorageManager
++import android.os.storage.StorageVolume
++import androidx.test.core.app.ApplicationProvider
++import org.robolectric.Shadows
++import java.lang.reflect.Field
++import java.lang.reflect.Modifier
++
++object TestUtils {
++    /**
++     * Populate "internal device storage" to StorageManager with directory as provided by Robolectric.
++     *
++     *
++     * Tests need storage access must call this on test case setup for SDK >= N to work.
++     */
++    @JvmStatic
++    fun initializeInternalStorage() {
++        val parcel = Parcel.obtain()
++        val dir = Environment.getExternalStorageDirectory()
++        parcel.writeString("FS-internal")
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) parcel.writeInt(0)
++        parcel.writeString(dir.absolutePath)
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) parcel.writeString(dir.absolutePath)
++        parcel.writeString("robolectric internal storage")
++        parcel.writeInt(1)
++        parcel.writeInt(0)
++        parcel.writeInt(1)
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) parcel.writeLong((1024 * 1024).toLong())
++        parcel.writeInt(0)
++        parcel.writeLong((1024 * 1024).toLong())
++        parcel.writeParcelable(UserHandle.getUserHandleForUid(0), 0)
++        parcel.writeString("1234-5678")
++        parcel.writeString(Environment.MEDIA_MOUNTED)
++        addVolumeToStorageManager(parcel)
++    }
++
++    /**
++     * Populate "external device storage" to StorageManager with directory as provided by Robolectric.
++     *
++     *
++     * Tests need storage access must call this on test case setup for SDK >= N to work.
++     */
++    @JvmStatic
++    fun initializeExternalStorage() {
++        val parcel = Parcel.obtain()
++        val dir = Environment.getExternalStoragePublicDirectory("external")
++        parcel.writeString("FS-external")
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) parcel.writeInt(0)
++        parcel.writeString(dir.absolutePath)
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) parcel.writeString(dir.absolutePath)
++        parcel.writeString("robolectric external storage")
++        parcel.writeInt(0)
++        parcel.writeInt(1)
++        parcel.writeInt(0)
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) parcel.writeLong((1024 * 1024).toLong())
++        parcel.writeInt(0)
++        parcel.writeLong((1024 * 1024).toLong())
++        parcel.writeParcelable(UserHandle.getUserHandleForUid(0), 0)
++        parcel.writeString("ABCD-EFGH")
++        parcel.writeString(Environment.MEDIA_MOUNTED)
++        addVolumeToStorageManager(parcel)
++    }
++
++    /**
++     * Utility method to assist mocking Kotlin objects.
++     *
++     * Kotlin objects are essentially singletons with a protected INSTANCE generated during
++     * compile. So we are injecting our mock copy using reflection.
++     */
++    @JvmStatic
++    fun <T> replaceObjectInstance(clazz: Class<T>, newInstance: T?): T {
++
++        if (!clazz.declaredFields.any {
++            it.name == "INSTANCE" && it.type == clazz && Modifier.isStatic(it.modifiers)
++        }
++        ) {
++            throw InstantiationException(
++                "clazz ${clazz.canonicalName} does not have a static  " +
++                    "INSTANCE field, is it really a Kotlin \"object\"?"
++            )
++        }
++
++        val instanceField = clazz.getDeclaredField("INSTANCE")
++        val modifiersField = Field::class.java.getDeclaredField("modifiers")
++        modifiersField.isAccessible = true
++        modifiersField.setInt(instanceField, instanceField.modifiers and Modifier.FINAL.inv())
++
++        instanceField.isAccessible = true
++        val originalInstance = instanceField.get(null) as T
++        instanceField.set(null, newInstance)
++        return originalInstance
++    }
++
++    private fun addVolumeToStorageManager(parcel: Parcel) {
++        parcel.setDataPosition(0)
++        val storageManager = Shadows.shadowOf(
++            ApplicationProvider.getApplicationContext<Context>().getSystemService(
++                StorageManager::class.java
++            )
++        )
++        val volume = StorageVolume.CREATOR.createFromParcel(parcel)
++        storageManager.addStorageVolume(volume)
++    }
++}

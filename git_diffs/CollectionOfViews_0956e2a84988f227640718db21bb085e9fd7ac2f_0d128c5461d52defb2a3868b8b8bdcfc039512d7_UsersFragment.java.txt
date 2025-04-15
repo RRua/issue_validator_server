@@ -1,0 +1,646 @@
+diff --git a/app/src/main/java/com/commit451/gitlab/GitLabApp.java b/app/src/main/java/com/commit451/gitlab/GitLabApp.java
+index f8ff4467..efb5f7e3 100644
+--- a/app/src/main/java/com/commit451/gitlab/GitLabApp.java
++++ b/app/src/main/java/com/commit451/gitlab/GitLabApp.java
+@@ -7,6 +7,8 @@ import com.squareup.otto.Bus;
+ 
+ import net.danlew.android.joda.JodaTimeAndroid;
+ 
++import timber.log.Timber;
++
+ /**
+  * App for one time init things
+  * Created by Jawn on 7/27/2015.
+@@ -24,6 +26,9 @@ public class GitLabApp extends Application {
+     @Override
+     public void onCreate() {
+         super.onCreate();
++        if (BuildConfig.DEBUG) {
++            Timber.plant(new Timber.DebugTree());
++        }
+         Repository.init(this);
+         JodaTimeAndroid.init(this);
+     }
+diff --git a/app/src/main/java/com/commit451/gitlab/IssueActivity.java b/app/src/main/java/com/commit451/gitlab/IssueActivity.java
+index 7e1f48b1..8391b6d4 100644
+--- a/app/src/main/java/com/commit451/gitlab/IssueActivity.java
++++ b/app/src/main/java/com/commit451/gitlab/IssueActivity.java
+@@ -115,33 +115,28 @@ public class IssueActivity extends BaseActivity {
+ 		}
+ 		stateSpinner.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, temp3));
+ 		stateSpinner.setSelection(temp3.indexOf(Repository.selectedIssue.getState()));
+-		
+-		if(Repository.userAdapter != null) {
+-			assigneeSpinner.setAdapter(Repository.userAdapter);
+-			if(Repository.selectedIssue.getAssignee() != null)
+-				assigneeSpinner.setSelection(Repository.userAdapter.getPosition(Repository.selectedIssue.getAssignee()), true);
+-		}
+-		else {
+-			if(Repository.selectedIssue.getAssignee() != null) {
+-				ArrayList<User> temp = new ArrayList<User>();
+-				temp.add(Repository.selectedIssue.getAssignee());
+-				assigneeSpinner.setAdapter(new UserAdapter(this, temp));
+-			}
+-			
+-			Repository.getService().getUsersFallback(Repository.selectedProject.getId(), usersCallback);
++
++		if(Repository.selectedIssue.getAssignee() != null) {
++			ArrayList<User> temp = new ArrayList<User>();
++			temp.add(Repository.selectedIssue.getAssignee());
++			assigneeSpinner.setAdapter(new UserAdapter(this, temp));
+ 		}
++
++		Repository.getService().getUsersFallback(Repository.selectedProject.getId(), usersCallback);
+ 		
+ 		ArrayList<Milestone> temp2 = new ArrayList<Milestone>();
+-		if(Repository.selectedIssue.getMilestone() != null)
++		if(Repository.selectedIssue.getMilestone() != null) {
+ 			temp2.add(Repository.selectedIssue.getMilestone());
++		}
+ 		milestoneSpinner.setAdapter(new MilestonesAdapter(this, temp2));
+ 		
+ 		Repository.getService().getMilestones(Repository.selectedProject.getId(), milestonesCallback);
+ 		
+ 		Bypass bypass = new Bypass();
+ 		String desc = Repository.selectedIssue.getDescription();
+-		if(desc == null)
++		if(desc == null) {
+ 			desc = "";
++		}
+ 		description.setText(bypass.markdownToSpannable(desc));
+ 		description.setMovementMethod(LinkMovementMethod.getInstance());
+ 		
+@@ -294,6 +289,9 @@ public class IssueActivity extends BaseActivity {
+ 			MilestonesAdapter ma = new MilestonesAdapter(IssueActivity.this, milestones);
+ 			milestoneSpinner.setAdapter(ma);
+ 			milestoneSpinner.setSelection(ma.getPosition(Repository.selectedIssue.getMilestone()), true);
++			if (milestones.isEmpty()) {
++				milestoneSpinner.setVisibility(View.GONE);
++			}
+ 		}
+ 		
+ 		@Override
+diff --git a/app/src/main/java/com/commit451/gitlab/LoginActivity.java b/app/src/main/java/com/commit451/gitlab/LoginActivity.java
+index e3a7a847..3bc05947 100644
+--- a/app/src/main/java/com/commit451/gitlab/LoginActivity.java
++++ b/app/src/main/java/com/commit451/gitlab/LoginActivity.java
+@@ -6,11 +6,11 @@ import android.app.ProgressDialog;
+ import android.content.DialogInterface;
+ import android.content.Intent;
+ import android.os.Bundle;
+-import android.support.design.widget.Snackbar;
+ import android.text.method.LinkMovementMethod;
+ import android.view.KeyEvent;
+ import android.view.View;
+ import android.widget.TextView;
++import android.widget.Toast;
+ 
+ import com.commit451.gitlab.model.Project;
+ import com.commit451.gitlab.model.Session;
+@@ -76,7 +76,7 @@ public class LoginActivity extends BaseActivity {
+ 		String url = urlInput.getText().toString();
+ 		
+ 		if(url.length() == 0) {
+-			Snackbar.make(getWindow().getDecorView(), getString(R.string.login_error), Snackbar.LENGTH_SHORT)
++			Toast.makeText(this, getString(R.string.login_error), Toast.LENGTH_SHORT)
+ 					.show();
+ 			return;
+ 		}
+@@ -210,7 +210,7 @@ public class LoginActivity extends BaseActivity {
+             connect(auth);
+         }
+         else {
+-			Snackbar.make(getWindow().getDecorView(), getString(R.string.login_error), Snackbar.LENGTH_SHORT)
++			Toast.makeText(this, getString(R.string.login_error), Toast.LENGTH_SHORT)
+ 					.show();
+ 		}
+     }
+diff --git a/app/src/main/java/com/commit451/gitlab/adapter/NewUserAdapter.java b/app/src/main/java/com/commit451/gitlab/adapter/NewUserAdapter.java
+new file mode 100644
+index 00000000..972432d3
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/adapter/NewUserAdapter.java
+@@ -0,0 +1,60 @@
++package com.commit451.gitlab.adapter;
++
++import android.support.v7.widget.RecyclerView;
++import android.view.ViewGroup;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.model.User;
++import com.commit451.gitlab.viewHolders.UserViewHolder;
++
++import java.util.List;
++
++/**
++ * Created by Jawn on 7/28/2015.
++ */
++public class NewUserAdapter extends RecyclerView.Adapter<UserViewHolder> {
++
++    private List<User> mValues;
++
++    public User getValueAt(int position) {
++        return mValues.get(position);
++    }
++
++    public NewUserAdapter(List<User> items) {
++        mValues = items;
++    }
++
++    @Override
++    public UserViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
++        UserViewHolder holder = UserViewHolder.create(parent);
++        return holder;
++    }
++
++    @Override
++    public void onBindViewHolder(final UserViewHolder holder, int position) {
++        User user = getValueAt(position);
++        holder.bind(user);
++        holder.itemView.setTag(R.id.list_position, position);
++    }
++
++    @Override
++    public int getItemCount() {
++        return mValues.size();
++    }
++
++    public void addUser(User user) {
++        mValues.add(user);
++        notifyItemInserted(mValues.size() - 1);
++    }
++
++    public void removeUser(long userId) {
++        for(User u : mValues) {
++            if(u.getId() == userId) {
++                int index = mValues.indexOf(u);
++                mValues.remove(u);
++                notifyItemRemoved(index);
++                break;
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java b/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
+index 35e537f8..222f92fc 100644
+--- a/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
++++ b/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
+@@ -23,11 +23,13 @@ import butterknife.ButterKnife;
+ import retrofit.Callback;
+ import retrofit.RetrofitError;
+ import retrofit.client.Response;
++import timber.log.Timber;
+ 
+ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRefreshListener {
+ 
+ 	@Bind(R.id.list) RecyclerView listView;
+     @Bind(R.id.swipe_layout) SwipeRefreshLayout swipeLayout;
++    @Bind(R.id.message_text) View messageView;
+ 	
+ 	public CommitsFragment() {}
+ 	
+@@ -39,8 +41,9 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 		listView.setLayoutManager(new LinearLayoutManager(getActivity()));
+         swipeLayout.setOnRefreshListener(this);
+ 
+-		if(Repository.selectedProject != null)
+-			loadData();
++		if(Repository.selectedProject != null) {
++            loadData();
++        }
+ 		
+ 		return view;
+ 	}
+@@ -57,19 +60,22 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 	}
+ 	
+ 	public void loadData() {
+-		if(Repository.selectedProject == null)
+-			return;
++		if(Repository.selectedProject == null) {
++            return;
++        }
+ 
+ 		if(Repository.selectedBranch == null) {
+-            if(swipeLayout != null && swipeLayout.isRefreshing())
++            if(swipeLayout != null && swipeLayout.isRefreshing()) {
+                 swipeLayout.setRefreshing(false);
++            }
+ 
+             listView.setAdapter(null);
+             return;
+         }
+ 		
+-		if(swipeLayout != null && !swipeLayout.isRefreshing())
++		if(swipeLayout != null && !swipeLayout.isRefreshing()) {
+             swipeLayout.setRefreshing(true);
++        }
+ 		
+ 		Repository.getService().getCommits(Repository.selectedProject.getId(), Repository.selectedBranch.getName(), commitsCallback);
+ 	}
+@@ -89,9 +95,12 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 			
+ 			if(commits.size() > 0) {
+ 				Repository.newestCommit = commits.get(0);
++                messageView.setVisibility(View.GONE);
+ 			}
+ 			else {
++                Timber.d("No commits have been made");
+ 				Repository.newestCommit = null;
++                messageView.setVisibility(View.VISIBLE);
+ 			}
+ 			listView.setAdapter(new CommitsAdapter(commits));
+ 		}
+@@ -100,8 +109,10 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 		public void failure(RetrofitError e) {
+ 			RetrofitHelper.printDebugInfo(getActivity(), e);
+ 
+-			if(swipeLayout != null && swipeLayout.isRefreshing())
++			if(swipeLayout != null && swipeLayout.isRefreshing()) {
+                 swipeLayout.setRefreshing(false);
++            }
++            messageView.setVisibility(View.VISIBLE);
+ 
+ 			Snackbar.make(getActivity().getWindow().getDecorView(), getString(R.string.connection_error_commits), Snackbar.LENGTH_SHORT)
+ 					.show();
+diff --git a/app/src/main/java/com/commit451/gitlab/fragments/FilesFragment.java b/app/src/main/java/com/commit451/gitlab/fragments/FilesFragment.java
+index 61684fcc..2e0f666a 100644
+--- a/app/src/main/java/com/commit451/gitlab/fragments/FilesFragment.java
++++ b/app/src/main/java/com/commit451/gitlab/fragments/FilesFragment.java
+@@ -43,7 +43,6 @@ public class FilesFragment extends Fragment implements SwipeRefreshLayout.OnRefr
+ 		View view = inflater.inflate(R.layout.fragment_files, container, false);
+ 		ButterKnife.bind(this, view);
+ 
+-
+ 		list.setLayoutManager(new LinearLayoutManager(getActivity()));
+ 
+         swipeLayout.setOnRefreshListener(this);
+@@ -104,7 +103,7 @@ public class FilesFragment extends Fragment implements SwipeRefreshLayout.OnRefr
+ 			if(swipeLayout != null && swipeLayout.isRefreshing())
+                 swipeLayout.setRefreshing(false);
+ 			
+-			if(e.getResponse().getStatus() == 404) {
++			if(e.getResponse() != null && e.getResponse().getStatus() == 404) {
+ 				errorText.setVisibility(View.VISIBLE);
+ 				list.setVisibility(View.GONE);
+ 			}
+@@ -114,7 +113,7 @@ public class FilesFragment extends Fragment implements SwipeRefreshLayout.OnRefr
+ 				}
+ 				list.setAdapter(null);
+ 				
+-				if(e.getResponse().getStatus() != 500) {
++				if(e.getResponse() != null && e.getResponse().getStatus() != 500) {
+                     RetrofitHelper.printDebugInfo(getActivity(), e);
+ 					Snackbar.make(getActivity().getWindow().getDecorView(), getString(R.string.connection_error_files), Snackbar.LENGTH_SHORT)
+ 							.show();
+diff --git a/app/src/main/java/com/commit451/gitlab/fragments/RemoveUserDialogFragment.java b/app/src/main/java/com/commit451/gitlab/fragments/RemoveUserDialogFragment.java
+deleted file mode 100644
+index e42fd86f..00000000
+--- a/app/src/main/java/com/commit451/gitlab/fragments/RemoveUserDialogFragment.java
++++ /dev/null
+@@ -1,93 +0,0 @@
+-package com.commit451.gitlab.fragments;
+-
+-import android.app.ProgressDialog;
+-import android.os.Bundle;
+-import android.support.v4.app.DialogFragment;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.Toast;
+-
+-import com.commit451.gitlab.R;
+-import com.commit451.gitlab.model.DeleteResponse;
+-import com.commit451.gitlab.tools.Repository;
+-import com.commit451.gitlab.tools.RetrofitHelper;
+-
+-import butterknife.ButterKnife;
+-import butterknife.OnClick;
+-import retrofit.Callback;
+-import retrofit.RetrofitError;
+-import retrofit.client.Response;
+-
+-public class RemoveUserDialogFragment extends DialogFragment {
+-	
+-	private ProgressDialog pd;
+-	
+-	/**
+-	 * Create a new instance of AddDialogFragment
+-	 **/
+-	static RemoveUserDialogFragment newInstance() {
+-		return new RemoveUserDialogFragment();
+-	}
+-	
+-	@Override
+-	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-		View view = inflater.inflate(R.layout.dialog_remove_user, container, false);
+-		ButterKnife.bind(this, view);
+-		
+-		getDialog().setTitle(getString(R.string.remove_user_dialog_title));
+-		
+-		return view;
+-	}
+-	
+-	@Override
+-	public void onDestroyView() {
+-		super.onDestroyView();
+-        ButterKnife.unbind(this);
+-	}
+-	
+-	@OnClick(R.id.remove_button)
+-	public void onRemoveClick() {
+-		if(Repository.selectedProject.getGroup() == null)
+-			return;
+-		
+-		pd = ProgressDialog.show(RemoveUserDialogFragment.this.getActivity(), "", getResources().getString(R.string.progress_dialog), true);
+-		
+-		Repository.getService().removeGroupMember(Repository.selectedProject.getGroup().getId(), Repository.selectedUser.getId(), deleteCallback);
+-	}
+-	
+-	private Callback<DeleteResponse> deleteCallback = new Callback<DeleteResponse>() {
+-		
+-		@Override
+-		public void success(DeleteResponse response, Response resp) {
+-			if(pd != null && pd.isShowing())
+-				pd.cancel();
+-			
+-			if(response.getUserId() != 0) {
+-				Repository.userAdapter.removeUser(response.getUserId());
+-			}
+-			else {
+-				Toast.makeText(getActivity(), getString(R.string.user_remove_error), Toast.LENGTH_SHORT)
+-						.show();
+-			}
+-			
+-			RemoveUserDialogFragment.this.dismiss();
+-		}
+-		
+-		@Override
+-		public void failure(RetrofitError e) {
+-			RetrofitHelper.printDebugInfo(getActivity(), e);
+-			
+-			if(pd != null && pd.isShowing())
+-				pd.cancel();
+-			Toast.makeText(getActivity(), getString(R.string.user_remove_error), Toast.LENGTH_SHORT)
+-					.show();
+-			RemoveUserDialogFragment.this.dismiss();
+-		}
+-	};
+-	
+-	@OnClick(R.id.cancel_button)
+-	public void onCancelClick() {
+-		this.dismiss();
+-	}
+-}
+diff --git a/app/src/main/java/com/commit451/gitlab/fragments/UsersFragment.java b/app/src/main/java/com/commit451/gitlab/fragments/UsersFragment.java
+index 0b68c031..2c6a1a48 100644
+--- a/app/src/main/java/com/commit451/gitlab/fragments/UsersFragment.java
++++ b/app/src/main/java/com/commit451/gitlab/fragments/UsersFragment.java
+@@ -6,16 +6,15 @@ import android.support.v4.app.DialogFragment;
+ import android.support.v4.app.Fragment;
+ import android.support.v4.app.FragmentTransaction;
+ import android.support.v4.widget.SwipeRefreshLayout;
++import android.support.v7.widget.LinearLayoutManager;
++import android.support.v7.widget.RecyclerView;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.AdapterView;
+-import android.widget.AdapterView.OnItemClickListener;
+-import android.widget.ListView;
+ import android.widget.TextView;
+ 
+ import com.commit451.gitlab.R;
+-import com.commit451.gitlab.adapter.UserAdapter;
++import com.commit451.gitlab.adapter.NewUserAdapter;
+ import com.commit451.gitlab.model.User;
+ import com.commit451.gitlab.tools.Repository;
+ import com.commit451.gitlab.tools.RetrofitHelper;
+@@ -29,10 +28,10 @@ import retrofit.Callback;
+ import retrofit.RetrofitError;
+ import retrofit.client.Response;
+ 
+-public class UsersFragment extends Fragment implements OnItemClickListener, SwipeRefreshLayout.OnRefreshListener {
++public class UsersFragment extends Fragment implements SwipeRefreshLayout.OnRefreshListener {
+ 	
+ 	@Bind(R.id.add_user_button) View addUserButton;
+-	@Bind(R.id.fragmentList) ListView listView;
++	@Bind(R.id.list) RecyclerView listView;
+ 	@Bind(R.id.error_text) TextView errorText;
+     @Bind(R.id.swipe_layout) SwipeRefreshLayout swipeLayout;
+ 	
+@@ -42,13 +41,13 @@ public class UsersFragment extends Fragment implements OnItemClickListener, Swip
+ 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+ 		View view = inflater.inflate(R.layout.fragment_users, container, false);
+         ButterKnife.bind(this, view);
+-		
+-		listView.setOnItemClickListener(this);
+ 
++		listView.setLayoutManager(new LinearLayoutManager(getActivity()));
+         swipeLayout.setOnRefreshListener(this);
+ 
+-		if(Repository.selectedProject != null)
++		if(Repository.selectedProject != null) {
+ 			loadData();
++		}
+ 		
+ 		return view;
+ 	}
+@@ -65,16 +64,18 @@ public class UsersFragment extends Fragment implements OnItemClickListener, Swip
+ 	}
+ 	
+ 	public void loadData() {
+-		if(swipeLayout != null && !swipeLayout.isRefreshing())
+-            swipeLayout.setRefreshing(true);
++		if(swipeLayout != null && !swipeLayout.isRefreshing()) {
++			swipeLayout.setRefreshing(true);
++		}
+ 		
+ 		if(Repository.selectedProject.getGroup() == null) {
+ 			errorText.setVisibility(View.VISIBLE);
+ 			errorText.setText(R.string.not_in_group);
+ 			listView.setVisibility(View.GONE);
+ 			addUserButton.setVisibility(View.GONE);
+-			if(swipeLayout != null && swipeLayout.isRefreshing())
++			if(swipeLayout != null && swipeLayout.isRefreshing()) {
+ 				swipeLayout.setRefreshing(false);
++			}
+ 			return;
+ 		}
+ 		
+@@ -85,14 +86,15 @@ public class UsersFragment extends Fragment implements OnItemClickListener, Swip
+ 		
+ 		@Override
+ 		public void success(List<User> users, Response resp) {
+-			if(swipeLayout != null && swipeLayout.isRefreshing())
+-                swipeLayout.setRefreshing(false);
++			if(swipeLayout != null && swipeLayout.isRefreshing()) {
++				swipeLayout.setRefreshing(false);
++			}
+ 			
+ 			errorText.setVisibility(View.GONE);
+ 			listView.setVisibility(View.VISIBLE);
+ 			addUserButton.setVisibility(View.VISIBLE);
+-			
+-			Repository.userAdapter = new UserAdapter(getActivity(), users);
++
++			Repository.userAdapter = new NewUserAdapter(users);
+ 			listView.setAdapter(Repository.userAdapter);
+ 			
+ 			addUserButton.setEnabled(true);
+@@ -100,25 +102,14 @@ public class UsersFragment extends Fragment implements OnItemClickListener, Swip
+ 		
+ 		@Override
+ 		public void failure(RetrofitError e) {
+-			if(swipeLayout != null && swipeLayout.isRefreshing())
+-                swipeLayout.setRefreshing(false);
+-			
+-			if(e.getResponse() != null && e.getResponse().getStatus() == 404) {
+-				errorText.setVisibility(View.VISIBLE);
+-				errorText.setText(R.string.groups_not_supported);
+-				listView.setVisibility(View.GONE);
+-				addUserButton.setVisibility(View.GONE);
+-			}
+-			else {
+-				errorText.setVisibility(View.GONE);
+-				listView.setVisibility(View.VISIBLE);
+-				addUserButton.setVisibility(View.VISIBLE);
+-
+-                RetrofitHelper.printDebugInfo(getActivity(), e);
+-				Snackbar.make(getActivity().getWindow().getDecorView(), getString(R.string.connection_error_users), Snackbar.LENGTH_SHORT)
+-						.show();
+-				listView.setAdapter(null);
++			if(swipeLayout != null && swipeLayout.isRefreshing()) {
++				swipeLayout.setRefreshing(false);
+ 			}
++			errorText.setVisibility(View.VISIBLE);
++			addUserButton.setVisibility(View.GONE);
++			RetrofitHelper.printDebugInfo(getActivity(), e);
++			Snackbar.make(getActivity().getWindow().getDecorView(), getString(R.string.connection_error_users), Snackbar.LENGTH_SHORT)
++					.show();
+ 		}
+ 	};
+ 	
+@@ -132,13 +123,4 @@ public class UsersFragment extends Fragment implements OnItemClickListener, Swip
+ 		DialogFragment newFragment = AddUserDialogFragment.newInstance();
+ 		newFragment.show(ft, "dialog");
+ 	}
+-	
+-	@Override
+-	public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+-		Repository.selectedUser = Repository.userAdapter.getItem(position);
+-		
+-		FragmentTransaction ft = getFragmentManager().beginTransaction();
+-		DialogFragment newFragment = RemoveUserDialogFragment.newInstance();
+-		newFragment.show(ft, "dialog");
+-	}
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/commit451/gitlab/tools/Repository.java b/app/src/main/java/com/commit451/gitlab/tools/Repository.java
+index 92235dd5..bab26322 100644
+--- a/app/src/main/java/com/commit451/gitlab/tools/Repository.java
++++ b/app/src/main/java/com/commit451/gitlab/tools/Repository.java
+@@ -10,7 +10,7 @@ import android.widget.ListAdapter;
+ import android.widget.ListView;
+ 
+ import com.commit451.gitlab.adapter.IssuesAdapter;
+-import com.commit451.gitlab.adapter.UserAdapter;
++import com.commit451.gitlab.adapter.NewUserAdapter;
+ import com.commit451.gitlab.model.Branch;
+ import com.commit451.gitlab.model.DiffLine;
+ import com.commit451.gitlab.model.Group;
+@@ -51,7 +51,7 @@ public class Repository {
+ 	public static DiffLine newestCommit;
+ 
+ 	public static IssuesAdapter issueAdapter;
+-	public static UserAdapter userAdapter;
++	public static NewUserAdapter userAdapter;
+ 	
+ 	public static float displayWidth;
+ 	
+diff --git a/app/src/main/java/com/commit451/gitlab/viewHolders/ProjectViewHolder.java b/app/src/main/java/com/commit451/gitlab/viewHolders/ProjectViewHolder.java
+index 6f9da76e..0809e486 100644
+--- a/app/src/main/java/com/commit451/gitlab/viewHolders/ProjectViewHolder.java
++++ b/app/src/main/java/com/commit451/gitlab/viewHolders/ProjectViewHolder.java
+@@ -25,8 +25,7 @@ public class ProjectViewHolder extends RecyclerView.ViewHolder {
+         return new ProjectViewHolder(view);
+     }
+ 
+-    @Bind(R.id.project_title)
+-    TextView title;
++    @Bind(R.id.project_title) TextView title;
+ 
+     public ProjectViewHolder(View view) {
+         super(view);
+diff --git a/app/src/main/java/com/commit451/gitlab/viewHolders/UserViewHolder.java b/app/src/main/java/com/commit451/gitlab/viewHolders/UserViewHolder.java
+new file mode 100644
+index 00000000..76c9c374
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/viewHolders/UserViewHolder.java
+@@ -0,0 +1,66 @@
++package com.commit451.gitlab.viewHolders;
++
++import android.support.v7.widget.RecyclerView;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.ImageView;
++import android.widget.TextView;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.model.User;
++import com.commit451.gitlab.tools.Repository;
++import com.squareup.picasso.Picasso;
++
++import butterknife.Bind;
++import butterknife.ButterKnife;
++import fr.tkeunebr.gravatar.Gravatar;
++
++/**
++ * Projects, yay!
++ * Created by Jawn on 6/11/2015.
++ */
++public class UserViewHolder extends RecyclerView.ViewHolder {
++
++    public static UserViewHolder create(ViewGroup parent) {
++        View view = LayoutInflater.from(parent.getContext())
++                .inflate(R.layout.item_user, parent, false);
++        return new UserViewHolder(view);
++    }
++
++    @Bind(R.id.title) TextView title;
++    @Bind(R.id.summary) TextView summary;
++    @Bind(R.id.custom) TextView custom;
++    @Bind(R.id.icon) ImageView icon;
++
++    public UserViewHolder(View view) {
++        super(view);
++        ButterKnife.bind(this, view);
++    }
++
++    public void bind(User user) {
++        title.setText(user.getName());
++        if(user.getEmail() != null) {
++            summary.setText(user.getEmail());
++        }
++        else {
++            summary.setText(user.getUsername());
++        }
++
++        custom.setText(user.getAccessLevel(itemView.getResources().getStringArray(R.array.role_names)));
++
++        float percent = Repository.displayWidth / 720f;
++        int size = (int) (96f * percent);
++
++        String url = "http://www.gravatar.com/avatar/00000000000000000000000000000000?s=" + size;
++
++        if(user.getEmail() != null) {
++            url = Gravatar.init().with(user.getEmail()).size(size).build();
++        }
++        else if(user.getAvatarUrl() != null) {
++            url = user.getAvatarUrl() + "&s=" + size;
++        }
++
++        Picasso.with(itemView.getContext()).load(url).into(icon);
++    }
++}

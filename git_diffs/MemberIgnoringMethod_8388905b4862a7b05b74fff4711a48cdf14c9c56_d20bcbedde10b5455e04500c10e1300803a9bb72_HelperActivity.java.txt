@@ -1,0 +1,291 @@
+diff --git a/app/src/main/java/com/jpwolfso/privdnsqt/HelperActivity.java b/app/src/main/java/com/jpwolfso/privdnsqt/HelperActivity.java
+deleted file mode 100644
+index 13e9c96..0000000
+--- a/app/src/main/java/com/jpwolfso/privdnsqt/HelperActivity.java
++++ /dev/null
+@@ -1,19 +0,0 @@
+-package com.jpwolfso.privdnsqt;
+-
+-import android.app.Activity;
+-import android.content.Intent;
+-import android.net.Uri;
+-import android.os.Bundle;
+-import android.provider.Settings;
+-
+-public class HelperActivity extends Activity {
+-
+-    protected void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-
+-
+-        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+-        intent.setData(Uri.parse("package:" + getPackageName()));
+-        startActivity(intent);
+-    }
+-}
+diff --git a/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsConfigActivity.java b/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsConfigActivity.java
+new file mode 100644
+index 0000000..3c9931c
+--- /dev/null
++++ b/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsConfigActivity.java
+@@ -0,0 +1,118 @@
++package com.jpwolfso.privdnsqt;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.pm.PackageManager;
++import android.os.Bundle;
++import android.provider.Settings;
++import android.view.View;
++import android.widget.Button;
++import android.widget.CheckBox;
++import android.widget.CompoundButton;
++import android.widget.EditText;
++import android.widget.Toast;
++
++public class PrivateDnsConfigActivity extends Activity {
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_private_dns_config);
++
++        final SharedPreferences togglestates = getSharedPreferences("togglestates", Context.MODE_PRIVATE);
++        final SharedPreferences.Editor editor = togglestates.edit();
++
++        final CheckBox checkoff = findViewById(R.id.check_off);
++        final CheckBox checkauto = findViewById(R.id.check_auto);
++        final CheckBox checkon = findViewById(R.id.check_on);
++
++        final EditText texthostname = findViewById(R.id.text_hostname);
++
++        final Button okbutton = findViewById(R.id.button_ok);
++
++        if (togglestates.getBoolean("toggle_off", true)) {
++            checkoff.setChecked(true);
++        }
++
++        if (togglestates.getBoolean("toggle_auto", true)) {
++            checkauto.setChecked(true);
++        }
++
++        if (togglestates.getBoolean("toggle_on", true)) {
++            checkon.setChecked(true);
++            texthostname.setEnabled(true);
++        } else {
++            texthostname.setEnabled(false);
++
++        }
++
++        String dnsprovider = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
++        if (dnsprovider != null) {
++            texthostname.setText(dnsprovider);
++        }
++
++        checkoff.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                if (checkoff.isChecked()) {
++                    editor.putBoolean("toggle_off", true);
++                } else {
++                    editor.putBoolean("toggle_off", false);
++                }
++            }
++        });
++
++        checkauto.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                if (checkauto.isChecked()) {
++                    editor.putBoolean("toggle_auto", true);
++                } else {
++                    editor.putBoolean("toggle_auto", false);
++                }
++            }
++        });
++
++        checkon.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                if (checkon.isChecked()) {
++                    editor.putBoolean("toggle_on", true);
++                    texthostname.setEnabled(true);
++                } else {
++                    editor.putBoolean("toggle_on", false);
++                    texthostname.setEnabled(false);
++                }
++            }
++        });
++
++        okbutton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                if (hasPermission()) {
++                    if (checkon.isChecked()) {
++                        if (texthostname.getText().toString().isEmpty()) {
++                            Toast.makeText(PrivateDnsConfigActivity.this, "DNS provider not configured", Toast.LENGTH_SHORT).show();
++                            return;
++                        } else {
++                            Settings.Global.putString(getContentResolver(), "private_dns_specifier", texthostname.getText().toString());
++                        }
++                    }
++                    editor.commit();
++                    finish();
++                } else {
++                    Toast.makeText(PrivateDnsConfigActivity.this, getString(R.string.toast_permission), Toast.LENGTH_SHORT).show();
++                    return;
++                }
++            }
++        });
++
++
++    }
++
++    public boolean hasPermission() {
++        return checkCallingOrSelfPermission("android.permission.WRITE_SECURE_SETTINGS") != PackageManager.PERMISSION_DENIED;
++    }
++
++}
+diff --git a/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsTileService.java b/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsTileService.java
+index 946afda..9323209 100644
+--- a/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsTileService.java
++++ b/app/src/main/java/com/jpwolfso/privdnsqt/PrivateDnsTileService.java
+@@ -1,5 +1,7 @@
+ package com.jpwolfso.privdnsqt;
+ 
++import android.content.Context;
++import android.content.SharedPreferences;
+ import android.content.pm.PackageManager;
+ import android.graphics.drawable.Icon;
+ import android.provider.Settings;
+@@ -26,30 +28,21 @@ public class PrivateDnsTileService extends TileService {
+     public void onStartListening() {
+         super.onStartListening();
+ 
+-        Tile tile = this.getQsTile();
+-
+         String dnsmode = Settings.Global.getString(getContentResolver(), "private_dns_mode");
++        Tile tile = this.getQsTile();
+ 
+         if (dnsmode.equalsIgnoreCase(DNS_MODE_OFF)) {
+-            tile.setState((Tile.STATE_INACTIVE));
+-            tile.setLabel(getString(R.string.qt_off));
+-            tile.setIcon(Icon.createWithResource(this,R.drawable.ic_dnsoff));
++            refreshTile(tile, Tile.STATE_INACTIVE, getString(R.string.qt_off), R.drawable.ic_dnsoff);
+         } else if (dnsmode.equalsIgnoreCase(DNS_MODE_AUTO)) {
+-            tile.setState((Tile.STATE_ACTIVE));
+-            tile.setLabel(getString(R.string.qt_auto));
+-            tile.setIcon(Icon.createWithResource(this,R.drawable.ic_dnsauto));
++            refreshTile(tile, Tile.STATE_ACTIVE, getString(R.string.qt_auto), R.drawable.ic_dnsauto);
+         } else if (dnsmode.equalsIgnoreCase(DNS_MODE_ON)) {
+-            String dnsname = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
+-            if ((dnsname != null) && (!dnsname.isEmpty())) {
+-                tile.setState(Tile.STATE_ACTIVE);
+-                tile.setLabel(dnsname);
+-                tile.setIcon(Icon.createWithResource(this, R.drawable.ic_dnson));
++            String dnsprovider = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
++            if ((dnsprovider != null)) {
++                refreshTile(tile, Tile.STATE_ACTIVE, dnsprovider, R.drawable.ic_dnson);
+             } else {
+                 Toast.makeText(this, "DNS provider not configured", Toast.LENGTH_SHORT).show();
+             }
+         }
+-
+-        tile.updateTile();
+     }
+ 
+     public void onStopListening() {
+@@ -59,47 +52,66 @@ public class PrivateDnsTileService extends TileService {
+     public void onClick() {
+         super.onClick();
+ 
+-        if (hasPermission()) {
+-            Tile tile = this.getQsTile();
++        final SharedPreferences togglestates = getSharedPreferences("togglestates", Context.MODE_PRIVATE);
+ 
+-            String dnsmode = Settings.Global.getString(getContentResolver(), "private_dns_mode");
++        final Boolean toggleoff = togglestates.getBoolean("toggle_off", true);
++        final Boolean toggleauto = togglestates.getBoolean("toggle_auto", true);
++        final Boolean toggleon = togglestates.getBoolean("toggle_on", true);
+ 
++        String dnsprovider = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
++
++        if (hasPermission()) {
++            String dnsmode = Settings.Global.getString(getContentResolver(), "private_dns_mode");
++            Tile tile = this.getQsTile();
+             if (dnsmode.equalsIgnoreCase(DNS_MODE_OFF)) {
+-                Settings.Global.putString(getContentResolver(), "private_dns_mode", DNS_MODE_AUTO);
+-                tile.setState((Tile.STATE_ACTIVE));
+-                tile.setLabel(getString(R.string.qt_auto));
+-                tile.setIcon(Icon.createWithResource(this,R.drawable.ic_dnsauto));
++                if (toggleauto) {
++                    changeTileState(tile, Tile.STATE_ACTIVE, getString(R.string.qt_auto), R.drawable.ic_dnsauto, DNS_MODE_AUTO);
++                } else if (toggleon) {
++                    changeTileState(tile, Tile.STATE_ACTIVE, dnsprovider, R.drawable.ic_dnson, DNS_MODE_ON);
++                }
+             } else if (dnsmode.equalsIgnoreCase(DNS_MODE_AUTO)) {
+-                    String dnsname = Settings.Global.getString(getContentResolver(), "private_dns_specifier");
+-                    if ((dnsname != null) && (!dnsname.isEmpty())) {
+-                        Settings.Global.putString(getContentResolver(), "private_dns_mode", DNS_MODE_ON);
+-                        tile.setState(Tile.STATE_ACTIVE);
+-                        tile.setLabel(dnsname);
+-                        tile.setIcon(Icon.createWithResource(this, R.drawable.ic_dnson));
+-                    } else {
+-                        Toast.makeText(this, "DNS provider not configured", Toast.LENGTH_SHORT).show();
+-                        Settings.Global.putString(getContentResolver(), "private_dns_mode", DNS_MODE_OFF);
+-                        tile.setState((Tile.STATE_INACTIVE));
+-                        tile.setLabel(getString(R.string.qt_off));
+-                        tile.setIcon(Icon.createWithResource(this,R.drawable.ic_dnsoff));
++                if (dnsprovider != null) {
++                    if (toggleon) {
++                        changeTileState(tile, Tile.STATE_ACTIVE, dnsprovider, R.drawable.ic_dnson, DNS_MODE_ON);
++                    } else if (toggleoff) {
++                        changeTileState(tile, Tile.STATE_INACTIVE, getString(R.string.qt_off), R.drawable.ic_dnsoff, DNS_MODE_OFF);
++                    }
++                } else {
++                    if (toggleoff) {
++                        changeTileState(tile, Tile.STATE_INACTIVE, getString(R.string.qt_off), R.drawable.ic_dnsoff, DNS_MODE_OFF);
+                     }
++                }
+             } else if (dnsmode.equals(DNS_MODE_ON)) {
+-                Settings.Global.putString(getContentResolver(), "private_dns_mode", DNS_MODE_OFF);
+-                tile.setState(Tile.STATE_INACTIVE);
+-                tile.setLabel(getString(R.string.qt_off));
+-                tile.setIcon(Icon.createWithResource(this,R.drawable.ic_dnsoff));
++                if (toggleoff) {
++                    changeTileState(tile, Tile.STATE_INACTIVE, getString(R.string.qt_off), R.drawable.ic_dnsoff, DNS_MODE_OFF);
++                } else if (toggleauto) {
++                    changeTileState(tile, Tile.STATE_ACTIVE, getString(R.string.qt_auto), R.drawable.ic_dnsauto, DNS_MODE_AUTO);
++                }
+             }
+-            tile.updateTile();
+ 
+-        } else if (!(hasPermission())){
++        } else if (!(hasPermission())) {
+             Toast.makeText(this, getString(R.string.toast_permission), Toast.LENGTH_SHORT).show();
+         }
+     }
+ 
+     public boolean hasPermission() {
+-
+         return checkCallingOrSelfPermission("android.permission.WRITE_SECURE_SETTINGS") != PackageManager.PERMISSION_DENIED;
+     }
+ 
++    public void changeTileState(Tile tile, int state, String label, int icon, String dnsmode) {
++        tile.setLabel(label);
++        tile.setState(state);
++        tile.setIcon(Icon.createWithResource(this, icon));
++        Settings.Global.putString(getContentResolver(), "private_dns_mode", dnsmode);
++        tile.updateTile();
++    }
++
++    public void refreshTile(Tile tile, int state, String label, int icon) {
++        tile.setState(state);
++        tile.setLabel(label);
++        tile.setIcon(Icon.createWithResource(this, icon));
++        tile.updateTile();
++    }
++
+ 
+ }

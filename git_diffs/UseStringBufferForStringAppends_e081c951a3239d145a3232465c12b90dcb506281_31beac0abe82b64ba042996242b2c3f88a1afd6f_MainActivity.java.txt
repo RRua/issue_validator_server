@@ -1,0 +1,3667 @@
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/helpers/ActivityHelper.java b/app/src/main/java/com/mdiqentw/lifedots/helpers/ActivityHelper.java
+index 6fc2331..a53cd18 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/helpers/ActivityHelper.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/helpers/ActivityHelper.java
+@@ -21,49 +21,31 @@
+ 
+ package com.mdiqentw.lifedots.helpers;
+ 
+-import static android.content.Context.JOB_SCHEDULER_SERVICE;
+-import static android.content.Context.NOTIFICATION_SERVICE;
+-
+ import android.annotation.SuppressLint;
+-import android.app.NotificationChannel;
+-import android.app.NotificationManager;
+-import android.app.PendingIntent;
+-import android.app.job.JobInfo;
+-import android.app.job.JobScheduler;
+ import android.content.AsyncQueryHandler;
+-import android.content.ComponentName;
+ import android.content.ContentProviderClient;
+ import android.content.ContentResolver;
+ import android.content.ContentUris;
+ import android.content.ContentValues;
+-import android.content.Intent;
+ import android.database.Cursor;
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+-import android.text.SpannableString;
+-import android.text.style.ForegroundColorSpan;
+ import android.util.Log;
+ 
+ import androidx.annotation.Nullable;
+-import androidx.core.app.NotificationCompat;
+-import androidx.core.app.NotificationManagerCompat;
+-import androidx.core.content.ContextCompat;
+ import androidx.preference.PreferenceManager;
+ 
+ import com.mdiqentw.lifedots.MVApplication;
+-import com.mdiqentw.lifedots.R;
+-import com.mdiqentw.lifedots.db.LDContentProvider;
+ import com.mdiqentw.lifedots.db.Contract;
+-import com.mdiqentw.lifedots.model.DetailViewModel;
++import com.mdiqentw.lifedots.db.LDContentProvider;
+ import com.mdiqentw.lifedots.model.DiaryActivity;
+ import com.mdiqentw.lifedots.model.conditions.AlphabeticalCondition;
+ import com.mdiqentw.lifedots.model.conditions.Condition;
+ import com.mdiqentw.lifedots.model.conditions.GlobalOccurrenceCondition;
+ import com.mdiqentw.lifedots.model.conditions.RecentOccurrenceCondition;
+-import com.mdiqentw.lifedots.ui.main.MainActivity;
+ import com.mdiqentw.lifedots.ui.settings.SettingsActivity;
+ 
+ import java.util.ArrayList;
+@@ -79,7 +61,7 @@ import java.util.Objects;
+  * LifeDots
+  *
+  * Copyright (C) 2020 Xilin Jia https://github.com/XilinJia
+-  ~ Copyright (C) 2017-2018 Raphael Mack http://www.raphael-mack.de
++ * Copyright (C) 2017-2018 Raphael Mack http://www.raphael-mack.de
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -127,10 +109,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+     private static final String SELECTION = Contract.DiaryActivity._DELETED + "=0";
+ 
+     public static final ActivityHelper helper = new ActivityHelper();
+-    private static final String CURRENT_ACTIVITY_CHANNEL_ID = "CurrentActivity";
+-    private static final int CURRENT_ACTIVITY_NOTIFICATION_ID = 0;
+-
+-    private static final int ACTIVITY_HELPER_REFRESH_JOB = 0;
+ 
+     /* list of all activities, not including deleted ones */
+     private List<DiaryActivity> activities;
+@@ -138,12 +116,12 @@ public class ActivityHelper extends AsyncQueryHandler{
+     private final List<DiaryActivity> unsortedActivities;
+ 
+     private DiaryActivity mCurrentActivity = null;
+-    private final Date mCurrentActivityStartTime;
++    final Date mCurrentActivityStartTime;
+     private @Nullable Uri mCurrentDiaryUri;
+     private /* @NonNull */ String mCurrentNote;
+     private final Condition[] conditions;
+ 
+-    private DetailViewModel viewModel;
++//    private DetailViewModel viewModel;
+ 
+     private final Handler mHandler = new Handler(Looper.getMainLooper()) {
+         /*
+@@ -169,12 +147,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+ 
+     };
+ 
+-    /* null if either no notification has be shown yet, or notification is disabled in settings */
+-    private @Nullable NotificationCompat.Builder notificationBuilder;
+-    private NotificationManagerCompat notificationManager;
+-
+-    JobInfo refreshJobInfo;
+-
+     /* to be used only in the UI thread, consider getActivitiesCopy() */
+     public List<DiaryActivity> getActivities() {
+         return activities;
+@@ -198,31 +170,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+         return result;
+     }
+ 
+-    public void scheduleRefresh() {
+-        int cycleTime;
+-        long delta = (new Date().getTime() - mCurrentActivityStartTime.getTime() + 500) / 1000;
+-        if(delta <= 15) {
+-            cycleTime = 1000 * 10;
+-        }else if(delta <= 45){
+-            cycleTime = 1000 * 20;
+-        }else if(delta <= 95){
+-            cycleTime = 1000 * 60;
+-        }else{
+-            cycleTime = 1000 * 60 * 5; /* 5 min for now. if we want we can make this time configurable in the settings */
+-        }
+-        ComponentName componentName = new ComponentName(MVApplication.getAppContext(), RefreshService.class);
+-        JobInfo.Builder builder = new JobInfo.Builder(ACTIVITY_HELPER_REFRESH_JOB, componentName);
+-        builder.setMinimumLatency(cycleTime);
+-        refreshJobInfo = builder.build();
+-
+-        JobScheduler jobScheduler = (JobScheduler) MVApplication.getAppContext().getSystemService(JOB_SCHEDULER_SERVICE);
+-        int resultCode = jobScheduler.schedule(refreshJobInfo);
+-        if (resultCode != JobScheduler.RESULT_SUCCESS) {
+-            Log.w(TAG, "RefreshJob not scheduled");
+-        }
+-// TODO: do we need to keep track on the scheduled jobs, or is a waiting job with the same ID as a new one automatically canceled?
+-    }
+-
+     public static ArrayList<DiaryActivity> sortedActivities(String query) {
+         ArrayList<DiaryActivity> filtered = new ArrayList<>(ActivityHelper.helper.activities.size());
+         ArrayList<Integer> filteredDist = new ArrayList<>(ActivityHelper.helper.activities.size());
+@@ -302,8 +249,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+ 
+         LocationHelper.helper.updateLocation();
+         mCurrentActivityStartTime = new Date();
+-        createNotificationChannels();
+-        scheduleRefresh();
+     }
+ 
+     /* reload all the activities from the database */
+@@ -323,22 +268,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+                 null);
+     }
+ 
+-    /* create all the notification channels */
+-    private static void createNotificationChannels() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            // Create the NotificationChannel for the "current activity"
+-            CharSequence name = MVApplication.getAppContext().getResources().getString(R.string.notif_channel_current_activity_name);
+-            String description = MVApplication.getAppContext().getResources().getString(R.string.notif_channel_current_activity_desc);
+-            int importance = NotificationManager.IMPORTANCE_DEFAULT;
+-            NotificationChannel nChannel = new NotificationChannel(CURRENT_ACTIVITY_CHANNEL_ID, name, importance);
+-            nChannel.setDescription(description);
+-
+-            NotificationManager notificationManagerL = (NotificationManager) MVApplication.getAppContext().getSystemService(
+-                    NOTIFICATION_SERVICE);
+-            notificationManagerL.createNotificationChannel(nChannel);
+-        }
+-    }
+-
+     /* start the query to read the current activity
+      * will trigger the update of currentActivity and send notifications afterwards */
+     public void readCurrentActivity() {
+@@ -355,7 +284,7 @@ public class ActivityHelper extends AsyncQueryHandler{
+     protected void onQueryComplete(int token, Object cookie,
+                                    Cursor cursor) {
+         if ((cursor != null) && cursor.moveToFirst()) {
+-            if(token == QUERY_ALL_ACTIVITIES) {
++            if (token == QUERY_ALL_ACTIVITIES) {
+                 synchronized (this) {
+                     activities.clear();
+                     unsortedActivities.clear();
+@@ -370,16 +299,16 @@ public class ActivityHelper extends AsyncQueryHandler{
+                     }
+                 }
+                 readCurrentActivity();
+-                for(DataChangedListener listener : mDataChangeListeners) {
++                for (DataChangedListener listener : mDataChangeListeners) {
+                     listener.onActivityDataChanged();
+                 }
+-            }else if(token == QUERY_CURRENT_ACTIVITY){
+-                if(!cursor.isNull(cursor.getColumnIndex(Contract.Diary.END))){
++            } else if (token == QUERY_CURRENT_ACTIVITY) {
++                if (!cursor.isNull(cursor.getColumnIndex(Contract.Diary.END))) {
+                     /* no current activity */
+                     mCurrentNote = "";
+                     mCurrentDiaryUri = null;
+                     mCurrentActivityStartTime.setTime(cursor.getLong(cursor.getColumnIndex(Contract.Diary.END)));
+-                }else {
++                } else {
+                     mCurrentActivity = activityWithId(cursor.getInt(cursor.getColumnIndex(Contract.Diary.ACT_ID)));
+                     mCurrentActivityStartTime.setTime(cursor.getLong(cursor.getColumnIndex(Contract.Diary.START)));
+                     mCurrentNote = cursor.getString(cursor.getColumnIndex(Contract.Diary.NOTE));
+@@ -387,12 +316,12 @@ public class ActivityHelper extends AsyncQueryHandler{
+                                         Long.toString(cursor.getLong(cursor.getColumnIndex(Contract.Diary._ID))));
+ 
+                 }
+-                showCurrentActivityNotification();
++//                showCurrentActivityNotification();
+ 
+-                for(DataChangedListener listener : mDataChangeListeners) {
++                for (DataChangedListener listener : mDataChangeListeners) {
+                     listener.onActivityChanged();
+                 }
+-            }else if(token == UNDELETE_ACTIVITY){
++            } else if (token == UNDELETE_ACTIVITY){
+ 
+                 DiaryActivity act = (DiaryActivity)cookie;
+                 act.setColor(cursor.getInt(cursor.getColumnIndex(Contract.DiaryActivity.COLOR)));
+@@ -441,92 +370,7 @@ public class ActivityHelper extends AsyncQueryHandler{
+                 }
+             }
+             LocationHelper.helper.updateLocation();
+-            showCurrentActivityNotification();
+-        }
+-    }
+-
+-    public void showCurrentActivityNotification() {
+-        if(PreferenceManager
+-                .getDefaultSharedPreferences(MVApplication.getAppContext())
+-                .getBoolean(SettingsActivity.KEY_PREF_NOTIF_SHOW_CUR_ACT, true)
+-                && mCurrentActivity != null) {
+-            int col = ContextCompat.getColor(MVApplication.getAppContext(), R.color.colorPrimary);
+-            notificationBuilder =
+-                    new NotificationCompat.Builder(MVApplication.getAppContext(),
+-                            CURRENT_ACTIVITY_CHANNEL_ID)
+-                            .setColor(col)
+-                            .setSmallIcon(R.mipmap.ic_launcher) // TODO: use ic_nav_select in orange
+-                            .setContentTitle(mCurrentActivity.getName())
+-                            .setPriority(NotificationCompat.PRIORITY_LOW)
+-                            .setShowWhen(false);
+-            // TODO: add icon on implementing #33
+-
+-            notificationBuilder.setOnlyAlertOnce(PreferenceManager
+-                    .getDefaultSharedPreferences(MVApplication.getAppContext())
+-                    .getBoolean(SettingsActivity.KEY_PREF_SILENT_RENOTIFICATIONS, true));
+-
+-            notificationManager = NotificationManagerCompat.from(MVApplication.getAppContext());
+-
+-            Intent intent = new Intent(MVApplication.getAppContext(), MainActivity.class);
+-            PendingIntent pIntent = null;
+-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+-                pIntent = PendingIntent.getActivity(MVApplication.getAppContext(),
+-                        (int) System.currentTimeMillis(), intent,
+-                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+-            }
+-            notificationBuilder.setContentIntent(pIntent);
+-            updateNotification();
+-        }else{
+-            if(notificationManager != null) {
+-                notificationManager.cancel(CURRENT_ACTIVITY_NOTIFICATION_ID);
+-            }
+-            notificationBuilder = null;
+-        }
+-    }
+-
+-    @SuppressLint("RestrictedApi")
+-    public void updateNotification(){
+-        String duration = MVApplication.getAppContext().getResources().
+-                getString(R.string.duration_description, TimeSpanFormatter.fuzzyFormat(ActivityHelper.helper.mCurrentActivityStartTime, new Date()));
+-
+-        if(notificationBuilder != null) {
+-            // if this comes faster than building the first notification we just ignore the update.
+-            // also in case the notification is disabled in the settings notificationBuilder is null
+-            boolean needUpdate = false;
+-            int idx = 0;
+-            for(NotificationCompat.Action a: notificationBuilder.mActions){
+-                if(notificationBuilder.mActions.size() - idx - 1 < activities.size()
+-                    &&
+-                   activities.get(notificationBuilder.mActions.size() - idx - 1).getId() != a.getExtras().getInt("SELECT_ACTIVITY_WITH_ID")) {
+-                    needUpdate = true;
+-                }
+-                idx++;
+-            }
+-            if(needUpdate || notificationBuilder.mActions.size() < 1) {
+-                notificationBuilder.mActions.clear();
+-
+-                for (int i = 2; i >= 0; i--) {
+-                    if (i < activities.size()) {
+-                        DiaryActivity act = activities.get(i);
+-                        SpannableString coloredActivity = new SpannableString(act.getName());
+-                        coloredActivity.setSpan(new ForegroundColorSpan(act.getColor()), 0, coloredActivity.length(), 0);
+-
+-                        Intent intent = new Intent(MVApplication.getAppContext(), MainActivity.class);
+-                        intent.putExtra("SELECT_ACTIVITY_WITH_ID", act.getId());
+-                        PendingIntent pIntent = null;
+-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+-                            pIntent = PendingIntent.getActivity(MVApplication.getAppContext(),
+-                                    (int) System.currentTimeMillis(), intent,
+-                                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+-                        }
+-                        NotificationCompat.Action a = new NotificationCompat.Action(R.drawable.ic_nav_select, coloredActivity, pIntent);
+-                        a.getExtras().putInt("SELECT_ACTIVITY_WITH_ID", act.getId());
+-                        notificationBuilder.addAction(a);
+-                    }
+-                }
+-            }
+-            notificationBuilder.setContentText(duration);
+-            notificationManager.notify(CURRENT_ACTIVITY_NOTIFICATION_ID, notificationBuilder.build());
++//            showCurrentActivityNotification();
+         }
+     }
+ 
+@@ -591,13 +435,13 @@ public class ActivityHelper extends AsyncQueryHandler{
+ 
+     @Override
+     protected void onInsertComplete(int token, Object cookie, Uri uri) {
+-        if(token == INSERT_NEW_DIARY_ENTRY){
++        if (token == INSERT_NEW_DIARY_ENTRY) {
+             mCurrentDiaryUri = uri;
+             for(DataChangedListener listener : mDataChangeListeners) {
+                 listener.onActivityChanged();
+             }
+ 
+-        }else if(token == INSERT_NEW_ACTIVITY){
++        } else if (token == INSERT_NEW_ACTIVITY) {
+ 
+             DiaryActivity act = (DiaryActivity)cookie;
+             act.setId(Integer.parseInt(uri.getLastPathSegment()));
+@@ -667,8 +511,8 @@ public class ActivityHelper extends AsyncQueryHandler{
+         synchronized (this) {
+             if (activities.remove(act)) {
+                 unsortedActivities.remove(act);
+-            }else{
+-                Log.e(TAG, "removal of activity " + act.toString() + " failed");
++            } else {
++                Log.e(TAG, "removal of activity " + act + " failed");
+             }
+         }
+         for(DataChangedListener listener : mDataChangeListeners) {
+@@ -689,6 +533,7 @@ public class ActivityHelper extends AsyncQueryHandler{
+                 }
+             }
+             for (DiaryActivity a : activities) {
++//                System.out.println("activity: " + a.getName());
+                 if (a.getId() == id) {
+                     return a;
+                 }
+@@ -709,7 +554,6 @@ public class ActivityHelper extends AsyncQueryHandler{
+     }
+ 
+     /* calculate the "search" distance between search string and model
+-     *
+      * Code based on Levensthein distance from https://en.wikibooks.org/wiki/Algorithm_Implementation/Strings/Levenshtein_distance#Java
+      */
+     public static int searchDistance(CharSequence inSearch, CharSequence inModel) {
+@@ -821,14 +665,14 @@ public class ActivityHelper extends AsyncQueryHandler{
+             activities = list;
+ 
+             /* is one of the conditions currently evaluating? */
+-            boolean reorderingInProgress = false;
++//            boolean reorderingInProgress = false;
+         }
+ 
+         for(DataChangedListener listener : mDataChangeListeners) {
+             listener.onActivityOrderChanged();
+         }
+ 
+-        updateNotification();
++//        updateNotification();
+     }
+ 
+     /*
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/helpers/GraphicsHelper.kt b/app/src/main/java/com/mdiqentw/lifedots/helpers/GraphicsHelper.kt
+index 88c0da6..c7c9287 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/helpers/GraphicsHelper.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/helpers/GraphicsHelper.kt
+@@ -18,19 +18,20 @@
+  */
+ package com.mdiqentw.lifedots.helpers
+ 
+-import android.Manifest
+-import android.content.pm.PackageManager
++import android.graphics.Bitmap
++import android.graphics.BitmapFactory
+ import android.net.Uri
+-import android.os.Environment
+ import android.util.Log
+ import androidx.core.content.ContextCompat
+ import androidx.exifinterface.media.ExifInterface
+-import androidx.preference.PreferenceManager
+ import com.mdiqentw.lifedots.MVApplication
+ import com.mdiqentw.lifedots.R
+-import com.mdiqentw.lifedots.ui.settings.SettingsActivity
++import java.io.ByteArrayOutputStream
+ import java.io.File
++import java.io.FileOutputStream
+ import java.io.IOException
++import java.text.SimpleDateFormat
++import java.util.*
+ import kotlin.math.ln
+ import kotlin.math.sqrt
+ 
+@@ -60,41 +61,54 @@ object GraphicsHelper {
+     @JvmField
+     val activityColorPalette = ArrayList<Int>(19)
+ 
+-    /* Checks if external storage is available for read and write */
+-    private val isExternalStorageWritable: Boolean
+-        get() {
+-            val state = Environment.getExternalStorageState()
+-            return Environment.MEDIA_MOUNTED == state
+-        }
+-
+-    @Suppress("DEPRECATION")
+     @JvmStatic
+     fun imageStorageDirectory(): File {
+-        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext())
+-        val directory: File = if (isExternalStorageWritable) {
+-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+-        } else {
+-            MVApplication.getAppContext().filesDir
+-        }
+-        val root = File(directory,
+-                sharedPreferences.getString(SettingsActivity.KEY_PREF_STORAGE_FOLDER, "LifeDots")!!)
+-        val permissionCheck = ContextCompat.checkSelfPermission(MVApplication.getAppContext(),
+-                Manifest.permission.WRITE_EXTERNAL_STORAGE)
+-        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
+-            if (!root.exists()) {
+-                if (!root.mkdirs()) {
+-                    Log.e(TAG, "failed to create directory")
+-                    throw RuntimeException("failed to create directory $root")
+-                }
++        val root = File(MVApplication.getAppContext().getExternalFilesDir("/"), "")
++        if (!root.exists()) {
++            if (!root.mkdirs()) {
++                Log.e(TAG, "failed to create directory")
++                throw RuntimeException("failed to create directory $root")
+             }
+-        } else {
+-            /* no permission, return null */
+         }
+         return root
+     }
+ 
++    @JvmStatic
++    fun createImageFile(): File {
++        // Create an image file name
++        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
++        val imageFileName = "IMG_" + timeStamp
++        val storageDir = imageStorageDirectory()
++        return File(storageDir, "$imageFileName.jpg")
++    }
++
++    @JvmStatic
++    fun compressAndSaveImage(photoPath: String) {
++        val b = BitmapFactory.decodeFile(photoPath)
++        // original measurements
++        val origWidth = b.width
++        val origHeight = b.height
++        val destWidth = 500 //or the width you need
++        if (origWidth > destWidth) {
++            // picture is wider than we want it, we calculate its target height
++            val destHeight = origHeight / (origWidth / destWidth)
++            // we create an scaled bitmap so it reduces the image, not just trim it
++            val b2 = Bitmap.createScaledBitmap(b, destWidth, destHeight, false)
++            val outStream = ByteArrayOutputStream()
++            // compress to the format you want, JPEG, PNG...
++            // 70 is the 0-100 quality percentage
++            b2.compress(Bitmap.CompressFormat.JPEG, 60, outStream)
++            // we save the file, at least until we have made use of it
++            val f = File(photoPath)
++            f.createNewFile()
++            //write the bytes in file
++            val fo = FileOutputStream(f)
++            fo.write(outStream.toByteArray())
++            fo.close()
++        }
++    }
++
+     /* return the rotation of the image at uri from the exif data
+-     *
+      * do better not call this for a network uri, as this would probably mean to fetch it twice
+      * */
+     fun getFileExifRotation(uri: Uri?): Int {
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/helpers/LocationHelper.kt b/app/src/main/java/com/mdiqentw/lifedots/helpers/LocationHelper.kt
+index 69f5719..3990428 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/helpers/LocationHelper.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/helpers/LocationHelper.kt
+@@ -19,10 +19,9 @@
+ package com.mdiqentw.lifedots.helpers
+ 
+ import android.Manifest
+-import android.content.AsyncQueryHandler
+-import android.content.ContentValues
+-import android.content.Context
+-import android.content.SharedPreferences
++import android.app.job.JobInfo
++import android.app.job.JobScheduler
++import android.content.*
+ import android.content.SharedPreferences.OnSharedPreferenceChangeListener
+ import android.content.pm.PackageManager
+ import android.location.Location
+@@ -30,11 +29,14 @@ import android.location.LocationListener
+ import android.location.LocationManager
+ import android.os.*
+ import android.os.Handler.Callback
++import android.util.Log
+ import androidx.core.content.ContextCompat
+ import androidx.preference.PreferenceManager
+ import com.mdiqentw.lifedots.MVApplication
+ import com.mdiqentw.lifedots.db.Contract
+ import com.mdiqentw.lifedots.ui.settings.SettingsActivity
++import kotlin.math.*
++
+ 
+ /*
+  * LifeDots
+@@ -54,42 +56,133 @@ import com.mdiqentw.lifedots.ui.settings.SettingsActivity
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentResolver), LocationListener, OnSharedPreferenceChangeListener {
++class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentResolver),
++    LocationListener, OnSharedPreferenceChangeListener {
++
+     private var minTime: Long = 0
+     private var minDist = 0f
+     private var setting: String? = null
+-    var currentLocation: Location
+-        private set
+-    private val locationManager: LocationManager
+-    private val sharedPreferences: SharedPreferences
++    var currentLocation: Location private set
++    private val locationManager: LocationManager = MVApplication.getAppContext().getSystemService(Context.LOCATION_SERVICE) as LocationManager
++    private val sharedPreferences: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext())
+     private val mHandler: Handler
++
++    private lateinit var refreshJobInfo: JobInfo
++
+     fun updateLocation() {
+-        if (setting == "off") {
+-            // do nothing
+-        } else {
+-            var permissionCheckFine = PackageManager.PERMISSION_DENIED
+-            var permissionCheckCoarse = PackageManager.PERMISSION_DENIED
+-            if (setting == "gps" && locationManager.allProviders.contains(LocationManager.GPS_PROVIDER)) {
+-                permissionCheckFine = ContextCompat.checkSelfPermission(MVApplication.getAppContext(),
+-                        Manifest.permission.ACCESS_FINE_LOCATION)
+-                permissionCheckCoarse = permissionCheckFine
+-            } else if (locationManager.allProviders.contains(LocationManager.NETWORK_PROVIDER)) {
+-                permissionCheckCoarse = ContextCompat.checkSelfPermission(MVApplication.getAppContext(),
+-                        Manifest.permission.ACCESS_COARSE_LOCATION)
++        if (setting == "off") return
++
++        var permissionCheckFine = PackageManager.PERMISSION_DENIED
++        var permissionCheckCoarse = PackageManager.PERMISSION_DENIED
++        if (setting == "gps" && locationManager.allProviders.contains(LocationManager.GPS_PROVIDER)) {
++            permissionCheckFine = ContextCompat.checkSelfPermission(MVApplication.getAppContext(),
++                Manifest.permission.ACCESS_FINE_LOCATION)
++            permissionCheckCoarse = permissionCheckFine
++        } else if (locationManager.allProviders.contains(LocationManager.NETWORK_PROVIDER)) {
++            permissionCheckCoarse = ContextCompat.checkSelfPermission(MVApplication.getAppContext(),
++                Manifest.permission.ACCESS_COARSE_LOCATION)
++        }
++
++        var locationProvider = ""
++        if (permissionCheckFine == PackageManager.PERMISSION_GRANTED)
++            locationProvider = LocationManager.GPS_PROVIDER
++        else if (permissionCheckCoarse == PackageManager.PERMISSION_GRANTED)
++            locationProvider = LocationManager.NETWORK_PROVIDER
++
++        if (locationProvider.isNotBlank()) {
++            val location = locationManager.getLastKnownLocation(locationProvider)
++            var locAge = 0L
++            if (location != null) {
++                locAge = System.currentTimeMillis() - location.time
++//                println("LastLocation: " + location.longitude + ":" + location.latitude + " " + locAge)
++
++                if (isAtZero(currentLocation)) {
++                    if (locAge < minTime) {
++                        onLocationChanged(location)
++//                        println("currentLocation recorded: " + location.longitude + ":" + location.latitude)
++                    } else {
++                        currentLocation = location
++                    }
++                }
+             }
+-            if (permissionCheckFine == PackageManager.PERMISSION_GRANTED) {
+-                val locationProvider = LocationManager.GPS_PROVIDER
+-                locationManager.requestLocationUpdates(locationProvider, minTime, minDist, this, Looper.getMainLooper())
+-                mHandler.sendEmptyMessageDelayed(LOCATION_UPDATE, 5 * MIN_TIME_FACTOR) // time out in 5 minutes
+-            } else if (permissionCheckCoarse == PackageManager.PERMISSION_GRANTED) {
+-                val locationProvider = LocationManager.NETWORK_PROVIDER
+-                locationManager.requestLocationUpdates(locationProvider, minTime, minDist, this, Looper.getMainLooper())
+-                //                mHandler.sendEmptyMessageDelayed(LOCATION_UPDATE, timeOut);
++//            if (location == null ||
++//                locAge > 0.5*minTime ||
++//                distance(location, currentLocation) > 0.5*minDist) {
++//                locationManager.requestLocationUpdates(
++//                    locationProvider,
++//                    60000L,
++//                    5f,
++//                    this,
++//                    Looper.getMainLooper()
++//                )
++////                println("requestLocationUpdates sent")
++//                mHandler.sendEmptyMessageDelayed(
++//                    LOCATION_UPDATE,
++//                    5 * MIN_TIME_FACTOR
++//                ) // time out in 5 minutes
++//            }
++            if (location == null ||
++                locAge > 0.5*minTime ||
++                distance(location, currentLocation) > 0.5*minDist) {
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
++//                    println("calling getCurrentLocation")
++                    locationManager.getCurrentLocation(locationProvider,
++                        null,
++                        MVApplication.getAppContext().mainExecutor,
++                        {
++                            fun accept(location: Location) {
++                                onLocationChanged(location)
++                            }
++                        })
++                } else {
++//                    println("calling requestSingleUpdate")
++                    @Suppress("DEPRECATION")
++                    locationManager.requestSingleUpdate(
++                        locationProvider, this, Looper.getMainLooper())
++                }
+             }
+         }
+     }
+ 
+-    fun stopLocationUpdates() {
++    private fun isAtZero(loc: Location) : Boolean {
++        return abs(loc.latitude) < 0.001 && abs(loc.longitude) < 0.001
++    }
++
++    /**
++     * Calculate distance between two points in latitude and longitude taking
++     * into account height difference. If you are not interested in height
++     * difference pass 0.0. Uses Haversine method as its base.
++     *
++     * lat1, lon1 Start point lat2, lon2 End point el1 Start altitude in meters
++     * el2 End altitude in meters
++     * @returns Distance in Meters
++     */
++    private fun distance(loc1: Location, loc2: Location): Double {
++        val lon1 = loc1.longitude
++        val lat1 = loc1.latitude
++        val lon2 = loc2.longitude
++        val lat2 = loc2.latitude
++        val el1 = 0.0
++        val el2 = 0.0
++
++        val ra = 6371 // Radius of the earth
++
++        val latDistance = Math.toRadians(lat2 - lat1)
++        val lonDistance = Math.toRadians(lon2 - lon1)
++        val a = (sin(latDistance / 2) * sin(latDistance / 2)
++                + (cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2))
++                * sin(lonDistance / 2) * sin(lonDistance / 2)))
++        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
++        var distance: Double = ra * c * 1000 // convert to meters
++
++        val height: Double = el1 - el2
++
++        distance = distance.pow(2.0) + height.pow(2.0)
++
++        return sqrt(distance)
++    }
++
++    private fun stopLocationUpdates() {
+         locationManager.removeUpdates(this)
+         mHandler.removeMessages(LOCATION_UPDATE)
+     }
+@@ -97,27 +190,36 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+     /**
+      * Called when the location has changed.
+      *
+-     *
+-     *
+      *  There are no restrictions on the use of the supplied Location object.
+      *
+      * @param location The new location, as a Location object.
+      */
+     override fun onLocationChanged(location: Location) {
+         stopLocationUpdates()
++
++//        println("onLocationChanged: " + location.time + " " + location.longitude + " " + location.latitude)
++
++        @Suppress("SENSELESS_COMPARISON", "DEPRECATION")
++        if (location == null || isAtZero(location)) return
++        if (distance(location, currentLocation) < minDist) return
++
++//        println("Adding location point: " + location.time + " " + location.longitude + " " + location.latitude)
+         val values = ContentValues()
+         currentLocation = location
+         values.put(Contract.DiaryLocation.TIMESTAMP, location.time)
+         values.put(Contract.DiaryLocation.LATITUDE, location.latitude)
+         values.put(Contract.DiaryLocation.LONGITUDE, location.longitude)
++
+         if (location.hasAccuracy()) {
+-            values.put(Contract.DiaryLocation.HACC, Math.round(location.accuracy * 10))
++            values.put(Contract.DiaryLocation.HACC, (location.accuracy * 10).roundToInt())
+         }
+         if (location.hasSpeed()) {
+             values.put(Contract.DiaryLocation.SPEED, location.speed)
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                 if (location.hasSpeedAccuracy()) {
+-                    values.put(Contract.DiaryLocation.SACC, Math.round(location.speedAccuracyMetersPerSecond * 10))
++                    values.put(Contract.DiaryLocation.SACC,
++                        (location.speedAccuracyMetersPerSecond * 10).roundToInt()
++                    )
+                 }
+             }
+         }
+@@ -125,12 +227,14 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+             values.put(Contract.DiaryLocation.ALTITUDE, location.altitude)
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                 if (location.hasVerticalAccuracy()) {
+-                    values.put(Contract.DiaryLocation.VACC, Math.round(location.verticalAccuracyMeters * 10))
++                    values.put(Contract.DiaryLocation.VACC,
++                        (location.verticalAccuracyMeters * 10).roundToInt()
++                    )
+                 }
+             }
+         }
+-        startInsert(0, null, Contract.DiaryLocation.CONTENT_URI,
+-                values)
++
++        startInsert(0, null, Contract.DiaryLocation.CONTENT_URI, values)
+     }
+ 
+     // deprecated for Android Q
+@@ -153,18 +257,21 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+      * update.
+      */
+     override fun onProviderDisabled(provider: String) {}
++
+     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+-        if (key == SettingsActivity.KEY_PREF_USE_LOCATION || key == SettingsActivity.KEY_PREF_LOCATION_AGE || key == SettingsActivity.KEY_PREF_LOCATION_DIST) {
+-            updatePreferences()
++        if (key == SettingsActivity.KEY_PREF_USE_LOCATION ||
++            key == SettingsActivity.KEY_PREF_LOCATION_AGE ||
++            key == SettingsActivity.KEY_PREF_LOCATION_DIST) {
++            loadFromPreferences()
+             updateLocation()
+         }
+     }
+ 
+-    fun updatePreferences() {
++    private fun loadFromPreferences() {
+         try {
+             setting = sharedPreferences.getString(SettingsActivity.KEY_PREF_USE_LOCATION, "off")
+-            val minTimeS = sharedPreferences.getString(SettingsActivity.KEY_PREF_LOCATION_AGE, (MIN_TIME_DEF * MIN_TIME_FACTOR).toString())
+-            minTime = minTimeS!!.toLong()
++            val minTimeS = sharedPreferences.getString(SettingsActivity.KEY_PREF_LOCATION_AGE, (MIN_TIME_DEF).toString())
++            minTime = MIN_TIME_FACTOR * (minTimeS!!.toLong())
+             val minDistS = sharedPreferences.getString(SettingsActivity.KEY_PREF_LOCATION_DIST, MIN_DISTANCE_DEF.toString())
+             minDist = minDistS!!.toFloat()
+         } catch (e: NumberFormatException) {
+@@ -172,6 +279,20 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+         }
+     }
+ 
++    fun scheduleRefresh() {
++        val componentName = ComponentName(MVApplication.getAppContext(), RefreshService::class.java)
++        val builder = JobInfo.Builder(ACTIVITY_HELPER_REFRESH_JOB, componentName)
++        builder.setMinimumLatency(minTime)
++        refreshJobInfo = builder.build()
++//        println("Job scheduled: $minTime")
++        val jobScheduler = MVApplication.getAppContext()
++            .getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
++        val resultCode = jobScheduler.schedule(refreshJobInfo)
++        if (resultCode != JobScheduler.RESULT_SUCCESS) {
++            Log.w(TAG, "RefreshJob not scheduled")
++        }
++    }
++
+     companion object {
+         private val TAG = LocationHelper::class.java.name
+         @JvmField
+@@ -180,12 +301,10 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+         private const val MIN_TIME_DEF: Long = 5 // for now every 5 minutes
+         private const val MIN_TIME_FACTOR = (1000 * 60).toLong()
+         private const val MIN_DISTANCE_DEF = 50.0f
++        private const val ACTIVITY_HELPER_REFRESH_JOB = 0
+     }
+ 
+     init {
+-        locationManager = MVApplication.getAppContext().getSystemService(Context.LOCATION_SERVICE) as LocationManager
+-        //        System.out.println("location providers available: " + locationManager.getAllProviders());
+-        sharedPreferences = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext())
+         mHandler = Handler(Looper.myLooper()!!, Callback { msg: Message ->
+             if (msg.what == LOCATION_UPDATE) {
+                 stopLocationUpdates()
+@@ -193,8 +312,11 @@ class LocationHelper : AsyncQueryHandler(MVApplication.getAppContext().contentRe
+             }
+             false
+         })
++//        println("location providers: " + locationManager.allProviders)
+         currentLocation = Location("DiaryLocation")
+-        updatePreferences()
++//        println("currentLocation: " + currentLocation.longitude + ":" + currentLocation.latitude)
++        loadFromPreferences()
+         sharedPreferences.registerOnSharedPreferenceChangeListener(this)
++        scheduleRefresh()
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/helpers/RefreshService.java b/app/src/main/java/com/mdiqentw/lifedots/helpers/RefreshService.java
+index fa61f19..540dfe5 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/helpers/RefreshService.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/helpers/RefreshService.java
+@@ -27,6 +27,7 @@ import android.util.Log;
+  * LifeDots
+  *
+  * Copyright (C) 2020 Xilin Jia https://github.com/XilinJia
++ * Copyright (C) 2018 Raphael Mack http://www.raphael-mack.de
+  *
+  * This program is free software: you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published by
+@@ -54,7 +55,7 @@ public class RefreshService extends JobService {
+         isWorking = true;
+ 
+         /* UI refresh is so fast we can do it directly here */
+-        ActivityHelper.helper.updateNotification();
++//        ActivityHelper.helper.updateNotification();
+ 
+         // We need 'jobParameters' so we can call 'jobFinished'
+         startWorkOnNewThread(jobParameters);
+@@ -67,13 +68,12 @@ public class RefreshService extends JobService {
+     }
+ 
+     private void refresh(JobParameters jobParameters) {
+-
+         if (jobCancelled)
+             return;
+ 
+         isWorking = false;
+-        boolean needsReschedule = false;
+-        ActivityHelper.helper.scheduleRefresh();
++//        boolean needsReschedule = false;
++        LocationHelper.helper.scheduleRefresh();
+         LocationHelper.helper.updateLocation();
+         jobFinished(jobParameters, false);
+     }
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/DetailRecyclerViewAdapter.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/DetailRecyclerViewAdapter.kt
+index 987babd..5a3017f 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/DetailRecyclerViewAdapter.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/DetailRecyclerViewAdapter.kt
+@@ -19,7 +19,10 @@
+  */
+ package com.mdiqentw.lifedots.ui.generic
+ 
+-import android.content.*
++import android.content.AsyncQueryHandler
++import android.content.ContentValues
++import android.content.DialogInterface
++import android.content.Intent
+ import android.database.Cursor
+ import android.database.DataSetObserver
+ import android.net.Uri
+@@ -35,6 +38,7 @@ import com.mdiqentw.lifedots.databinding.DetailRecyclerItemBinding
+ import com.mdiqentw.lifedots.db.Contract
+ import com.mdiqentw.lifedots.helpers.GraphicsHelper
+ import com.squareup.picasso.Picasso
++import java.io.File
+ 
+ /*
+  * LifeDots
+@@ -54,12 +58,13 @@ import com.squareup.picasso.Picasso
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-class DetailRecyclerViewAdapter(context: Context, details: Cursor?) : RecyclerView.Adapter<DetailViewHolders>(), DetailViewHolders.SelectListener {
++class DetailRecyclerViewAdapter(act: BaseActivity, details: Cursor?) :
++    RecyclerView.Adapter<DetailViewHolders>(), DetailViewHolders.SelectListener {
+     private class QHandler : AsyncQueryHandler(MVApplication.getAppContext().contentResolver)
+ 
+     private val mQHandler = QHandler()
+     private var mCursor: Cursor?
+-    private val mContext: Context
++    private val mAct: BaseActivity
+     private val mDataObserver: DataSetObserver?
+     private var uriRowIdx = 0
+     private var idRowIdx = 0
+@@ -131,8 +136,29 @@ class DetailRecyclerViewAdapter(context: Context, details: Cursor?) : RecyclerVi
+         return result
+     }
+ 
++    private fun deleteImageAt(position: Int) {
++        check(idRowIdx >= 0) { "idRowIdx not valid" }
++        require(position >= 0) { "position ($position) too small" }
++        require(position < mCursor!!.count) { "position ($position) too small" }
++        val pos = mCursor!!.position
++        mCursor!!.moveToPosition(position)
++        val result: Long = mCursor!!.getLong(idRowIdx)
++
++        val uri = mCursor!!.getString(uriRowIdx)
++        val filename = uri.substring(uri.lastIndexOf("/")+1)
++        File(GraphicsHelper.imageStorageDirectory(), filename).delete()
++        mCursor!!.moveToPosition(pos)
++
++        val values = ContentValues()
++        values.put(Contract.DiaryImage._DELETED, 1)
++        mQHandler.startUpdate(0,
++            null,
++            Contract.DiaryImage.CONTENT_URI,
++            values,
++            Contract.DiaryImage._ID + "=?", arrayOf(result.toString()))
++    }
++
+     override fun onDetailItemClick(adapterPosition: Int) {
+-//        val diaryImageId = getDiaryImageIdAt(adapterPosition)
+         check(mCursor!!.moveToPosition(adapterPosition)) { "couldn't move cursor to position $adapterPosition" }
+         val s = mCursor!!.getString(uriRowIdx)
+         val i = Uri.parse(s)
+@@ -140,23 +166,17 @@ class DetailRecyclerViewAdapter(context: Context, details: Cursor?) : RecyclerVi
+         intent.action = Intent.ACTION_VIEW
+         intent.setDataAndType(i, "image/*")
+         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+-        mContext.startActivity(intent)
++//        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++        mAct.startActivity(intent)
+     }
+ 
+     override fun onDetailItemLongClick(adapterPosition: Int): Boolean {
+-        val diaryImageId = getDiaryImageIdAt(adapterPosition)
+         //TODO: generalize the DetailView to include this code also
+-        val builder = AlertDialog.Builder(mContext)
++        val builder = AlertDialog.Builder(mAct)
+                 .setTitle(R.string.dlg_delete_image_title)
+                 .setMessage(R.string.dlg_delete_image_text)
+                 .setPositiveButton(R.string.yes) { _: DialogInterface?, _: Int ->
+-                    val values = ContentValues()
+-                    values.put(Contract.DiaryImage._DELETED, 1)
+-                    mQHandler.startUpdate(0,
+-                            null,
+-                            Contract.DiaryImage.CONTENT_URI,
+-                            values,
+-                            Contract.DiaryImage._ID + "=?", arrayOf(diaryImageId.toString()))
++                    deleteImageAt(adapterPosition)
+                 }
+                 .setNegativeButton(R.string.no, null)
+         builder.create().show()
+@@ -171,7 +191,7 @@ class DetailRecyclerViewAdapter(context: Context, details: Cursor?) : RecyclerVi
+     init {
+         lastAdapterId++
+         mCursor = details
+-        mContext = context
++        mAct = act
+         // TODO: do we need this one here?
+         mDataObserver = object : DataSetObserver() {
+             override fun onChanged() {
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/EditActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/EditActivity.java
+index 28b762e..db0e0ec 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/EditActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/EditActivity.java
+@@ -34,19 +34,14 @@ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+-import android.widget.EditText;
+-import android.widget.ImageButton;
+-import android.widget.ImageView;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.Nullable;
+-import androidx.appcompat.content.res.AppCompatResources;
+ import androidx.appcompat.widget.TooltipCompat;
+ import androidx.databinding.DataBindingUtil;
+ 
+ import com.flask.colorpicker.ColorPickerView;
+ import com.flask.colorpicker.builder.ColorPickerDialogBuilder;
+-import com.google.android.material.textfield.TextInputLayout;
+ import com.mdiqentw.lifedots.MVApplication;
+ import com.mdiqentw.lifedots.R;
+ import com.mdiqentw.lifedots.databinding.ActivityEditContentBinding;
+@@ -56,7 +51,6 @@ import com.mdiqentw.lifedots.helpers.GraphicsHelper;
+ import com.mdiqentw.lifedots.model.DiaryActivity;
+ 
+ import java.lang.ref.WeakReference;
+-import java.util.LinkedList;
+ import java.util.Objects;
+ 
+ /*
+@@ -90,85 +84,55 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+     private static final int QUERY_NAMES = 1;
+     private static final int RENAME_DELETED_ACTIVITY = 2;
+     private static final int TEST_DELETED_NAME = 3;
+-    private static final int SIMILAR_ACTIVITY = 4;
++//    private static final int SIMILAR_ACTIVITY = 4;
+ 
+     private static final String COLOR_KEY = "COLOR";
+     private static final String NAME_KEY = "NAME";
+ 
+     private static final int CHECK_STATE_CHECKING = 0;
+     private static final int CHECK_STATE_OK = 1;
+-    private static final int CHECK_STATE_WARNING = 2;
++//    private static final int CHECK_STATE_WARNING = 2;
+     private static final int CHECK_STATE_ERROR = 3;
+     private static final String[] NAME_TEST_PROJ = new String[]{Contract.DiaryActivity.NAME};
+ 
+     private int checkState = CHECK_STATE_CHECKING;
+ 
+-    private ImageView mActivityColorImg;
+-    private int mActivityColor;
+-
+-    private EditText mActivityName;
+-    private TextInputLayout mActivityNameTIL;
+-    private ImageButton mQuickFixBtn1;
+-    private ImageButton mBtnRenameDeleted;
++    ActivityEditContentBinding binding;
+ 
+-    private int getCheckState() {
+-        return checkState;
+-    }
++    private int mActivityColor;
+ 
+     private void setCheckState(int checkState) {
+         this.checkState = checkState;
+-        if(checkState == CHECK_STATE_CHECKING && mActivityNameTIL != null){
+-            mActivityNameTIL.setError("...");
+-        }
+-    }
+-
+-    public void doTokenSimilar(Cursor cursor) {
+-        if (cursor.moveToFirst()) {
+-            LinkedList<String> similarNames = new LinkedList<>();
+-            String sims = android.text.TextUtils.join(", ", similarNames);
+-            mActivityNameTIL.setError(getResources().getString(R.string.error_name_similar, sims));
+-            setCheckState(CHECK_STATE_WARNING);
++        if(checkState == CHECK_STATE_CHECKING){
++            binding.editActivityNameTil.setError("...");
+         }
+     }
+ 
+     public void doTokenQueryName(Cursor cursor, AsyncQueryHandler handler) {
++        binding.btnRename.setVisibility(View.GONE);
++        binding.btnRename.setOnClickListener(null);
+         if(cursor.moveToFirst()) {
+-            mQuickFixBtn1.setVisibility(View.VISIBLE);
++//            binding.btnQuickfix.setVisibility(View.VISIBLE);
+             @SuppressLint("Range") boolean deleted = (cursor.getLong(cursor.getColumnIndex(Contract.DiaryActivity._DELETED)) != 0);
+             @SuppressLint("Range") int actId = cursor.getInt(cursor.getColumnIndex(Contract.DiaryActivity._ID));
+             @SuppressLint("Range") String name = cursor.getString(cursor.getColumnIndex(Contract.DiaryActivity.NAME));
+             setCheckState(CHECK_STATE_ERROR);
+ 
+-            if(deleted) {
++            if (deleted) {
+                 CharSequence str = getResources().getString(R.string.error_name_already_used_in_deleted, cursor.getString(0));
+-                mBtnRenameDeleted.setVisibility(View.VISIBLE);
+-                setBtnTooltip(mBtnRenameDeleted, getResources().getString(R.string.tooltip_quickfix_btn_rename_deleted));
+-                mBtnRenameDeleted.setContentDescription(getResources().getString(R.string.contentDesc_renameDeletedActivity));
+-
+-                mActivityNameTIL.setError(str);
+-                mQuickFixBtn1.setImageDrawable(AppCompatResources.getDrawable(this, R.drawable.ic_undelete));
+-                setBtnTooltip(mQuickFixBtn1, getResources().getString(R.string.tooltip_quickfix_btn_undelete_existing));
+-                mQuickFixBtn1.setContentDescription(getResources().getString(R.string.contentDesc_undeleteActivity));
+-
+-
+-                mQuickFixBtn1.setOnClickListener(v -> {
+-                    currentActivity = ActivityHelper.helper.undeleteActivity(actId, name);
+-                    assert currentActivity != null;
+-                    Toast.makeText(this,
+-                            getResources().getString(R.string.recover_activity_toast, currentActivity.getName()),
+-                            Toast.LENGTH_LONG).show();
++                binding.btnRename.setVisibility(View.VISIBLE);
++                setBtnTooltip(binding.btnRename, getResources().getString(R.string.tooltip_quickfix_btn_rename_deleted));
++                binding.btnRename.setContentDescription(getResources().getString(R.string.contentDesc_renameDeletedActivity));
+ 
+-                    refreshElements();
+-                    setCheckState(CHECK_STATE_OK);
+-                });
+-                mBtnRenameDeleted.setOnClickListener(v -> {
++                binding.editActivityNameTil.setError(str);
++                binding.btnRename.setOnClickListener(v -> {
+                     setCheckState(CHECK_STATE_CHECKING);
+-                    Toast.makeText(this,
+-                            getResources().getString(R.string.renamed_deleted_activity_toast, name),
+-                            Toast.LENGTH_LONG).show();
+ 
+                     ContentValues values = new ContentValues();
+                     String newName = name + "_deleted";
++                    Toast.makeText(this,
++                            getResources().getString(R.string.renamed_deleted_activity_toast, newName),
++                            Toast.LENGTH_LONG).show();
+ 
+                     values.put(Contract.DiaryActivity.NAME, newName);
+                     values.put(Contract.DiaryActivity._ID, Long.valueOf(actId));
+@@ -183,30 +147,11 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+                     setCheckState(CHECK_STATE_OK);
+                 });
+             } else {
+-                mActivityNameTIL.setError(getResources().getString(R.string.error_name_already_used, cursor.getString(0)));
+-                mBtnRenameDeleted.setVisibility(View.GONE);
+-                mBtnRenameDeleted.setOnClickListener(null);
+-                mQuickFixBtn1.setImageDrawable(AppCompatResources.getDrawable(this, R.drawable.ic_edit));
+-                setBtnTooltip(mQuickFixBtn1, getResources().getString(R.string.tooltip_quickfix_btn_edit_existing));
+-                mQuickFixBtn1.setContentDescription(getResources().getString(R.string.contentDesc_rejectAndOpenActivity));
+-                mQuickFixBtn1.setOnClickListener(v -> {
+-                    currentActivity = ActivityHelper.helper.activityWithId(actId);
+-                    assert currentActivity != null;
+-                    Toast.makeText(this,
+-                            getResources().getString(R.string.edit_existing_activity_toast, currentActivity.getName()),
+-                            Toast.LENGTH_LONG).show();
+-
+-                    refreshElements();
+-                    setCheckState(CHECK_STATE_OK);
+-                });
++                binding.editActivityNameTil.setError(getResources().getString(R.string.error_name_already_used, cursor.getString(0)));
++                setCheckState(CHECK_STATE_ERROR);
+             }
+-        }
+-        else {
+-            mActivityNameTIL.setError("");
+-            mQuickFixBtn1.setVisibility(View.GONE);
+-            mQuickFixBtn1.setOnClickListener(null);
+-            mBtnRenameDeleted.setVisibility(View.GONE);
+-            mBtnRenameDeleted.setOnClickListener(null);
++        } else {
++            binding.editActivityNameTil.setError("");
+             setCheckState(CHECK_STATE_OK);
+         }
+     }
+@@ -223,44 +168,43 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+         @Override
+         protected void onQueryComplete(int token, Object cookie, Cursor cursor) {
+             if ((cursor != null)) {
+-                if(token == SIMILAR_ACTIVITY)
+-                    act.doTokenSimilar(cursor);
+-                else if(token == QUERY_NAMES)
+-                    act.doTokenQueryName(cursor, this);
+-                else if(token == TEST_DELETED_NAME) {
+-                    ContentValues values = (ContentValues)cookie;
+-                    if(cursor.moveToFirst()){
+-                        // name already exists, choose another one
+-                        String triedName = (String)values.get(Contract.Diary.NAME);
+-                        String newName = triedName.replaceFirst("-\\d+$", "");
+-                        String idx;
+-                        if(triedName.length() == newName.length()) {
+-                            // no "-x" at the end so far
+-                            idx = "-2";
+-                        }else{
+-                            String x = triedName.substring(newName.length() + 1);
+-                            idx = "-" + (Integer.parseInt(x) + 1);
++                switch (token) {
++                    case QUERY_NAMES:
++                        act.doTokenQueryName(cursor, this);
++                        break;
++                    case TEST_DELETED_NAME:
++                        ContentValues values = (ContentValues) cookie;
++                        if (cursor.moveToFirst()) {
++                            // name already exists, choose another one
++                            String triedName = (String) values.get(Contract.Diary.NAME);
++                            String newName = triedName.replaceFirst("-\\d+$", "");
++                            String idx;
++                            if (triedName.length() == newName.length()) {
++                                // no "-x" at the end so far
++                                idx = "-2";
++                            } else {
++                                String x = triedName.substring(newName.length() + 1);
++                                idx = "-" + (Integer.parseInt(x) + 1);
++                            }
++                            newName += idx;
++                            values.put(Contract.DiaryActivity.NAME, newName);
++                            startQuery(TEST_DELETED_NAME, values,
++                                    Contract.DiaryActivity.CONTENT_URI,
++                                    NAME_TEST_PROJ,
++                                    Contract.DiaryActivity.NAME + " = ?",
++                                    new String[]{newName},
++                                    null
++                            );
++
++                        } else {
++                            // name not found, use it for the deleted one
++                            Long actId = (Long) values.get(Contract.Diary._ID);
++                            values.remove(Contract.Diary._ID);
++                            startUpdate(RENAME_DELETED_ACTIVITY, null,
++                                    ContentUris.withAppendedId(Contract.DiaryActivity.CONTENT_URI, actId),
++                                    values, Contract.Diary._ID + " = " + actId, null);
+                         }
+-                        newName += idx;
+-                        values.put(Contract.DiaryActivity.NAME, newName);
+-                        startQuery(TEST_DELETED_NAME, values,
+-                                Contract.DiaryActivity.CONTENT_URI,
+-                                NAME_TEST_PROJ,
+-                                Contract.DiaryActivity.NAME + " = ?",
+-                                new String[]{newName},
+-                                null
+-                        );
+-
+-                    }
+-
+-                    else {
+-                        // name not found, use it for the deleted one
+-                        Long actId = (Long)values.get(Contract.Diary._ID);
+-                        values.remove(Contract.Diary._ID);
+-                        startUpdate(RENAME_DELETED_ACTIVITY, null,
+-                                ContentUris.withAppendedId(Contract.DiaryActivity.CONTENT_URI, actId),
+-                                values, Contract.Diary._ID + " = " + actId, null);
+-                    }
++                        break;
+                 }
+                 cursor.close();
+             }
+@@ -291,13 +235,13 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+     /* refresh all view elements depending on currentActivity */
+     private void refreshElements() {
+         if (currentActivity != null) {
+-            mActivityName.setText(currentActivity.getName());
++            binding.editActivityName.setText(currentActivity.getName());
+             Objects.requireNonNull(getSupportActionBar()).setTitle(currentActivity.getName());
+             mActivityColor = currentActivity.getColor();
+         } else {
+             mActivityColor = GraphicsHelper.prepareColorForNextActivity();
+         }
+-        mActivityColorImg.setBackgroundColor(mActivityColor);
++        binding.editActivityColor.setBackgroundColor(mActivityColor);
+     }
+ 
+     private final QHandler mQHandler = new QHandler(this);
+@@ -305,23 +249,22 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-//        linkCol = ContextCompat.getColor(MVApplication.getAppContext(), R.color.colorAccent);
++
++        binding = DataBindingUtil.setContentView(this, R.layout.activity_edit_content);
++        setContent(binding.getRoot());
++
+         setCheckState(CHECK_STATE_CHECKING);
+ 
+-//        LayoutInflater inflater = (LayoutInflater) this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+         Intent i = getIntent();
+         int actId = i.getIntExtra("activityID", -1);
+-        if(actId == -1) {
++//        System.out.println("ActId: " + actId);
++        if (actId == -1) {
+             currentActivity = null;
+-        }else {
++        } else {
+             currentActivity = ActivityHelper.helper.activityWithId(actId);
+         }
+ 
+-        ActivityEditContentBinding binding = DataBindingUtil.setContentView(this, R.layout.activity_edit_content);
+-        setContent(binding.getRoot());
+-
+-        mActivityName = binding.editActivityName;
+-        mActivityName.addTextChangedListener(new TextWatcher(){
++        binding.editActivityName.addTextChangedListener(new TextWatcher(){
+             @Override
+             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+             }
+@@ -333,15 +276,11 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+             @Override
+             public void afterTextChanged(Editable s) {
+                 checkConstraints();
+-                checkSimilarNames();
++//                checkSimilarNames();
+             }
+         });
+-        mActivityNameTIL = binding.editActivityNameTil;
+-        mQuickFixBtn1 = binding.quickFixButton1;
+-        mBtnRenameDeleted = binding.quickFixButtonRename;
+ 
+-        mActivityColorImg = binding.editActivityColor;
+-        mActivityColorImg.setOnClickListener(v -> ColorPickerDialogBuilder
++        binding.editActivityColor.setOnClickListener(v -> ColorPickerDialogBuilder
+                 .with(EditActivity.this)
+                 .setTitle("Choose color")
+                 .initialColor(R.color.activityTextColorLight)
+@@ -352,7 +291,7 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+                 })
+                 .setPositiveButton("ok", (dialog, selectedColor, allColors) -> {
+                     mActivityColor = selectedColor;
+-                    mActivityColorImg.setBackgroundColor(mActivityColor);
++                    binding.editActivityColor.setBackgroundColor(mActivityColor);
+ //                                changeBackgroundColor(selectedColor);
+                 })
+                 .setNegativeButton("cancel", (dialog, which) -> {
+@@ -363,7 +302,7 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+         if(savedInstanceState != null) {
+             String name = savedInstanceState.getString(NAME_KEY);
+             mActivityColor = savedInstanceState.getInt(COLOR_KEY);
+-            mActivityName.setText(name);
++            binding.editActivityName.setText(name);
+             Objects.requireNonNull(getSupportActionBar()).setTitle(name);
+             checkConstraints();
+         }else{
+@@ -392,7 +331,7 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+ 
+     @Override
+     public void onSaveInstanceState(Bundle outState) {
+-        outState.putString(NAME_KEY, mActivityName.getText().toString());
++        outState.putString(NAME_KEY, Objects.requireNonNull(binding.editActivityName.getText()).toString());
+         outState.putInt(COLOR_KEY, mActivityColor);
+         // call superclass to save any view hierarchy
+         super.onSaveInstanceState(outState);
+@@ -415,17 +354,16 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+             finish();
+         } else if (mid == R.id.action_edit_done) {
+             if(checkState != CHECK_STATE_CHECKING) {
+-                CharSequence error = mActivityNameTIL.getError();
+                 if (checkState == CHECK_STATE_ERROR) {
+                     Toast.makeText(EditActivity.this,
+-                            error,
++                            binding.editActivityNameTil.getError(),
+                             Toast.LENGTH_LONG
+                     ).show();
+                 } else {
+                     if (currentActivity == null) {
+-                        ActivityHelper.helper.insertActivity(new DiaryActivity(-1, mActivityName.getText().toString(), mActivityColor));
++                        ActivityHelper.helper.insertActivity(new DiaryActivity(-1, Objects.requireNonNull(binding.editActivityName.getText()).toString(), mActivityColor));
+                     } else {
+-                        currentActivity.setName(mActivityName.getText().toString());
++                        currentActivity.setName(Objects.requireNonNull(binding.editActivityName.getText()).toString());
+                         currentActivity.setColor(mActivityColor);
+                         ActivityHelper.helper.updateActivity(currentActivity);
+                     }
+@@ -447,7 +385,7 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+                     Contract.DiaryActivity.CONTENT_URI,
+                     new String[]{Contract.DiaryActivity.NAME, Contract.DiaryActivity._DELETED, Contract.DiaryActivity._ID},
+                     Contract.DiaryActivity.NAME + "=?",
+-                    new String[]{mActivityName.getText().toString()}, null);
++                    new String[]{Objects.requireNonNull(binding.editActivityName.getText()).toString()}, null);
+         } else {
+             mQHandler.startQuery(QUERY_NAMES,
+                     null,
+@@ -455,21 +393,11 @@ public class EditActivity extends BaseActivity implements ActivityHelper.DataCha
+                     new String[]{Contract.DiaryActivity.NAME, Contract.DiaryActivity._DELETED, Contract.DiaryActivity._ID},
+                     Contract.DiaryActivity.NAME + "=? AND " +
+                             Contract.DiaryActivity._ID + " != ?",
+-                    new String[]{mActivityName.getText().toString(), Long.toString(currentActivity.getId())},
++                    new String[]{Objects.requireNonNull(binding.editActivityName.getText()).toString(), Long.toString(currentActivity.getId())},
+                     null);
+         }
+     }
+ 
+-    private void checkSimilarNames() {
+-        setCheckState(CHECK_STATE_CHECKING);
+-
+-        mQHandler.startQuery(SIMILAR_ACTIVITY,
+-                null,
+-                Contract.DiaryActivity.CONTENT_URI,
+-                new String[]{Contract.DiaryActivity.NAME, Contract.DiaryActivity._DELETED, Contract.DiaryActivity._ID},
+-                null, null,null);
+-    }
+-
+     /**
+      * Called when the data has changed and no further specification is possible.
+      * => everything needs to be refreshed!
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/PrivacyPolicyActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/PrivacyPolicyActivity.java
+index 13d2401..3c5548d 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/generic/PrivacyPolicyActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/generic/PrivacyPolicyActivity.java
+@@ -76,17 +76,17 @@ public class PrivacyPolicyActivity extends BaseActivity {
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText1a) + "</p>";
+         mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle2) + "</h3>";
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText2a) + "</p>";
+-        mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle3) + "</h3>";
+-        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText3a) + "</p>";
++//        mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle3) + "</h3>";
++//        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText3a) + "</p>";
+         mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle4) + "</h3>";
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText4a) + "</p>";
+         mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle5) + "</h3>";
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText5a) + "</p>";
+-        mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle6) + "</h3>";
+-        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6a) + "</p>";
+-        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6b) + "</p>";
+-        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6c) + "</p>";
+-        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6d) + "</p>";
++//        mergedPolicyText += "<h3>" + getResources().getString(R.string.privacy_what_subTitle6) + "</h3>";
++//        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6a) + "</p>";
++//        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6b) + "</p>";
++//        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6c) + "</p>";
++//        mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_what_subText6d) + "</p>";
+         mergedPolicyText += "<h2>" + getResources().getString(R.string.privacy_why_title) + "</h2>";
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_why_text1) + "</p>";
+         mergedPolicyText += "<p>" + getResources().getString(R.string.privacy_why_text2) + "</p>";
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/history/AnalyticsActivity.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/history/AnalyticsActivity.kt
+index b17579b..10da71d 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/history/AnalyticsActivity.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/history/AnalyticsActivity.kt
+@@ -19,12 +19,15 @@
+ package com.mdiqentw.lifedots.ui.history
+ 
+ import android.annotation.SuppressLint
++import android.content.Intent
+ import android.database.Cursor
+ import android.graphics.Color
+ import android.net.Uri
+ import android.os.Bundle
+ import android.view.View
+-import android.widget.*
++import android.widget.AdapterView
++import android.widget.ArrayAdapter
++import android.widget.DatePicker
+ import androidx.databinding.DataBindingUtil
+ import androidx.loader.app.LoaderManager
+ import androidx.loader.content.CursorLoader
+@@ -41,12 +44,12 @@ import com.github.mikephil.charting.listener.OnChartValueSelectedListener
+ import com.mdiqentw.lifedots.MVApplication
+ import com.mdiqentw.lifedots.R
+ import com.mdiqentw.lifedots.databinding.ActivityAnalyticsBinding
+-import com.mdiqentw.lifedots.db.LocalDBHelper
+ import com.mdiqentw.lifedots.db.Contract
++import com.mdiqentw.lifedots.db.LocalDBHelper
+ import com.mdiqentw.lifedots.helpers.DateHelper
+ import com.mdiqentw.lifedots.helpers.TimeSpanFormatter
+ import com.mdiqentw.lifedots.ui.generic.BaseActivity
+-import com.mdiqentw.lifedots.ui.history.HistoryDetailActivity.DatePickerFragment
++import com.mdiqentw.lifedots.ui.history.EventDetailActivity.DatePickerFragment
+ import org.osmdroid.config.Configuration
+ import java.util.*
+ import kotlin.math.max
+@@ -71,61 +74,80 @@ import kotlin.math.roundToInt
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>, AdapterView.OnItemSelectedListener, OnChartValueSelectedListener {
+-    private var chartFrame: FrameLayout? = null
++class AnalyticsActivity : BaseActivity(),
++    LoaderManager.LoaderCallbacks<Cursor?>,
++    AdapterView.OnItemSelectedListener,
++    OnChartValueSelectedListener {
++
+     private var pieChart: PieChart? = null
+     private var timeFramePosition = 0
+     private var bnbAct: Bundle? = null
+     private var pieMax = 100.0f
+     private var pieMin = 5.0f
+-    var pieUnit = true
++    private var pieUnit = true
+     private var xyChart: ScatterChart? = null
+     private var startOfTime = 0L
+     private var useXYChart = false
+-    private var timeframeSpinner: Spinner? = null
+-    private var rangeTextView: TextView? = null
+-    private var rangeEarlierImageView: ImageView? = null
+-    private var rangeLaterImageView: ImageView? = null
+     private var currentDateTime: Long = 0
+     private var currentOffset = 0
+     private var currentRange = Calendar.WEEK_OF_YEAR
+ 
++    private lateinit var startTimes : ArrayList<Long>
++
++    lateinit var binding: ActivityAnalyticsBinding
++
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+-        val ctx = applicationContext
+-        Configuration.getInstance().load(ctx, PreferenceManager.getDefaultSharedPreferences(ctx))
+-        val binding: ActivityAnalyticsBinding = DataBindingUtil.setContentView(this, R.layout.activity_analytics)
++        Configuration.getInstance().load(applicationContext,
++            PreferenceManager.getDefaultSharedPreferences(applicationContext))
++
++        binding = DataBindingUtil.setContentView(this, R.layout.activity_analytics)
+         setContent(binding.root)
+-        timeframeSpinner = binding.timeframeSpinner
+-        timeframeSpinner!!.onItemSelectedListener = this
++        binding.activity = this
++
++        binding.timeframeSpinner.onItemSelectedListener = this
+         val adapter = ArrayAdapter.createFromResource(this,
+                 R.array.statistic_dropdown,
+                 android.R.layout.simple_spinner_item)
+-        timeframeSpinner!!.adapter = adapter
++        binding.timeframeSpinner.adapter = adapter
++
+         LoaderManager.getInstance(this).initLoader(LOADER_ID_TIME, null, this)
+         getStartOfTime()
+-        xyChart = ScatterChart(ctx)
++        pieChart = PieChart(applicationContext)
++        xyChart = ScatterChart(applicationContext)
++
++        initPieChart()
++        initXYChart()
++
++        binding.chartFrame.addView(pieChart)
++        binding.imgEarlier.setOnClickListener { loadRange(currentRange, --currentOffset) }
++        binding.imgLater.setOnClickListener { loadRange(currentRange, ++currentOffset) }
++        currentDateTime = Date().time
++
++        mDrawerToggle.isDrawerIndicatorEnabled = false
++    }
++
++    private fun initPieChart() {
++        pieChart!!.legend.isEnabled = false
++        pieChart!!.description = null
++        pieChart!!.holeRadius = 30.0f
++        pieChart!!.transparentCircleRadius = 40.0f
++        pieChart!!.setOnChartValueSelectedListener(this)
++    }
++
++    private fun initXYChart() {
+         xyChart!!.axisRight.isEnabled = false
+         xyChart!!.legend.isEnabled = true
+         xyChart!!.legend.textSize = 16f
+         xyChart!!.description.text = "Time Summary Per Day"
+         xyChart!!.description.textSize = 16f
++        xyChart!!.setTouchEnabled(true)
++        xyChart!!.maxHighlightDistance = 200f
+         xyChart!!.setOnChartValueSelectedListener(this)
+-        pieChart = PieChart(ctx)
+-        pieChart!!.legend.isEnabled = false
+-        pieChart!!.description = null
+-        pieChart!!.holeRadius = 30.0f
+-        pieChart!!.transparentCircleRadius = 40.0f
+-        pieChart!!.setOnChartValueSelectedListener(this)
+-        chartFrame = binding.chartFrame
+-        chartFrame!!.addView(pieChart)
+-        rangeTextView = binding.rangeTextView
+-        rangeEarlierImageView = binding.imgEarlier
+-        rangeEarlierImageView!!.setOnClickListener { loadRange(currentRange, --currentOffset) }
+-        rangeLaterImageView = binding.imgLater
+-        rangeLaterImageView!!.setOnClickListener { loadRange(currentRange, ++currentOffset) }
+-        currentDateTime = Date().time
+-        mDrawerToggle.isDrawerIndicatorEnabled = false
++        xyChart!!.isDragEnabled = true
++        xyChart!!.setScaleEnabled(true)
++//        xyChart!!.setMaxVisibleValueCount(200)
++        xyChart!!.setPinchZoom(true)
+     }
+ 
+     @SuppressLint("Range")
+@@ -213,6 +235,7 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                 pieChart!!.setUsePercentValues(false)
+                 pieChart!!.rotationAngle = 180.0f
+                 pieChart!!.invalidate() // refresh
++                initPieChart()
+             }
+         }
+     }
+@@ -248,18 +271,30 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                     bnbAct!!.putLong("end", currentDateTime)
+                 }
+                 3 -> {
++                    bnbAct!!.putLong("start", currentDateTime - MS_Per_Day * 90)
++                    bnbAct!!.putLong("end", currentDateTime)
++                }
++                4 -> {
++                    bnbAct!!.putLong("start", currentDateTime - MS_Per_Day * 180)
++                    bnbAct!!.putLong("end", currentDateTime)
++                }
++                5 -> {
++                    bnbAct!!.putLong("start", currentDateTime - MS_Per_Day * 365)
++                    bnbAct!!.putLong("end", currentDateTime)
++                }
++                6 -> {
+                     currentOffset = 0
+                     currentRange = Calendar.DAY_OF_YEAR
+                 }
+-                4 -> {
++                7 -> {
+                     currentOffset = 0
+                     currentRange = Calendar.WEEK_OF_YEAR
+                 }
+-                5 -> {
++                8 -> {
+                     currentOffset = 0
+                     currentRange = Calendar.MONTH
+                 }
+-                6 -> {
++                9 -> {
+                     currentOffset = 0
+                     currentRange = Calendar.YEAR
+                 }
+@@ -271,14 +306,14 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+     }
+ 
+     private fun resetRangeTextView() {
+-        if (timeFramePosition < 3 || useXYChart) {
+-            rangeTextView!!.visibility = View.INVISIBLE
+-            rangeEarlierImageView!!.visibility = View.INVISIBLE
+-            rangeLaterImageView!!.visibility = View.INVISIBLE
++        if (timeFramePosition < 6 || useXYChart) {
++            binding.rangeTextView.visibility = View.INVISIBLE
++            binding.imgEarlier.visibility = View.INVISIBLE
++            binding.imgLater.visibility = View.INVISIBLE
+         } else {
+-            rangeTextView!!.visibility = View.VISIBLE
+-            rangeEarlierImageView!!.visibility = View.VISIBLE
+-            rangeLaterImageView!!.visibility = View.VISIBLE
++            binding.rangeTextView.visibility = View.VISIBLE
++            binding.imgEarlier.visibility = View.VISIBLE
++            binding.imgLater.visibility = View.VISIBLE
+         }
+     }
+ 
+@@ -287,7 +322,7 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+             timeFramePosition < 1 -> {
+                 LoaderManager.getInstance(this).restartLoader(LOADER_ID_TIME, bnbAct, this)
+             }
+-            timeFramePosition < 3 -> {
++            timeFramePosition < 6 -> {
+                 LoaderManager.getInstance(this).restartLoader(LOADER_ID_RANGE, bnbAct, this)
+             }
+             else -> {
+@@ -305,7 +340,7 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+         calEnd.add(field, 1)
+         val sdf = DateHelper.dateFormat(field)
+         val tt = sdf.format(calStart.time)
+-        rangeTextView!!.text = tt
++        binding.rangeTextView.text = tt
+         bnd.putLong("start", calStart.timeInMillis)
+         bnd.putLong("end", calEnd.timeInMillis)
+         LoaderManager.getInstance(this).restartLoader(LOADER_ID_RANGE, bnd, this)
+@@ -330,15 +365,15 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+         // can't remove the xyChart here because it still needs to handle this touch event
+ //            chartFrame.removeView(pieChart);
+         xyChart!!.clear()
+-        chartFrame!!.addView(pieChart)
+-        timeframeSpinner!!.visibility = View.VISIBLE
++        binding.chartFrame.addView(pieChart)
++        binding.timeframeSpinner.visibility = View.VISIBLE
+         //            chartFrame.removeView(xyChart);
+     }
+ 
+     private fun switchToXYChart() {
+-        chartFrame!!.removeView(xyChart)
+-        chartFrame!!.addView(xyChart)
+-        chartFrame!!.removeView(pieChart)
++        binding.chartFrame.removeView(xyChart)
++        binding.chartFrame.addView(xyChart)
++        binding.chartFrame.removeView(pieChart)
+     }
+ 
+     // implementing the pie chart listener
+@@ -368,7 +403,7 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                 reload()
+             } else {
+                 useXYChart = true
+-                timeframeSpinner!!.visibility = View.GONE
++                binding.timeframeSpinner.visibility = View.GONE
+                 val db = mOpenHelper.readableDatabase
+                 var cursor = db.query(Contract.DiaryActivity.TABLE_NAME, arrayOf("*"),
+                         "name = ?", arrayOf(pe.label), null, null, null, null)
+@@ -380,17 +415,28 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                     cursor.close()
+                 }
+                 val currentChartStep = Calendar.DAY_OF_YEAR
+-                val calStart = DateHelper.startOf(currentChartStep, startOfTime)
++                var calStart = DateHelper.startOf(currentChartStep, startOfTime)
++                val valueFormatter: ValueFormatter = MyValueFormatter2()
++                var sel = "act_id = ?"
++                if (timeFramePosition > 0 && bnbAct != null) {
++                    val start = bnbAct!!.getLong("start")
++                    val end = bnbAct!!.getLong("end")
++                    calStart = DateHelper.startOf(currentChartStep, start)
++                    sel += " AND " + Contract.Diary.START + " >= " + start +
++                            " AND " + Contract.Diary.END + " <= " + end
++                }
++                cursor = db.query(
++                    Contract.Diary.TABLE_NAME, arrayOf("start", "end"),
++                    sel, arrayOf(actID), null, null,
++                    Contract.Diary.START, null)
+                 val calEnd = calStart.clone() as Calendar
+                 calEnd.add(currentChartStep, 1)
+-                val valueFormatter: ValueFormatter = MyValueFormatter2()
+-                cursor = db.query(Contract.Diary.TABLE_NAME, arrayOf("start", "end"),
+-                        "act_id = ?", arrayOf(actID), null, null, null, null)
+                 val segEntries = ArrayList<Entry>(50)
++                startTimes = ArrayList<Long>(50)
+                 val dates = ArrayList<String>(50)
+                 if (cursor != null && cursor.moveToFirst()) {
+-                    var actStart: Long
+-                    var actEnd: Long
++                    var actStart = 0L
++                    var actEnd = 0L
+                     var startMS = calStart.timeInMillis
+                     var endMS = calEnd.timeInMillis
+                     var offset = 0
+@@ -414,18 +460,21 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                         }
+                         segEntries.add(Entry(offset.toFloat(), actSum.toFloat()))
+                         dates.add(String.format("%d-%d-%d", calStart[Calendar.MONTH] + 1, calStart[Calendar.DAY_OF_MONTH], calStart[Calendar.YEAR]))
++                        startTimes.add(actStart)
+                         offset += 1
+                         calStart.add(currentChartStep, 1)
+                         calEnd.add(currentChartStep, 1)
+                         startMS = calStart.timeInMillis
+                         endMS = calEnd.timeInMillis
+                     }
++                    startTimes.add(actEnd)
+                     cursor.close()
+                 }
+                 val dataSets: MutableList<IScatterDataSet> = ArrayList(50)
+                 val set = ScatterDataSet(segEntries, pe.label)
+                 set.valueFormatter = valueFormatter
+                 set.color = actColor
++                set.scatterShapeSize = 20f
+                 set.setDrawValues(false)
+                 dataSets.add(set)
+                 val data = ScatterData(dataSets)
+@@ -438,15 +487,19 @@ class AnalyticsActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?>
+                 xAxis.labelRotationAngle = 60f
+                 xAxis.valueFormatter = MyValueFormatter(dates)
+                 xyChart!!.invalidate()
++                initXYChart()
+                 switchToXYChart()
+             }
+         } else {
+-            useXYChart = false
+-            switchToPieChart()
++            val hist = Intent(this, HistoryActivity::class.java)
++            hist.putExtra("StartTime", startTimes[e.x.toInt()])
++            hist.putExtra("EndTime", startTimes[e.x.toInt()+1])
++            startActivity(hist)
+         }
+         resetRangeTextView()
+     }
+ 
++
+     private class MyValueFormatter(private val dates: ArrayList<String>) : ValueFormatter() {
+         override fun getFormattedValue(value: Float): String {
+             val intVal = value.toInt()
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryDetailActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/history/EventDetailActivity.java
+similarity index 84%
+rename from app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryDetailActivity.java
+rename to app/src/main/java/com/mdiqentw/lifedots/ui/history/EventDetailActivity.java
+index 37f1c8b..6560fe5 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryDetailActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/history/EventDetailActivity.java
+@@ -26,7 +26,6 @@ import android.content.AsyncQueryHandler;
+ import android.content.ContentUris;
+ import android.content.ContentValues;
+ import android.content.Intent;
+-import android.content.SharedPreferences;
+ import android.database.Cursor;
+ import android.os.Bundle;
+ import android.text.Editable;
+@@ -36,26 +35,19 @@ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+-import android.widget.Button;
+-import android.widget.CheckBox;
+-import android.widget.EditText;
+-import android.widget.TextView;
+ 
+ import androidx.annotation.NonNull;
+-import androidx.cardview.widget.CardView;
+ import androidx.databinding.DataBindingUtil;
+ import androidx.fragment.app.DialogFragment;
+ import androidx.loader.app.LoaderManager;
+ import androidx.loader.content.CursorLoader;
+ import androidx.loader.content.Loader;
+-import androidx.preference.PreferenceManager;
+ import androidx.recyclerview.widget.RecyclerView;
+ import androidx.recyclerview.widget.StaggeredGridLayoutManager;
+ 
+-import com.google.android.material.textfield.TextInputLayout;
+ import com.mdiqentw.lifedots.MVApplication;
+ import com.mdiqentw.lifedots.R;
+-import com.mdiqentw.lifedots.databinding.ActivityHistoryDetailContentBinding;
++import com.mdiqentw.lifedots.databinding.ActivityEventDetailContentBinding;
+ import com.mdiqentw.lifedots.db.Contract;
+ import com.mdiqentw.lifedots.helpers.ActivityHelper;
+ import com.mdiqentw.lifedots.ui.generic.BaseActivity;
+@@ -90,7 +82,7 @@ import java.util.Objects;
+  * HistoryDetailActivity to show details of and modify diary entries
+  *
+  * */
+-public class HistoryDetailActivity extends BaseActivity
++public class EventDetailActivity extends BaseActivity
+         implements LoaderManager.LoaderCallbacks<Cursor> {
+ 
+     private static final String[] PROJECTION_IMG = new String[] {
+@@ -103,16 +95,17 @@ public class HistoryDetailActivity extends BaseActivity
+     private static final int UPDATE_PRE = 3;
+     private static final int UPDATE_SUCC = 4;
+ 
+-    ActivityHistoryDetailContentBinding binding;
++    ActivityEventDetailContentBinding binding;
+ 
+     private DetailRecyclerViewAdapter detailAdapter;
+ 
+     private final boolean[] mUpdatePending = new boolean[UPDATE_SUCC + 1];
+-    private static final int OVERLAP_CHECK = 5;
++//    private static final int OVERLAP_CHECK = 5;
+ 
+     private final String[] ENTRY_PROJ = new String[]{
+             Contract.DiaryActivity.TABLE_NAME + "." + Contract.DiaryActivity.NAME,
+             Contract.DiaryActivity.TABLE_NAME + "." + Contract.DiaryActivity.COLOR,
++            Contract.Diary.TABLE_NAME + "." + Contract.Diary.ACT_ID,
+             Contract.Diary.TABLE_NAME + "." + Contract.Diary._ID,
+             Contract.Diary.NOTE,
+             Contract.Diary.START,
+@@ -124,22 +117,16 @@ public class HistoryDetailActivity extends BaseActivity
+ 
+     final String dateFormatString = MVApplication.getAppContext().getResources().getString(R.string.date_format);
+     final String timeFormatString = MVApplication.getAppContext().getResources().getString(R.string.time_format);
+-    private final SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext());
++//    private final SharedPreferences sharedPref = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext());
+ 
+     /* the id of the currently displayed diary entry */
+     private long diaryEntryID;
++//    private int actId;
+ 
+-    private TextView mActivityName;
+-    private CheckBox mAdjustAdjacent;
+-    private Button mStartDate, mEndDate, mStartTime, mEndTime;
+     private Calendar start, storedStart;
+     private Calendar end, storedEnd;
+ 
+-    private EditText mNote;
+-    private View mBackground;
+-
+     private ContentValues updateValues = new ContentValues();
+-    private TextView mTimeError;
+     private boolean mIsCurrent;
+ 
+     public static class TimePickerFragment extends DialogFragment{
+@@ -195,20 +182,28 @@ public class HistoryDetailActivity extends BaseActivity
+             storedEnd = Calendar.getInstance();
+             long endMillis = cursor.getLong(cursor.getColumnIndex(Contract.Diary.END));
+             storedEnd.setTimeInMillis(endMillis);
+-            if(endMillis != 0) {
++            if (endMillis != 0) {
+                 end.setTimeInMillis(endMillis);
+                 mIsCurrent = false;
+-            }else{
++            } else {
+                 mIsCurrent = true;
+             }
+ 
+             if(!updateValues.containsKey(Contract.Diary.NOTE)) {
+-                mNote.setText(cursor.getString(cursor.getColumnIndex(Contract.Diary.NOTE)));
++                binding.editActivityNote.setText(cursor.getString(cursor.getColumnIndex(Contract.Diary.NOTE)));
+             }
+-            mActivityName.setText(
++//            actId = cursor.getInt(cursor.getColumnIndex(Contract.Diary.ACT_ID));
++//            System.out.println("Contract.DiaryActivity: " + cursor.getString(cursor.getColumnIndex(Contract.DiaryActivity.NAME)) +
++//                    " " + actId);
++            binding.row.name.setText(
+                     cursor.getString(cursor.getColumnIndex(Contract.DiaryActivity.NAME)));
+-
+-            mBackground.setBackgroundColor(cursor.getInt(cursor.getColumnIndex(Contract.DiaryActivity.COLOR)));
++//            binding.activityCard.setOnLongClickListener((view) -> {
++//                Intent i = new Intent(EventDetailActivity.this, EditActivity.class);
++//                i.putExtra("activityID", actId);
++//                startActivity(i);
++//                return true;
++//            });
++            binding.row.background.setBackgroundColor(cursor.getInt(cursor.getColumnIndex(Contract.DiaryActivity.COLOR)));
+ 
+             if(diaryEntryID == -1){
+                 diaryEntryID = cursor.getLong(cursor.getColumnIndex(Contract.Diary._ID));
+@@ -242,9 +237,9 @@ public class HistoryDetailActivity extends BaseActivity
+     }
+ 
+     private static class QHandler extends AsyncQueryHandler {
+-        final HistoryDetailActivity act;
++        final EventDetailActivity act;
+ 
+-        private QHandler(HistoryDetailActivity act){
++        private QHandler(EventDetailActivity act){
+             super(MVApplication.getAppContext().getContentResolver());
+             this.act = new WeakReference<>(act).get();
+         }
+@@ -268,7 +263,7 @@ public class HistoryDetailActivity extends BaseActivity
+     // override the UI by the values in updateValues
+     private void overrideUpdates() {
+         if(updateValues.containsKey(Contract.Diary.NOTE)) {
+-            mNote.setText((CharSequence) updateValues.get(Contract.Diary.NOTE));
++            binding.editActivityNote.setText((CharSequence) updateValues.get(Contract.Diary.NOTE));
+         }
+         if(updateValues.containsKey(Contract.Diary.START)) {
+             start.setTimeInMillis(updateValues.getAsLong(Contract.Diary.START));
+@@ -280,10 +275,10 @@ public class HistoryDetailActivity extends BaseActivity
+     }
+ 
+     private void updateDateTimes() {
+-        mStartDate.setText(DateFormat.format(dateFormatString, start));
+-        mStartTime.setText(DateFormat.format(timeFormatString, start));
+-        mEndDate.setText(DateFormat.format(dateFormatString, end));
+-        mEndTime.setText(DateFormat.format(timeFormatString, end));
++        binding.dateStart.setText(DateFormat.format(dateFormatString, start));
++        binding.timeStart.setText(DateFormat.format(timeFormatString, start));
++        binding.dateEnd.setText(DateFormat.format(dateFormatString, end));
++        binding.timeEnd.setText(DateFormat.format(timeFormatString, end));
+         checkConstraints();
+     }
+ 
+@@ -293,27 +288,14 @@ public class HistoryDetailActivity extends BaseActivity
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
+-        binding = DataBindingUtil.setContentView(this, R.layout.activity_history_detail_content);
+-
++        binding = DataBindingUtil.setContentView(this, R.layout.activity_event_detail_content);
+         setContent(binding.getRoot());
+-//        LayoutInflater inflater = (LayoutInflater) this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
++        binding.setActivity(this);
++
+         Intent i = getIntent();
+         diaryEntryID = i.getIntExtra("diaryEntryID", -1);
+ 
+-//        View contentView = View.inflate(this, R.layout.activity_history_detail_content, null);
+-
+-//        setContent(binding.getRoot());
+-        CardView mActivityCard = binding.activityCard;
+-        assert binding.row != null;
+-        mActivityName = binding.row.name;
+-        mBackground = binding.row.background;
+-
+-        mAdjustAdjacent = binding.adjustAdjacent;
+-
+-        TextInputLayout mNoteTIL = binding.editActivityNoteTil;
+-        mNote = binding.editActivityNote;
+-
+-        mNote.addTextChangedListener(new TextWatcher() {
++        binding.editActivityNote.addTextChangedListener(new TextWatcher() {
+             @Override
+             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                 // empty
+@@ -331,26 +313,20 @@ public class HistoryDetailActivity extends BaseActivity
+             }
+         });
+ 
+-        mStartDate = binding.dateStart;
+-        mEndDate = binding.dateEnd;
+-        mStartTime = binding.timeStart;
+-        mEndTime = binding.timeEnd;
+         start = Calendar.getInstance();
+         end = Calendar.getInstance();
+-        mTimeError = binding.timeError;
+ 
+-        RecyclerView detailRecyclerView = binding.pictureRecycler;
+         RecyclerView.LayoutManager layoutMan = new StaggeredGridLayoutManager(3, StaggeredGridLayoutManager.VERTICAL);
+-        detailRecyclerView.setLayoutManager(layoutMan);
++        binding.pictureRecycler.setLayoutManager(layoutMan);
+         detailAdapter = new DetailRecyclerViewAdapter(this,null);
+-        detailRecyclerView.setAdapter(detailAdapter);
++        binding.pictureRecycler.setAdapter(detailAdapter);
+ 
+         LoaderManager.getInstance(this).restartLoader(0, null, this);
+ 
+         if(savedInstanceState != null) {
+             updateValues = savedInstanceState.getParcelable(UPDATE_VALUE_KEY);
+             diaryEntryID = savedInstanceState.getLong(DIRAY_ENTRY_ID_KEY);
+-            mAdjustAdjacent.setChecked(savedInstanceState.getBoolean(ADJUST_ADJACENT_KEY));
++            binding.adjustAdjacent.setChecked(savedInstanceState.getBoolean(ADJUST_ADJACENT_KEY));
+             overrideUpdates();
+         }
+         Arrays.fill(mUpdatePending, false);
+@@ -390,7 +366,7 @@ public class HistoryDetailActivity extends BaseActivity
+ 
+     @Override
+     public void onSaveInstanceState(Bundle outState) {
+-        outState.putBoolean(ADJUST_ADJACENT_KEY, mAdjustAdjacent.isChecked());
++        outState.putBoolean(ADJUST_ADJACENT_KEY, binding.adjustAdjacent.isChecked());
+         outState.putLong(DIRAY_ENTRY_ID_KEY, diaryEntryID);
+         outState.putParcelable(UPDATE_VALUE_KEY, updateValues);
+         // call superclass to save any view hierarchy
+@@ -407,11 +383,12 @@ public class HistoryDetailActivity extends BaseActivity
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+         int mid = item.getItemId();
+-        if (mid == R.id.action_edit_delete) {
+-            /* TODO: DELETE diary entry */
+-            System.out.println("Deleting diary entry not implemented");
+-            finish();
+-        } else if (mid == android.R.id.home) {
++//        if (mid == R.id.action_edit_delete) {
++//            /* TODO: DELETE diary entry */
++//            Toast.makeText(this, R.string.delete_event_entry_msg, Toast.LENGTH_SHORT).show();
++//            finish();
++//        } else
++        if (mid == android.R.id.home) {
+             /* cancel edit */
+             finish();
+         } else if (mid == R.id.action_edit_done) {
+@@ -423,7 +400,7 @@ public class HistoryDetailActivity extends BaseActivity
+                             updateValues, null, null);
+                     mUpdatePending[UPDATE_ENTRY] = true;
+ 
+-                    if (mAdjustAdjacent.isChecked()) {
++                    if (binding.adjustAdjacent.isChecked()) {
+                         if (updateValues.containsKey(Contract.Diary.START)) {
+                             // update also the predecessor
+                             ContentValues updateEndTime = new ContentValues();
+@@ -458,19 +435,19 @@ public class HistoryDetailActivity extends BaseActivity
+         boolean result = true;
+         if(end.getTimeInMillis() != 0 && !end.after(start)){
+             result = false;
+-            mTimeError.setText(R.string.constraint_positive_duration);
++            binding.timeError.setText(R.string.constraint_positive_duration);
+         }
+ 
+         checkForOverlap();
+-// TODO
++        // TODO
+         // end >= start + 1000
+         // no overlap OR adjust adjacent (but still no oerlap with the next next and last last
+ 
+         if(!result) {
+             // TODO: make animation here, and do so only if it is not already visibile
+-            mTimeError.setVisibility(View.VISIBLE);
++            binding.timeError.setVisibility(View.VISIBLE);
+         }else{
+-            mTimeError.setVisibility(View.GONE);
++            binding.timeError.setVisibility(View.GONE);
+         }
+         return result;
+     }
+@@ -558,14 +535,14 @@ public class HistoryDetailActivity extends BaseActivity
+     public void showStartDatePickerDialog(View v) {
+         DatePickerFragment newFragment = new DatePickerFragment();
+         newFragment.setData((view, year, month, dayOfMonth) -> {
+-            start.set(Calendar.YEAR, year);
+-            start.set(Calendar.MONTH, month);
+-            start.set(Calendar.DAY_OF_MONTH, dayOfMonth);
+-
+-            Long newStart = start.getTimeInMillis();
+-            updateValues.put(Contract.Diary.START, newStart);
+-            updateDateTimes();
+-        }
++                    start.set(Calendar.YEAR, year);
++                    start.set(Calendar.MONTH, month);
++                    start.set(Calendar.DAY_OF_MONTH, dayOfMonth);
++
++                    Long newStart = start.getTimeInMillis();
++                    updateValues.put(Contract.Diary.START, newStart);
++                    updateDateTimes();
++                }
+                 , start.get(Calendar.YEAR), start.get(Calendar.MONTH), start.get(Calendar.DAY_OF_MONTH));
+         newFragment.show(getSupportFragmentManager(), "startDatePicker");
+     }
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryActivity.java
+index 42daad9..3e5975f 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryActivity.java
+@@ -36,8 +36,6 @@ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+ import android.view.inputmethod.EditorInfo;
+-import android.widget.ImageView;
+-import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
+@@ -50,18 +48,16 @@ import androidx.fragment.app.DialogFragment;
+ import androidx.loader.app.LoaderManager;
+ import androidx.loader.content.CursorLoader;
+ import androidx.loader.content.Loader;
+-import androidx.recyclerview.widget.RecyclerView;
+ import androidx.recyclerview.widget.StaggeredGridLayoutManager;
+ 
+ import com.google.android.material.datepicker.MaterialDatePicker;
+ import com.mdiqentw.lifedots.MVApplication;
+ import com.mdiqentw.lifedots.R;
+ import com.mdiqentw.lifedots.databinding.ActivityHistoryContentBinding;
+-import com.mdiqentw.lifedots.db.LDContentProvider;
+ import com.mdiqentw.lifedots.db.Contract;
++import com.mdiqentw.lifedots.db.LDContentProvider;
+ import com.mdiqentw.lifedots.ui.generic.BaseActivity;
+ import com.mdiqentw.lifedots.ui.generic.DetailRecyclerViewAdapter;
+-import com.mdiqentw.lifedots.ui.generic.EditActivity;
+ import com.mdiqentw.lifedots.ui.main.NoteEditDialog;
+ 
+ import java.text.ParseException;
+@@ -128,10 +124,7 @@ public class HistoryActivity extends BaseActivity
+ 
+     private HistoryRecyclerViewAdapter historyAdapter;
+     private DetailRecyclerViewAdapter[] detailAdapters;
+-    private MenuItem imagesMenuItem;
+-    private MenuItem locationMenuItem;
+     private SearchView searchView;
+-    private TextView rangeTextView;
+ 
+     private Long startTime, endTime, duration;
+ 
+@@ -146,7 +139,7 @@ public class HistoryActivity extends BaseActivity
+ 
+     @Override
+     public void onItemClick(HistoryViewHolders viewHolder, int adapterPosition, int diaryID) {
+-        Intent i = new Intent(this, HistoryDetailActivity.class);
++        Intent i = new Intent(this, EventDetailActivity.class);
+         i.putExtra("diaryEntryID", diaryID);
+         startActivity(i);
+     }
+@@ -154,7 +147,11 @@ public class HistoryActivity extends BaseActivity
+     public boolean onItemLongClick(HistoryViewHolders viewHolder, int adapterPosition, int diaryID) {
+         NoteEditDialog dialog = new NoteEditDialog();
+         dialog.setDiaryId(diaryID);
+-        dialog.setText(viewHolder.mNoteLabel.getText().toString());
++        if (viewHolder != null) {
++            CharSequence noteText = viewHolder.mNoteLabel.getText();
++            if (noteText != null && noteText.length()>0)
++                dialog.setInputText(noteText.toString());
++        }
+         dialog.show(getSupportFragmentManager(), "NoteEditDialogFragment");
+         return true;
+     }
+@@ -201,7 +198,7 @@ public class HistoryActivity extends BaseActivity
+         return true;
+     }
+ 
+-    public boolean	onMenuItemClick(MenuItem item) {
++    public boolean onMenuItemClick(MenuItem item) {
+         int mid = item.getItemId();
+         if (mid == R.id.menu_notes) {
+             obtainHistoryNotes();
+@@ -213,16 +210,13 @@ public class HistoryActivity extends BaseActivity
+                 endTime = selection.second;
+                 duration = endTime - startTime;
+ 
+-                rangeTextView.setText(String.format("%d Days", duration / MS_Per_Day));
++                binding.hisRangeTextView.setText(String.format("%d Days", duration / MS_Per_Day));
+                 obtainHistoryInPeriod();
+             });
+ //        } else if (item.getItemId() == R.id.menu_images) {
+-////            obtainHistoryImages();
+-//            ;
+-//        } else if (item.getItemId() == R.id.menu_location) {
+-////            obtainHistoryImages();
+-//            ;
++//            obtainHistoryImages();
+         }
++
+         return true;
+     }
+ 
+@@ -241,37 +235,41 @@ public class HistoryActivity extends BaseActivity
+ 
+         binding = DataBindingUtil.setContentView(this, R.layout.activity_history_content);
+         setContent(binding.getRoot());
++        binding.setActivity(this);
++
++        Intent i = getIntent();
++        long tstart = i.getLongExtra("StartTime", 0L);
++        long tend = i.getLongExtra("EndTime", 0L);
++        if (tstart > 0L && tend > 0L) {
++            startTime = tstart;
++            endTime = tend;
++        }
+ 
+         detailAdapters = new DetailRecyclerViewAdapter[5];
+ 
+-        RecyclerView historyRecyclerView = binding.historyList;
+-
+         StaggeredGridLayoutManager detailLayoutManager;
+         int hov;
+-        if(getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
++        if(getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE)
+             hov = StaggeredGridLayoutManager.HORIZONTAL;
+-        } else {
++        else
+             hov = StaggeredGridLayoutManager.VERTICAL;
+-        }
++
+         detailLayoutManager = new MyStaggeredGridLayoutManager(hov);
+ 
+ //        detailLayoutManager.setAutoMeasureEnabled(true);
+ 
+-        historyRecyclerView.setLayoutManager(detailLayoutManager);
++        binding.historyList.setLayoutManager(detailLayoutManager);
+ 
+         historyAdapter = new HistoryRecyclerViewAdapter(HistoryActivity.this, this, null);
+-        historyRecyclerView.setAdapter(historyAdapter);
++        binding.historyList.setAdapter(historyAdapter);
+ 
+-        rangeTextView = binding.hisRangeTextView;
+-        rangeTextView.setText(String.format("%d Days", duration / MS_Per_Day));
+-        ImageView rangeEarlierView = binding.hisImgEarlier;
+-        rangeEarlierView.setOnClickListener(v -> {
++        binding.hisRangeTextView.setText(String.format("%d Days", duration / MS_Per_Day));
++        binding.hisImgEarlier.setOnClickListener(v -> {
+             endTime = startTime;
+             startTime -= duration;
+             filterHistoryView(null);
+         });
+-        ImageView rangeLaterView = binding.hisImgLater;
+-        rangeLaterView.setOnClickListener(v -> {
++        binding.hisImgLater.setOnClickListener(v -> {
+             startTime = endTime;
+             endTime += duration;
+             filterHistoryView(null);
+@@ -288,7 +286,7 @@ public class HistoryActivity extends BaseActivity
+     }
+ 
+     public void showDatePickerDialog(View v) {
+-        HistoryDetailActivity.DatePickerFragment newFragment = new HistoryDetailActivity.DatePickerFragment();
++        EventDetailActivity.DatePickerFragment newFragment = new EventDetailActivity.DatePickerFragment();
+         Calendar date = Calendar.getInstance();
+         date.setTimeInMillis(startTime+duration/2);
+         newFragment.setData((view, year, month, dayOfMonth) -> {
+@@ -327,7 +325,6 @@ public class HistoryActivity extends BaseActivity
+                 query = data.getLastPathSegment();
+                 filterHistoryNotes(query);
+             }
+-
+         } else if (LDContentProvider.SEARCH_GLOBAL.equals(action)) {
+             Uri data = intent.getData();
+             if (data != null) {
+@@ -384,12 +381,9 @@ public class HistoryActivity extends BaseActivity
+         MenuItem datesMenuItem = menu.findItem(R.id.menu_dates);
+         datesMenuItem.setOnMenuItemClickListener(this);
+ 
+-//        imagesMenuItem = menu.findItem(R.id.menu_images);
++//        MenuItem imagesMenuItem = menu.findItem(R.id.menu_images);
+ //        imagesMenuItem.setOnMenuItemClickListener(this);
+ //
+-//        locationMenuItem = menu.findItem(R.id.menu_location);
+-//        locationMenuItem.setOnMenuItemClickListener(this);
+-
+         // Get the SearchView and set the searchable configuration
+         SearchManager searchManager = (SearchManager) getSystemService(Context.SEARCH_SERVICE);
+         MenuItem searchMenuItem = menu.findItem(R.id.action_filter);
+@@ -491,9 +485,11 @@ public class HistoryActivity extends BaseActivity
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+         // Handle your other action bar items...
+-        if (item.getItemId() == R.id.action_add_activity) {
+-            Intent intentaddact = new Intent(HistoryActivity.this, EditActivity.class);
+-            startActivity(intentaddact);
++        if (item.getItemId() == R.id.action_map) {
++            Intent map = new Intent(HistoryActivity.this, MapActivity.class);
++            map.putExtra("StartTime", startTime);
++            map.putExtra("EndTime", endTime);
++            startActivity(map);
+         }
+         return super.onOptionsItemSelected(item);
+     }
+@@ -521,6 +517,11 @@ public class HistoryActivity extends BaseActivity
+                                 Contract.Diary.NOTE + " != ''" ;
+                         sel_args = null;
+                         break;
++//                    case OBTAIN_TYPE_IMAGE:
++//                        sel =  sel + " AND " + Contract.Diary. + " IS NOT NULL AND " +
++//                                Contract.Diary.NOTE + " != ''" ;
++//                        sel_args = null;
++//                        break;
+                     case OBTAIN_TYPE_PERIOD:
+                         sel = sel + " AND " + Contract.Diary.END + " >= " + args.getLong("START")
+                             + " AND " + Contract.Diary.START + " <= " + args.getLong("END");
+@@ -587,7 +588,7 @@ public class HistoryActivity extends BaseActivity
+     }
+ 
+     @Override
+-    public void onNoteEditPositiveClock(String str, DialogFragment dialog) {
++    public void onNoteEditPositiveClick(String str, DialogFragment dialog) {
+         /* update note */
+         NoteEditDialog dlg = (NoteEditDialog) dialog;
+ 
+@@ -600,7 +601,6 @@ public class HistoryActivity extends BaseActivity
+                         Long.toString(dlg.getDiaryId())),
+                 values,
+                 null, null);
+-
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryRecyclerViewAdapter.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryRecyclerViewAdapter.kt
+index 66dc3cc..231fb6f 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryRecyclerViewAdapter.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/history/HistoryRecyclerViewAdapter.kt
+@@ -18,6 +18,9 @@
+  */
+ package com.mdiqentw.lifedots.ui.history
+ 
++import java.text.SimpleDateFormat
++import java.util.*
++
+ import android.database.Cursor
+ import android.database.DataSetObserver
+ import android.text.format.DateFormat
+@@ -28,6 +31,7 @@ import androidx.databinding.DataBindingUtil
+ import androidx.preference.PreferenceManager
+ import androidx.recyclerview.widget.RecyclerView
+ import androidx.recyclerview.widget.StaggeredGridLayoutManager
++
+ import com.mdiqentw.lifedots.MVApplication
+ import com.mdiqentw.lifedots.R
+ import com.mdiqentw.lifedots.databinding.ActivityHistoryEntryBinding
+@@ -36,8 +40,6 @@ import com.mdiqentw.lifedots.helpers.GraphicsHelper
+ import com.mdiqentw.lifedots.helpers.TimeSpanFormatter
+ import com.mdiqentw.lifedots.ui.generic.DetailRecyclerViewAdapter
+ import com.mdiqentw.lifedots.ui.settings.SettingsActivity
+-import java.text.SimpleDateFormat
+-import java.util.*
+ 
+ /*
+  * LifeDots
+@@ -57,7 +59,11 @@ import java.util.*
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private val mListener: SelectListener, private var mCursor: Cursor?) : RecyclerView.Adapter<HistoryViewHolders>() {
++class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity,
++                                 private val mListener: SelectListener,
++                                 private var mCursor: Cursor?) :
++    RecyclerView.Adapter<HistoryViewHolders>() {
++
+     private val mDataObserver: DataSetObserver?
+     private var idRowIdx = -1
+     private var startRowIdx = -1
+@@ -89,23 +95,23 @@ class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private
+     override fun onBindViewHolder(holder: HistoryViewHolders, position: Int) {
+         var showHeader = false
+         var header = ""
++
+         check(mCursor!!.moveToPosition(position)) { "couldn't move cursor to position $position" }
++
+         val start = Date(mCursor!!.getLong(startRowIdx))
+         val name = mCursor!!.getString(nameRowIdx)
+         val color = mCursor!!.getInt(colorRowIdx)
+         holder.mBackground.setBackgroundColor(color)
+         holder.mName.setTextColor(GraphicsHelper.textColorOnBackground(color))
+         holder.diaryEntryID = mCursor!!.getInt(idRowIdx)
+-        val end: Date? = if (mCursor!!.isNull(endRowIdx)) {
+-            null
+-        } else {
+-            Date(mCursor!!.getLong(endRowIdx))
+-        }
++        val end: Date? =
++            if (mCursor!!.isNull(endRowIdx)) null
++            else Date(mCursor!!.getLong(endRowIdx))
++
+         val startCal = Calendar.getInstance()
+         startCal.timeInMillis = mCursor!!.getLong(startRowIdx)
+-        if (mCursor!!.isFirst) {
+-            showHeader = true
+-        } else {
++        if (mCursor!!.isFirst) showHeader = true
++        else {
+             mCursor!!.moveToPrevious()
+             val clast = Calendar.getInstance()
+             clast.timeInMillis = mCursor!!.getLong(startRowIdx)
+@@ -114,6 +120,7 @@ class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private
+                 showHeader = true
+             }
+         }
++
+         if (showHeader) {
+             val now = Calendar.getInstance()
+             header = when {
+@@ -140,9 +147,9 @@ class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private
+         if (showHeader) {
+             holder.mSeparator.visibility = View.VISIBLE
+             holder.mSeparator.text = header
+-        } else {
++        } else
+             holder.mSeparator.visibility = View.GONE
+-        }
++
+         holder.mName.text = name
+         val sharedPref = PreferenceManager.getDefaultSharedPreferences(MVApplication.getAppContext())
+         val formatString = sharedPref.getString(SettingsActivity.KEY_PREF_DATETIME_FORMAT,
+@@ -152,14 +159,14 @@ class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private
+         if (!mCursor!!.isNull(noteRowIdx)) {
+             noteStr = mCursor!!.getString(noteRowIdx)
+             holder.mNoteLabel.visibility = View.VISIBLE
+-        } else {
++        } else
+             holder.mNoteLabel.visibility = View.GONE
+-        }
++
+         holder.mNoteLabel.text = noteStr
+         val duration: String
+-        if (end == null) {
++        if (end == null)
+             duration = MVApplication.getAppContext().resources.getString(R.string.duration_description, TimeSpanFormatter.fuzzyFormat(start, Date()))
+-        } else {
++        else {
+             holder.mStartLabel.text = MVApplication.getAppContext().resources.getString(R.string.history_start, DateFormat.format(formatString, start))
+             duration = MVApplication.getAppContext().resources.getString(R.string.history_end, DateFormat.format(formatString, end),
+                     TimeSpanFormatter.format(end.time - start.time))
+@@ -177,12 +184,10 @@ class HistoryRecyclerViewAdapter(private val mContext: HistoryActivity, private
+     }
+ 
+     override fun getItemCount(): Int {
+-        return if (mCursor != null) {
+-            mCursor!!.count
+-        } else 0
++        return if (mCursor != null) mCursor!!.count
++        else 0
+     }
+ 
+-    //    XJ edit
+     fun swapCursor(newCursor: Cursor) {
+         if (newCursor === mCursor) {
+ //            if (newCursor != null) {
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/history/MapActivity.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/history/MapActivity.kt
+index 184ca3c..1b8c98a 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/history/MapActivity.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/history/MapActivity.kt
+@@ -19,18 +19,24 @@
+ package com.mdiqentw.lifedots.ui.history
+ 
+ import android.annotation.SuppressLint
++import android.content.DialogInterface
++import android.content.Intent
+ import android.database.Cursor
+ import android.graphics.Color
+ import android.graphics.Paint
+ import android.os.Bundle
++import android.view.Menu
++import android.view.MenuItem
+ import android.view.View
+-import android.widget.TextView
+ import android.widget.Toast
++import androidx.appcompat.app.AlertDialog
++import androidx.core.util.Pair
+ import androidx.databinding.DataBindingUtil
+ import androidx.loader.app.LoaderManager
+ import androidx.loader.content.CursorLoader
+ import androidx.loader.content.Loader
+ import androidx.preference.PreferenceManager
++import com.google.android.material.datepicker.MaterialDatePicker
+ import com.mdiqentw.lifedots.BuildConfig
+ import com.mdiqentw.lifedots.R
+ import com.mdiqentw.lifedots.databinding.ActivityMapBinding
+@@ -42,7 +48,6 @@ import org.osmdroid.config.Configuration
+ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+ import org.osmdroid.util.GeoPoint
+ import org.osmdroid.views.CustomZoomButtonsController
+-import org.osmdroid.views.MapView
+ import org.osmdroid.views.overlay.CopyrightOverlay
+ import org.osmdroid.views.overlay.ScaleBarOverlay
+ import org.osmdroid.views.overlay.simplefastpoint.LabelledGeoPoint
+@@ -50,6 +55,9 @@ import org.osmdroid.views.overlay.simplefastpoint.SimpleFastPointOverlay
+ import org.osmdroid.views.overlay.simplefastpoint.SimpleFastPointOverlay.PointAdapter
+ import org.osmdroid.views.overlay.simplefastpoint.SimpleFastPointOverlayOptions
+ import org.osmdroid.views.overlay.simplefastpoint.SimplePointTheme
++import java.text.SimpleDateFormat
++import java.util.*
++import kotlin.math.abs
+ 
+ /*
+  * LifeDots
+@@ -69,42 +77,70 @@ import org.osmdroid.views.overlay.simplefastpoint.SimplePointTheme
+  * You should have received a copy of the GNU General Public License
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+-class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+-    var map: MapView? = null
+-    private var noMap: TextView? = null
++class MapActivity : BaseActivity(),
++    LoaderManager.LoaderCallbacks<Cursor?>, MenuItem.OnMenuItemClickListener {
++
++    lateinit var binding: ActivityMapBinding
++
++    private var startTime = 0L
++    private var endTime = 0L
++    private var startPoint = GeoPoint(LocationHelper.helper.currentLocation)
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+         val ctx = applicationContext
+ 
+         Configuration.getInstance().load(ctx, PreferenceManager.getDefaultSharedPreferences(ctx))
+-        Configuration.getInstance().setUserAgentValue(BuildConfig.APPLICATION_ID)
++        Configuration.getInstance().userAgentValue = BuildConfig.APPLICATION_ID
+ 
+-        val binding: ActivityMapBinding = DataBindingUtil.setContentView(this, R.layout.activity_map)
++        binding = DataBindingUtil.setContentView(this, R.layout.activity_map)
+         setContent(binding.root)
+ 
+-        noMap = binding.noMap
+-        map = binding.map
+-        map!!.setTileSource(TileSourceFactory.MAPNIK)
+-        map!!.isTilesScaledToDpi = true
+-        map!!.zoomController.setVisibility(CustomZoomButtonsController.Visibility.ALWAYS)
+-        map!!.setMultiTouchControls(true)
+-        val mapController = map!!.controller
+-        mapController.setZoom(14.0)
+-        val startPoint = GeoPoint(LocationHelper.helper.currentLocation)
+-        mapController.setCenter(startPoint)
+-        val copyrightOverlay = CopyrightOverlay(this)
+-        copyrightOverlay.setTextSize(10)
+-        map!!.overlays.add(copyrightOverlay)
+-        val scaleBarOverlay = ScaleBarOverlay(map)
+-        map!!.overlays.add(scaleBarOverlay)
+-        // Scale bar tries to draw as 1-inch, so to put it in the top center, set x offset to
+-        // half screen width, minus half an inch.
+-        scaleBarOverlay.setScaleBarOffset(
+-                (resources.displayMetrics.widthPixels / 2 - resources
+-                        .displayMetrics.xdpi / 2).toInt(), 10)
++        val i = intent
++        val tstart = i.getLongExtra("StartTime", 0L)
++        val tend = i.getLongExtra("EndTime", 0L)
++        if (tstart > 0L && tend > 0L) {
++            startTime = tstart
++            endTime = tend
++        }
++
++        if (!hasTimeInterval()) buildMap(startPoint)
++
+         LoaderManager.getInstance(this).initLoader(LOADER_ID_INIT, null, this)
+-        mDrawerToggle.isDrawerIndicatorEnabled = false
++    }
++
++    private fun hasTimeInterval() : Boolean {
++        return startTime > 0 && endTime > 0
++    }
++
++    private fun buildMap(startPoint : GeoPoint) {
++        if (abs(startPoint.latitude) > 0.001 && abs(startPoint.longitude) > 0.001) {
++            binding.map.setTileSource(TileSourceFactory.MAPNIK)
++            binding.map.isTilesScaledToDpi = true
++            binding.map.zoomController.setVisibility(CustomZoomButtonsController.Visibility.ALWAYS)
++            binding.map.setMultiTouchControls(true)
++            if (hasTimeInterval())
++                binding.map.controller.setZoom(16.0)
++            else
++                binding.map.controller.setZoom(13.0)
++            binding.map.controller.setCenter(startPoint)
++            val copyrightOverlay = CopyrightOverlay(this)
++            copyrightOverlay.setTextSize(10)
++            binding.map.overlays.add(copyrightOverlay)
++            val scaleBarOverlay = ScaleBarOverlay(binding.map)
++            binding.map.overlays.add(scaleBarOverlay)
++
++            // Scale bar tries to draw as 1-inch, so to put it in the top center, set x offset to
++            // half screen width, minus half an inch.
++            scaleBarOverlay.setScaleBarOffset(
++                (resources.displayMetrics.widthPixels / 2 -
++                        resources.displayMetrics.xdpi / 2).toInt(), 10
++            )
++            mDrawerToggle.isDrawerIndicatorEnabled = false
++        } else {
++            binding.noMap.visibility = View.VISIBLE
++            binding.map.visibility = View.GONE
++        }
+     }
+ 
+     // Called when a new Loader needs to be created
+@@ -112,8 +148,13 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+         // Now create and return a CursorLoader that will take care of
+         // creating a Cursor for the data being displayed.
+         return if (id == LOADER_ID_INIT) {
++            var sel = SELECTION_INIT
++            if (hasTimeInterval())
++                sel = (sel + " AND " + Contract.DiaryLocation.TIMESTAMP + " >= " + startTime
++                        + " AND " + Contract.DiaryLocation.TIMESTAMP + " <= " + endTime)
++
+             CursorLoader(this, Contract.DiaryLocation.CONTENT_URI,
+-                    PROJECTION, SELECTION_INIT, null, null)
++                    PROJECTION, sel, null, null)
+         } else {
+             CursorLoader(this)
+         }
+@@ -127,17 +168,37 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+         // old cursor once we return.)
+         if (data != null && data.count > 0) {
+             val pts: MutableList<IGeoPoint> = ArrayList(data.count)
++            val ts: MutableList<Long> = ArrayList(data.count)
+             if (data.moveToFirst()) {
+                 var i = 0
++                var aveLon = 0.0
++                var aveLat = 0.0
+                 while (!data.isAfterLast) {
+                     val haccIdx = data.getColumnIndex(Contract.DiaryLocation.HACC)
+-                    if (data.isNull(haccIdx) || data.getInt(haccIdx) < 250) {
+-                        pts.add(LabelledGeoPoint(data.getDouble(data.getColumnIndex(Contract.DiaryLocation.LATITUDE)),
+-                                data.getDouble(data.getColumnIndex(Contract.DiaryLocation.LONGITUDE)), "Pt $i"))
++                    if (data.isNull(haccIdx) || data.getInt(haccIdx) < 1000) {
++                        val lat = data.getDouble(data.getColumnIndex(Contract.DiaryLocation.LATITUDE))
++                        val lon = data.getDouble(data.getColumnIndex(Contract.DiaryLocation.LONGITUDE))
++                        aveLon += lon
++                        aveLat += lat
++                        pts.add(LabelledGeoPoint(lat, lon, "P$i"))
++                        val tCol = data.getColumnIndex(Contract.DiaryLocation.TIMESTAMP)
++                        ts.add(if (tCol>=0) data.getLong(tCol) else 0L)
++                        i++
+                     }
+-                    i++
+                     data.moveToNext()
+                 }
++                aveLon /= i
++                aveLat /= i
++                if (hasTimeInterval()) {
++                    startPoint = GeoPoint(aveLat, aveLon)
++                    buildMap(startPoint)
++                }
++
++                Toast.makeText(
++                    binding.map.context,
++                    i.toString() + getString(R.string.num_valid_points),
++                    Toast.LENGTH_LONG
++                ).show()
+             }
+ 
+             // wrap them in a theme
+@@ -161,16 +222,33 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+ 
+             // onClick callback
+             sfpo.setOnClickListener { points: PointAdapter, point: Int? ->
+-                Toast.makeText(map!!.context, "You clicked " + (points[point!!] as LabelledGeoPoint).label, Toast.LENGTH_SHORT).show()
++                val date = Date(ts[point!!])
++                val format = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
++
++                // selected item is deleted. Ask for undeleting it.
++                val builder = AlertDialog.Builder(this)
++                    .setMessage((points[point] as LabelledGeoPoint).label + ": " + format.format(date) +
++                    "\n" + getString(R.string.review_that_day))
++                    .setPositiveButton(android.R.string.yes) { _: DialogInterface?, _: Int ->
++                        val hist = Intent(this, HistoryActivity::class.java)
++                        hist.putExtra("StartTime", ts[point] - 12*60*60*1000)
++                        hist.putExtra("EndTime", ts[point] + 12*60*60*1000)
++                        startActivity(hist)
++                    }
++                    .setNegativeButton(android.R.string.no, null)
++                builder.create().show()
+             }
+ 
+-            // add overlay
+-            map!!.overlays.add(sfpo)
+-            noMap!!.visibility = View.GONE
+-            map!!.visibility = View.VISIBLE
++            binding.map.overlays.add(sfpo)
++
++            binding.noMap.visibility = View.GONE
++            binding.map.visibility = View.VISIBLE
+         } else {
+-            noMap!!.visibility = View.VISIBLE
+-            map!!.visibility = View.GONE
++            Toast.makeText(
++                binding.map.context,
++                getString(R.string.no_valid_points),
++                Toast.LENGTH_LONG
++            ).show()
+         }
+     }
+ 
+@@ -181,6 +259,33 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+         // longer using it.
+     }
+ 
++    override fun onCreateOptionsMenu(menu: Menu) : Boolean {
++        val inflater = getMenuInflater ()
++        inflater.inflate(R.menu.map_menu, menu)
++
++        val datesMenuItem = menu.findItem (R.id.menu_dates)
++        datesMenuItem.setOnMenuItemClickListener(this)
++
++        return true
++    }
++
++    override fun onMenuItemClick(item: MenuItem): Boolean {
++        val mid = item.itemId
++
++        if (mid == R.id.menu_dates) {
++            val picker = MaterialDatePicker.Builder.dateRangePicker().build()
++            picker.show(supportFragmentManager, picker.toString())
++            picker.addOnPositiveButtonClickListener { selection: Pair<Long, Long> ->
++                binding.map.getOverlays().clear()
++                binding.map.invalidate()
++                startTime = selection.first
++                endTime = selection.second
++                LoaderManager.getInstance(this@MapActivity).restartLoader(LOADER_ID_INIT, null, this@MapActivity)
++            }
++        }
++        return true
++    }
++
+     public override fun onResume() {
+         mNavigationView.menu.findItem(R.id.nav_map).isChecked = true
+         super.onResume()
+@@ -188,7 +293,7 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+         //if you make changes to the configuration, use
+         //SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+         //Configuration.getInstance().load(this, PreferenceManager.getDefaultSharedPreferences(this));
+-        map!!.onResume() //needed for compass, my location overlays, v6.0.0 and up
++        binding.map.onResume() //needed for compass, my location overlays, v6.0.0 and up
+     }
+ 
+     public override fun onPause() {
+@@ -197,15 +302,16 @@ class MapActivity : BaseActivity(), LoaderManager.LoaderCallbacks<Cursor?> {
+         //if you make changes to the configuration, use
+         //SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+         //Configuration.getInstance().save(this, prefs);
+-        map!!.onPause() //needed for compass, my location overlays, v6.0.0 and up
++        binding.map.onPause() //needed for compass, my location overlays, v6.0.0 and up
+     }
+ 
+     companion object {
+         private const val LOADER_ID_INIT = 0
+         private val PROJECTION = arrayOf(
+-                Contract.DiaryLocation.LONGITUDE,
+-                Contract.DiaryLocation.LATITUDE,
+-                Contract.DiaryLocation.HACC
++            Contract.DiaryLocation.TIMESTAMP,
++            Contract.DiaryLocation.LONGITUDE,
++            Contract.DiaryLocation.LATITUDE,
++            Contract.DiaryLocation.HACC
+         )
+         private const val SELECTION_INIT = Contract.DiaryLocation._DELETED + "=0"
+     }
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailNoteFragment.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailNoteFragment.kt
+index 268d0a7..c65ea9e 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailNoteFragment.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailNoteFragment.kt
+@@ -23,6 +23,7 @@ import android.view.LayoutInflater
+ import android.view.View
+ import android.view.ViewGroup
+ import androidx.databinding.DataBindingUtil
++import androidx.fragment.app.DialogFragment
+ import androidx.fragment.app.Fragment
+ import androidx.lifecycle.ViewModelProvider
+ import com.mdiqentw.lifedots.R
+@@ -52,22 +53,26 @@ class DetailNoteFragment : Fragment() {
+ 
+     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
+                               savedInstanceState: Bundle?): View {
++
+         val binding: FragmentDetailNoteBinding = DataBindingUtil.inflate(
+                 inflater, R.layout.fragment_detail_note, container, false)
+-        val view = binding.root
+         //here data must be an instance of the class MarsDataProvider
+-        view.setOnClickListener {
+-            // Handle the click on the FAB
++
++        binding.note.setOnClickListener{
+             if (viewModel!!.currentActivity().value != null) {
+                 val dialog = NoteEditDialog()
+-                dialog.setText(viewModel!!.mNote.value)
++//                dialog.setStyle(DialogFragment.STYLE_NO_FRAME, 0)
++                val noteText = viewModel!!.mNote.value
++                if (noteText != null && noteText.isNotBlank())
++                    dialog.inputText = noteText.toString()
+                 dialog.show(parentFragmentManager, "NoteEditDialogFragment")
+             }
+         }
++
+         viewModel = ViewModelProvider(requireActivity()).get(DetailViewModel::class.java)
+         binding.viewModel = viewModel
+         // Specify the current activity as the lifecycle owner.
+         binding.lifecycleOwner = this
+-        return view
++        return binding.root
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailPictureFragement.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailPictureFragement.kt
+index 7a28170..b1ac723 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailPictureFragement.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailPictureFragement.kt
+@@ -33,6 +33,7 @@ import androidx.recyclerview.widget.StaggeredGridLayoutManager
+ import com.mdiqentw.lifedots.R
+ import com.mdiqentw.lifedots.db.Contract
+ import com.mdiqentw.lifedots.model.DetailViewModel
++import com.mdiqentw.lifedots.ui.generic.BaseActivity
+ import com.mdiqentw.lifedots.ui.generic.DetailRecyclerViewAdapter
+ 
+ //import androidx.gridlayout.widget.GridLayoutManager;
+@@ -56,20 +57,22 @@ import com.mdiqentw.lifedots.ui.generic.DetailRecyclerViewAdapter
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ class DetailPictureFragement : Fragment(), LoaderManager.LoaderCallbacks<Cursor> {
++
+     private lateinit var detailRecyclerView: RecyclerView
+     private lateinit var detailAdapter: DetailRecyclerViewAdapter
+     private var viewModel: DetailViewModel? = null
+ 
+     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
+                               savedInstanceState: Bundle?): View? {
++
+         val view = inflater.inflate(R.layout.fragment_detail_pictures, container, false)
+         viewModel = ViewModelProvider(requireActivity()).get(DetailViewModel::class.java)
+         detailRecyclerView = view.findViewById(R.id.picture_recycler)
+         val detailLayoutManager = StaggeredGridLayoutManager(3, StaggeredGridLayoutManager.VERTICAL)
+         detailRecyclerView.layoutManager = detailLayoutManager
+ 
+-// TODO:check        detailRecyclerView.setNestedScrollingEnabled(true);
+-        detailAdapter = DetailRecyclerViewAdapter(requireActivity().applicationContext, null)
++        // TODO:check  detailRecyclerView.setNestedScrollingEnabled(true);
++        detailAdapter = DetailRecyclerViewAdapter(activity as BaseActivity, null)
+         detailRecyclerView.adapter = detailAdapter
+         reload()
+         return view
+@@ -106,12 +109,6 @@ class DetailPictureFragement : Fragment(), LoaderManager.LoaderCallbacks<Cursor>
+         detailAdapter.swapCursor(null)
+     }
+ 
+-//    override fun onDestroy() {
+-//        super.onDestroy()
+-////        detailRecyclerView = null
+-////        detailAdapter = null
+-//    }
+-
+     companion object {
+         private val PROJECTION_IMG = arrayOf(
+                 Contract.DiaryImage.URI,
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailStatFragement.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailStatFragement.kt
+index 4ee081a..2668abb 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailStatFragement.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/main/DetailStatFragement.kt
+@@ -34,7 +34,7 @@ import com.mdiqentw.lifedots.databinding.FragmentDetailStatsBinding
+ import com.mdiqentw.lifedots.helpers.ActivityHelper
+ import com.mdiqentw.lifedots.helpers.TimeSpanFormatter
+ import com.mdiqentw.lifedots.model.DetailViewModel
+-import com.mdiqentw.lifedots.ui.history.HistoryDetailActivity
++import com.mdiqentw.lifedots.ui.history.EventDetailActivity
+ import java.util.*
+ 
+ /*
+@@ -61,25 +61,25 @@ class DetailStatFragement : Fragment() {
+ 
+     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
+                               savedInstanceState: Bundle?): View {
++
+         val binding: FragmentDetailStatsBinding = DataBindingUtil.inflate(
+                 inflater, R.layout.fragment_detail_stats, container, false)
+-        val view = binding.root
+ 
+         // passing no diaryEntryID will edit the last one
+         val headerClickHandler = View.OnClickListener {
+             if (viewModel!!.currentActivity().value != null) {
+-                val i = Intent(activity, HistoryDetailActivity::class.java)
++                val i = Intent(activity, EventDetailActivity::class.java)
+                 // passing no diaryEntryID will edit the last one
+                 startActivity(i)
+             }
+         }
+-        view.setOnClickListener(headerClickHandler)
++        binding.root.setOnClickListener(headerClickHandler)
+         binding.detailContent.setOnClickListener(headerClickHandler)
+         viewModel = ViewModelProvider(requireActivity()).get(DetailViewModel::class.java)
+         binding.viewModel = viewModel
+         // Specify the current activity as the lifecycle owner.
+         binding.lifecycleOwner = this
+-        return view
++        return binding.root
+     }
+ 
+     private val updateDurationRunnable: Runnable = object : Runnable {
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/main/MainActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/main/MainActivity.java
+index 5300049..9e9a7cc 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/main/MainActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/main/MainActivity.java
+@@ -19,7 +19,6 @@
+  */
+ package com.mdiqentw.lifedots.ui.main;
+ 
+-import android.Manifest;
+ import android.annotation.SuppressLint;
+ import android.app.SearchManager;
+ import android.content.AsyncQueryHandler;
+@@ -39,30 +38,24 @@ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+ import android.view.WindowManager;
+-import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.appcompat.widget.SearchView;
+-import androidx.core.app.ActivityCompat;
+ import androidx.core.content.ContextCompat;
+ import androidx.core.content.FileProvider;
+ import androidx.databinding.DataBindingUtil;
+-import androidx.exifinterface.media.ExifInterface;
+ import androidx.fragment.app.DialogFragment;
+ import androidx.fragment.app.Fragment;
+ import androidx.fragment.app.FragmentManager;
+ import androidx.fragment.app.FragmentPagerAdapter;
+ import androidx.lifecycle.ViewModelProvider;
+ import androidx.preference.PreferenceManager;
+-import androidx.recyclerview.widget.RecyclerView;
+ import androidx.viewpager.widget.ViewPager;
+ 
+ import com.google.android.flexbox.FlexDirection;
+ import com.google.android.flexbox.FlexboxLayoutManager;
+ import com.google.android.flexbox.JustifyContent;
+-import com.google.android.material.floatingactionbutton.FloatingActionButton;
+-import com.google.android.material.tabs.TabLayout;
+ import com.mdiqentw.lifedots.BuildConfig;
+ import com.mdiqentw.lifedots.R;
+ import com.mdiqentw.lifedots.databinding.ActivityMainContentBinding;
+@@ -75,15 +68,12 @@ import com.mdiqentw.lifedots.model.DetailViewModel;
+ import com.mdiqentw.lifedots.model.DiaryActivity;
+ import com.mdiqentw.lifedots.ui.generic.BaseActivity;
+ import com.mdiqentw.lifedots.ui.generic.EditActivity;
+-import com.mdiqentw.lifedots.ui.history.HistoryDetailActivity;
++import com.mdiqentw.lifedots.ui.history.EventDetailActivity;
+ import com.mdiqentw.lifedots.ui.settings.SettingsActivity;
+ 
+ import java.io.File;
+-import java.io.IOException;
+-import java.text.SimpleDateFormat;
+ import java.util.ArrayList;
+ import java.util.Calendar;
+-import java.util.Date;
+ import java.util.List;
+ import java.util.Objects;
+ 
+@@ -118,9 +108,10 @@ public class MainActivity extends BaseActivity
+         View.OnLongClickListener,
+         SearchView.OnQueryTextListener,
+         SearchView.OnCloseListener {
++
+     private static final String TAG = MainActivity.class.getSimpleName();
+     private static final int REQUEST_IMAGE_CAPTURE = 1;
+-    private static final int PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE = 4711;
++//    private static final int PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE = 4711;
+ 
+     private static final int QUERY_CURRENT_ACTIVITY_STATS = 1;
+     private static final int QUERY_CURRENT_ACTIVITY_TOTAL = 2;
+@@ -131,24 +122,21 @@ public class MainActivity extends BaseActivity
+ 
+     private String mCurrentPhotoPath;
+ 
+-    private RecyclerView selectRecyclerView;
+     FlexboxLayoutManager layoutManager;
+     private SelectRecyclerViewAdapter selectAdapter;
+ 
+     private String filter = "";
+-    private FloatingActionButton fabAttachPicture;
+     private SearchView searchView;
+-    private View headerView;
+ 
+     private void setSearchMode(boolean searchMode){
+         if (searchMode) {
+-            headerView.setVisibility(View.GONE);
+-            fabAttachPicture.hide();
++            binding.headerArea.setVisibility(View.GONE);
++            binding.fabAttachPicture.hide();
+             getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+         } else {
+             getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+-            headerView.setVisibility(View.VISIBLE);
+-            fabAttachPicture.show();
++            binding.headerArea.setVisibility(View.VISIBLE);
++            binding.fabAttachPicture.show();
+         }
+     }
+ 
+@@ -171,7 +159,6 @@ public class MainActivity extends BaseActivity
+ //        initNavigation();
+ 
+         viewModel = new ViewModelProvider(this).get(DetailViewModel.class);
+-
+         mQHandler = new MainAsyncQueryHandler(getApplicationContext().getContentResolver(), viewModel);
+ 
+         // recovering the instance state
+@@ -179,44 +166,17 @@ public class MainActivity extends BaseActivity
+             mCurrentPhotoPath = savedInstanceState.getString("currentPhotoPath");
+         }
+ 
+-//        LayoutInflater inflater = (LayoutInflater) this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+-//        View contentView = View.inflate(this, R.layout.activity_main_content, null);
+-
+-//        setContent(binding.getRoot());
+-
+-        int permissionCheck = ContextCompat.checkSelfPermission(getApplicationContext(),
+-                Manifest.permission.WRITE_EXTERNAL_STORAGE);
+-
+-        if(permissionCheck != PackageManager.PERMISSION_GRANTED) {
+-            if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+-                    Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+-
+-                Toast.makeText(this,R.string.perm_write_external_storage_xplain, Toast.LENGTH_LONG).show();
+-            }
+-            ActivityCompat.requestPermissions(this,
+-                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+-                    PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE);
+-        }
+-
+-        headerView = binding.headerArea;
+-        TabLayout tabLayout = binding.tablayout;
+-
+-        ViewPager viewPager = binding.viewpager;
+-        setupViewPager(viewPager);
+-        tabLayout.setupWithViewPager(viewPager);
++        setupViewPager(binding.viewpager);
++        binding.tablayout.setupWithViewPager(binding.viewpager);
+ 
+-        selectRecyclerView = binding.selectRecycler;
+-
+-        View selector = binding.row.background;
+-        selector.setOnLongClickListener(this);
+-        selector.setOnClickListener(v -> {
+-            // TODO: get rid of this setting?
+-            if(PreferenceManager
++        binding.row.background.setOnLongClickListener(this);
++        binding.row.background.setOnClickListener(v -> {
++            if (PreferenceManager
+                     .getDefaultSharedPreferences(getApplicationContext())
+-                    .getBoolean(SettingsActivity.KEY_PREF_DISABLE_CURRENT, true)){
++                    .getBoolean(SettingsActivity.KEY_PREF_DISABLE_CURRENT, true)) {
+                 ActivityHelper.helper.setCurrentActivity(null);
+             } else {
+-                Intent i = new Intent(MainActivity.this, HistoryDetailActivity.class);
++                Intent i = new Intent(MainActivity.this, EventDetailActivity.class);
+                 // no diaryEntryID will edit the last one
+                 startActivity(i);
+             }
+@@ -228,55 +188,42 @@ public class MainActivity extends BaseActivity
+         layoutManager = new FlexboxLayoutManager(this);
+         layoutManager.setFlexDirection(FlexDirection.ROW);
+         layoutManager.setJustifyContent(JustifyContent.FLEX_START);
+-        selectRecyclerView.setLayoutManager(layoutManager);
++        binding.selectRecycler.setLayoutManager(layoutManager);
+ 
+         Objects.requireNonNull(Objects.requireNonNull(getSupportActionBar())).setSubtitle(getResources().getString(R.string.activity_subtitle_main));
+ 
+         likelyhoodSort();
+ 
+-        fabAttachPicture = binding.fabAttachPicture;
+-
+-        fabAttachPicture.setOnClickListener(v -> {
++        binding.fabAttachPicture.setOnClickListener(v -> {
+             // Handle the click on the FAB
+-            if(viewModel.currentActivity() != null) {
++            if(viewModel.currentActivity() != null && viewModel.currentActivity().getValue() != null) {
+                 Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+ 
+                 if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+-                    File photoFile = null;
+-                    try {
+-                        photoFile = createImageFile();
+-                        Log.i(TAG, "create file for image capture " + photoFile.getAbsolutePath());
+-
+-                    } catch (IOException ex) {
+-                        // Error occurred while creating the File
+-                        Toast.makeText(MainActivity.this, getResources().getString(R.string.camera_error), Toast.LENGTH_LONG).show();
+-                    }
+-                    // Continue only if the File was successfully created
+-                    if (photoFile != null) {
+-                        // Save a file: path for use with ACTION_VIEW intents
+-                        mCurrentPhotoPath = photoFile.getAbsolutePath();
+-
+-                        Uri photoURI = FileProvider.getUriForFile(MainActivity.this,
+-                                BuildConfig.APPLICATION_ID + ".fileprovider",
+-                                photoFile);
+-                        takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+-                        takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+-                        startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+-                    }
++                    File photoFile = GraphicsHelper.createImageFile();
++                    Log.i(TAG, "create file for image capture " + photoFile.getAbsolutePath());
+ 
++                    // Continue only if the File was successfully created
++                    // Save a file: path for use with ACTION_VIEW intents
++                    mCurrentPhotoPath = photoFile.getAbsolutePath();
++
++                    Uri photoURI = FileProvider.getUriForFile(MainActivity.this,
++                            BuildConfig.APPLICATION_ID + ".fileprovider",
++                            photoFile);
++                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
++                    takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++                    startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+                 }
+-            }else{
++            } else
+                 Toast.makeText(MainActivity.this, getResources().getString(R.string.no_active_activity_error), Toast.LENGTH_LONG).show();
+-            }
+         });
+ 
+         PackageManager pm = getPackageManager();
+ 
+-        if(pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+-            fabAttachPicture.show();
+-        }else{
+-            fabAttachPicture.hide();
+-        }
++        if (pm.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY))
++            binding.fabAttachPicture.show();
++        else
++            binding.fabAttachPicture.hide();
+ 
+         // Get the intent, verify the action and get the search query
+         Intent intent = getIntent();
+@@ -290,24 +237,6 @@ public class MainActivity extends BaseActivity
+         onActivityChanged(); /* do this at the very end to ensure that no Loader finishes its data loading before */
+     }
+ 
+-    private File createImageFile() throws IOException {
+-        // Create an image file name
+-        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+-        String imageFileName = "IMG_";
+-        if(viewModel.currentActivity().getValue() != null){
+-            imageFileName += Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getName();
+-            imageFileName += "_";
+-        }
+-
+-        imageFileName += timeStamp;
+-        File storageDir = GraphicsHelper.imageStorageDirectory();
+-
+-        File image = new File(storageDir, imageFileName + ".jpg");
+-        image.createNewFile();
+-        return image;
+-
+-    }
+-
+     @Override
+     public void onResume() {
+         mNavigationView.getMenu().findItem(R.id.nav_main).setChecked(true);
+@@ -328,11 +257,11 @@ public class MainActivity extends BaseActivity
+ 
+     @Override
+     public boolean onLongClick(View view) {
+-        Intent i = new Intent(MainActivity.this, EditActivity.class);
+         if(viewModel.currentActivity().getValue() != null) {
++            Intent i = new Intent(MainActivity.this, EditActivity.class);
+             i.putExtra("activityID", Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getId());
++            startActivity(i);
+         }
+-        startActivity(i);
+         return true;
+     }
+ 
+@@ -346,10 +275,8 @@ public class MainActivity extends BaseActivity
+ 
+     @Override
+     public void onItemClick(int adapterPosition) {
+-
+         DiaryActivity newAct = selectAdapter.item(adapterPosition);
+         if(newAct != ActivityHelper.helper.getCurrentActivity()) {
+-
+             ActivityHelper.helper.setCurrentActivity(newAct);
+ 
+             searchView.setQuery("", false);
+@@ -361,29 +288,25 @@ public class MainActivity extends BaseActivity
+         DiaryActivity newAct = ActivityHelper.helper.getCurrentActivity();
+         viewModel.mCurrentActivity.setValue(newAct);
+ 
+-        if(newAct != null) {
+-            queryAllTotals();
+-        }
++        if(newAct != null) queryAllTotals();
+ 
+         viewModel.setCurrentDiaryUri(ActivityHelper.helper.getCurrentDiaryUri());
+-        TextView aName = binding.row.name;
+         // TODO: move this logic into the DetailViewModel??
+-
+ //        viewModel.mAvgDuration.setValue("-");
+ //        viewModel.mStartOfLast.setValue("-");
+ //        viewModel.mTotalToday.setValue("-");
+         /* stats are updated after query finishes in mQHelper */
+ 
+         if(viewModel.currentActivity().getValue() != null) {
+-            aName.setText(Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getName());
++            binding.row.name.setText(Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getName());
+             binding.row.background.setBackgroundColor(Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getColor());
+-            aName.setTextColor(GraphicsHelper.textColorOnBackground(Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getColor()));
++            binding.row.name.setTextColor(GraphicsHelper.textColorOnBackground(Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getColor()));
+             viewModel.mNote.setValue(ActivityHelper.helper.getCurrentNote());
+         }else{
+             int col = ContextCompat.getColor(getApplicationContext(), R.color.colorPrimary);
+-            aName.setText(getResources().getString(R.string.activity_title_no_selected_act));
++            binding.row.name.setText(getResources().getString(R.string.activity_title_no_selected_act));
+             binding.row.background.setBackgroundColor(col);
+-            aName.setTextColor(GraphicsHelper.textColorOnBackground(col));
++            binding.row.name.setTextColor(GraphicsHelper.textColorOnBackground(col));
+             viewModel.mDuration.setValue("-");
+             viewModel.mNote.setValue("");
+         }
+@@ -434,9 +357,7 @@ public class MainActivity extends BaseActivity
+     @Override
+     public void onActivityOrderChanged() {
+         /* only do likelihood sort in case we are not in a search */
+-        if(filter.length() == 0){
+-            likelyhoodSort();
+-        }
++        if (filter.length() == 0) likelyhoodSort();
+     }
+ 
+     /**
+@@ -519,15 +440,15 @@ public class MainActivity extends BaseActivity
+             ArrayList<DiaryActivity> filtered = ActivityHelper.sortedActivities(query);
+ //
+             selectAdapter = new SelectRecyclerViewAdapter(MainActivity.this, filtered);
+-            selectRecyclerView.swapAdapter(selectAdapter, false);
+-            selectRecyclerView.scrollToPosition(0);
++            binding.selectRecycler.swapAdapter(selectAdapter, false);
++            binding.selectRecycler.scrollToPosition(0);
+         }
+     }
+ 
+     private void likelyhoodSort() {
+-        if (selectAdapter == null || selectAdapter != selectRecyclerView.getAdapter()) {
++        if (selectAdapter == null || selectAdapter != binding.selectRecycler.getAdapter()) {
+             selectAdapter = new SelectRecyclerViewAdapter(MainActivity.this, ActivityHelper.helper.getActivities());
+-            selectRecyclerView.swapAdapter(selectAdapter, false);
++            binding.selectRecycler.swapAdapter(selectAdapter, false);
+         } else {
+             selectAdapter.setActivities(ActivityHelper.helper.getActivities());
+         }
+@@ -553,7 +474,7 @@ public class MainActivity extends BaseActivity
+     }
+ 
+     @Override
+-    public void onNoteEditPositiveClock(String str, DialogFragment dialog) {
++    public void onNoteEditPositiveClick(String str, DialogFragment dialog) {
+         ContentValues values = new ContentValues();
+         values.put(Contract.Diary.NOTE, str);
+ 
+@@ -572,6 +493,8 @@ public class MainActivity extends BaseActivity
+         super.onActivityResult(requestCode, resultCode, data);
+         if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
+             if(mCurrentPhotoPath != null && viewModel.getCurrentDiaryUri() != null) {
++                GraphicsHelper.compressAndSaveImage(mCurrentPhotoPath);
++
+                 Uri photoURI = FileProvider.getUriForFile(MainActivity.this,
+                         BuildConfig.APPLICATION_ID + ".fileprovider",
+                         new File(mCurrentPhotoPath));
+@@ -583,27 +506,6 @@ public class MainActivity extends BaseActivity
+                         null,
+                         Contract.DiaryImage.CONTENT_URI,
+                         values);
+-
+-                if(PreferenceManager
+-                        .getDefaultSharedPreferences(getApplicationContext())
+-                        .getBoolean(SettingsActivity.KEY_PREF_TAG_IMAGES, true)) {
+-                    try {
+-                        ExifInterface exifInterface = new ExifInterface(mCurrentPhotoPath);
+-                        if (viewModel.currentActivity().getValue() != null) {
+-                            /* TODO: #24: when using hierarchical activities tag them all here, seperated with comma */
+-                            /* would be great to use IPTC keywords instead of EXIF UserComment, but
+-                             * at time of writing (2017-11-24) it is hard to find a library able to write IPTC
+-                             * to JPEG for android.
+-                             * pixymeta-android or apache/commons-imaging could be interesting for this.
+-                             * */
+-                            exifInterface.setAttribute(ExifInterface.TAG_USER_COMMENT,
+-                                    Objects.requireNonNull(Objects.requireNonNull(viewModel.currentActivity().getValue())).getName());
+-                            exifInterface.saveAttributes();
+-                        }
+-                    } catch (IOException e) {
+-                        Log.e(TAG, "writing exif data to " + mCurrentPhotoPath + " failed", e);
+-                    }
+-                }
+             }
+         }
+     }
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/main/NoteEditDialog.kt b/app/src/main/java/com/mdiqentw/lifedots/ui/main/NoteEditDialog.kt
+index f810cd4..9605219 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/main/NoteEditDialog.kt
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/main/NoteEditDialog.kt
+@@ -18,16 +18,19 @@
+  */
+ package com.mdiqentw.lifedots.ui.main
+ 
++import android.app.Activity
+ import android.app.Dialog
+ import android.content.Context
+ import android.content.DialogInterface
+ import android.os.Bundle
+-import android.view.WindowManager
++import android.view.WindowManager.LayoutParams
++import android.view.inputmethod.InputMethodManager
+ import android.widget.EditText
+ import androidx.appcompat.app.AlertDialog
+ import androidx.fragment.app.DialogFragment
+ import com.mdiqentw.lifedots.R
+ 
++
+ /*
+  * LifeDots
+  *
+@@ -47,30 +50,44 @@ import com.mdiqentw.lifedots.R
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ class NoteEditDialog : DialogFragment() {
++
+     private var note: String? = null
+     private lateinit var input: EditText
+     private var mListener: NoteEditDialogListener? = null
+     var diaryId: Long = 0
++    var inputText: String = ""
++
++    lateinit var result: Dialog
+ 
+     interface NoteEditDialogListener {
+-        fun onNoteEditPositiveClock(str: String?, dialog: DialogFragment?)
++        fun onNoteEditPositiveClick(str: String?, dialog: DialogFragment?)
+     }
+ 
+     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
+-        super.onSaveInstanceState(savedInstanceState!!)
+-        val result: Dialog
++        savedInstanceState?.let { super.onSaveInstanceState(it) }
+         val builder = AlertDialog.Builder(requireActivity())
++
+         val inflater = requireActivity().layoutInflater
+-        builder.setTitle(R.string.dialog_title_note)
+         val dlgView = inflater.inflate(R.layout.dialog_note_editor, null)
+-        input = dlgView.findViewById(R.id.noteText)
+-        input.setText(savedInstanceState.getString("Note"))
++
++        input = dlgView.findViewById(R.id.note_text)
++        if (savedInstanceState != null) {
++            input.setText(savedInstanceState.getString("Note"))
++        }
++        input.setText(inputText)
++        note = inputText
+         input.setSelection(input.text.length)
++        input.requestFocus()
++        val inputMethodManager = context?.getSystemService(Activity.INPUT_METHOD_SERVICE) as InputMethodManager
++        inputMethodManager.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
++
+         builder.setView(dlgView) // Add action buttons
+-                .setPositiveButton(R.string.dlg_ok) { _: DialogInterface?, _: Int -> mListener!!.onNoteEditPositiveClock(input.text.toString(), this@NoteEditDialog) }
++                .setPositiveButton(R.string.dlg_ok) { _: DialogInterface?, _: Int ->
++                    mListener!!.onNoteEditPositiveClick(input.text.toString(), this@NoteEditDialog) }
+                 .setNegativeButton(R.string.dlg_cancel) { dialog: DialogInterface, _: Int -> dialog.cancel() }
+         result = builder.create()
+-        result.getWindow()!!.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
++
++        result.window!!.setSoftInputMode(LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+         return result
+     }
+ 
+@@ -87,11 +104,6 @@ class NoteEditDialog : DialogFragment() {
+         }
+     }
+ 
+-    fun setText(text: String?) {
+-        input.setText(text)
+-        note = text
+-    }
+-
+     override fun onSaveInstanceState(savedInstanceState: Bundle) {
+         super.onSaveInstanceState(savedInstanceState)
+         savedInstanceState.putString("Note", input.text.toString())
+diff --git a/app/src/main/java/com/mdiqentw/lifedots/ui/settings/SettingsActivity.java b/app/src/main/java/com/mdiqentw/lifedots/ui/settings/SettingsActivity.java
+index 4cc6f69..87cd22a 100644
+--- a/app/src/main/java/com/mdiqentw/lifedots/ui/settings/SettingsActivity.java
++++ b/app/src/main/java/com/mdiqentw/lifedots/ui/settings/SettingsActivity.java
+@@ -29,11 +29,13 @@ import android.content.pm.PackageManager;
+ import android.database.Cursor;
+ import android.database.sqlite.SQLiteDatabase;
+ import android.net.Uri;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.text.format.DateFormat;
+ import android.util.Log;
+ import android.widget.Toast;
+ 
++import androidx.annotation.NonNull;
+ import androidx.core.app.ActivityCompat;
+ import androidx.core.content.ContextCompat;
+ import androidx.databinding.DataBindingUtil;
+@@ -48,8 +50,11 @@ import com.mdiqentw.lifedots.databinding.ActivitySettingsBinding;
+ import com.mdiqentw.lifedots.db.LocalDBHelper;
+ import com.mdiqentw.lifedots.db.Contract;
+ import com.mdiqentw.lifedots.helpers.ActivityHelper;
++import com.mdiqentw.lifedots.helpers.LocationHelper;
+ import com.mdiqentw.lifedots.ui.generic.BaseActivity;
+ 
++import org.jetbrains.annotations.NonNls;
++
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileOutputStream;
+@@ -85,16 +90,14 @@ public class SettingsActivity extends BaseActivity
+ 
+     public static final String KEY_PREF_DATETIME_FORMAT = "pref_datetimeFormat";
+     public static final String KEY_PREF_AUTO_SELECT = "pref_auto_select_new";
+-    public static final String KEY_PREF_STORAGE_FOLDER = "pref_storageFolder";
+-    public static final String KEY_PREF_TAG_IMAGES = "pref_tag_images";
+     public static final String KEY_PREF_DB_EXPORT = "pref_db_export";
+     public static final String KEY_PREF_DB_IMPORT = "pref_db_import";
+     public static final String KEY_PREF_COND_ALPHA = "pref_cond_alpha";
+     public static final String KEY_PREF_COND_PREDECESSOR = "pref_cond_predecessor";
+     public static final String KEY_PREF_COND_OCCURRENCE = "pref_cond_occurrence";
+     public static final String KEY_PREF_COND_RECENCY = "pref_cond_recency";
+-    public static final String KEY_PREF_NOTIF_SHOW_CUR_ACT = "pref_show_cur_activity_notification";
+-    public static final String KEY_PREF_SILENT_RENOTIFICATIONS = "pref_silent_renotification";
++//    public static final String KEY_PREF_NOTIF_SHOW_CUR_ACT = "pref_show_cur_activity_notification";
++//    public static final String KEY_PREF_SILENT_RENOTIFICATIONS = "pref_silent_renotification";
+     public static final String KEY_PREF_DISABLE_CURRENT = "pref_disable_current_on_click";
+     public static final String KEY_PREF_COND_DAYTIME = "pref_cond_daytime";
+     public static final String KEY_PREF_USE_LOCATION = "pref_use_location";
+@@ -111,13 +114,13 @@ public class SettingsActivity extends BaseActivity
+     private Preference dateformatPref;
+     private ListPreference durationFormatPref;
+     private Preference autoSelectPref;
+-    private Preference storageFolderPref;
+-    private Preference tagImagesPref;
++//    private Preference storageFolderPref;
++//    private Preference tagImagesPref;
+     private Preference condAlphaPref;
+     private Preference condOccurrencePref;
+     private Preference condRecencyPref;
+-    private Preference nofifShowCurActPref;
+-    private Preference silentRenotifPref;
++//    private Preference nofifShowCurActPref;
++//    private Preference silentRenotifPref;
+     private Preference disableOnClickPref;
+     private ListPreference useLocationPref;
+     private EditTextPreference locationAgePref;
+@@ -136,13 +139,6 @@ public class SettingsActivity extends BaseActivity
+             case KEY_PREF_AUTO_SELECT:
+                 updateAutoSelectSummary();
+                 break;
+-            case KEY_PREF_STORAGE_FOLDER:
+-                /* TODO: we could ask here whether we shall move the pictures... */
+-                updateStorageFolderSummary();
+-                break;
+-            case KEY_PREF_TAG_IMAGES:
+-                updateTagImageSummary();
+-                break;
+             case KEY_PREF_COND_ALPHA:
+                 updateCondAlphaSummary();
+                 break;
+@@ -152,12 +148,12 @@ public class SettingsActivity extends BaseActivity
+             case KEY_PREF_COND_RECENCY:
+                 updateCondRecencySummary();
+                 break;
+-            case KEY_PREF_NOTIF_SHOW_CUR_ACT:
+-                updateNotifShowCurActivity();
+-                break;
+-            case KEY_PREF_SILENT_RENOTIFICATIONS:
+-                updateSilentNotifications();
+-                break;
++//            case KEY_PREF_NOTIF_SHOW_CUR_ACT:
++//                updateNotifShowCurActivity();
++//                break;
++//            case KEY_PREF_SILENT_RENOTIFICATIONS:
++//                updateSilentNotifications();
++//                break;
+             case KEY_PREF_DISABLE_CURRENT:
+                 updateDisableCurrent();
+                 break;
+@@ -202,57 +198,79 @@ public class SettingsActivity extends BaseActivity
+         int permissionCheckFine;
+         int permissionCheckCoarse;
+ 
+-        String value = PreferenceManager
++        @NonNls String value = PreferenceManager
+                 .getDefaultSharedPreferences(getApplicationContext())
+                 .getString(KEY_PREF_USE_LOCATION, "off");
+ 
+-        if(value.equals("off")){
++        if (value.equals("off")) {
+             locationAgePref.setEnabled(false);
+             locationDistPref.setEnabled(false);
+             useLocationPref.setSummary(getResources().getString(R.string.setting_use_location_off_summary));
+-        }else {
++        } else {
+             locationAgePref.setEnabled(true);
+             locationDistPref.setEnabled(true);
+             useLocationPref.setSummary(getResources().getString(R.string.setting_use_location_summary, useLocationPref.getEntry()));
+         }
+ 
+-        if(value.equals("gps")) {
++        if (value.equals("gps")) {
+             permissionCheckFine = ContextCompat.checkSelfPermission(getApplicationContext(),
+                     Manifest.permission.ACCESS_FINE_LOCATION);
+             if (permissionCheckFine != PackageManager.PERMISSION_GRANTED) {
+                 if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+-                        Manifest.permission.ACCESS_FINE_LOCATION)) {
+-
++                        Manifest.permission.ACCESS_FINE_LOCATION))
+                     Toast.makeText(this, R.string.perm_location_xplain, Toast.LENGTH_LONG).show();
++
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++                    ActivityCompat.requestPermissions(this,
++                            new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION,
++                                    Manifest.permission.ACCESS_FINE_LOCATION},
++                            4711);
++                } else {
++                    ActivityCompat.requestPermissions(this,
++                            new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
++                            4712);
+                 }
+-                ActivityCompat.requestPermissions(this,
+-                        new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+-                        4712);
+             }
+-        }else{
++        } else if (value.equals("network")) {
+             permissionCheckCoarse = ContextCompat.checkSelfPermission(getApplicationContext(),
+                     Manifest.permission.ACCESS_COARSE_LOCATION);
+             if (permissionCheckCoarse != PackageManager.PERMISSION_GRANTED) {
+                 if (ActivityCompat.shouldShowRequestPermissionRationale(this,
+-                        Manifest.permission.ACCESS_COARSE_LOCATION)) {
+-
++                        Manifest.permission.ACCESS_COARSE_LOCATION))
+                     Toast.makeText(this, R.string.perm_location_xplain, Toast.LENGTH_LONG).show();
++
++                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++                    ActivityCompat.requestPermissions(this,
++                            new String[]{Manifest.permission.ACCESS_BACKGROUND_LOCATION,
++                                    Manifest.permission.ACCESS_COARSE_LOCATION},
++                            4711);
++                } else {
++                    ActivityCompat.requestPermissions(this,
++                            new String[]{Manifest.permission.ACCESS_COARSE_LOCATION},
++                            4713);
+                 }
+-                ActivityCompat.requestPermissions(this,
+-                        new String[]{Manifest.permission.ACCESS_COARSE_LOCATION},
+-                        4713);
++            }
++        }
++    }
++
++    @Override
++    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
++        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
++        if (requestCode == 4712 || requestCode == 4713) {
++            if (grantResults[0] == 0) {
++                LocationHelper.helper.updateLocation();
+             }
+         }
+     }
+ 
+     private void updateLocationDist() {
+         String def = getResources().getString(R.string.pref_location_dist_default);
+-        String value = PreferenceManager
++        @NonNls String value = PreferenceManager
+                 .getDefaultSharedPreferences(getApplicationContext())
+                 .getString(KEY_PREF_LOCATION_DIST, def);
+ 
+         int v = Integer.parseInt(value.replaceAll("\\D",""));
+-        if(v < 5){
++        if (v < 5) {
+             v = 5;
+         }
+         String nvalue = Integer.toString(v);
+@@ -271,14 +289,14 @@ public class SettingsActivity extends BaseActivity
+ 
+     private void updateLocationAge() {
+         String def = getResources().getString(R.string.pref_location_age_default);
+-        String value = PreferenceManager
++        @NonNls String value = PreferenceManager
+                 .getDefaultSharedPreferences(getApplicationContext())
+                 .getString(KEY_PREF_LOCATION_AGE, def);
+         int v = Integer.parseInt(value.replaceAll("\\D",""));
+-        if(v < 2){
++        if (v < 2) {
+             v = 2;
+-        }else if(v > 60){
+-            v = 60;
++        } else if (v > 720){
++            v = 720;
+         }
+         String nvalue = Integer.toString(v);
+         if(!value.equals(nvalue)){
+@@ -303,24 +321,6 @@ public class SettingsActivity extends BaseActivity
+         }
+     }
+ 
+-    private void updateTagImageSummary() {
+-        if(PreferenceManager
+-                .getDefaultSharedPreferences(getApplicationContext())
+-                .getBoolean(KEY_PREF_TAG_IMAGES, true)){
+-            tagImagesPref.setSummary(getResources().getString(R.string.setting_tag_yes));
+-        }else{
+-            tagImagesPref.setSummary(getResources().getString(R.string.setting_tag_no));
+-        }
+-    }
+-
+-    private void updateStorageFolderSummary() {
+-        String dir = PreferenceManager
+-                .getDefaultSharedPreferences(getApplicationContext())
+-                .getString(KEY_PREF_STORAGE_FOLDER, "LifeDots");
+-
+-        storageFolderPref.setSummary(getResources().getString(R.string.setting_storage_folder_summary, dir));
+-    }
+-
+     private void updateCondAlphaSummary() {
+         String def = getResources().getString(R.string.pref_cond_alpha_default);
+         String value = PreferenceManager
+@@ -370,28 +370,27 @@ public class SettingsActivity extends BaseActivity
+         }
+     }
+ 
+-    private void updateNotifShowCurActivity() {
+-        if(PreferenceManager
+-                .getDefaultSharedPreferences(getApplicationContext())
+-                .getBoolean(KEY_PREF_NOTIF_SHOW_CUR_ACT, false)){
+-            nofifShowCurActPref.setSummary(getResources().getString(R.string.setting_show_cur_activitiy_notification_summary_active));
+-        }else{
+-            nofifShowCurActPref.setSummary(getResources().getString(R.string.setting_show_cur_activitiy_notification_summary_inactive));
+-        }
+-        ActivityHelper.helper.showCurrentActivityNotification();
+-    }
+-
+-    private void updateSilentNotifications() {
+-        if(PreferenceManager
+-                .getDefaultSharedPreferences(getApplicationContext())
+-                .getBoolean(KEY_PREF_SILENT_RENOTIFICATIONS, true)){
+-            silentRenotifPref.setSummary(getResources().getString(R.string.setting_silent_reconfication_summary_active));
+-        }else{
+-            silentRenotifPref.setSummary(getResources().getString(R.string.setting_silent_reconfication_summary_inactive));
+-        }
+-        ActivityHelper.helper.showCurrentActivityNotification();
+-    }
+-
++//    private void updateNotifShowCurActivity() {
++//        if(PreferenceManager
++//                .getDefaultSharedPreferences(getApplicationContext())
++//                .getBoolean(KEY_PREF_NOTIF_SHOW_CUR_ACT, false)){
++//            nofifShowCurActPref.setSummary(getResources().getString(R.string.setting_show_cur_activitiy_notification_summary_active));
++//        }else{
++//            nofifShowCurActPref.setSummary(getResources().getString(R.string.setting_show_cur_activitiy_notification_summary_inactive));
++//        }
++//        ActivityHelper.helper.showCurrentActivityNotification();
++//    }
++
++//    private void updateSilentNotifications() {
++//        if(PreferenceManager
++//                .getDefaultSharedPreferences(getApplicationContext())
++//                .getBoolean(KEY_PREF_SILENT_RENOTIFICATIONS, true)){
++//            silentRenotifPref.setSummary(getResources().getString(R.string.setting_silent_reconfication_summary_active));
++//        }else{
++//            silentRenotifPref.setSummary(getResources().getString(R.string.setting_silent_reconfication_summary_inactive));
++//        }
++//        ActivityHelper.helper.showCurrentActivityNotification();
++//    }
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -400,7 +399,6 @@ public class SettingsActivity extends BaseActivity
+         ActivitySettingsBinding binding = DataBindingUtil.setContentView(this, R.layout.activity_settings);
+ 
+ //        View contentView = View.inflate(this, R.layout.activity_settings, null);
+-//
+ //        setContent(contentView);
+         SettingsFragment sf = (SettingsFragment)getSupportFragmentManager().findFragmentById(R.id.settings_fragment);
+ 
+@@ -420,14 +418,14 @@ public class SettingsActivity extends BaseActivity
+         durationFormatPref = mPreferenceManager.findPreference(KEY_PREF_DURATION_FORMAT);
+         autoSelectPref = mPreferenceManager.findPreference(KEY_PREF_AUTO_SELECT);
+         disableOnClickPref = mPreferenceManager.findPreference(KEY_PREF_DISABLE_CURRENT);
+-        storageFolderPref = mPreferenceManager.findPreference(KEY_PREF_STORAGE_FOLDER);
++//        storageFolderPref = mPreferenceManager.findPreference(KEY_PREF_STORAGE_FOLDER);
+         useLocationPref = mPreferenceManager.findPreference(KEY_PREF_USE_LOCATION);
+         locationAgePref = mPreferenceManager.findPreference(KEY_PREF_LOCATION_AGE);
+         locationDistPref = mPreferenceManager.findPreference(KEY_PREF_LOCATION_DIST);
+ 
+-        tagImagesPref = mPreferenceManager.findPreference(KEY_PREF_TAG_IMAGES);
+-        nofifShowCurActPref = mPreferenceManager.findPreference(KEY_PREF_NOTIF_SHOW_CUR_ACT);
+-        silentRenotifPref = mPreferenceManager.findPreference(KEY_PREF_SILENT_RENOTIFICATIONS);
++//        tagImagesPref = mPreferenceManager.findPreference(KEY_PREF_TAG_IMAGES);
++//        nofifShowCurActPref = mPreferenceManager.findPreference(KEY_PREF_NOTIF_SHOW_CUR_ACT);
++//        silentRenotifPref = mPreferenceManager.findPreference(KEY_PREF_SILENT_RENOTIFICATIONS);
+ 
+         Preference exportPref = mPreferenceManager.findPreference(KEY_PREF_DB_EXPORT);
+         exportPref.setOnPreferenceClickListener(preference -> {
+@@ -455,18 +453,18 @@ public class SettingsActivity extends BaseActivity
+         condOccurrencePref = mPreferenceManager.findPreference(KEY_PREF_COND_OCCURRENCE);
+         condRecencyPref = mPreferenceManager.findPreference(KEY_PREF_COND_RECENCY);
+ 
+-        updateAutoSelectSummary();
+-        updateStorageFolderSummary();
+-        updateTagImageSummary();
+-        updateCondAlphaSummary();
+-        updateCondOccurenceSummary();
+-        updateNotifShowCurActivity();
+-        updateSilentNotifications();
+-        updateDisableCurrent();
+-        updateUseLocation();
+-        updateLocationAge();
+-        updateLocationDist();
+-        updateDurationFormat();
++//        updateAutoSelectSummary();
++//        updateStorageFolderSummary();
++//        updateTagImageSummary();
++//        updateCondAlphaSummary();
++//        updateCondOccurenceSummary();
++//        updateNotifShowCurActivity();
++//        updateSilentNotifications();
++//        updateDisableCurrent();
++//        updateUseLocation();
++//        updateLocationAge();
++//        updateLocationDist();
++//        updateDurationFormat();
+ 
+         mDrawerToggle.setDrawerIndicatorEnabled(false);
+     }

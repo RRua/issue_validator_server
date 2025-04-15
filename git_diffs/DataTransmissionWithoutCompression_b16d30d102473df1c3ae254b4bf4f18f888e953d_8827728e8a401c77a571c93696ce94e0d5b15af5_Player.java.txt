@@ -1,0 +1,954 @@
+diff --git a/app/src/main/java/agersant/polaris/PlaybackQueue.java b/app/src/main/java/agersant/polaris/PlaybackQueue.java
+index fdd052b..4a52b65 100644
+--- a/app/src/main/java/agersant/polaris/PlaybackQueue.java
++++ b/app/src/main/java/agersant/polaris/PlaybackQueue.java
+@@ -188,7 +188,7 @@ public class PlaybackQueue {
+ 			if (offlineCache.hasAudio(item.getPath())) {
+ 				continue;
+ 			}
+-			if (downloadQueue.isWorkingOn(item)) {
++			if (downloadQueue.isDownloading(item)) {
+ 				continue;
+ 			}
+ 			bestScore = score;
+diff --git a/app/src/main/java/agersant/polaris/Player.java b/app/src/main/java/agersant/polaris/Player.java
+index 6fc6a63..c132d29 100644
+--- a/app/src/main/java/agersant/polaris/Player.java
++++ b/app/src/main/java/agersant/polaris/Player.java
+@@ -1,7 +1,6 @@
+ package agersant.polaris;
+ 
+ import android.content.Intent;
+-import android.net.Uri;
+ 
+ import com.google.android.exoplayer2.C;
+ import com.google.android.exoplayer2.ExoPlaybackException;
+@@ -9,17 +8,11 @@ import com.google.android.exoplayer2.ExoPlayer;
+ import com.google.android.exoplayer2.ExoPlayerFactory;
+ import com.google.android.exoplayer2.PlaybackParameters;
+ import com.google.android.exoplayer2.Timeline;
+-import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
+-import com.google.android.exoplayer2.source.ExtractorMediaSource;
+ import com.google.android.exoplayer2.source.MediaSource;
+ import com.google.android.exoplayer2.source.TrackGroupArray;
+ import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
+ import com.google.android.exoplayer2.trackselection.TrackSelectionArray;
+ 
+-import java.io.File;
+-
+-import agersant.polaris.api.remote.PolarisExoPlayerDataSourceFactory;
+-
+ public class Player implements ExoPlayer.EventListener {
+ 
+ 	public static final String PLAYBACK_ERROR = "PLAYBACK_ERROR";
+@@ -29,7 +22,7 @@ public class Player implements ExoPlayer.EventListener {
+ 	public static final String COMPLETED_TRACK = "COMPLETED_TRACK";
+ 
+ 	private ExoPlayer mediaPlayer;
+-	private Uri currentURI;
++	private MediaSource mediaSource;
+ 	private CollectionItem item;
+ 	private PolarisService service;
+ 	private float resumeProgress;
+@@ -51,6 +44,7 @@ public class Player implements ExoPlayer.EventListener {
+ 	void stop() {
+ 		mediaPlayer.stop();
+ 		resumeProgress = -1.f;
++		mediaSource = null;
+ 		item = null;
+ 	}
+ 
+@@ -69,9 +63,7 @@ public class Player implements ExoPlayer.EventListener {
+ 		stop();
+ 
+ 		try {
+-			currentURI = service.getAPI().getAudio(item);
+-			PolarisExoPlayerDataSourceFactory dsf = new PolarisExoPlayerDataSourceFactory(service);
+-			MediaSource mediaSource = new ExtractorMediaSource(currentURI, dsf, new DefaultExtractorsFactory(), null, null);
++			mediaSource = service.getAPI().getAudio(item);
+ 			mediaPlayer.prepare(mediaSource);
+ 			mediaPlayer.setPlayWhenReady(true);
+ 		} catch (Exception e) {
+@@ -91,9 +83,8 @@ public class Player implements ExoPlayer.EventListener {
+ 		return item == null;
+ 	}
+ 
+-	boolean isUsing(File file) {
+-		// TODO
+-		return false;
++	boolean isUsing(MediaSource mediaSource) {
++		return this.mediaSource == mediaSource;
+ 	}
+ 
+ 	void resume() {
+diff --git a/app/src/main/java/agersant/polaris/PolarisService.java b/app/src/main/java/agersant/polaris/PolarisService.java
+index 6f631f8..725105f 100644
+--- a/app/src/main/java/agersant/polaris/PolarisService.java
++++ b/app/src/main/java/agersant/polaris/PolarisService.java
+@@ -12,11 +12,12 @@ import android.content.IntentFilter;
+ import android.graphics.Bitmap;
+ import android.graphics.drawable.Icon;
+ import android.media.AudioManager;
+-import android.net.Uri;
+ import android.os.Binder;
+ import android.os.IBinder;
+ import android.widget.Toast;
+ 
++import com.google.android.exoplayer2.source.MediaSource;
++
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileOutputStream;
+@@ -260,6 +261,10 @@ public class PolarisService extends Service {
+ 		}
+ 	}
+ 
++	private boolean shouldAutoStart() {
++		return isIdle() || (size() == 0 && !isPlaying());
++	}
++
+ 
+ 	// API
+ 	public CollectionItem getCurrentItem() {
+@@ -274,15 +279,17 @@ public class PolarisService extends Service {
+ 		if (items.isEmpty()) {
+ 			return;
+ 		}
++		boolean autoStart = shouldAutoStart();
+ 		playbackQueue.addItems(items);
+-		if (player.isIdle()) {
++		if (autoStart) {
+ 			skipNext();
+ 		}
+ 	}
+ 
+ 	public void addItem(CollectionItem item) {
+ 		playbackQueue.addItem(item);
+-		if (player.isIdle()) {
++		boolean autoStart = shouldAutoStart();
++		if (autoStart) {
+ 			skipNext();
+ 		}
+ 	}
+@@ -368,12 +375,8 @@ public class PolarisService extends Service {
+ 		player.seekTo(progress);
+ 	}
+ 
+-	public void stop() {
+-		player.stop();
+-	}
+-
+-	public boolean isUsing(File file) {
+-		return player.isUsing(file);
++	public boolean isUsing(MediaSource mediaSource) {
++		return player.isUsing(mediaSource);
+ 	}
+ 
+ 	public boolean isOffline() {
+@@ -385,7 +388,11 @@ public class PolarisService extends Service {
+ 	}
+ 
+ 	public boolean isDownloading(CollectionItem item) {
+-		return downloadQueue.isWorkingOn(item);
++		return downloadQueue.isDownloading(item);
++	}
++
++	public boolean isStreaming(CollectionItem item) {
++		return downloadQueue.isStreaming(item);
+ 	}
+ 
+ 	public CollectionItem getNextItemToDownload() {
+@@ -408,7 +415,7 @@ public class PolarisService extends Service {
+ 		offlineCache.putImage(item, image);
+ 	}
+ 
+-	public Uri downloadAudio(CollectionItem item) throws IOException {
++	public MediaSource downloadAudio(CollectionItem item) throws IOException {
+ 		return downloadQueue.getAudio(item);
+ 	}
+ 
+@@ -416,10 +423,6 @@ public class PolarisService extends Service {
+ 		return api;
+ 	}
+ 
+-	public LocalAPI getLocalAPI() {
+-		return localAPI;
+-	}
+-
+ 	public ServerAPI getServerAPI() {
+ 		return serverAPI;
+ 	}
+diff --git a/app/src/main/java/agersant/polaris/api/API.java b/app/src/main/java/agersant/polaris/api/API.java
+index c8ed1db..707c941 100644
+--- a/app/src/main/java/agersant/polaris/api/API.java
++++ b/app/src/main/java/agersant/polaris/api/API.java
+@@ -2,10 +2,11 @@ package agersant.polaris.api;
+ 
+ import android.content.SharedPreferences;
+ import android.graphics.Bitmap;
+-import android.net.Uri;
+ import android.preference.PreferenceManager;
+ import android.widget.ImageView;
+ 
++import com.google.android.exoplayer2.source.MediaSource;
++
+ import java.io.IOException;
+ 
+ import agersant.polaris.CollectionItem;
+@@ -39,7 +40,7 @@ public class API {
+ 		return preferences.getBoolean(offlineModePreferenceKey, false);
+ 	}
+ 
+-	public Uri getAudio(CollectionItem item) throws IOException {
++	public MediaSource getAudio(CollectionItem item) throws IOException {
+ 		if (localAPI.hasAudio(item)) {
+ 			return localAPI.getAudio(item);
+ 		}
+diff --git a/app/src/main/java/agersant/polaris/api/IPolarisAPI.java b/app/src/main/java/agersant/polaris/api/IPolarisAPI.java
+index b18f4e4..5eb2fde 100644
+--- a/app/src/main/java/agersant/polaris/api/IPolarisAPI.java
++++ b/app/src/main/java/agersant/polaris/api/IPolarisAPI.java
+@@ -1,8 +1,9 @@
+ package agersant.polaris.api;
+ 
+-import android.net.Uri;
+ import android.widget.ImageView;
+ 
++import com.google.android.exoplayer2.source.MediaSource;
++
+ import java.io.IOException;
+ 
+ import agersant.polaris.CollectionItem;
+@@ -15,7 +16,7 @@ public interface IPolarisAPI {
+ 
+ 	void getImage(CollectionItem item, ImageView view);
+ 
+-	Uri getAudio(CollectionItem item) throws IOException;
++	MediaSource getAudio(CollectionItem item) throws IOException;
+ 
+ 	void browse(String path, final ItemsCallback handlers);
+ 
+diff --git a/app/src/main/java/agersant/polaris/api/local/LocalAPI.java b/app/src/main/java/agersant/polaris/api/local/LocalAPI.java
+index 7179a1f..edd8052 100644
+--- a/app/src/main/java/agersant/polaris/api/local/LocalAPI.java
++++ b/app/src/main/java/agersant/polaris/api/local/LocalAPI.java
+@@ -1,9 +1,10 @@
+ package agersant.polaris.api.local;
+ 
+ import android.graphics.Bitmap;
+-import android.net.Uri;
+ import android.widget.ImageView;
+ 
++import com.google.android.exoplayer2.source.MediaSource;
++
+ import java.io.IOException;
+ import java.util.ArrayList;
+ 
+@@ -29,7 +30,7 @@ public class LocalAPI implements IPolarisAPI {
+ 	}
+ 
+ 	@Override
+-	public Uri getAudio(CollectionItem item) throws IOException {
++	public MediaSource getAudio(CollectionItem item) throws IOException {
+ 		String path = item.getPath();
+ 		return offlineCache.getAudio(path);
+ 	}
+diff --git a/app/src/main/java/agersant/polaris/api/local/OfflineCache.java b/app/src/main/java/agersant/polaris/api/local/OfflineCache.java
+index ac470bf..49a1cc8 100644
+--- a/app/src/main/java/agersant/polaris/api/local/OfflineCache.java
++++ b/app/src/main/java/agersant/polaris/api/local/OfflineCache.java
+@@ -8,6 +8,12 @@ import android.graphics.BitmapFactory;
+ import android.net.Uri;
+ import android.preference.PreferenceManager;
+ 
++import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
++import com.google.android.exoplayer2.source.ExtractorMediaSource;
++import com.google.android.exoplayer2.source.MediaSource;
++import com.google.android.exoplayer2.upstream.DataSource;
++import com.google.android.exoplayer2.upstream.DefaultDataSourceFactory;
++
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+@@ -332,7 +338,7 @@ public class OfflineCache {
+ 		}
+ 	}
+ 
+-	Uri getAudio(String virtualPath) throws IOException {
++	MediaSource getAudio(String virtualPath) throws IOException {
+ 		if (!hasAudio(virtualPath)) {
+ 			throw new FileNotFoundException();
+ 		}
+@@ -341,7 +347,9 @@ public class OfflineCache {
+ 			metadata.lastUse = new Date();
+ 			saveMetadata(virtualPath, metadata);
+ 		}
+-		return Uri.fromFile(getCacheFile(virtualPath, CacheDataType.AUDIO, false));
++		Uri uri = Uri.fromFile(getCacheFile(virtualPath, CacheDataType.AUDIO, false));
++		DataSource.Factory factory = new DefaultDataSourceFactory(service, "Polaris Local");
++		return new ExtractorMediaSource(uri, factory, new DefaultExtractorsFactory(), null, null);
+ 	}
+ 
+ 	Bitmap getImage(String virtualPath) throws IOException {
+diff --git a/app/src/main/java/agersant/polaris/api/remote/DownloadQueue.java b/app/src/main/java/agersant/polaris/api/remote/DownloadQueue.java
+index 9a9db34..9f1c8ac 100644
+--- a/app/src/main/java/agersant/polaris/api/remote/DownloadQueue.java
++++ b/app/src/main/java/agersant/polaris/api/remote/DownloadQueue.java
+@@ -1,6 +1,6 @@
+ package agersant.polaris.api.remote;
+ 
+-import android.net.Uri;
++import com.google.android.exoplayer2.source.MediaSource;
+ 
+ import java.io.File;
+ import java.io.IOException;
+@@ -41,19 +41,49 @@ public class DownloadQueue {
+ 		}, 1500, 500);
+ 	}
+ 
+-	public synchronized Uri getAudio(CollectionItem item) throws IOException {
+-		return service.getServerAPI().serveUri(item.getPath());
++	public synchronized MediaSource getAudio(CollectionItem item) throws IOException {
++		DownloadQueueWorkItem existingWorker = findWorkerWithAudioForItem(item);
++		if (existingWorker != null) {
++			existingWorker.stopBackgroundDownload();
++			return existingWorker.getMediaSource();
++		}
++
++		DownloadQueueWorkItem newWorker = findIdleWorker();
++		if (newWorker == null) {
++			newWorker = findInterruptibleWorker();
++		}
++
++		newWorker.assignItem(item);
++		return newWorker.getMediaSource();
+ 	}
+ 
+-	private DownloadQueueWorkItem findActiveWorker(CollectionItem item) {
++	private DownloadQueueWorkItem findWorkerWithAudioForItem(CollectionItem item) {
+ 		for (DownloadQueueWorkItem worker : workers) {
+-			if (worker.isHandling(item)) {
++			if (worker.hasMediaSourceFor(item)) {
+ 				return worker;
+ 			}
+ 		}
+ 		return null;
+ 	}
+ 
++	public boolean isStreaming(CollectionItem item) {
++		for (DownloadQueueWorkItem worker : workers) {
++			if (worker.hasMediaSourceFor(item)) {
++				return true;
++			}
++		}
++		return false;
++	}
++
++	public boolean isDownloading(CollectionItem item) {
++		for (DownloadQueueWorkItem worker : workers) {
++			if (worker.isDownloading(item)) {
++				return true;
++			}
++		}
++		return false;
++	}
++
+ 	private DownloadQueueWorkItem findIdleWorker() {
+ 		for (DownloadQueueWorkItem worker : workers) {
+ 			if (worker.isIdle()) {
+@@ -72,10 +102,6 @@ public class DownloadQueue {
+ 		return null;
+ 	}
+ 
+-	public boolean isWorkingOn(CollectionItem item) {
+-		return findActiveWorker(item) != null;
+-	}
+-
+ 	private synchronized void downloadNext() {
+ 
+ 		if (service.isOffline()) {
+@@ -93,7 +119,8 @@ public class DownloadQueue {
+ 				return;
+ 			}
+ 			try {
+-				worker.beginDownload(nextItem);
++				worker.assignItem(nextItem);
++				worker.beginBackgroundDownload();
+ 			} catch (IOException e) {
+ 				System.out.println("Error while downloading item ahead of time: " + e);
+ 			}
+diff --git a/app/src/main/java/agersant/polaris/api/remote/DownloadQueueWorkItem.java b/app/src/main/java/agersant/polaris/api/remote/DownloadQueueWorkItem.java
+index 99961dc..db0e4f3 100644
+--- a/app/src/main/java/agersant/polaris/api/remote/DownloadQueueWorkItem.java
++++ b/app/src/main/java/agersant/polaris/api/remote/DownloadQueueWorkItem.java
+@@ -1,8 +1,14 @@
+ package agersant.polaris.api.remote;
+ 
+ import android.content.Intent;
++import android.net.Uri;
+ import android.os.AsyncTask;
+ 
++import com.google.android.exoplayer2.extractor.DefaultExtractorsFactory;
++import com.google.android.exoplayer2.source.ExtractorMediaSource;
++import com.google.android.exoplayer2.source.MediaSource;
++import com.google.android.exoplayer2.upstream.DefaultDataSource;
++
+ import java.io.File;
+ import java.io.IOException;
+ 
+@@ -10,150 +16,100 @@ import agersant.polaris.CollectionItem;
+ import agersant.polaris.PolarisApplication;
+ import agersant.polaris.PolarisService;
+ 
++import static android.os.AsyncTask.Status.FINISHED;
++
+ /**
+  * Created by agersant on 1/11/2017.
+  */
+ 
+ class DownloadQueueWorkItem {
+ 
+-	static final int MAX_ATTEMPTS = 10;
+-
+-	private File tempFile;
++	private File scratchFile;
+ 	private CollectionItem item;
+ 	private DownloadTask job;
+-	private StreamingMediaDataSource mediaDataSource;
+ 	private PolarisService service;
+-	private int attempts;
++	private MediaSource mediaSource;
++	private DefaultDataSource dataSource;
+ 
+-	DownloadQueueWorkItem(File tempFile, PolarisService service) {
+-		this.tempFile = tempFile;
++	DownloadQueueWorkItem(File scratchFile, PolarisService service) {
++		this.scratchFile = scratchFile;
+ 		this.service = service;
+ 	}
+ 
+-	boolean isHandling(CollectionItem item) {
++	boolean hasMediaSourceFor(CollectionItem item) {
+ 		return this.item != null && this.item.getPath().equals(item.getPath());
+ 	}
+ 
+-	boolean isIdle() {
++	boolean isDownloading(CollectionItem item) {
+ 		if (job == null) {
+-			return true;
++			return false;
+ 		}
+-		AsyncTask.Status status = job.getStatus();
+-		switch (status) {
+-			case PENDING:
+-			case RUNNING:
+-				return false;
+-			case FINISHED:
+-				return !isDataSourceInUse();
++		if (job.getStatus() == FINISHED) {
++			return false;
+ 		}
+-		return true;
++		return this.item != null && this.item.getPath().equals(item.getPath());
+ 	}
+ 
+-	private boolean isDataSourceInUse() {
+-		if (mediaDataSource == null) {
+-			return false;
++	boolean isIdle() {
++		if (job != null) {
++			AsyncTask.Status status = job.getStatus();
++			switch (status) {
++				case PENDING:
++				case RUNNING:
++					return false;
++			}
+ 		}
+-		return service.isUsing(mediaDataSource.getFile());
++		return !isDataSourceInUse();
+ 	}
+ 
+-	boolean isInterruptible() {
+-		return !isDataSourceInUse();
++	private boolean isDataSourceInUse() {
++		return mediaSource != null && service.isUsing(mediaSource);
+ 	}
+ 
+-	File getMediaFile() {
+-		return tempFile;
++	boolean isInterruptible() {
++		return !isDataSourceInUse();
+ 	}
+ 
+-	void beginDownload(CollectionItem item) throws IOException {
+-		assert !isHandling(item);
+-		stop();
+-		attempts = 0;
++	void assignItem(CollectionItem item) throws IOException {
++		reset();
+ 		this.item = item;
+-		tryDownload();
++		Uri uri = service.getServerAPI().serveUri(item.getPath());
++		PolarisExoPlayerDataSourceFactory dsf = new PolarisExoPlayerDataSourceFactory(service, scratchFile, item);
++		mediaSource = new ExtractorMediaSource(uri, dsf, new DefaultExtractorsFactory(), null, null);
++		dataSource = dsf.createDataSource();
+ 		broadcast(DownloadQueue.WORKLOAD_CHANGED);
+ 	}
+ 
+-	void tryDownload() throws IOException {
+-		attempts++;
+-
+-		if (tempFile.exists()) {
+-			if (!tempFile.delete()) {
+-				System.out.println("Could not delete streaming file");
+-			}
+-		}
+-
+-		if (!tempFile.createNewFile()) {
+-			System.out.println("Could not create streaming file");
+-		}
+-
+-		System.out.println("Downloading " + item.getPath() + " (attempt #" + attempts + ")" );
+-		mediaDataSource = new StreamingMediaDataSource(tempFile);
+-		job = new DownloadTask(service, this, item, tempFile);
+-		broadcast(DownloadQueue.WORKLOAD_CHANGED);
++	MediaSource getMediaSource() {
++		return mediaSource;
++	}
+ 
++	void beginBackgroundDownload() {
++		System.out.println("Beginning background download for: " + item.getPath());
++		Uri uri = service.getServerAPI().serveUri(item.getPath());
++		job = new DownloadTask(dataSource, uri);
+ 		job.execute();
++		broadcast(DownloadQueue.WORKLOAD_CHANGED);
+ 	}
+ 
+-	void onJobSuccess() {
+-		// TODO?
+-		// mediaDataSource.markAsComplete();
++	void stopBackgroundDownload() {
++		job.cancel(false);
++		job = null;
++		broadcast(DownloadQueue.WORKLOAD_CHANGED);
+ 	}
+ 
+-	void onJobError() {
+-		float mediaProgress = 0.f;
+-		boolean isPaused = true;
+-
+-		boolean stopActiveMedia = isDataSourceInUse();
+-		if (stopActiveMedia) {
+-			System.out.println("Stopping active datasource");
+-			isPaused = !service.isPlaying();
+-			mediaProgress = service.getPosition();
+-			service.stop();
++	private void reset() {
++		if (mediaSource != null) {
++			mediaSource.releaseSource();
++			mediaSource = null;
+ 		}
+-
+-		if (stopActiveMedia || attempts < MAX_ATTEMPTS) {
+-			try {
+-				endAttempt();
+-				tryDownload();
+-				if (stopActiveMedia) {
+-					System.out.println("Resuming playback from " + mediaProgress + "%");
+-					service.play(item);
+-					service.seekTo(mediaProgress);
+-					if (isPaused) {
+-						service.pause();
+-					}
+-				}
+-				return;
+-			} catch (Exception e) {
+-				System.out.println("Error while retrying download (" + item.getPath() + "): " + e );
+-			}
+-		} else {
+-			System.out.println("Giving up on " + item.getPath() );
++		if (dataSource != null) {
++			dataSource = null;
+ 		}
+-
+-		stop();
+-		broadcast(DownloadQueue.WORKLOAD_CHANGED);
+-	}
+-
+-	private void endAttempt() {
+-		assert !isDataSourceInUse();
+ 		if (job != null) {
+-			job.cancel(true);
++			job.cancel(false);
+ 			job = null;
+ 		}
+-		if (mediaDataSource != null) {
+-			try {
+-				// TODO?
+-				// mediaDataSource.getFile().close();
+-			} catch (Exception e) {
+-				System.out.println("Error while closing data source for download queue work item");
+-			}
+-			mediaDataSource = null;
+-		}
+-	}
+-
+-	private void stop() {
+-		endAttempt();
+ 		item = null;
+ 	}
+ 
+diff --git a/app/src/main/java/agersant/polaris/api/remote/DownloadTask.java b/app/src/main/java/agersant/polaris/api/remote/DownloadTask.java
+index 480d5db..cf76266 100644
+--- a/app/src/main/java/agersant/polaris/api/remote/DownloadTask.java
++++ b/app/src/main/java/agersant/polaris/api/remote/DownloadTask.java
+@@ -1,16 +1,11 @@
+ package agersant.polaris.api.remote;
+ 
++import android.net.Uri;
+ import android.os.AsyncTask;
+ 
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.io.InputStream;
+-
+-import agersant.polaris.CollectionItem;
+-import agersant.polaris.PolarisService;
+-import okhttp3.ResponseBody;
++import com.google.android.exoplayer2.C;
++import com.google.android.exoplayer2.upstream.DataSpec;
++import com.google.android.exoplayer2.upstream.DefaultDataSource;
+ 
+ /**
+  * Created by agersant on 12/26/2016.
+@@ -20,85 +15,39 @@ class DownloadTask extends AsyncTask<Object, Integer, Integer> {
+ 
+ 	private static final int BUFFER_SIZE = 1024 * 64; // 64 kB
+ 
+-	private CollectionItem item;
+-	private String path;
+-	private File outFile;
+-	private boolean reachedEOF;
+-	private DownloadQueueWorkItem workItem;
+-	private PolarisService service;
+-
+-	DownloadTask(PolarisService service, DownloadQueueWorkItem workItem, CollectionItem item, File outFile) {
+-		this.workItem = workItem;
+-		this.item = item;
+-		this.outFile = outFile;
+-		this.service = service;
+-		path = item.getPath();
+-		reachedEOF = false;
+-	}
++	private DefaultDataSource dataSource;
++	private DataSpec dataSpec;
+ 
+-	public String getPath() {
+-		return item.getPath();
++	DownloadTask(DefaultDataSource dataSource, Uri uri) {
++		this.dataSource = dataSource;
++		dataSpec = new DataSpec(uri);
+ 	}
+ 
+ 	@Override
+ 	protected Integer doInBackground(Object... params) {
+-
+-		ResponseBody responseBody;
++		byte[] buffer = new byte[BUFFER_SIZE];
+ 		try {
+-			responseBody = service.getServerAPI().serve(path);
+-		} catch (Exception e) {
+-			System.out.println("Error establishing stream connection: " + e);
+-			return 1;
+-		}
+-
+-		if (responseBody == null) {
+-			System.out.println("Stream content has no response");
+-			return 1;
+-		}
+-
+-		try (InputStream inputStream = responseBody.byteStream();
+-			 FileOutputStream outputStream = new FileOutputStream(outFile);
+-		) {
+-			byte[] chunk = new byte[BUFFER_SIZE];
++			dataSource.open(dataSpec);
+ 			while (true) {
+-				int bytesRead = inputStream.read(chunk);
+-				if (bytesRead > 0) {
+-					outputStream.write(chunk, 0, bytesRead);
+-				}
+-				if (bytesRead == -1) {
+-					reachedEOF = true;
++				if (isCancelled()) {
+ 					break;
+ 				}
+-				if (isCancelled()) {
++				int bytesRead = dataSource.read(buffer, 0, BUFFER_SIZE);
++				if (bytesRead == 0 || bytesRead == C.RESULT_END_OF_INPUT) {
+ 					break;
+ 				}
+ 			}
+-		} catch (IOException e) {
+-			System.out.println("Stream download error: " + e);
+-			return 1;
++		} catch (Exception e) {
++			System.out.println("Download task error during reads: " + e + " (" + dataSpec.uri + ")");
+ 		}
+ 
+-		saveForOfflineUse();
+-		return 0;
+-	}
+-
+-	private void saveForOfflineUse() {
+-		if (reachedEOF) {
+-			try (FileInputStream audioStreamFile = new FileInputStream(outFile)) {
+-				service.saveAudio(item, audioStreamFile);
+-			} catch (IOException e) {
+-				System.out.println("Error while storing item to offline cache: " + e);
+-			}
++		try {
++			dataSource.close();
++		} catch (Exception e) {
++			System.out.println("Download task error during close: " + e);
+ 		}
+-	}
+ 
+-	@Override
+-	protected void onPostExecute(Integer result) {
+-		if (reachedEOF) {
+-			workItem.onJobSuccess();
+-		} else {
+-			workItem.onJobError();
+-		}
++		return 0;
+ 	}
+ 
+ }
+diff --git a/app/src/main/java/agersant/polaris/api/remote/PolarisExoPlayerDataSourceFactory.java b/app/src/main/java/agersant/polaris/api/remote/PolarisExoPlayerDataSourceFactory.java
+index e7b8d7f..e695dd2 100644
+--- a/app/src/main/java/agersant/polaris/api/remote/PolarisExoPlayerDataSourceFactory.java
++++ b/app/src/main/java/agersant/polaris/api/remote/PolarisExoPlayerDataSourceFactory.java
+@@ -1,9 +1,18 @@
+ package agersant.polaris.api.remote;
+ 
+ import com.google.android.exoplayer2.upstream.DataSource;
++import com.google.android.exoplayer2.upstream.DataSpec;
+ import com.google.android.exoplayer2.upstream.DefaultDataSource;
+ import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
++import com.google.android.exoplayer2.upstream.TransferListener;
+ 
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.RandomAccessFile;
++import java.net.HttpURLConnection;
++import java.util.BitSet;
++
++import agersant.polaris.CollectionItem;
+ import agersant.polaris.PolarisService;
+ 
+ /**
+@@ -12,38 +21,150 @@ import agersant.polaris.PolarisService;
+ 
+ public final class PolarisExoPlayerDataSourceFactory implements DataSource.Factory {
+ 
+-	private class PolarisExoPlayerHttpDataSourceFactory implements DataSource.Factory {
++	private PolarisService service;
++	private PolarisExoPlayerHttpDataSource dataSource;
+ 
+-		private PolarisService service;
++	PolarisExoPlayerDataSourceFactory(PolarisService service, File scratchLocation, CollectionItem item) {
++		this.service = service;
++		PolarisExoPlayerHttpDataSourceFactory dataSourceFactory = new PolarisExoPlayerHttpDataSourceFactory(service, scratchLocation, item);
++		dataSource = dataSourceFactory.createDataSource();
++	}
++
++	@Override
++	public DefaultDataSource createDataSource() {
++		return new DefaultDataSource(service, null, dataSource);
++	}
++
++	private class PolarisExoPlayerTransferListener implements TransferListener<DefaultHttpDataSource> {
++
++		@Override
++		public void onTransferStart(DefaultHttpDataSource source, DataSpec dataSpec) {
++
++		}
++
++		@Override
++		public void onBytesTransferred(DefaultHttpDataSource source, int bytesTransferred) {
+ 
+-		PolarisExoPlayerHttpDataSourceFactory(PolarisService service) {
+-			this.service = service;
+ 		}
+ 
+ 		@Override
+-		public DataSource createDataSource() {
+-			DefaultHttpDataSource defaultHttpDataSource = new DefaultHttpDataSource("Polaris Android", null);
++		public void onTransferEnd(DefaultHttpDataSource source) {
++			PolarisExoPlayerHttpDataSource ds = (PolarisExoPlayerHttpDataSource) source;
++			ds.onTransferEnd();
++		}
++	}
++
++	private class PolarisExoPlayerHttpDataSource extends DefaultHttpDataSource {
++
++		private BitSet bytesStreamed;
++		private File scratchLocation;
++		private RandomAccessFile file;
++		private PolarisService service;
++		private CollectionItem item;
++
++		PolarisExoPlayerHttpDataSource(PolarisService service, PolarisExoPlayerTransferListener listener, File scratchLocation, CollectionItem item) {
++			super("Polaris Android", null, listener);
++			this.scratchLocation = scratchLocation;
++			this.service = service;
++			this.item = item;
++
+ 			String authCookie = service.getAuthCookieHeader();
+ 			if (authCookie != null) {
+-				defaultHttpDataSource.setRequestProperty("Cookie", authCookie);
++				setRequestProperty("Cookie", authCookie);
+ 			} else {
+ 				String authRaw = service.getAuthRawHeader();
+-				defaultHttpDataSource.setRequestProperty("Authorization", authRaw);
++				setRequestProperty("Authorization", authRaw);
+ 			}
+-			return defaultHttpDataSource;
+ 		}
+-	}
+ 
+-	PolarisService service;
+-	PolarisExoPlayerHttpDataSourceFactory httpDataSourceFactory;
++		@Override
++		public int read(byte[] buffer, int offset, int readLength) throws HttpDataSourceException {
++			final int out = super.read(buffer, offset, readLength);
++			if (out <= 0) {
++				return out;
++			}
++
++			HttpURLConnection connection = getConnection();
++			if (connection == null) {
++				return out;
++			}
+ 
+-	public PolarisExoPlayerDataSourceFactory(PolarisService service) {
+-		this.service = service;
+-		httpDataSourceFactory = new PolarisExoPlayerHttpDataSourceFactory(service);
++			int length = connection.getContentLength();
++			if (length <= 0) {
++				return out;
++			}
++
++			if (bytesStreamed == null) {
++				bytesStreamed = new BitSet(length);
++				try {
++					if (scratchLocation.exists()) {
++						scratchLocation.delete();
++					}
++					file = new RandomAccessFile(scratchLocation, "rw");
++				} catch (Exception e) {
++					System.out.println("Error while opening stream file: " + e);
++				}
++			}
++
++			if (file == null) {
++				return out;
++			}
++
++			int readStart = (int) (bytesRead() + bytesSkipped()) - out;
++			bytesStreamed.set(readStart, readStart + out);
++
++			try {
++				file.write(buffer, offset, out);
++			} catch (Exception e) {
++				System.out.println("Error while audio to stream file: " + e);
++				file = null;
++			}
++
++			if (bytesStreamed.nextClearBit(0) >= length) {
++				System.out.println("Streaming complete, saving file for local use: " + item.getPath());
++				try {
++					service.saveAudio(item, new FileInputStream(scratchLocation));
++				} catch (Exception e) {
++					System.out.println("Error while saving stream audio in cache: " + e);
++				}
++				try {
++					file.close();
++				} catch (Exception e) {
++					System.out.println("Error while closing stream audio file: " + e);
++				}
++				file = null;
++			}
++
++			return out;
++		}
++
++		void onTransferEnd() {
++			try {
++				if (file != null) {
++					file.close();
++					file = null;
++				}
++			} catch (Exception e) {
++				System.out.println("Error while closing stream file (cleanup): " + e);
++			}
++		}
+ 	}
+ 
+-	@Override
+-	public DefaultDataSource createDataSource() {
+-		return new DefaultDataSource(service, null, httpDataSourceFactory.createDataSource());
++	private class PolarisExoPlayerHttpDataSourceFactory implements DataSource.Factory {
++
++		PolarisService service;
++		CollectionItem item;
++		File scratchLocation;
++
++		PolarisExoPlayerHttpDataSourceFactory(PolarisService service, File scratchLocation, CollectionItem item) {
++			this.service = service;
++			this.scratchLocation = scratchLocation;
++			this.item = item;
++		}
++
++		@Override
++		public PolarisExoPlayerHttpDataSource createDataSource() {
++			return new PolarisExoPlayerHttpDataSource(service, new PolarisExoPlayerTransferListener(), scratchLocation, item);
++		}
+ 	}
+ }
+diff --git a/app/src/main/java/agersant/polaris/api/remote/ServerAPI.java b/app/src/main/java/agersant/polaris/api/remote/ServerAPI.java
+index 0fb04ef..4f140f5 100644
+--- a/app/src/main/java/agersant/polaris/api/remote/ServerAPI.java
++++ b/app/src/main/java/agersant/polaris/api/remote/ServerAPI.java
+@@ -6,6 +6,7 @@ import android.net.Uri;
+ import android.preference.PreferenceManager;
+ import android.widget.ImageView;
+ 
++import com.google.android.exoplayer2.source.MediaSource;
+ import com.google.gson.Gson;
+ import com.google.gson.GsonBuilder;
+ import com.google.gson.reflect.TypeToken;
+@@ -70,7 +71,7 @@ public class ServerAPI
+ 	}
+ 
+ 	@Override
+-	public Uri getAudio(CollectionItem item) throws IOException {
++	public MediaSource getAudio(CollectionItem item) throws IOException {
+ 		return service.downloadAudio(item);
+ 	}
+ 
+diff --git a/app/src/main/java/agersant/polaris/features/queue/QueueAdapter.java b/app/src/main/java/agersant/polaris/features/queue/QueueAdapter.java
+index 2175731..43995de 100644
+--- a/app/src/main/java/agersant/polaris/features/queue/QueueAdapter.java
++++ b/app/src/main/java/agersant/polaris/features/queue/QueueAdapter.java
+@@ -77,7 +77,7 @@ class QueueAdapter
+ 			if (service.hasLocalAudio(item)) {
+ 				cacheIcon.setVisibility(View.VISIBLE);
+ 				downloadIcon.setVisibility(View.INVISIBLE);
+-			} else if (service.isDownloading(item)) {
++			} else if (service.isDownloading(item) || service.isStreaming(item)) {
+ 				cacheIcon.setVisibility(View.INVISIBLE);
+ 				downloadIcon.setVisibility(View.VISIBLE);
+ 			} else {

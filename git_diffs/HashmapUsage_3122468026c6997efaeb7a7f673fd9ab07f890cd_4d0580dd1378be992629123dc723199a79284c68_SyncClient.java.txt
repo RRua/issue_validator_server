@@ -1,0 +1,314 @@
+diff --git a/src/com/ichi2/anki/DeckPicker.java b/src/com/ichi2/anki/DeckPicker.java
+index 56f77ef2de..c6c82a5af0 100644
+--- a/src/com/ichi2/anki/DeckPicker.java
++++ b/src/com/ichi2/anki/DeckPicker.java
+@@ -227,10 +227,6 @@ public class DeckPicker extends Activity {
+ 	private String mCurrentDeckFilename = null;
+ 	private String mCurrentDeckPath = null;
+ 
+-	private int mTotalDueCards = 0;
+-	private int mTotalCards = 0;
+-	private int mTotalTime = 0;
+-
+ 	private EditText mRenameDeckEditText;
+ 
+ 	int mStatisticType;
+@@ -503,7 +499,7 @@ public class DeckPicker extends Activity {
+ 					}
+ 				}
+ 			} else {
+-				updateDecksList((TreeSet<Object[]>) data.result);
++				updateDecksList((TreeSet<Object[]>) data.result, (Integer)data.data[2], (Integer)data.data[3]);
+ 				if (data.data.length > 0 && data.data[0] instanceof String && ((String)data.data[0]).length() > 0) {
+ 					String dataString = (String) data.data[0];
+ 					if (dataString.equals("upload")) {
+@@ -592,7 +588,7 @@ public class DeckPicker extends Activity {
+ 			if (mCol == null) {
+ 				return;
+ 			}
+-			updateDecksList(result.getDeckList());
++			updateDecksList(result.getDeckList(), -1, -1);
+ 			mDeckListView.setVisibility(View.VISIBLE);
+ 			mDeckListView.setAnimation(ViewAnimation.fade(ViewAnimation.FADE_IN, 500, 0));
+ 			DeckTask.launchDeckTask(DeckTask.TASK_TYPE_LOAD_DECK_COUNTS, mLoadCountsHandler, new TaskData(mCol));
+@@ -628,7 +624,8 @@ public class DeckPicker extends Activity {
+ 
+ 		@Override
+ 		public void onPostExecute(DeckTask.TaskData result) {
+-			updateDecksList(result.getDeckList());
++			Object[] res = result.getObjArray();
++			updateDecksList((TreeSet<Object[]>) res[0], (Integer)res[1], (Integer)res[2]);
+ 		}
+ 
+ 		@Override
+@@ -1732,7 +1729,6 @@ public class DeckPicker extends Activity {
+ //						SharedPreferences preferences = PrefSettings.getSharedPrefs(getBaseContext());
+ //						String deckPath = preferences.getString("deckPath", AnkiDroidApp.getStorageDirectory());
+ 						mDeckIsSelected = false;
+-						setTitleText();
+ //						populateDeckList(deckPath);
+ 					}
+ 				}
+@@ -1919,13 +1915,6 @@ public class DeckPicker extends Activity {
+     }
+ 
+ 
+-	private void setTitleText(){
+-		Resources res = getResources();
+-		String time = res.getQuantityString(R.plurals.deckpicker_title_minutes, mTotalTime, mTotalTime);
+-		setTitle(res.getQuantityString(R.plurals.deckpicker_title, mTotalDueCards, mTotalDueCards, mTotalCards, time));
+-	}
+-
+-
+ 	private HashMap<String, String> getDeckFromDeckList(long did) {
+ 		for (HashMap<String, String> d : mDeckList) {
+ 			if (d.get("did").equals(Long.toString(did))) {
+@@ -2019,8 +2008,9 @@ public class DeckPicker extends Activity {
+ 	}
+ 
+ 
+-	private void updateDecksList(TreeSet<Object[]> decks) {
++	private void updateDecksList(TreeSet<Object[]> decks, int eta, int count) {
+ 		mDeckList.clear();
++		int due = 0;
+         for (Object[] d : decks) {
+         	HashMap<String, String> m = new HashMap<String, String>();
+         	String[] name = ((String[])d[0]);
+@@ -2032,6 +2022,7 @@ public class DeckPicker extends Activity {
+         	m.put("complMat", ((Float)d[5]).toString());
+         	m.put("complAll", ((Float)d[6]).toString());
+         	if (name.length == 1) {
++        		due += Integer.parseInt(m.get("new")) + Integer.parseInt(m.get("lrn")) + Integer.parseInt(m.get("rev"));
+         		// top position
+         		m.put("sep", "top");
+         		// correct previous deck
+@@ -2048,7 +2039,7 @@ public class DeckPicker extends Activity {
+         		if (name.length == 1) {
+         			m.put("sep", "ful");
+ 	    		} else {
+-	    			m.put("sep", "bot");    			
++	    			m.put("sep", "bot");
+ 	    		}
+         	} else {
+         		// center position
+@@ -2057,6 +2048,16 @@ public class DeckPicker extends Activity {
+         	mDeckList.add(m);
+         }
+         mDeckListAdapter.notifyDataSetChanged();
++
++        // set title
++        Resources res = getResources();
++        if (eta != -1) {
++        	eta /= 60;
++            String time = res.getQuantityString(R.plurals.deckpicker_title_minutes, eta, eta);
++    		setTitle(res.getQuantityString(R.plurals.deckpicker_title, due, due, count, time));
++        } else {
++    		setTitle(res.getString(R.string.app_name));
++        }
+ 	}
+ 
+ //	private void restartApp() {
+diff --git a/src/com/ichi2/anki/StudyOptions.java b/src/com/ichi2/anki/StudyOptions.java
+index 0312ab25a7..fd589489f0 100644
+--- a/src/com/ichi2/anki/StudyOptions.java
++++ b/src/com/ichi2/anki/StudyOptions.java
+@@ -955,13 +955,13 @@ public class StudyOptions extends Activity implements IButtonListener {
+ 	private void updateValuesFromDeck(boolean reset) {
+ 		Resources res = getResources();
+ 
+-		String[] name;
++		String fullName;
+ 		try {
+-			name = mCol.getDecks().current().getString("name").split("::");
++			fullName = mCol.getDecks().current().getString("name");
+ 		} catch (JSONException e) {
+ 			throw new RuntimeException(e);
+ 		}
+-
++		String[] name = fullName.split("::");
+ 		StringBuilder nameBuilder = new StringBuilder();
+ 		if (name.length > 0) {
+ 			nameBuilder.append(name[0]);
+@@ -973,6 +973,7 @@ public class StudyOptions extends Activity implements IButtonListener {
+ 			nameBuilder.append("\n").append(name[name.length - 1]);
+ 		}
+ 		mTextDeckName.setText(nameBuilder.toString());
++		setTitle(fullName);
+ 		String desc = mCol.getDecks().getActualDescription();
+ 		if (desc.length() > 0) {
+ 			mTextDeckDescription.setText(desc);
+@@ -1203,15 +1204,19 @@ public class StudyOptions extends Activity implements IButtonListener {
+ 			int totalCards = (Integer) obj[4];
+ 			mProgressMature = (Double) obj[5];
+ 			mProgressAll = (Double) obj[6];
++			int eta = (Integer) obj[7];
+ 			
+ 			int dues = newCards + lrnCards + revCards;
+-			setTitle(getResources().getQuantityString(R.plurals.studyoptions_window_title, dues, "asdf", dues, 0));
+ 			mTextTodayNew.setText(String.valueOf(newCards));
+ 			mTextTodayLrn.setText(String.valueOf(lrnCards));
+ 			mTextTodayRev.setText(String.valueOf(revCards));
+ 			mTextNewTotal.setText(String.valueOf(totalNew));
+ 			mTextTotal.setText(String.valueOf(totalCards));
+-			mTextETA.setText("???");
++			if (eta != -1) {
++				mTextETA.setText(Integer.toString(eta / 60));				
++			} else {
++				mTextETA.setText("-1");
++			}
+ 			updateStatisticBars();
+ 
+ 			if(mDeckCounts.getVisibility() == View.INVISIBLE) {
+diff --git a/src/com/ichi2/async/Connection.java b/src/com/ichi2/async/Connection.java
+index a616b42a1e..89b8ea670e 100644
+--- a/src/com/ichi2/async/Connection.java
++++ b/src/com/ichi2/async/Connection.java
+@@ -326,8 +326,16 @@ public class Connection extends AsyncTask<Connection.Payload, Object, Connection
+     	} else {
+         	data.success = true;
+     		TreeSet<Object[]> decks = col.getSched().deckDueTree(true);
++        	int[] counts = new int[]{0, 0, 0};
++        	for (Object[] deck : decks) {
++        		if (((String[])deck[0]).length == 1) {
++        			counts[0] += (Integer) deck[2];
++        			counts[1] += (Integer) deck[3];
++        			counts[2] += (Integer) deck[4];
++        		}
++        	}
+     		data.result = decks;
+-    		data.data = new Object[]{conflictResolution, col};
++    		data.data = new Object[]{conflictResolution, col, col.getSched().eta(counts), col.cardCount()};
+         	return data;
+     	}
+     }
+diff --git a/src/com/ichi2/async/DeckTask.java b/src/com/ichi2/async/DeckTask.java
+index cca11de18c..6f8b438aea 100644
+--- a/src/com/ichi2/async/DeckTask.java
++++ b/src/com/ichi2/async/DeckTask.java
+@@ -405,7 +405,7 @@ public class DeckTask extends AsyncTask<DeckTask.TaskData, DeckTask.TaskData, De
+                 Utils.writeToFile(stream, collectionFile);
+                 stream.close();
+                 AnkiDb ankiDB = AnkiDatabaseManager.getDatabase(collectionFile);
+-                ankiDB.exec("UPDATE col SET crt = " + Utils.intNow());
++                ankiDB.execute("UPDATE col SET crt = " + Utils.intNow());
+                 ankiDB.closeDatabase();
+             } catch (IOException e) {
+                 Log.e(AnkiDroidApp.TAG, Log.getStackTraceString(e));
+@@ -431,7 +431,15 @@ public class DeckTask extends AsyncTask<DeckTask.TaskData, DeckTask.TaskData, De
+     private TaskData doInBackgroundLoadDeckCounts(TaskData... params) {
+     	Collection col = params[0].getCollection();
+     	TreeSet<Object[]> decks = col.getSched().deckDueTree(true);
+-    	return new TaskData(decks);
++    	int[] counts = new int[]{0, 0, 0};
++    	for (Object[] deck : decks) {
++    		if (((String[])deck[0]).length == 1) {
++    			counts[0] += (Integer) deck[2];
++    			counts[1] += (Integer) deck[3];
++    			counts[2] += (Integer) deck[4];
++    		}
++    	}
++    	return new TaskData(new Object[]{decks, col.getSched().eta(counts), col.cardCount()});
+     }
+ 
+ 
+@@ -728,7 +736,7 @@ public class DeckTask extends AsyncTask<DeckTask.TaskData, DeckTask.TaskData, De
+ 				/ ((double) totalCount);
+ 		double progressAll = 1 - (((double) (totalNewCount + counts[1])) / ((double) totalCount));
+ 
+-		return new TaskData(new Object[]{counts[0], counts[1], counts[2], totalNewCount, totalCount, progressMature, progressAll});
++		return new TaskData(new Object[]{counts[0], counts[1], counts[2], totalNewCount, totalCount, progressMature, progressAll, sched.eta(counts)});
+     }
+ 
+ 
+diff --git a/src/com/ichi2/libanki/Decks.java b/src/com/ichi2/libanki/Decks.java
+index b2ebdcbf9a..dd5d1f2b06 100644
+--- a/src/com/ichi2/libanki/Decks.java
++++ b/src/com/ichi2/libanki/Decks.java
+@@ -445,7 +445,7 @@ public class Decks {
+ 		}
+ 	}
+ 
+-	private long[] cids(long did) {
++	public long[] cids(long did) {
+ 		ArrayList<Long> cids = mCol.getDb().queryColumn(Long.class,
+ 				"SELECT id FROM cards WHERE did = " + did, 0);
+ 		long[] result = new long[cids.size()];
+diff --git a/src/com/ichi2/libanki/Sched.java b/src/com/ichi2/libanki/Sched.java
+index 89d343189e..ee7f0c49c5 100644
+--- a/src/com/ichi2/libanki/Sched.java
++++ b/src/com/ichi2/libanki/Sched.java
+@@ -289,6 +289,40 @@ public class Sched {
+ 		}
+ 	}
+ 
++	/** LIBANKI: not in libanki */
++	public int eta(int[] counts) {
++		double revYesRate;
++		double revTime;
++		double lrnYesRate;
++		double lrnTime;
++		Cursor cur = null;
++		try {
++			cur = mCol.getDb().getDatabase().rawQuery("SELECT avg(CASE WHEN ease > 1 THEN 1 ELSE 0 END), avg(time) FROM revlog WHERE type = 1", null);
++			if (!cur.moveToFirst()) {
++				return -1;
++			}
++			revYesRate = cur.getDouble(0);
++			revTime = cur.getDouble(1);
++			cur = mCol.getDb().getDatabase().rawQuery("SELECT avg(CASE WHEN ease = 3 THEN 1 ELSE 0 END), avg(time) FROM revlog WHERE type != 1", null);
++			if (!cur.moveToFirst()) {
++				return -1;
++			}
++			lrnYesRate = cur.getDouble(0);
++			lrnTime = cur.getDouble(1);
++		} finally {
++			if (cur != null && !cur.isClosed()) {
++				cur.close();
++			}
++		}
++		// rev cards
++		double eta = revTime * counts[2];
++		// lrn cards
++		double factor = Math.min(1/(1 - lrnYesRate), 10);
++		double lrnAnswers = (counts[0] + counts[1] + counts[2] * (1 - revYesRate)) * factor;
++		eta += lrnAnswers * lrnTime;
++		return (int) (eta / 1000);
++	}
++
+ 	private int _walkingCount() {
+ 		return _walkingCount(null, null, null);
+ 	}
+@@ -1764,7 +1798,7 @@ public class Sched {
+  	public void sortCards(long[] cids, int start, int step, boolean shuffle, boolean shift) {
+ 		String scids = Utils.ids2str(cids);
+ 		long now = Utils.intNow();
+-		ArrayList<Long> nids = mCol.getDb().queryColumn("SELECT DISTINCT nid FROM cards WHERE type = 0 AND id IN " + scids + " ORDER BY nid", 0);
++		ArrayList<Long> nids = mCol.getDb().queryColumn(Long.class, "SELECT DISTINCT nid FROM cards WHERE type = 0 AND id IN " + scids + " ORDER BY nid", 0);
+ 		if (nids.size() == 0) {
+ 			// no new cards
+ 			return;
+@@ -1772,12 +1806,12 @@ public class Sched {
+ 		// determine nid ordering
+ 		HashMap<Long, Long> due = new HashMap<Long, Long>();
+ 		if (shuffle) {
+-			Collection.shuffle(nids);
++			Collections.shuffle(nids);
+ 		}
+ 		for (int c = 0; c < nids.size(); c++) {
+-			due.put(nids.get(i), start + c * step);
++			due.put(nids.get(c), (long) (start + c * step));
+ 		}
+-		int high = start + c * nids.size();
++		int high = start + step * nids.size();
+ 		// shift
+ 		if (shift) {
+ 			int low = mCol.getDb().queryScalar("SELECT min(due) FROM cards WHERE due >= " + start + " AND type = 0 AND id NOT IN " + scids, false);
+@@ -1800,7 +1834,7 @@ public class Sched {
+ 				cur.close();
+ 			}
+ 		}
+-		mCol.getDb().executeMany("UPDATE cards SET due = ?, mod = ?, usn = ? WHERE id = ?"), d);
++		mCol.getDb().executeMany("UPDATE cards SET due = ?, mod = ?, usn = ? WHERE id = ?", d);
+ 	}
+ 
+ 	// randomizecards

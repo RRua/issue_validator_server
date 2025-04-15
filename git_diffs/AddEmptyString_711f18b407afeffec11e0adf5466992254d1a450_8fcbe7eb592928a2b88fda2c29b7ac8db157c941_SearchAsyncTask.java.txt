@@ -1,0 +1,501 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+index 825126b0a..ff894315c 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/activities/MainActivity.java
+@@ -538,7 +538,7 @@ public class MainActivity extends PermissionsActivity
+           .subscribe(
+               () -> {
+                 if (tabFragment != null) {
+-                  tabFragment.refactorDrawerStorages(false);
++                  tabFragment.refactorDrawerStorages(false, false);
+                   Fragment main = tabFragment.getFragmentAtIndex(0);
+                   if (main != null) ((MainFragment) main).updateTabWithDb(tabHandler.findTab(1));
+                   Fragment main1 = tabFragment.getFragmentAtIndex(1);
+@@ -948,7 +948,7 @@ public class MainActivity extends PermissionsActivity
+           fragmentTransaction.remove(compressedExplorerFragment);
+           fragmentTransaction.commit();
+           supportInvalidateOptionsMenu();
+-          floatingActionButton.show();
++          showFab();
+         }
+       } else {
+         compressedExplorerFragment.mActionMode.finish();
+@@ -999,6 +999,16 @@ public class MainActivity extends PermissionsActivity
+   }
+ 
+   public void goToMain(String path) {
++    goToMain(path, false);
++  }
++
++  /**
++   * Sets up the main view with a {@link MainFragment}
++   *
++   * @param path The path to which to go in the {@link MainFragment}
++   * @param hideFab Whether the FAB should be hidden in the new created {@link MainFragment} or not
++   */
++  public void goToMain(String path, boolean hideFab) {
+     FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+     // title.setText(R.string.app_name);
+     TabFragment tabFragment = new TabFragment();
+@@ -1009,17 +1019,19 @@ public class MainActivity extends PermissionsActivity
+         path = "6";
+       }
+     }
++    Bundle b = new Bundle();
+     if (path != null && path.length() > 0) {
+-      Bundle b = new Bundle();
+       b.putString("path", path);
+-      tabFragment.setArguments(b);
+     }
++    // This boolean will be given to the newly created MainFragment
++    b.putBoolean(MainFragment.BUNDLE_HIDE_FAB, hideFab);
++    tabFragment.setArguments(b);
+     transaction.replace(R.id.content_frame, tabFragment);
+     // Commit the transaction
+     transaction.addToBackStack("tabt" + 1);
+     transaction.commitAllowingStateLoss();
+     appbar.setTitle(null);
+-    floatingActionButton.show();
++
+     if (isCompressedOpen && pathInCompressedArchive != null) {
+       openCompressed(pathInCompressedArchive);
+       pathInCompressedArchive = null;
+@@ -1527,7 +1539,11 @@ public class MainActivity extends PermissionsActivity
+   }
+ 
+   public void showFab() {
+-    showFab(getFAB());
++    if (getCurrentMainFragment() != null && getCurrentMainFragment().getHideFab()) {
++      hideFab();
++    } else {
++      showFab(getFAB());
++    }
+   }
+ 
+   private void showFab(SpeedDialView fab) {
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+index a6275417f..24ad0250e 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/MainFragment.java
+@@ -143,6 +143,9 @@ public class MainFragment extends Fragment
+   private static final Logger LOG = LoggerFactory.getLogger(MainFragment.class);
+   private static final String KEY_FRAGMENT_MAIN = "main";
+ 
++  /** Key for boolean in arguments whether to hide the FAB if this {@link MainFragment} is shown */
++  public static final String BUNDLE_HIDE_FAB = "hideFab";
++
+   public SwipeRefreshLayout mSwipeRefreshLayout;
+ 
+   public RecyclerAdapter adapter;
+@@ -168,6 +171,8 @@ public class MainFragment extends Fragment
+   private MainFragmentViewModel mainFragmentViewModel;
+   private MainActivityViewModel mainActivityViewModel;
+ 
++  private boolean hideFab = false;
++
+   private final ActivityResultLauncher<Intent> handleDocumentUriForRestrictedDirectories =
+       registerForActivityResult(
+           new ActivityResultContracts.StartActivityForResult(),
+@@ -207,6 +212,9 @@ public class MainFragment extends Fragment
+         requireMainActivity().getCurrentColorPreference().getPrimaryFirstTab());
+     mainFragmentViewModel.setPrimaryTwoColor(
+         requireMainActivity().getCurrentColorPreference().getPrimarySecondTab());
++    if (getArguments() != null) {
++      hideFab = getArguments().getBoolean(BUNDLE_HIDE_FAB, false);
++    }
+   }
+ 
+   @Override
+@@ -1073,6 +1081,7 @@ public class MainFragment extends Fragment
+     if (mainFragmentViewModel.getOpenMode() == OpenMode.CUSTOM
+         || mainFragmentViewModel.getOpenMode() == OpenMode.TRASH_BIN) {
+       loadlist(mainFragmentViewModel.getHome(), false, OpenMode.FILE, false);
++      setHideFab(false);
+       return;
+     }
+ 
+@@ -1081,6 +1090,7 @@ public class MainFragment extends Fragment
+     if (requireMainActivity().getListItemSelected()) {
+       adapter.toggleChecked(false);
+     } else {
++      setHideFab(false);
+       if (OpenMode.SMB.equals(mainFragmentViewModel.getOpenMode())) {
+         if (mainFragmentViewModel.getSmbPath() != null
+             && !mainFragmentViewModel.getSmbPath().equals(mainFragmentViewModel.getCurrentPath())) {
+@@ -1527,4 +1537,14 @@ public class MainFragment extends Fragment
+       LOG.warn("Failed to adjust scrollview for tv", e);
+     }
+   }
++
++  /** Whether the FAB should be hidden when this MainFragment is shown */
++  public boolean getHideFab() {
++    return this.hideFab;
++  }
++
++  /** Set whether the FAB should be hidden when this MainFragment is shown */
++  public void setHideFab(boolean hideFab) {
++    this.hideFab = hideFab;
++  }
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java b/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
+index 8bcd4081d..5c8a2950d 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/fragments/TabFragment.java
+@@ -126,8 +126,10 @@ public class TabFragment extends Fragment {
+ 
+     viewPager = rootView.findViewById(R.id.pager);
+ 
++    boolean hideFab = false;
+     if (getArguments() != null) {
+       path = getArguments().getString(KEY_PATH);
++      hideFab = getArguments().getBoolean(MainFragment.BUNDLE_HIDE_FAB);
+     }
+ 
+     requireMainActivity().supportInvalidateOptionsMenu();
+@@ -138,7 +140,7 @@ public class TabFragment extends Fragment {
+       int lastOpenTab = sharedPrefs.getInt(PREFERENCE_CURRENT_TAB, DEFAULT_CURRENT_TAB);
+       MainActivity.currentTab = lastOpenTab;
+ 
+-      refactorDrawerStorages(true);
++      refactorDrawerStorages(true, hideFab);
+ 
+       viewPager.setAdapter(sectionsPagerAdapter);
+ 
+@@ -299,6 +301,9 @@ public class TabFragment extends Fragment {
+         if (ma.getCurrentPath() != null) {
+           requireMainActivity().getDrawer().selectCorrectDrawerItemForPath(ma.getCurrentPath());
+           updateBottomBar(ma);
++          // FAB might be hidden in the previous tab
++          // so we check if it should be shown for the new tab
++          requireMainActivity().showFab();
+         }
+       }
+ 
+@@ -331,7 +336,7 @@ public class TabFragment extends Fragment {
+   }
+ 
+   private void addNewTab(int num, String path) {
+-    addTab(new Tab(num, path, path), "");
++    addTab(new Tab(num, path, path), "", false);
+   }
+ 
+   /**
+@@ -339,8 +344,10 @@ public class TabFragment extends Fragment {
+    * change paths in database. Calls should implement updating each tab's list for new paths.
+    *
+    * @param addTab whether new tabs should be added to ui or just change values in database
++   * @param hideFabInCurrentMainFragment whether the FAB should be hidden in the current {@link
++   *     MainFragment}
+    */
+-  public void refactorDrawerStorages(boolean addTab) {
++  public void refactorDrawerStorages(boolean addTab, boolean hideFabInCurrentMainFragment) {
+     TabHandler tabHandler = TabHandler.getInstance();
+     Tab tab1 = tabHandler.findTab(1);
+     Tab tab2 = tabHandler.findTab(2);
+@@ -366,22 +373,22 @@ public class TabFragment extends Fragment {
+     } else {
+       if (path != null && path.length() != 0) {
+         if (MainActivity.currentTab == 0) {
+-          addTab(tab1, path);
+-          addTab(tab2, "");
++          addTab(tab1, path, hideFabInCurrentMainFragment);
++          addTab(tab2, "", false);
+         }
+ 
+         if (MainActivity.currentTab == 1) {
+-          addTab(tab1, "");
+-          addTab(tab2, path);
++          addTab(tab1, "", false);
++          addTab(tab2, path, hideFabInCurrentMainFragment);
+         }
+       } else {
+-        addTab(tab1, "");
+-        addTab(tab2, "");
++        addTab(tab1, "", false);
++        addTab(tab2, "", false);
+       }
+     }
+   }
+ 
+-  private void addTab(@NonNull Tab tab, String path) {
++  private void addTab(@NonNull Tab tab, String path, boolean hideFabInTab) {
+     MainFragment main = new MainFragment();
+     Bundle b = new Bundle();
+ 
+@@ -394,6 +401,8 @@ public class TabFragment extends Fragment {
+ 
+     b.putString("home", tab.home);
+     b.putInt("no", tab.tabNumber);
++    // specifies if the constructed MainFragment hides the FAB when it is shown
++    b.putBoolean(MainFragment.BUNDLE_HIDE_FAB, hideFabInTab);
+     main.setArguments(b);
+     fragments.add(main);
+     sectionsPagerAdapter.notifyDataSetChanged();
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/views/appbar/SearchView.java b/app/src/main/java/com/amaze/filemanager/ui/views/appbar/SearchView.java
+index c23e072a1..afec6fd7e 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/views/appbar/SearchView.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/views/appbar/SearchView.java
+@@ -415,6 +415,7 @@ public class SearchView {
+     }
+ 
+     mainActivity.showSmokeScreen();
++    mainActivity.hideFab();
+ 
+     animator.setInterpolator(new AccelerateDecelerateInterpolator());
+     animator.setDuration(600);
+@@ -546,6 +547,7 @@ public class SearchView {
+ 
+     // removing background fade view
+     mainActivity.hideSmokeScreen();
++    mainActivity.showFab();
+     animator.setInterpolator(new AccelerateDecelerateInterpolator());
+     animator.setDuration(600);
+     animator.start();
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/views/drawer/Drawer.java b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/Drawer.java
+index 44b8b8579..2f1f604bc 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/views/drawer/Drawer.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/Drawer.java
+@@ -128,7 +128,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+       0; // number of storage available (internal/external/otg etc)
+   private boolean isDrawerLocked = false;
+   private FragmentTransaction pending_fragmentTransaction;
+-  private String pendingPath;
++  private PendingPath pendingPath;
+   private String firstPath = null, secondPath = null;
+ 
+   private DrawerLayout mDrawerLayout;
+@@ -308,7 +308,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             STORAGES_GROUP,
+             order++,
+             "OTG",
+-            new MenuMetadata(file),
++            new MenuMetadata(file, false),
+             R.drawable.ic_usb_white_24dp,
+             R.drawable.ic_show_chart_black_24dp,
+             Formatter.formatFileSize(mainActivity, freeSpace),
+@@ -322,7 +322,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             STORAGES_GROUP,
+             order++,
+             name,
+-            new MenuMetadata(file),
++            new MenuMetadata(file, false),
+             icon,
+             R.drawable.ic_show_chart_black_24dp,
+             Formatter.formatFileSize(mainActivity, freeSpace),
+@@ -344,7 +344,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+               SERVERS_GROUP,
+               order++,
+               file[0],
+-              new MenuMetadata(file[1]),
++              new MenuMetadata(file[1], false),
+               R.drawable.ic_settings_remote_white_24dp,
+               R.drawable.ic_edit_24dp);
+         }
+@@ -363,7 +363,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+               CLOUDS_GROUP,
+               order++,
+               CloudHandler.CLOUD_NAME_DROPBOX,
+-              new MenuMetadata(CloudHandler.CLOUD_PREFIX_DROPBOX + "/"),
++              new MenuMetadata(CloudHandler.CLOUD_PREFIX_DROPBOX + "/", false),
+               R.drawable.ic_dropbox_white_24dp,
+               deleteIcon);
+ 
+@@ -377,7 +377,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+               CLOUDS_GROUP,
+               order++,
+               CloudHandler.CLOUD_NAME_BOX,
+-              new MenuMetadata(CloudHandler.CLOUD_PREFIX_BOX + "/"),
++              new MenuMetadata(CloudHandler.CLOUD_PREFIX_BOX + "/", false),
+               R.drawable.ic_box_white_24dp,
+               deleteIcon);
+ 
+@@ -391,7 +391,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+               CLOUDS_GROUP,
+               order++,
+               CloudHandler.CLOUD_NAME_ONE_DRIVE,
+-              new MenuMetadata(CloudHandler.CLOUD_PREFIX_ONE_DRIVE + "/"),
++              new MenuMetadata(CloudHandler.CLOUD_PREFIX_ONE_DRIVE + "/", false),
+               R.drawable.ic_onedrive_white_24dp,
+               deleteIcon);
+ 
+@@ -405,7 +405,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+               CLOUDS_GROUP,
+               order++,
+               CloudHandler.CLOUD_NAME_GOOGLE_DRIVE,
+-              new MenuMetadata(CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE + "/"),
++              new MenuMetadata(CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE + "/", false),
+               R.drawable.ic_google_drive_white_24dp,
+               deleteIcon);
+ 
+@@ -430,7 +430,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+                 FOLDERS_GROUP,
+                 order++,
+                 file[0],
+-                new MenuMetadata(file[1]),
++                new MenuMetadata(file[1], false),
+                 R.drawable.ic_folder_white_24dp,
+                 R.drawable.ic_edit_24dp);
+           }
+@@ -451,7 +451,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.quick,
+-            new MenuMetadata("5"),
++            new MenuMetadata("5", true),
+             R.drawable.ic_star_white_24dp,
+             null);
+       }
+@@ -461,7 +461,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.recent,
+-            new MenuMetadata("6"),
++            new MenuMetadata("6", true),
+             R.drawable.ic_history_white_24dp,
+             null);
+       }
+@@ -471,7 +471,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.images,
+-            new MenuMetadata("0"),
++            new MenuMetadata("0", true),
+             R.drawable.ic_photo_library_white_24dp,
+             null);
+       }
+@@ -481,7 +481,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.videos,
+-            new MenuMetadata("1"),
++            new MenuMetadata("1", true),
+             R.drawable.ic_video_library_white_24dp,
+             null);
+       }
+@@ -491,7 +491,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.audio,
+-            new MenuMetadata("2"),
++            new MenuMetadata("2", true),
+             R.drawable.ic_library_music_white_24dp,
+             null);
+       }
+@@ -501,7 +501,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.documents,
+-            new MenuMetadata("3"),
++            new MenuMetadata("3", true),
+             R.drawable.ic_library_books_white_24dp,
+             null);
+       }
+@@ -511,7 +511,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+             QUICKACCESSES_GROUP,
+             order++,
+             R.string.apks,
+-            new MenuMetadata("4"),
++            new MenuMetadata("4", true),
+             R.drawable.ic_apk_library_white_24dp,
+             null);
+       }
+@@ -596,7 +596,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+         LASTGROUP,
+         order++,
+         R.string.trash_bin,
+-        new MenuMetadata("7"),
++        new MenuMetadata("7", true),
+         R.drawable.round_delete_outline_24,
+         null);
+ 
+@@ -778,20 +778,22 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+     }
+ 
+     if (pendingPath != null) {
+-      HybridFile hFile = new HybridFile(OpenMode.UNKNOWN, pendingPath);
++      HybridFile hFile = new HybridFile(OpenMode.UNKNOWN, pendingPath.getPath());
+       hFile.generateMode(mainActivity);
+       if (hFile.isSimpleFile()) {
+-        FileUtils.openFile(new File(pendingPath), mainActivity, mainActivity.getPrefs());
++        FileUtils.openFile(new File(pendingPath.getPath()), mainActivity, mainActivity.getPrefs());
+         resetPendingPath();
+         return;
+       }
+ 
+       MainFragment mainFragment = mainActivity.getCurrentMainFragment();
+       if (mainFragment != null) {
+-        mainFragment.loadlist(pendingPath, false, OpenMode.UNKNOWN, false);
++        mainFragment.loadlist(pendingPath.getPath(), false, OpenMode.UNKNOWN, false);
++        // Set if the FAB should be hidden when displaying the pendingPath
++        mainFragment.setHideFab(pendingPath.getHideFabInMainFragment());
+         resetPendingPath();
+       } else {
+-        mainActivity.goToMain(pendingPath);
++        mainActivity.goToMain(pendingPath.getPath(), pendingPath.getHideFabInMainFragment());
+         resetPendingPath();
+         return;
+       }
+@@ -845,7 +847,7 @@ public class Drawer implements NavigationView.OnNavigationItemSelectedListener {
+                   });
+           dialog.show();
+         } else {
+-          pendingPath = meta.path;
++          pendingPath = new PendingPath(meta.path, meta.hideFabInMainFragment);
+           closeIfNotLocked();
+           if (isLocked()) {
+             onDrawerClosed();
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/views/drawer/MenuMetadata.java b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/MenuMetadata.java
+index af2b98b8d..bfcc7ee4e 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/views/drawer/MenuMetadata.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/MenuMetadata.java
+@@ -26,17 +26,20 @@ public final class MenuMetadata {
+ 
+   public final int type;
+   public final String path;
++  public final boolean hideFabInMainFragment;
+   public final OnClickListener onClickListener;
+ 
+-  public MenuMetadata(String path) {
++  public MenuMetadata(String path, boolean hideFabInMainFragment) {
+     this.type = ITEM_ENTRY;
+     this.path = path;
++    this.hideFabInMainFragment = hideFabInMainFragment;
+     this.onClickListener = null;
+   }
+ 
+   public MenuMetadata(OnClickListener onClickListener) {
+     this.type = ITEM_INTENT;
+     this.onClickListener = onClickListener;
++    this.hideFabInMainFragment = false;
+     this.path = null;
+   }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/views/drawer/PendingPath.kt b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/PendingPath.kt
+new file mode 100644
+index 000000000..ec0721288
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/ui/views/drawer/PendingPath.kt
+@@ -0,0 +1,23 @@
++/*
++ * Copyright (C) 2014-2024 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.ui.views.drawer
++
++data class PendingPath(val path: String, val hideFabInMainFragment: Boolean)

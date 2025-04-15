@@ -1,0 +1,1137 @@
+diff --git a/app/src/main/java/com/aravi/dotpro/activities/main/MainActivity.java b/app/src/main/java/com/aravi/dot/activities/main/MainActivity.java
+similarity index 66%
+rename from app/src/main/java/com/aravi/dotpro/activities/main/MainActivity.java
+rename to app/src/main/java/com/aravi/dot/activities/main/MainActivity.java
+index d867141..3344350 100644
+--- a/app/src/main/java/com/aravi/dotpro/activities/main/MainActivity.java
++++ b/app/src/main/java/com/aravi/dot/activities/main/MainActivity.java
+@@ -15,27 +15,35 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
+-package com.aravi.dotpro.activities.main;
++package com.aravi.dot.activities.main;
+ 
++import android.Manifest;
+ import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
++import android.content.pm.PackageManager;
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.provider.Settings;
+ import android.text.TextUtils;
+ import android.view.accessibility.AccessibilityManager;
++import android.widget.Toast;
+ 
+ import androidx.appcompat.app.AppCompatActivity;
++import androidx.core.app.ActivityCompat;
++import androidx.core.content.ContextCompat;
+ 
+-import com.aravi.dotpro.BuildConfig;
+-import com.aravi.dotpro.R;
+-import com.aravi.dotpro.Utils;
+-import com.aravi.dotpro.activities.log.LogsActivity;
+-import com.aravi.dotpro.databinding.ActivityMainBinding;
+-import com.aravi.dotpro.manager.PreferenceManager;
+-import com.aravi.dotpro.service.DotService;
++import com.aravi.dot.BuildConfig;
++import com.aravi.dot.R;
++import com.aravi.dot.activities.custom.CustomisationActivity;
++import com.aravi.dot.activities.log.LogsActivity;
++import com.aravi.dot.databinding.ActivityMainBinding;
++import com.aravi.dot.manager.AdvertisementManager;
++import com.aravi.dot.manager.PreferenceManager;
++import com.aravi.dot.service.DotService;
++import com.aravi.dot.util.Utils;
++import com.facebook.ads.InterstitialAd;
+ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+ import com.google.android.material.snackbar.Snackbar;
+ 
+@@ -43,10 +51,11 @@ import com.google.android.material.snackbar.Snackbar;
+ public class MainActivity extends AppCompatActivity {
+     private static final int MY_REQUEST_CODE = 1802;
+     private boolean TRIGGERED_START = false;
+-
+     private PreferenceManager sharedPreferenceManager;
+     private Intent serviceIntent;
++    private AdvertisementManager advertisementManager;
+     private ActivityMainBinding mBinding;
++    private InterstitialAd interstitialAd;
+ 
+     @Override
+     protected void onStart() {
+@@ -62,13 +71,44 @@ public class MainActivity extends AppCompatActivity {
+         mBinding = ActivityMainBinding.inflate(getLayoutInflater());
+         setContentView(mBinding.getRoot());
+         sharedPreferenceManager = PreferenceManager.getInstance(getApplication());
++        advertisementManager = AdvertisementManager.getInstance(getApplication());
++        loadFromPrefs();
+         init();
++        loadAd();
+         checkAutoStartRequirement();
+     }
+ 
+-    private void init() {
++    private void loadAd() {
++        interstitialAd = new InterstitialAd(this, "-----");
++        interstitialAd.loadAd();
++        advertisementManager.setBannerAd(mBinding.adLayout);
++    }
++
++    private void loadFromPrefs() {
+         mBinding.vibrationSwitch.setChecked(sharedPreferenceManager.isVibrationEnabled());
++        mBinding.locationSwitch.setChecked(sharedPreferenceManager.isLocationEnabled());
++        mBinding.mainSwitch.setChecked(sharedPreferenceManager.isServiceEnabled());
++    }
++
++    private void init() {
++        mBinding.locationSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
++            if (isChecked) {
++                if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
++                    new MaterialAlertDialogBuilder(MainActivity.this)
++                            .setIcon(ContextCompat.getDrawable(MainActivity.this, R.drawable.ic_round_location))
++                            .setTitle("Requires Location Permission")
++                            .setMessage("This features requires LOCATION PERMISSION to work as expected\n\nNOTE: This app doesn't have permission to connect to internet so your data is safe on your device.")
++                            .setNeutralButton("Later", (dialog, which) -> mBinding.locationSwitch.setChecked(false))
++                            .setPositiveButton("Continue", (dialog, which) -> {
++                                askPermission(Manifest.permission.ACCESS_FINE_LOCATION);
++                            })
++                            .show();
++                } else {
++                    sharedPreferenceManager.setLocationEnabled(true);
++                }
++            }
+ 
++        });
+         mBinding.vibrationSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> sharedPreferenceManager.setVibrationEnabled(isChecked));
+         mBinding.mainSwitch.setOnCheckedChangeListener((buttonView, b) -> {
+             if (b) {
+@@ -79,22 +119,14 @@ public class MainActivity extends AppCompatActivity {
+                 TRIGGERED_START = false;
+             }
+         });
+-        mBinding.align.setOnCheckedChangeListener((group, i) -> {
+-            // fixed: Resource IDs will be non-final in Android Gradle Plugin version 5.0, avoid using them in switch case statements
+-            // fix source : http://tools.android.com/tips/non-constant-fields
+-            if (i == R.id.topLeft) {
+-                sharedPreferenceManager.setPosition(0);
+-            } else if (i == R.id.topRight) {
+-                sharedPreferenceManager.setPosition(1);
+-            }
+-        });
+-
+         mBinding.twitterButton.setOnClickListener(v -> openWeb("https://www.twitter.com/kamaravichow"));
+         mBinding.githubButton.setOnClickListener(v -> openWeb("https://www.github.com/kamaravichow"));
+         mBinding.logsOption.setOnClickListener(view -> {
+             Intent intent = new Intent(MainActivity.this, LogsActivity.class);
+             startActivity(intent);
+         });
++        mBinding.customisationOption.setOnClickListener(v -> startActivity(new Intent(MainActivity.this, CustomisationActivity.class)));
++
+         mBinding.shareOption.setOnClickListener(v -> {
+             Intent shareIntent = new Intent();
+             shareIntent.setAction(Intent.ACTION_SEND);
+@@ -102,10 +134,12 @@ public class MainActivity extends AppCompatActivity {
+             shareIntent.setType("text/plain");
+             startActivity(shareIntent);
+         });
++
+         mBinding.versionText.setText("Version - " + BuildConfig.VERSION_NAME);
+     }
+ 
+     private void checkForAccessibilityAndStart() {
++
+         if (!accessibilityPermission(getApplicationContext(), DotService.class)) {
+             mBinding.mainSwitch.setChecked(false);
+             new MaterialAlertDialogBuilder(this)
+@@ -130,11 +164,11 @@ public class MainActivity extends AppCompatActivity {
+ 
+     private void stopService() {
+         if (isAccessibilityServiceRunning()) {
+-            sharedPreferenceManager.setServiceEnabled(false);
++//            sharedPreferenceManager.setServiceEnabled(false);
+             Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+             startActivity(intent);
++            Toast.makeText(this, getString(R.string.close_app_note), Toast.LENGTH_SHORT).show();
+         }
+-        showSnack(getString(R.string.close_app_note));
+     }
+ 
+ //    @Override
+@@ -172,12 +206,12 @@ public class MainActivity extends AppCompatActivity {
+     }
+ 
+ 
+-    private void sendFeedbackEmail() {
+-        Intent emailIntent = new Intent(Intent.ACTION_SENDTO, Uri.fromParts("mailto", getString(R.string.feedback_email_address), null));
+-        emailIntent.putExtra(Intent.EXTRA_SUBJECT, getString(R.string.feedback_subject));
+-        emailIntent.putExtra(Intent.EXTRA_TEXT, "Device Information : \n----- Don't clear these ----\n " + Build.DEVICE + " ,\n " + Build.BOARD + " ,\n " + Build.BRAND + " , " + Build.MANUFACTURER + " ,\n " + Build.MODEL + "\n ------ ");
+-        startActivity(Intent.createChooser(emailIntent, "Send feedback..."));
+-    }
++//    private void sendFeedbackEmail() {
++//        Intent emailIntent = new Intent(Intent.ACTION_SENDTO, Uri.fromParts("mailto", getString(R.string.feedback_email_address), null));
++//        emailIntent.putExtra(Intent.EXTRA_SUBJECT, getString(R.string.feedback_subject));
++//        emailIntent.putExtra(Intent.EXTRA_TEXT, "Device Information : \n----- Don't clear these ----\n " + Build.DEVICE + " ,\n " + Build.BOARD + " ,\n " + Build.BRAND + " , " + Build.MANUFACTURER + " ,\n " + Build.MODEL + "\n ------ ");
++//        startActivity(Intent.createChooser(emailIntent, "Send feedback..."));
++//    }
+ 
+ 
+     /**
+@@ -213,6 +247,19 @@ public class MainActivity extends AppCompatActivity {
+         startActivity(i);
+     }
+ 
++
++    /**
++     * Asks permission runtime
++     *
++     * @param permission
++     */
++    private void askPermission(String permission) {
++        if (!(ContextCompat.checkSelfPermission(this, permission) == 0)) {
++            requestPermissions(new String[]{permission}, 0);
++            sharedPreferenceManager.setLocationEnabled(true);
++        }
++    }
++
+     /**
+      * Chinese ROM's kill the app services frequently so AutoStart Permission is required
+      */
+@@ -223,12 +270,22 @@ public class MainActivity extends AppCompatActivity {
+                     || ("oppo".equalsIgnoreCase(manufacturer))
+                     || ("vivo".equalsIgnoreCase(manufacturer))
+                     || ("Honor".equalsIgnoreCase(manufacturer))) {
+-                Utils.showAutoStartDialog(MainActivity.this);
++                Utils.showAutoStartDialog(MainActivity.this, manufacturer);
+                 sharedPreferenceManager.setFirstLaunch();
+             }
+         }
+     }
+ 
++
++    @Override
++    protected void onPostResume() {
++        assert interstitialAd != null;
++        if (interstitialAd.isAdLoaded()) {
++            interstitialAd.show();
++        }
++        super.onPostResume();
++    }
++
+     @Override
+     protected void onDestroy() {
+         super.onDestroy();
+diff --git a/app/src/main/java/com/aravi/dot/helper/ApplicationHelper.java b/app/src/main/java/com/aravi/dot/helper/ApplicationHelper.java
+new file mode 100755
+index 0000000..40f36db
+--- /dev/null
++++ b/app/src/main/java/com/aravi/dot/helper/ApplicationHelper.java
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2021.  Aravind Chowdary (@kamaravichow)
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.aravi.dot.helper;
++
++import android.app.Application;
++
++public class ApplicationHelper {
++    private static final String TAG = ApplicationHelper.class.getSimpleName();
++    private static final String REMAINDER_CHANNEL = "REMINDER_CHANNEL";
++
++    public static void initApplicationHelper(Application application) {
++    }
++
++}
+diff --git a/app/src/main/java/com/aravi/dot/manager/PreferenceManager.java b/app/src/main/java/com/aravi/dot/manager/PreferenceManager.java
+new file mode 100644
+index 0000000..399143d
+--- /dev/null
++++ b/app/src/main/java/com/aravi/dot/manager/PreferenceManager.java
+@@ -0,0 +1,168 @@
++/*
++ * Copyright (C) 2021.  Aravind Chowdary (@kamaravichow)
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.aravi.dot.manager;
++
++import android.annotation.SuppressLint;
++import android.app.Application;
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import androidx.core.content.res.ResourcesCompat;
++
++import com.aravi.dot.constant.Constants;
++import com.aravi.dot.R;
++
++public class PreferenceManager {
++    private static PreferenceManager instance;
++    private Application application;
++    private SharedPreferences sharedPreferences;
++    private SharedPreferences.Editor prefEditor;
++
++
++    private class PREF_CONSTANTS {
++        public static final String SERVICE_KEY = "me.aravi.dot.SERVICE";
++        public static final String VIBRATION_KEY = "me.aravi.dot.CUSTOM.VIBRATION";
++        public static final String PLACEMENT_KEY = "me.aravi.dot.ALIGNMENT";
++        public static final String ICON_KEY = "me.aravi.dot.ICON";
++
++        public static final String CAMERA_KEY = "me.aravi.dot.CAMERA";
++        public static final String MIC_KEY = "me.aravi.dot.MICROPHONE";
++        public static final String LOCATION_KEY = "me.aravi.dot.LOCATION";
++
++        public static final String CAMERA_DOT_COLOR = "dot.camera.color";
++        public static final String MIC_DOT_COLOR = "dot.mic.color";
++        public static final String LOC_DOT_COLOR = "dot.loc.color";
++    }
++
++
++    public static PreferenceManager getInstance(Application application) {
++        if (instance == null) {
++            instance = new PreferenceManager(application);
++        }
++        return instance;
++    }
++
++    @SuppressLint("CommitPrefEdits")
++    public PreferenceManager(Application application) {
++        this.application = application;
++        this.sharedPreferences = application.getSharedPreferences(Constants.SHARED_PREFERENCE_NAME, Context.MODE_PRIVATE);
++        this.prefEditor = sharedPreferences.edit();
++    }
++
++
++    public boolean isServiceEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.SERVICE_KEY, false);
++    }
++
++    public void setServiceEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.SERVICE_KEY, set).apply();
++    }
++
++
++    public boolean isVibrationEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.VIBRATION_KEY, false);
++    }
++
++    public void setVibrationEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.VIBRATION_KEY, set).apply();
++    }
++
++    // --------- Mic customisations ------------
++
++    public boolean isMicEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.MIC_KEY, true);
++    }
++
++    public void setMicEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.MIC_KEY, set).apply();
++    }
++
++    public int getMicDotColor() {
++        return sharedPreferences.getInt(PREF_CONSTANTS.MIC_DOT_COLOR, ResourcesCompat.getColor(application.getResources(), R.color.orange_500, null));
++    }
++
++    public void setMicDotColor(int color) {
++        prefEditor.putInt(PREF_CONSTANTS.MIC_DOT_COLOR, color).apply();
++    }
++
++    // --------- Camera customisations ------------
++
++    public boolean isCameraEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.CAMERA_KEY, true);
++    }
++
++    public void setCameraEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.CAMERA_KEY, set).apply();
++    }
++
++    public int getCameraDotColor() {
++        return sharedPreferences.getInt(PREF_CONSTANTS.CAMERA_DOT_COLOR, application.getColor(R.color.green_500));
++    }
++
++    public void setCameraDotColor(int color) {
++        prefEditor.putInt(PREF_CONSTANTS.CAMERA_DOT_COLOR, color).apply();
++    }
++
++
++    // --------- Location customisations ------------
++    public boolean isLocationEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.LOCATION_KEY, false);
++    }
++
++    public void setLocationEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.LOCATION_KEY, set).apply();
++    }
++
++    public int getLocationDotColor() {
++        return sharedPreferences.getInt(PREF_CONSTANTS.LOC_DOT_COLOR, ResourcesCompat.getColor(application.getResources(), R.color.purple_500, null));
++    }
++
++    public void setLocationDotColor(int color) {
++        prefEditor.putInt(PREF_CONSTANTS.LOC_DOT_COLOR, color).apply();
++    }
++
++
++    // --------- Dot customisations ------------
++    public int getDotPosition() {
++        return sharedPreferences.getInt(PREF_CONSTANTS.PLACEMENT_KEY, 1);
++    }
++
++    public void setDotPostion(int set) {
++        prefEditor.putInt(PREF_CONSTANTS.PLACEMENT_KEY, set).apply();
++    }
++
++    public boolean isIconsEnabled() {
++        return sharedPreferences.getBoolean(PREF_CONSTANTS.ICON_KEY, true);
++    }
++
++    public void setIconsEnabled(boolean set) {
++        prefEditor.putBoolean(PREF_CONSTANTS.ICON_KEY, set).apply();
++    }
++
++
++    //--------- App -------
++
++    public boolean isFirstLaunch() {
++        return sharedPreferences.getBoolean("is_first", true);
++    }
++
++    public void setFirstLaunch() {
++        prefEditor.putBoolean("is_first", false).apply();
++    }
++
++}
+diff --git a/app/src/main/java/com/aravi/dotpro/model/Logs.java b/app/src/main/java/com/aravi/dot/model/Logs.java
+similarity index 81%
+rename from app/src/main/java/com/aravi/dotpro/model/Logs.java
+rename to app/src/main/java/com/aravi/dot/model/Logs.java
+index dc08e8f..ec65a05 100644
+--- a/app/src/main/java/com/aravi/dotpro/model/Logs.java
++++ b/app/src/main/java/com/aravi/dot/model/Logs.java
+@@ -1,4 +1,4 @@
+-package com.aravi.dotpro.model;
++package com.aravi.dot.model;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.room.Entity;
+@@ -15,12 +15,14 @@ public class Logs implements Serializable {
+     private String packageName;
+     private int camera_state;
+     private int mic_state;
++    private int loc_state;
+ 
+-    public Logs(long timestamp, String packageName, int camera_state, int mic_state) {
++    public Logs(long timestamp, String packageName, int camera_state, int mic_state, int loc_state) {
+         this.timestamp = timestamp;
+         this.packageName = packageName;
+         this.camera_state = camera_state;
+         this.mic_state = mic_state;
++        this.loc_state = loc_state;
+     }
+ 
+     public long getTimestamp() {
+@@ -54,4 +56,12 @@ public class Logs implements Serializable {
+     public void setMic_state(int mic_state) {
+         this.mic_state = mic_state;
+     }
++
++    public int getLoc_state() {
++        return loc_state;
++    }
++
++    public void setLoc_state(int loc_state) {
++        this.loc_state = loc_state;
++    }
+ }
+diff --git a/app/src/main/java/com/aravi/dotpro/service/DotService.java b/app/src/main/java/com/aravi/dot/service/DotService.java
+similarity index 67%
+rename from app/src/main/java/com/aravi/dotpro/service/DotService.java
+rename to app/src/main/java/com/aravi/dot/service/DotService.java
+index 3940985..d0a4125 100644
+--- a/app/src/main/java/com/aravi/dotpro/service/DotService.java
++++ b/app/src/main/java/com/aravi/dot/service/DotService.java
+@@ -1,4 +1,4 @@
+-package com.aravi.dotpro.service;
++package com.aravi.dot.service;
+ 
+ import android.Manifest;
+ import android.accessibilityservice.AccessibilityService;
+@@ -9,13 +9,14 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ServiceInfo;
+-import android.graphics.Color;
+ import android.graphics.PixelFormat;
++import android.graphics.PorterDuff;
++import android.graphics.drawable.Drawable;
+ import android.hardware.camera2.CameraManager;
+ import android.location.GnssStatus;
+-import android.location.Location;
+ import android.location.LocationListener;
+ import android.location.LocationManager;
++import android.media.AudioAttributes;
+ import android.media.AudioManager;
+ import android.media.AudioRecordingConfiguration;
+ import android.os.Build;
+@@ -30,24 +31,26 @@ import android.view.accessibility.AccessibilityEvent;
+ import android.widget.FrameLayout;
+ import android.widget.ImageView;
+ 
+-import androidx.annotation.NonNull;
+ import androidx.core.app.ActivityCompat;
+ import androidx.core.app.NotificationCompat;
+ import androidx.core.app.NotificationManagerCompat;
+-
+-import com.aravi.dotpro.BuildConfig;
+-import com.aravi.dotpro.Constants;
+-import com.aravi.dotpro.R;
+-import com.aravi.dotpro.Utils;
+-import com.aravi.dotpro.activities.log.LogsRepository;
+-import com.aravi.dotpro.activities.main.MainActivity;
+-import com.aravi.dotpro.manager.PreferenceManager;
+-import com.aravi.dotpro.model.Logs;
++import androidx.core.content.ContextCompat;
++import androidx.lifecycle.MutableLiveData;
++
++import com.aravi.dot.BuildConfig;
++import com.aravi.dot.constant.Constants;
++import com.aravi.dot.R;
++import com.aravi.dot.util.Utils;
++import com.aravi.dot.activities.log.database.LogsRepository;
++import com.aravi.dot.activities.main.MainActivity;
++import com.aravi.dot.manager.PreferenceManager;
++import com.aravi.dot.model.Logs;
+ 
+ import java.util.List;
+ 
++import static android.app.PendingIntent.FLAG_IMMUTABLE;
+ import static android.app.PendingIntent.FLAG_UPDATE_CURRENT;
+-import static com.aravi.dotpro.Constants.NOTIFICATION_ID;
++import static com.aravi.dot.constant.Constants.NOTIFICATION_ID;
+ 
+ 
+ public class DotService extends AccessibilityService {
+@@ -56,10 +59,12 @@ public class DotService extends AccessibilityService {
+     private LogsRepository mLogsRepository;
+     private boolean isCameraUnavailable = false;
+     private boolean isMicUnavailable = false;
++    private boolean isLocUnavailable = false;
+     private final boolean isOnUseNotificationEnabled = true;
+ 
+     private boolean didCameraUseStart = false;
+     private boolean didMicUseStart = false;
++    private boolean didLocUseStart = false;
+ 
+     private FrameLayout hoverLayout;
+     private ImageView dotCamera, dotMic, dotLoc;
+@@ -79,6 +84,7 @@ public class DotService extends AccessibilityService {
+     private NotificationManagerCompat notificationManager;
+     private NotificationCompat.Builder notificationCompatBuilder;
+     private String currentRunningAppPackage = BuildConfig.APPLICATION_ID;
++    private MutableLiveData<String> currentLivePackage = new MutableLiveData<>();
+ 
+ 
+     @Override
+@@ -90,19 +96,27 @@ public class DotService extends AccessibilityService {
+     public void onCreate() {
+         super.onCreate();
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            final NotificationCompat.Builder builder = new NotificationCompat.Builder(getApplicationContext(), Constants.SERVICE_NOTIFICATION_CHANNEL);
+-            final Notification n = builder.setLocalOnly(true)
+-                    .setCategory(Notification.CATEGORY_SERVICE)
+-                    .setPriority(NotificationCompat.PRIORITY_MIN)
++            Intent notificationIntent = new Intent(this, MainActivity.class);
++            PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
++
++            Notification notification = new Notification.Builder(this, Constants.SERVICE_NOTIFICATION_CHANNEL)
++                    .setContentTitle("SafeDot")
++                    .setContentText("SafeDot is protecting your privacy")
+                     .setSmallIcon(R.drawable.transparent)
++                    .setContentIntent(pendingIntent)
++                    .setTicker("Safedot protection is now turned on")
+                     .build();
+ 
++            currentLivePackage.setValue(BuildConfig.APPLICATION_ID);
++
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+-                startForeground(3, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
++                startForeground(3, notification,
++                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
++                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
++                                | ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+             } else {
+-                startForeground(3, n);
++                startForeground(3, notification);
+             }
+-
+         }
+ 
+         getDefaults();
+@@ -134,35 +148,12 @@ public class DotService extends AccessibilityService {
+             locationManager.removeUpdates(locationListener);
+ 
+         } else {
+-
++            sharedPreferenceManager.setLocationEnabled(false);
+         }
+ 
+     }
+ 
+ 
+-    // Location service Callbacks
+-    private LocationListener locationListener = new LocationListener() {
+-        @Override
+-        public void onLocationChanged(@NonNull Location location) {
+-
+-        }
+-    };
+-
+-    private GnssStatus.Callback locationCallback = new GnssStatus.Callback() {
+-        @Override
+-        public void onStarted() {
+-            super.onStarted();
+-            Log.i(TAG, "location: started");
+-        }
+-
+-        @Override
+-        public void onStopped() {
+-            super.onStopped();
+-            Log.i(TAG, "location: stopped");
+-        }
+-    };
+-
+-
+     // Camera service callbacks
+     private CameraManager.AvailabilityCallback getCameraCallback() {
+         cameraCallback = new CameraManager.AvailabilityCallback() {
+@@ -216,14 +207,49 @@ public class DotService extends AccessibilityService {
+                     didMicUseStart = true;
+                     makeLog();
+                 }
+-
+-
+             }
+         };
+         return micCallback;
+     }
+ 
+ 
++    // Location service Callbacks
++    private LocationListener locationListener = location -> {
++        if (Constants.isDebug()) {
++            Log.i(TAG, "location: " + location.toString());
++        }
++    };
++
++    private GnssStatus.Callback locationCallback = new GnssStatus.Callback() {
++        @Override
++        public void onStarted() {
++            super.onStarted();
++            if (sharedPreferenceManager.isLocationEnabled()) {
++                didLocUseStart = true;
++                isLocUnavailable = true;
++                showLocDot();
++                triggerVibration();
++                makeLog();
++                showOnUseNotification();
++            }
++
++        }
++
++        @Override
++        public void onStopped() {
++            super.onStopped();
++            if (sharedPreferenceManager.isLocationEnabled()) {
++                hideLocDot();
++                isLocUnavailable = false;
++                didLocUseStart = true;
++                makeLog();
++                dismissOnUseNotification();
++            }
++
++        }
++    };
++
++
+     /*
+      * Notification alert when app is accessing your privacy sensors
+      * Takes in the variable of app in last accessibility event
+@@ -240,20 +266,24 @@ public class DotService extends AccessibilityService {
+         notificationManager = NotificationManagerCompat.from(getApplicationContext());
+     }
+ 
+-    /*
+-    Generates the notification title
++    /**
++     * Generates the notification title
+      */
+     private String getNotificationTitle() {
+-        if (isCameraUnavailable && isMicUnavailable)
+-            return "Camera and Mic are being accessed";
+-        if (isCameraUnavailable && !isMicUnavailable)
+-            return "Camera is being accessed";
+-        if (!isCameraUnavailable && isMicUnavailable)
+-            return "Mic is being accessed";
+-        return "Your Camera or Mic is ON";
++        String title = "Your ";
++        if (isCameraUnavailable) {
++            title = title + "CAMERA, ";
++        }
++        if (isMicUnavailable) {
++            title = title + "MIC, ";
++        }
++        if (isLocUnavailable) {
++            title = title + "LOCATION";
++        }
++        return title + " are being monitored";
+     }
+ 
+-    /*
++    /**
+      * Generates the notification description
+      * Takes in the currently running application name from last accessibility event
+      */
+@@ -261,13 +291,17 @@ public class DotService extends AccessibilityService {
+         if (appUsingComponent.isEmpty() || appUsingComponent.equals("(unknown)")) {
+             appUsingComponent = "some app";
+         }
+-        if (isCameraUnavailable && isMicUnavailable)
+-            return "Hey, " + appUsingComponent + " is watching and hearing you";
+-        if (isCameraUnavailable && !isMicUnavailable)
+-            return "You're being watched by " + appUsingComponent + "!";
+-        if (!isCameraUnavailable && isMicUnavailable)
+-            return Utils.capitalizeFirstLetterOfString(appUsingComponent) + " is hearing you !";
+-        return "Looks like " + appUsingComponent + " is using your camera and mic...";
++        String description = appUsingComponent + " is using your ";
++        if (isCameraUnavailable) {
++            description = description + "CAMERA, ";
++        }
++        if (isMicUnavailable) {
++            description = description + "MIC, ";
++        }
++        if (isLocUnavailable) {
++            description = description + "LOCATION";
++        }
++        return description;
+     }
+ 
+ 
+@@ -302,6 +336,7 @@ public class DotService extends AccessibilityService {
+         int micState = 0;
+         int locState = 0;
+ 
++        // sets the state of camera
+         if (didCameraUseStart && isCameraUnavailable) {
+             cameraState = 1;
+         } else {
+@@ -311,6 +346,7 @@ public class DotService extends AccessibilityService {
+             }
+         }
+ 
++        // sets the state of mic
+         if (didMicUseStart && isMicUnavailable) {
+             micState = 1;
+         } else {
+@@ -319,8 +355,20 @@ public class DotService extends AccessibilityService {
+                 didMicUseStart = false;
+             }
+         }
+-        if (!currentRunningAppPackage.equals("com.aravi.dotpro")) {
+-            Logs log = new Logs(System.currentTimeMillis(), currentRunningAppPackage, cameraState, micState);
++
++        // sets the state of location
++        if (didLocUseStart && isLocUnavailable) {
++            locState = 1;
++        } else {
++            if (didLocUseStart && !isLocUnavailable) {
++                locState = 2;
++                didLocUseStart = false;
++            }
++        }
++
++
++        if (!currentRunningAppPackage.equals(BuildConfig.APPLICATION_ID)) {
++            Logs log = new Logs(System.currentTimeMillis(), currentRunningAppPackage, cameraState, micState, locState);
+             mLogsRepository.insertLog(log);
+         }
+     }
+@@ -329,85 +377,136 @@ public class DotService extends AccessibilityService {
+     // CUSTOMISATION SETTINGS
+ 
+     private void setDotCustomColors() {
+-        setViewTint(dotCamera, "#4CAF50");
+-        setViewTint(dotMic, "#FF9800");
++        setViewTint(dotCamera, sharedPreferenceManager.getCameraDotColor());
++        setViewTint(dotMic, sharedPreferenceManager.getMicDotColor());
++        setViewTint(dotLoc, sharedPreferenceManager.getLocationDotColor());
+     }
+ 
+-    private void setViewTint(ImageView imageView, String hex) {
+-        imageView.setColorFilter(Color.parseColor(hex), android.graphics.PorterDuff.Mode.SRC_IN);
++    private void setViewTint(ImageView imageView, int color) {
++        Drawable drawable = ContextCompat.getDrawable(getApplicationContext(), R.drawable.ic_dot);
++        drawable.setColorFilter(color, PorterDuff.Mode.SRC_ATOP);
++        Log.i(TAG, "setViewTint: camera color " + color);
++        imageView.setBackground(drawable);
+     }
+ 
++    /**
++     * For android versions below oreo gives a vibration of 500ms
++     * For O above with effect - DEFAULT_AMPLITUDE
++     * for Q above with effect - EFFECT_HEAVY_CLICK
++     * todo make vibration pattern
++     */
+     private void triggerVibration() {
++
++        AudioAttributes audioAttributes = new AudioAttributes.Builder()
++                .setFlags(FLAG_IMMUTABLE)
++                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
++                .build();
++
+         if (sharedPreferenceManager.isVibrationEnabled()) {
+             Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                 v.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE));
++            }
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++                v.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.EFFECT_HEAVY_CLICK));
+             } else {
+                 v.vibrate(500);
++
+             }
+         }
+     }
+ 
++    private void getIconsEnabled() {
++        if (sharedPreferenceManager.isIconsEnabled()) {
++            dotCamera.setImageDrawable(ContextCompat.getDrawable(getApplicationContext(), R.drawable.ic_round_camera));
++            dotMic.setImageDrawable(ContextCompat.getDrawable(getApplicationContext(), R.drawable.ic_round_mic));
++            dotLoc.setImageDrawable(ContextCompat.getDrawable(getApplicationContext(), R.drawable.ic_round_location));
++        } else {
++            dotCamera.setImageDrawable(null);
++            dotMic.setImageDrawable(null);
++            dotLoc.setImageDrawable(null);
++        }
++    }
++
+ 
++    /**
++     * get's alignment of dots
++     *
++     * @return
++     */
+     private int getLayoutGravity() {
+         int position = sharedPreferenceManager.getDotPosition();
+         switch (position) {
+             case 0:
++                // left
+                 return Gravity.TOP | Gravity.START;
+             case 1:
++                //right
+                 return Gravity.TOP | Gravity.END;
+             case 2:
+-                return Gravity.BOTTOM | Gravity.START;
+-            case 3:
+-                return Gravity.BOTTOM | Gravity.END;
++                // center
++                return Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+             default:
++                // right on default
+                 return Gravity.TOP | Gravity.END;
+         }
+     }
+ 
+-    private void showMicDot() {
+-        if (sharedPreferenceManager.isMicEnabled()) {
+-            updateLayoutGravity();
+-            setDotCustomColors();
+-            upScaleView(dotMic);
+-            dotMic.setVisibility(View.VISIBLE);
+-        }
+-    }
+ 
+-    private void hideMicDot() {
+-        downScaleView(dotMic);
+-        dotMic.setVisibility(View.GONE);
+-    }
++    /// show dots functions ---------------------------
+ 
+     private void showCamDot() {
+         if (sharedPreferenceManager.isCameraEnabled()) {
+             updateLayoutGravity();
+             setDotCustomColors();
++            getIconsEnabled();
+             upScaleView(dotCamera);
+             dotCamera.setVisibility(View.VISIBLE);
+         }
+     }
+ 
+-    private void hideCamDot() {
+-        downScaleView(dotCamera);
+-        dotCamera.setVisibility(View.GONE);
++    private void showMicDot() {
++        if (sharedPreferenceManager.isMicEnabled()) {
++            updateLayoutGravity();
++            setDotCustomColors();
++            getIconsEnabled();
++            upScaleView(dotMic);
++            dotMic.setVisibility(View.VISIBLE);
++        }
+     }
+ 
+ 
+     private void showLocDot() {
+-        if (sharedPreferenceManager.isCameraEnabled()) {
++        if (sharedPreferenceManager.isLocationEnabled()) {
+             updateLayoutGravity();
+             setDotCustomColors();
+-            upScaleView(dotCamera);
+-            dotCamera.setVisibility(View.VISIBLE);
++            getIconsEnabled();
++            upScaleView(dotLoc);
++            dotLoc.setVisibility(View.VISIBLE);
+         }
+     }
+ 
+-    private void hideLocDot() {
++    /// hide dots functions ---------------------------
++
++    private void hideMicDot() {
++        downScaleView(dotMic);
++        dotMic.setVisibility(View.GONE);
++    }
++
++    private void hideCamDot() {
+         downScaleView(dotCamera);
+         dotCamera.setVisibility(View.GONE);
+     }
+ 
++
++    private void hideLocDot() {
++        downScaleView(dotLoc);
++        dotLoc.setVisibility(View.GONE);
++    }
++
++
++    // Dot animations
++
+     public void upScaleView(View view) {
+         view.animate().scaleX(1f).scaleY(1f).setDuration(500);
+     }
+@@ -421,13 +520,14 @@ public class DotService extends AccessibilityService {
+     private void initDotViews() {
+         dotCamera = hoverLayout.findViewById(R.id.dot_camera);
+         dotMic = hoverLayout.findViewById(R.id.dot_mic);
+-
++        dotLoc = hoverLayout.findViewById(R.id.dot_location);
+         setDotCustomColors();
+ 
+         dotCamera.postDelayed(() -> {
+             dotCamera.setVisibility(View.GONE);
+             dotMic.setVisibility(View.GONE);
+-        }, 500);
++            dotLoc.setVisibility(View.GONE);
++        }, 300);
+ 
+     }
+ 
+@@ -458,7 +558,9 @@ public class DotService extends AccessibilityService {
+ 
+     @Override
+     public void onInterrupt() {
+-
++        if (Constants.isDebug()) {
++            Log.i(TAG, "onInterrupt: ");
++        }
+     }
+ 
+     @Override
+@@ -467,9 +569,12 @@ public class DotService extends AccessibilityService {
+             if (accessibilityEvent.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && accessibilityEvent.getPackageName() != null) {
+                 ComponentName componentName = new ComponentName(accessibilityEvent.getPackageName().toString(), accessibilityEvent.getClassName().toString());
+                 currentRunningAppPackage = componentName.getPackageName();
++                currentLivePackage.setValue(componentName.getPackageName());
+             }
+         } catch (Exception ignored) {
+-            Log.i(TAG, "onAccessibilityEvent:" + new Exception(ignored).getMessage());
++            if (Constants.isDebug()) {
++                Log.i(TAG, "onAccessibilityEvent:" + new Exception(ignored).getMessage());
++            }
+         }
+ 
+     }
+@@ -484,6 +589,7 @@ public class DotService extends AccessibilityService {
+         if (notificationManager != null) {
+             notificationManager.cancel(3);
+         }
++        // we cannot remove accessibility service
+         stopForeground(true);
+         super.onDestroy();
+ 
+diff --git a/app/src/main/java/com/aravi/dotpro/Utils.java b/app/src/main/java/com/aravi/dot/util/Utils.java
+similarity index 76%
+rename from app/src/main/java/com/aravi/dotpro/Utils.java
+rename to app/src/main/java/com/aravi/dot/util/Utils.java
+index a1a9f11..f9e3561 100644
+--- a/app/src/main/java/com/aravi/dotpro/Utils.java
++++ b/app/src/main/java/com/aravi/dot/util/Utils.java
+@@ -1,4 +1,21 @@
+-package com.aravi.dotpro;
++/*
++ * Copyright (C) 2021.  Aravind Chowdary (@kamaravichow)
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ */
++
++package com.aravi.dot.util;
+ 
+ import android.content.ComponentName;
+ import android.content.Context;
+@@ -28,10 +45,10 @@ public class Utils {
+     /**
+      * @param context
+      */
+-    public static void showAutoStartDialog(Context context) {
++    public static void showAutoStartDialog(Context context, String manufacturer) {
+         new MaterialAlertDialogBuilder(context)
+-                .setTitle("Enable AutoStart")
+-                .setMessage("You're required to provide the auto start permission to the app to keep app running as expected. ")
++                .setTitle("Enable AutoStart ")
++                .setMessage(manufacturer.toUpperCase() + " devices will kill the useful services to free up ram. You're required to provide the auto start permission to the app to keep app running as expected. ")
+                 .setPositiveButton("Setup Now", (dialog, which) -> {
+                     openAutoStartAccordingToManufacturer(context);
+                 })
+diff --git a/app/src/main/java/com/aravi/dotpro/manager/PreferenceManager.java b/app/src/main/java/com/aravi/dotpro/manager/PreferenceManager.java
+deleted file mode 100644
+index 5436344..0000000
+--- a/app/src/main/java/com/aravi/dotpro/manager/PreferenceManager.java
++++ /dev/null
+@@ -1,86 +0,0 @@
+-/*
+- * Copyright (C) 2021.  Aravind Chowdary (@kamaravichow)
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+- */
+-
+-package com.aravi.dotpro.manager;
+-
+-import android.annotation.SuppressLint;
+-import android.app.Application;
+-import android.content.Context;
+-import android.content.SharedPreferences;
+-
+-import com.aravi.dotpro.Constants;
+-
+-public class PreferenceManager {
+-    private static PreferenceManager instance;
+-    private Application application;
+-    private SharedPreferences sharedPreferences;
+-    private SharedPreferences.Editor prefEditor;
+-
+-
+-    private class PREF_CONSTANTS {
+-        public static final String SERVICE_KEY = "";
+-        public static final String VIBRATION_KEY = "";
+-        public static final String PLACEMENT_KEY = "";
+-
+-        public static final String CAMERA_KEY = "";
+-        public static final String MIC_KEY = "";
+-        public static final String LOCATION_KEY = "";
+-    }
+-
+-
+-    public static PreferenceManager getInstance(Application application) {
+-        if (instance == null) {
+-            instance = new PreferenceManager(application);
+-        }
+-        return instance;
+-    }
+-
+-    @SuppressLint("CommitPrefEdits")
+-    public PreferenceManager(Application application) {
+-        this.application = application;
+-        this.sharedPreferences = application.getSharedPreferences(Constants.SHARED_PREFERENCE_NAME, Context.MODE_PRIVATE);
+-        this.prefEditor = sharedPreferences.edit();
+-    }
+-
+-
+-    public boolean isServiceEnabled() {
+-        return sharedPreferences.getBoolean(PREF_CONSTANTS.SERVICE_KEY, false);
+-    }
+-
+-    public boolean isVibrationEnabled() {
+-        return sharedPreferences.getBoolean(PREF_CONSTANTS.VIBRATION_KEY, false);
+-    }
+-
+-    public boolean isMicEnabled() {
+-        return sharedPreferences.getBoolean(PREF_CONSTANTS.MIC_KEY, true);
+-    }
+-
+-    public boolean isCameraEnabled() {
+-        return sharedPreferences.getBoolean(PREF_CONSTANTS.CAMERA_KEY, true);
+-    }
+-
+-    public boolean isLocationEnabled() {
+-        return sharedPreferences.getBoolean(PREF_CONSTANTS.LOCATION_KEY, true);
+-    }
+-
+-    public int getDotPosition() {
+-        return sharedPreferences.getInt(PREF_CONSTANTS.PLACEMENT_KEY, 0);
+-    }
+-
+-
+-
+-}

@@ -1,0 +1,191 @@
+diff --git a/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/GenericMessageExtractor.java b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/GenericMessageExtractor.java
+new file mode 100644
+index 0000000..3c77f97
+--- /dev/null
++++ b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/GenericMessageExtractor.java
+@@ -0,0 +1,59 @@
++package com.abhijitvalluri.android.fitnotifications.services;
++
++import android.app.Notification;
++import android.os.Build;
++import android.os.Bundle;
++
++
++class GenericMessageExtractor implements MessageExtractor {
++
++    @Override
++    public CharSequence[] getTitleAndText(Bundle extras, int notificationFlags) {
++        CharSequence notificationTitle = extras.getCharSequence(Notification.EXTRA_TITLE);
++
++        CharSequence notificationText = extras.getCharSequence(Notification.EXTRA_TEXT);
++
++        CharSequence notificationBigText = null;
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
++            notificationBigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
++        }
++
++        if (startsWith(notificationBigText, notificationText)) {
++            // if notification "big text" starts with the short text - just use the big one
++            notificationText = notificationBigText;
++            notificationBigText = null;
++        }
++
++        StringBuilder sb = new StringBuilder();
++        if (notificationText != null) {
++            sb.append(notificationText);
++        }
++
++        if (!isBlank(notificationBigText)) {
++            sb.append(" -- ").append(notificationBigText);
++        }
++
++        CharSequence text = sb.toString().trim().replaceAll("\\s+", " ");
++
++        return new CharSequence[] { notificationTitle, text };
++    }
++
++
++    private static boolean startsWith(CharSequence big, CharSequence small) {
++        return big != null && small != null && big.length() >= small.length()
++                && big.subSequence(0, small.length()).toString().contentEquals(small);
++    }
++
++
++    private static boolean isBlank(CharSequence text) {
++        if (text != null && text.length() > 0) {
++            for (int i = 0; i < text.length(); i++) {
++                // FIXME: isWhitespace() does not recognize some characters (e.g. non-breaking space)
++                if (!Character.isWhitespace(text.charAt(i))) {
++                    return false;
++                }
++            }
++        }
++        return true;
++    }
++}
+diff --git a/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/MessageExtractor.java b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/MessageExtractor.java
+new file mode 100644
+index 0000000..3081b6c
+--- /dev/null
++++ b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/MessageExtractor.java
+@@ -0,0 +1,14 @@
++package com.abhijitvalluri.android.fitnotifications.services;
++
++import android.os.Bundle;
++
++
++public interface MessageExtractor {
++
++    /**
++     * [0] - title
++     * [1] - text
++     */
++    CharSequence[] getTitleAndText(Bundle extras, int notificationFlags);
++
++}
+diff --git a/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/NLService.java b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/NLService.java
+index 5b60a91..06b560c 100644
+--- a/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/NLService.java
++++ b/app/src/main/java/com/abhijitvalluri/android/fitnotifications/services/NLService.java
+@@ -56,6 +56,8 @@ public class NLService extends NotificationListenerService {
+ 
+     private static final Integer NOTIFICATION_ID = (int)((new Date().getTime() / 1000L) % Integer.MAX_VALUE);
+ 
++    private static final MessageExtractor DEFAULT_EXTRACTOR = new GenericMessageExtractor();
++
+     private final Handler mHandler = new Handler();
+ 
+     private static List<String> mSelectedAppsPackageNames;
+@@ -226,14 +228,23 @@ public class NLService extends NotificationListenerService {
+             }
+         }
+ 
+-        CharSequence notificationTitle = extras.getCharSequence(Notification.EXTRA_TITLE);
+-        String notificationText = buildNotificationText(extras, appPackageName, discardEmptyNotifications);
++        CharSequence[] titleAndText = DEFAULT_EXTRACTOR.getTitleAndText(extras, notification.flags);
++
++        if (titleAndText[1] == null && discardEmptyNotifications) {
++            return;
++        }
+ 
+-        // notificationText can be null only when discardEmptyNotifications is enabled
+-        if (notificationText == null || anyMatchesFilter(filterText, notificationTitle, notificationText)) {
++        if (anyMatchesFilter(filterText, titleAndText)) {
+             return;
+         }
+ 
++        CharSequence notificationTitle = titleAndText[0];
++        String notificationText = titleAndText[1] == null ? "" : titleAndText[1].toString();
++
++        if (mDisplayAppName) {
++            notificationText = "[" + mAppSelectionsStore.getAppName(appPackageName) + "] " + notificationText;
++        }
++
+         String prevNotificationText = mNotificationStringMap.put(appPackageName, notificationText);
+         // TODO: add more specific checks to avoid blocking legitimate identical notifications
+         if (notificationText.equals(prevNotificationText)) {
+@@ -317,40 +328,6 @@ public class NLService extends NotificationListenerService {
+         super.onNotificationRemoved(sbn);
+     }
+ 
+-    private String buildNotificationText(Bundle notificationExtras, String appPackageName, boolean discardEmpty) {
+-        CharSequence notificationText = notificationExtras.getCharSequence(Notification.EXTRA_TEXT);
+-
+-        CharSequence notificationBigText = null;
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+-            notificationBigText = notificationExtras.getCharSequence(Notification.EXTRA_BIG_TEXT);
+-        }
+-
+-        if (isBlank(notificationText) && isBlank(notificationBigText)) {
+-            if (discardEmpty) {
+-                return null;
+-            }
+-        } else if (startsWith(notificationBigText, notificationText)) {
+-            // if notification "big text" starts with the short text - just use the big one
+-            notificationText = notificationBigText;
+-            notificationBigText = null;
+-        }
+-
+-        StringBuilder sb = new StringBuilder();
+-        if (mDisplayAppName) {
+-            sb.append("[").append(mAppSelectionsStore.getAppName(appPackageName)).append("] ");
+-        }
+-
+-        if (notificationText != null) {
+-            sb.append(notificationText);
+-        }
+-
+-        if (!isBlank(notificationBigText)) {
+-            sb.append(" -- ").append(notificationBigText);
+-        }
+-
+-        return sb.toString().trim().replaceAll("\\s+", " ");
+-    }
+-
+     /**
+      * Creates an intent to open Fit Notifications settings when notification is clicked.
+      */
+@@ -445,23 +422,6 @@ public class NLService extends NotificationListenerService {
+         return false;
+     }
+ 
+-    private static boolean startsWith(CharSequence big, CharSequence small) {
+-        return big != null && small != null && big.length() >= small.length()
+-                && big.subSequence(0, small.length()).toString().contentEquals(small);
+-    }
+-
+-    private static boolean isBlank(CharSequence text) {
+-        if (text != null && text.length() > 0) {
+-            for (int i = 0; i < text.length(); i++) {
+-                // FIXME: isWhitespace() does not recognize some characters (e.g. non-breaking space)
+-                if (!Character.isWhitespace(text.charAt(i))) {
+-                    return false;
+-                }
+-            }
+-        }
+-        return true;
+-    }
+-
+     /**
+      * Slices the text into up to <code>mNumSplitNotifications + 1</code> pieces each not longer than
+      * <code>mFitbitNotifCharLimit</code> (except for the last piece which contains the all remaining text)

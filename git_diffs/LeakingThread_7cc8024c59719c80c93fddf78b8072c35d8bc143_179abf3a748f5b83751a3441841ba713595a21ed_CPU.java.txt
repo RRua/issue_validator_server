@@ -1,0 +1,408 @@
+diff --git a/app/src/main/java/com/dkanada/chip/core/CPU.java b/app/src/main/java/com/dkanada/chip/core/CPU.java
+index 4c12ac7..cb7af36 100644
+--- a/app/src/main/java/com/dkanada/chip/core/CPU.java
++++ b/app/src/main/java/com/dkanada/chip/core/CPU.java
+@@ -1,17 +1,9 @@
+ package com.dkanada.chip.core;
+ 
+ import java.util.Random;
+-import java.util.Timer;
+-import java.util.TimerTask;
+-
+-import com.dkanada.chip.core.instructions.ClearInstruction;
+-import com.dkanada.chip.interfaces.DisplayListener;
+ 
+ public class CPU {
+-    public Memory memory;
+-    public Display display;
+-    public Keypad keypad;
+-    public DisplayListener event;
++    public Core core;
+ 
+     public char[] v;
+ 
+@@ -19,50 +11,38 @@ public class CPU {
+     public char sp;
+     public char index;
+ 
+-    public char delay;
+-    public char sound;
+-
+-    public CPU(Memory memoryCore, Display displayCore, Keypad keypadCore, DisplayListener displayListener) {
+-        memory = memoryCore;
+-        display = displayCore;
+-        keypad = keypadCore;
+-        event = displayListener;
++    public CPU(Core core) {
++        this.core = core;
+ 
+         v = new char[16];
+ 
+         pc = 0x200;
+         sp = 0x000;
+         index = 0x200;
+-
+-        sound = 0;
+-        delay = 0;
+-
+-        initTimer();
+     }
+ 
+     public void cycle() {
+-        char opcode = memory.getWord(pc);
++        char opcode = core.memory.getWord(pc);
+         switch (opcode & 0xF000) {
+             case 0x0000:
+                 switch (opcode & 0x000F) {
+                     case 0x0000:
+-                        new ClearInstruction().execute(this, opcode);
++                        core.display.setDisplay(new byte[64][32]);
++                        core.updateDisplay(core.display.getDisplay());
++                        pc += 2;
+                         break;
+                     case 0x000E:
+-                        // return from subroutine
+-                        pc = memory.getWord((char) (sp - 2));
++                        pc = core.memory.getWord((char) (sp - 2));
+                         sp -= 2;
+-                        memory.setWord(sp, (char) 0x0);
++                        core.memory.setWord(sp, (char) 0x0);
+                         break;
+                 }
+                 break;
+             case 0x1000:
+-                // jump to address
+                 pc = getNNN(opcode);
+                 break;
+             case 0x2000:
+-                // call subroutine
+-                memory.setWord(sp, (char) (pc + 2));
++                core.memory.setWord(sp, (char) (pc + 2));
+                 sp += 2;
+                 pc = getNNN(opcode);
+                 break;
+@@ -119,7 +99,6 @@ public class CPU {
+                             v[0xF] = 0;
+                         }
+                         v[getX(opcode)] = (char) add;
+-                        // handle carry
+                         v[getX(opcode)] &= 0xFF;
+                         pc += 2;
+                         break;
+@@ -183,58 +162,51 @@ public class CPU {
+             case 0xD000:
+                 char startX = v[getX(opcode)];
+                 char startY = v[getY(opcode)];
+-                // collision detection is completely broken without this line
+                 v[0xF] = 0;
++
+                 for (int y = 0; y < getN(opcode); y++) {
+-                    char line = memory.getByte((char) (index + y));
++                    char line = core.memory.getByte((char) (index + y));
+                     for (int x = 0; x < 8; x++) {
+                         char pixel = (char) (line & (0x80 >> x));
+                         if (pixel != 0) {
+-                            if (display.getPixel((startX + x) % 64, (startY + y) % 32) != 0) {
++                            if (core.display.getPixel((startX + x) % 64, (startY + y) % 32) != 0) {
+                                 v[0xF] = 1;
+                             }
+-                            display.setPixel((startX + x) % 64, (startY + y) % 32, (byte) 1);
++                            core.display.setPixel((startX + x) % 64, (startY + y) % 32, (byte) 1);
+                         }
+                     }
+                 }
+-                // callback
+-                event.updateDisplay(display.getDisplay());
++                core.updateDisplay(core.display.getDisplay());
+                 pc += 2;
+                 break;
+             case 0xE000:
+                 switch (opcode & 0x00FF) {
+                     case 0x009E:
+-                        pc += 2;
+-                        if (keypad.getKey() == v[getX(opcode)]) {
+-                            pc += 2;
+-                        }
++                        pc += core.keypad.getKey() == v[getX(opcode)] ? 4 : 2;
+                         break;
+                     case 0x00A1:
+-                        pc += 2;
+-                        if (keypad.getKey() != v[getX(opcode)]) {
+-                            pc += 2;
+-                        }
++                        pc += core.keypad.getKey() != v[getX(opcode)] ? 4 : 2;
+                         break;
+                 }
+                 break;
+             case 0xF000:
+                 switch (opcode & 0x00FF) {
+                     case 0x0007:
+-                        v[getX(opcode)] = delay;
++                        v[getX(opcode)] = core.delay;
+                         pc += 2;
+                         break;
+                     case 0x000A:
+-                        if (keypad.getKey() != 1000) {
+-                            v[getX(opcode)] = keypad.getKey();
++                        if (core.keypad.getKey() != 1000) {
++                            v[getX(opcode)] = core.keypad.getKey();
+                             pc += 2;
+                         }
+                         break;
+                     case 0x0015:
+-                        delay = v[getX(opcode)];
++                        core.delay = v[getX(opcode)];
+                         pc += 2;
+                         break;
+                     case 0x0018:
+-                        sound = v[getX(opcode)];
++                        core.sound = v[getX(opcode)];
+                         pc += 2;
+                         break;
+                     case 0x001E:
+@@ -243,28 +215,26 @@ public class CPU {
+                         break;
+                     case 0x0029:
+                         char offset = (char) (v[getX(opcode)] * 0x5);
+-                        index = (char) (memory.getFontAddress() + offset);
++                        index = (char) (core.memory.getFontAddress() + offset);
+                         pc += 2;
+                         break;
+                     case 0x0033:
+                         int num = v[getX(opcode)];
+                         for (int i = 2; i >= 0; i--) {
+-                            memory.setByte((char) (index + i), (char) (num % 10));
++                            core.memory.setByte((char) (index + i), (char) (num % 10));
+                             num /= 10;
+                         }
+                         pc += 2;
+                         break;
+                     case 0x0055:
+-                        // dump registers
+                         for (int x = 0; x <= getX(opcode); x++) {
+-                            memory.setByte(index++, v[x]);
++                            core.memory.setByte(index++, v[x]);
+                         }
+                         pc += 2;
+                         break;
+                     case 0x0065:
+-                        // load registers
+                         for (int x = 0; x <= getX(opcode); x++) {
+-                            v[x] = memory.getByte(index++);
++                            v[x] = core.memory.getByte(index++);
+                         }
+                         pc += 2;
+                         break;
+@@ -292,23 +262,4 @@ public class CPU {
+     public char getY(char opcode) {
+         return (char) ((opcode & 0x00F0) >> 4);
+     }
+-
+-    public void initTimer() {
+-        Timer timer = new Timer();
+-        timer.schedule(new TimerTask() {
+-            @Override
+-            public void run() {
+-                decrementTimer();
+-            }
+-        }, 60, 60);
+-    }
+-
+-    public void decrementTimer() {
+-        if (delay != 0) {
+-            delay--;
+-        }
+-        if (sound != 0) {
+-            sound--;
+-        }
+-    }
+ }
+diff --git a/app/src/main/java/com/dkanada/chip/core/Core.java b/app/src/main/java/com/dkanada/chip/core/Core.java
+index d3eb2af..68ac1a9 100644
+--- a/app/src/main/java/com/dkanada/chip/core/Core.java
++++ b/app/src/main/java/com/dkanada/chip/core/Core.java
+@@ -10,45 +10,44 @@ import java.io.DataInputStream;
+ import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
++import java.util.Timer;
++import java.util.TimerTask;
+ 
+ public class Core extends Thread implements DisplayListener, KeypadListener {
+-    private Memory memoryCore;
+-    private Display displayCore;
+-    private Keypad keypadCore;
+-    private CPU cpuCore;
+-
+     private DisplayView displayView;
++    private boolean load;
+ 
+-    private int delay;
+-    private int sound;
+-
+-    public boolean load;
+-    public int time;
++    public Memory memory;
++    public Display display;
++    public Keypad keypad;
++    public CPU cpu;
+ 
+-    public Core(DisplayView display) {
+-        displayView = display;
++    public char delay;
++    public char sound;
+ 
++    public Core(DisplayView displayView) {
++        this.displayView = displayView;
+         reset();
+     }
+ 
+     public void reset() {
+         load = false;
+ 
+-        memoryCore = new Memory();
+-        displayCore = new Display();
+-        keypadCore = new Keypad();
++        memory = new Memory();
++        display = new Display();
++        keypad = new Keypad();
++
++        cpu = new CPU(this);
+ 
+-        cpuCore = new CPU(memoryCore, displayCore, keypadCore, this);
++        initTimer();
+     }
+ 
+     public void step() {
+-        cpuCore.cycle();
++        cpu.cycle();
+     }
+ 
+     public void load(String file) {
+-        if (load) {
+-            reset();
+-        }
++        reset();
+ 
+         loadFont();
+         loadProgram(file);
+@@ -76,9 +75,9 @@ public class Core extends Thread implements DisplayListener, KeypadListener {
+                 0xF0, 0x80, 0xF0, 0x80, 0x80
+         };
+ 
+-        char address = memoryCore.getFontAddress();
++        char address = memory.getFontAddress();
+         for (char value : font) {
+-            memoryCore.setByte(address, value);
++            memory.setByte(address, value);
+             address++;
+         }
+     }
+@@ -91,9 +90,9 @@ public class Core extends Thread implements DisplayListener, KeypadListener {
+             fileInputStream = new FileInputStream(file);
+             dataInputStream = new DataInputStream(fileInputStream);
+ 
+-            char address = memoryCore.getProgramAddress();
++            char address = memory.getProgramAddress();
+             while (dataInputStream.available() > 0) {
+-                memoryCore.setByte(address, (char) dataInputStream.readByte());
++                memory.setByte(address, (char) dataInputStream.readByte());
+                 address++;
+             }
+         } catch (FileNotFoundException e) {
+@@ -103,6 +102,25 @@ public class Core extends Thread implements DisplayListener, KeypadListener {
+         }
+     }
+ 
++    public void initTimer() {
++        Timer timer = new Timer();
++        timer.schedule(new TimerTask() {
++            @Override
++            public void run() {
++                decrementTimer();
++            }
++        }, 60, 60);
++    }
++
++    public void decrementTimer() {
++        if (delay != 0) {
++            delay--;
++        }
++        if (sound != 0) {
++            sound--;
++        }
++    }
++
+     @Override
+     public void run() {
+         while (true) {
+@@ -125,11 +143,11 @@ public class Core extends Thread implements DisplayListener, KeypadListener {
+ 
+     @Override
+     public void keyDown(char key) {
+-        keypadCore.setKey(key);
++        keypad.setKey(key);
+     }
+ 
+     @Override
+     public void keyUp(char key) {
+-        keypadCore.setKey((char) 1000);
++        keypad.setKey((char) 1000);
+     }
+ }
+diff --git a/app/src/main/java/com/dkanada/chip/core/instructions/ClearInstruction.java b/app/src/main/java/com/dkanada/chip/core/instructions/ClearInstruction.java
+deleted file mode 100644
+index f576779..0000000
+--- a/app/src/main/java/com/dkanada/chip/core/instructions/ClearInstruction.java
++++ /dev/null
+@@ -1,15 +0,0 @@
+-package com.dkanada.chip.core.instructions;
+-
+-import com.dkanada.chip.core.CPU;
+-import com.dkanada.chip.core.Core;
+-
+-public class ClearInstruction implements Instruction {
+-    @Override
+-    public void execute(CPU cpu, char opcode) {
+-        // clear display
+-        cpu.display.setDisplay(new byte[64][32]);
+-        // callback
+-        cpu.event.updateDisplay(cpu.display.getDisplay());
+-        cpu.pc += 2;
+-    }
+-}
+diff --git a/app/src/main/java/com/dkanada/chip/core/instructions/ClearScreenInstruction.java b/app/src/main/java/com/dkanada/chip/core/instructions/ClearScreenInstruction.java
+new file mode 100644
+index 0000000..343350c
+--- /dev/null
++++ b/app/src/main/java/com/dkanada/chip/core/instructions/ClearScreenInstruction.java
+@@ -0,0 +1,14 @@
++package com.dkanada.chip.core.instructions;
++
++import com.dkanada.chip.core.CPU;
++import com.dkanada.chip.core.Core;
++import com.dkanada.chip.core.OPCode;
++
++public class ClearScreenInstruction implements Instruction {
++    @Override
++    public void execute(Core core, CPU cpu, OPCode opcode) {
++        core.display.setDisplay(new byte[64][32]);
++        core.updateDisplay(core.display.getDisplay());
++        cpu.pc += 2;
++    }
++}
+diff --git a/app/src/main/java/com/dkanada/chip/core/instructions/Instruction.java b/app/src/main/java/com/dkanada/chip/core/instructions/Instruction.java
+index 1fd4a37..190352d 100644
+--- a/app/src/main/java/com/dkanada/chip/core/instructions/Instruction.java
++++ b/app/src/main/java/com/dkanada/chip/core/instructions/Instruction.java
+@@ -1,7 +1,9 @@
+ package com.dkanada.chip.core.instructions;
+ 
+ import com.dkanada.chip.core.CPU;
++import com.dkanada.chip.core.Core;
++import com.dkanada.chip.core.OPCode;
+ 
+ public interface Instruction {
+-    void execute(CPU cpu, char opcode);
++    void execute(Core core, CPU cpu, OPCode opcode);
+ }

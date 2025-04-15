@@ -1,0 +1,1142 @@
+diff --git a/src/ch/bailu/aat/activities/AbsFileContentActivity.java b/src/ch/bailu/aat/activities/AbsFileContentActivity.java
+index 2f2d7f8d..8e3ffa33 100644
+--- a/src/ch/bailu/aat/activities/AbsFileContentActivity.java
++++ b/src/ch/bailu/aat/activities/AbsFileContentActivity.java
+@@ -28,6 +28,7 @@ import ch.bailu.aat.dispatcher.OverlaySource;
+ import ch.bailu.aat.dispatcher.TrackerSource;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.helpers.AppLayout;
++import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.services.editor.EditorHelper;
+ import ch.bailu.aat.views.BusyButton;
+ import ch.bailu.aat.views.ContentView;
+@@ -84,7 +85,7 @@ public class AbsFileContentActivity extends AbsDispatcher implements OnClickList
+ 
+ 
+     private ControlBar createButtonBar() {
+-        MainControlBar bar = new MainControlBar(this);
++        MainControlBar bar = new MainControlBar(getServiceContext());
+ 
+         nextView = bar.addImageButton(R.drawable.go_next_inverse);
+         previousFile =  bar.addImageButton(R.drawable.go_up_inverse);
+@@ -206,7 +207,7 @@ public class AbsFileContentActivity extends AbsDispatcher implements OnClickList
+             switchFile(v);
+             
+         } else if (v == fileOperation) {
+-            currentFile.fileAction(this).showPopupMenu(v);
++            new FileMenu(currentFile.fileAction(this)).showAsPopup(this, v);
+         }
+ 
+     }
+diff --git a/src/ch/bailu/aat/activities/AbsGpxListActivity.java b/src/ch/bailu/aat/activities/AbsGpxListActivity.java
+index c89e79c5..e0a39d97 100644
+--- a/src/ch/bailu/aat/activities/AbsGpxListActivity.java
++++ b/src/ch/bailu/aat/activities/AbsGpxListActivity.java
+@@ -24,6 +24,7 @@ import ch.bailu.aat.dispatcher.OverlaySource;
+ import ch.bailu.aat.helpers.AppFile;
+ import ch.bailu.aat.helpers.AppTheme;
+ import ch.bailu.aat.helpers.FileAction;
++import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.preferences.SolidDirectory;
+ import ch.bailu.aat.services.directory.Iterator;
+ import ch.bailu.aat.services.directory.IteratorSimple;
+@@ -52,7 +53,7 @@ import ch.bailu.aat.views.map.overlay.grid.GridDynOverlay;
+ 
+ public abstract class AbsGpxListActivity extends AbsDispatcher implements OnItemClickListener, OnClickListener {
+ 
+-
++    private FileMenu fileMenu;
+     private String                      solid_key;
+ 
+     private Iterator                    iteratorSimple = Iterator.NULL;
+@@ -97,7 +98,7 @@ public abstract class AbsGpxListActivity extends AbsDispatcher implements OnItem
+ 
+ 
+     private ControlBar createControlBar() {
+-        final MainControlBar bar = new MainControlBar(this, 4);
++        final MainControlBar bar = new MainControlBar(getServiceContext(), 4);
+ 
+         busyControl = new DbSynchronizerBusyIndicator(bar.getMenu());
+         prevView = bar.addImageButton(R.drawable.go_previous_inverse);
+@@ -222,7 +223,6 @@ public abstract class AbsGpxListActivity extends AbsDispatcher implements OnItem
+     }
+ 
+     
+-
+     @Override
+     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenu.ContextMenuInfo menuInfo) {
+         super.onCreateContextMenu(menu, v, menuInfo);
+@@ -231,14 +231,16 @@ public abstract class AbsGpxListActivity extends AbsDispatcher implements OnItem
+                 ((AdapterView.AdapterContextMenuInfo)menuInfo).position;
+ 
+         iteratorSimple.moveToPosition(position);
+-        new FileAction(this, iteratorSimple).createFileMenu(menu);
+-
++        
++        fileMenu = new FileMenu(new FileAction(this, iteratorSimple));
++        fileMenu.inflate(menu);
++        fileMenu.prepare(menu);
+     }
+ 
+ 
+     @Override
+     public boolean onContextItemSelected(MenuItem item) {
+-        return new FileAction(this, iteratorSimple).onMenuItemClick(item);
++        return fileMenu.onItemClick(item);
+     }
+ 
+ 
+diff --git a/src/ch/bailu/aat/activities/AbsMenu.java b/src/ch/bailu/aat/activities/AbsMenu.java
+index 637ca156..98f09215 100644
+--- a/src/ch/bailu/aat/activities/AbsMenu.java
++++ b/src/ch/bailu/aat/activities/AbsMenu.java
+@@ -1,59 +1,39 @@
+ package ch.bailu.aat.activities;
+ 
+ 
+-import org.osmdroid.util.BoundingBoxE6;
+-
+ import android.os.Bundle;
+ import android.view.Menu;
+ import android.view.MenuItem;
+-import android.widget.Button;
+-import ch.bailu.aat.R;
+ import ch.bailu.aat.description.DescriptionInterface;
+ import ch.bailu.aat.gpx.GpxInformation;
+-import ch.bailu.aat.preferences.CheckListDialog;
+-import ch.bailu.aat.preferences.IndexListDialog;
++import ch.bailu.aat.menus.OptionsMenu;
+ import ch.bailu.aat.preferences.PreferenceLoadDefaults;
+-import ch.bailu.aat.preferences.SolidAutopause;
+-import ch.bailu.aat.preferences.SolidBacklight;
+-import ch.bailu.aat.preferences.SolidMapTileStack;
+-import ch.bailu.aat.preferences.SolidOverlayFileList;
+-import ch.bailu.aat.preferences.SolidPreset;
+-import ch.bailu.aat.services.tracker.State;
+ 
+ public abstract class AbsMenu extends AbsServiceLink 
+ implements DescriptionInterface{
+ 
+-    private MenuItem start, pause, backlight, autopause, map, overlays, nominatim;
+-
++    private OptionsMenu menu;
+ 
+     @Override
+-    public boolean onCreateOptionsMenu(Menu menu) {
+-        start = menu.add(R.string.tracker_start);
+-        start.setIcon(R.drawable.media_playback_start_inverse);
+-
+-        pause = menu.add(R.string.tracker_pause);
+-        pause.setIcon(R.drawable.media_playback_pause_inverse);
+-
+-        nominatim = menu.add(R.string.intro_nominatim);
+-        nominatim.setIcon(R.drawable.edit_find_inverse);
+-
+-        map = menu.add(R.string.p_map);
+-
+-        overlays = menu.add(R.string.p_overlay);
+-        overlays.setIcon(R.drawable.view_paged_inverse);
+-
+-        backlight = menu.add(R.string.p_backlight_title);
+-
++    public void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        
++        menu = new OptionsMenu(getServiceContext());
++        new PreferenceLoadDefaults(this);
++    }
+ 
++    
++    @Override
++    public boolean onCreateOptionsMenu(Menu m) {
++        
++        menu.inflate(m);
+         return true;
+     }
+ 
+ 
+     @Override 
+-    public boolean onPrepareOptionsMenu(Menu menu) {
+-
+-        updateMenuText(getServiceContext().getTrackerService().getState());
+-
++    public boolean onPrepareOptionsMenu(Menu m) {
++        menu.prepare(m);
+         return true;
+     }
+ 
+@@ -61,46 +41,7 @@ implements DescriptionInterface{
+ 
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+-
+-        if (item == start) {
+-            getServiceContext().getTrackerService().getState().onStartStop();
+-
+-        } else if (item == pause) {
+-            getServiceContext().getTrackerService().getState().onPauseResume();
+-
+-        } else if (item == backlight) {
+-            new IndexListDialog(this, new SolidBacklight(this, new SolidPreset(this).getIndex()));
+-
+-        } else if (item == autopause) {
+-            new IndexListDialog(this, new SolidAutopause(this, new SolidPreset(this).getIndex()));
+-
+-        } else if (item == map) {
+-            new CheckListDialog(this,new SolidMapTileStack(this, new SolidPreset(this).getIndex()));
+-
+-        } else if (item == overlays) {
+-            new CheckListDialog(this,new SolidOverlayFileList(this));
+-
+-        } else if (item == nominatim) {
+-            ActivitySwitcher.start(this, NominatimActivity.class,new BoundingBoxE6(0,0,0,0));
+-
+-
+-        } else {
+-            return false;
+-
+-        }
+-
+-
+-
+-        return true;
+-    }
+-
+-
+-
+-    @Override
+-    public void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-
+-        new PreferenceLoadDefaults(this);
++        return menu.onItemClick(item);
+     }
+ 
+ 
+@@ -108,17 +49,16 @@ implements DescriptionInterface{
+     @Override
+     public void updateGpxContent(GpxInformation info) {}
+ 
+-
+-
++/*
+     public void updateStartButtonText(Button v, GpxInformation info) {
+         if (info.getID()== GpxInformation.ID.INFO_ID_TRACKER) {
+             v.setText(getStartButtonTextResource(info.getState()));
+         }
+     }
++*/
+ 
+ 
+-
+-
++/*
+     private int getStartButtonTextResource(int state) {
+ 
+         return getServiceContext().getTrackerService().getState().getStartPauseResumeTextID();
+@@ -135,5 +75,5 @@ implements DescriptionInterface{
+         // FIXME: pause.setEnabled(false);
+     }
+ 
+-
++*/
+ }
+diff --git a/src/ch/bailu/aat/activities/AbsOsmApiActivity.java b/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
+index 02e20a9c..80bc9982 100644
+--- a/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
++++ b/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
+@@ -110,7 +110,7 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+ 
+     
+     private ControlBar createControlBar() {
+-        ControlBar bar = new MainControlBar(this,6);      
++        ControlBar bar = new MainControlBar(getServiceContext(),6);      
+         
+         download = new BusyButton(this, R.drawable.go_bottom_inverse);
+         
+diff --git a/src/ch/bailu/aat/activities/GpxViewActivity.java b/src/ch/bailu/aat/activities/GpxViewActivity.java
+index 9643abb2..7009adfa 100644
+--- a/src/ch/bailu/aat/activities/GpxViewActivity.java
++++ b/src/ch/bailu/aat/activities/GpxViewActivity.java
+@@ -9,7 +9,6 @@ import android.view.View;
+ import android.view.View.OnClickListener;
+ import android.widget.ImageButton;
+ import android.widget.LinearLayout;
+-import android.widget.TextView;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.description.AverageSpeedDescription;
+ import ch.bailu.aat.description.CaloriesDescription;
+@@ -33,6 +32,7 @@ import ch.bailu.aat.dispatcher.TrackerSource;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.helpers.AppLayout;
+ import ch.bailu.aat.helpers.FileAction;
++import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.views.BusyButton;
+ import ch.bailu.aat.views.ContentView;
+ import ch.bailu.aat.views.ControlBar;
+@@ -101,7 +101,7 @@ public class GpxViewActivity extends AbsDispatcher implements OnClickListener {
+ 
+ 
+     private ControlBar createButtonBar() {
+-        MainControlBar bar = new MainControlBar(this);
++        MainControlBar bar = new MainControlBar(getServiceContext());
+ 
+         nextView = bar.addImageButton(R.drawable.go_next_inverse);
+         copyTo = bar.addImageButton(R.drawable.document_save_as_inverse);
+@@ -194,7 +194,7 @@ public class GpxViewActivity extends AbsDispatcher implements OnClickListener {
+             new FileAction(this, new File(fileID)).copyTo();
+             
+         } else if (v == fileOperation) {
+-            new FileAction(this, new File(fileID)).showPopupMenu(v);
++            new FileMenu(new FileAction(this, new File(fileID))).showAsPopup(this, fileOperation);
+         } 
+ 
+     }
+diff --git a/src/ch/bailu/aat/activities/MainActivity.java b/src/ch/bailu/aat/activities/MainActivity.java
+index 1fa0886c..9ce7b10f 100644
+--- a/src/ch/bailu/aat/activities/MainActivity.java
++++ b/src/ch/bailu/aat/activities/MainActivity.java
+@@ -102,7 +102,7 @@ implements AdapterView.OnItemSelectedListener, OnSharedPreferenceChangeListener
+ 
+ 
+     private LinearLayout createButtonBar() {
+-        final ControlBar bar = new MainControlBar(this);
++        final ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         gpsState = new GPSStateButton(this);
+         trackerState = new TrackerStateButton(getServiceContext());
+diff --git a/src/ch/bailu/aat/activities/MapActivity.java b/src/ch/bailu/aat/activities/MapActivity.java
+index 403b1d9c..712109d6 100644
+--- a/src/ch/bailu/aat/activities/MapActivity.java
++++ b/src/ch/bailu/aat/activities/MapActivity.java
+@@ -11,6 +11,7 @@ import android.view.View.OnClickListener;
+ import android.widget.ImageButton;
+ import android.widget.LinearLayout;
+ import ch.bailu.aat.R;
++import ch.bailu.aat.coordinates.Coordinates;
+ import ch.bailu.aat.description.DescriptionInterface;
+ import ch.bailu.aat.dispatcher.ContentDispatcher;
+ import ch.bailu.aat.dispatcher.ContentSource;
+@@ -70,19 +71,13 @@ public class MapActivity extends AbsDispatcher implements OnClickListener{
+ 
+     private void setMapCenterFromIntent() {
+         Intent intent = getIntent();
+-        
+         Uri uri = intent.getData();
+         
+         if (intent.getAction()==Intent.ACTION_VIEW && uri != null) {
+-            String s = uri.toString();
+-            
+-            String[] uri_parts = s.split("[:,?#]");
++            GeoPoint geo = new GeoPoint(0,0);
+             
+-            if (uri_parts.length>=3) {
+-                float la = Float.parseFloat(uri_parts[1]);
+-                float lo = Float.parseFloat(uri_parts[2]);
+-                
+-                map.map.getController().setCenter(new GeoPoint(la, lo));
++            if (Coordinates.stringToGeoPoint(uri.toString(), geo)) {
++                map.map.getController().setCenter(geo);
+             }
+         }
+     }
+@@ -147,7 +142,7 @@ public class MapActivity extends AbsDispatcher implements OnClickListener{
+ 
+ 
+     private ControlBar createButtonBar() {
+-        ControlBar bar = new MainControlBar(this);
++        ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         cycleButton = bar.addImageButton(R.drawable.go_down_inverse);
+ 
+diff --git a/src/ch/bailu/aat/activities/MapFeaturesActivity.java b/src/ch/bailu/aat/activities/MapFeaturesActivity.java
+index bc035ac1..33edc8b8 100644
+--- a/src/ch/bailu/aat/activities/MapFeaturesActivity.java
++++ b/src/ch/bailu/aat/activities/MapFeaturesActivity.java
+@@ -39,7 +39,7 @@ public class MapFeaturesActivity extends AbsDispatcher implements OnClickListene
+         ToolTip.set(download, R.string.tt_overpass_download_features);
+         download.setOnClickListener(this);
+         
+-        bar = new MainControlBar(this,6);
++        bar = new MainControlBar(getServiceContext(),6);
+         
+         bar.addView(download);
+         bar.addViewIgnoreSize(AppTheme.getTitleTextView(this, R.string.query_features));
+diff --git a/src/ch/bailu/aat/activities/NodeDetailActivity.java b/src/ch/bailu/aat/activities/NodeDetailActivity.java
+index 7f1d79e9..7349c56b 100644
+--- a/src/ch/bailu/aat/activities/NodeDetailActivity.java
++++ b/src/ch/bailu/aat/activities/NodeDetailActivity.java
+@@ -77,7 +77,7 @@ public class NodeDetailActivity extends AbsDispatcher implements OnClickListener
+     
+ 
+     private ControlBar createButtonBar() {
+-        ControlBar bar = new MainControlBar(this);
++        ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         previousNode =  bar.addImageButton(R.drawable.go_up_inverse);
+         nextNode = bar.addImageButton(R.drawable.go_down_inverse);
+diff --git a/src/ch/bailu/aat/activities/SplitViewActivity.java b/src/ch/bailu/aat/activities/SplitViewActivity.java
+index 8ad92dd2..84302f27 100644
+--- a/src/ch/bailu/aat/activities/SplitViewActivity.java
++++ b/src/ch/bailu/aat/activities/SplitViewActivity.java
+@@ -130,7 +130,7 @@ public class SplitViewActivity extends AbsDispatcher implements OnClickListener{
+ 
+ 
+     private ControlBar createButtonBar() {
+-        ControlBar bar = new MainControlBar(this);
++        ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         activityCycle = bar.addImageButton(R.drawable.go_down_inverse);
+         multiCycle = bar.addImageButton(R.drawable.go_next_inverse);
+diff --git a/src/ch/bailu/aat/activities/TestActivity.java b/src/ch/bailu/aat/activities/TestActivity.java
+index 932a2cd0..7c149906 100644
+--- a/src/ch/bailu/aat/activities/TestActivity.java
++++ b/src/ch/bailu/aat/activities/TestActivity.java
+@@ -176,7 +176,7 @@ public class TestActivity extends AbsDispatcher implements OnClickListener {
+ 
+ 
+     private ControlBar createButtonBar() {
+-        final ControlBar bar = new MainControlBar(this);
++        final ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         multiCycleP = bar.addImageButton(R.drawable.go_previous_inverse);
+         multiCycleN = bar.addImageButton(R.drawable.go_next_inverse);
+diff --git a/src/ch/bailu/aat/activities/TrackerActivity.java b/src/ch/bailu/aat/activities/TrackerActivity.java
+index 20d5dd5c..65a965f8 100644
+--- a/src/ch/bailu/aat/activities/TrackerActivity.java
++++ b/src/ch/bailu/aat/activities/TrackerActivity.java
+@@ -105,7 +105,7 @@ public class TrackerActivity extends AbsDispatcher implements OnClickListener{
+     }
+ 
+     private ControlBar createButtonBar() {
+-        ControlBar bar = new MainControlBar(this);
++        ControlBar bar = new MainControlBar(getServiceContext());
+ 
+         activityCycle = bar.addImageButton(R.drawable.go_down_inverse);
+         multiCycle = bar.addImageButton(R.drawable.go_next_inverse);
+diff --git a/src/ch/bailu/aat/coordinates/Coordinates.java b/src/ch/bailu/aat/coordinates/Coordinates.java
+index 9db074b8..83891515 100644
+--- a/src/ch/bailu/aat/coordinates/Coordinates.java
++++ b/src/ch/bailu/aat/coordinates/Coordinates.java
+@@ -1,5 +1,60 @@
+ package ch.bailu.aat.coordinates;
+ 
++import org.osmdroid.api.IGeoPoint;
++import org.osmdroid.util.GeoPoint;
++
+ public abstract class Coordinates {
+     public abstract String toString();
++
++
++    public static boolean stringToGeoPoint(String src, GeoPoint dst) {
++        String[] parts = src.split("[:,?#]");
++
++        int c=0;
++
++        double la=0, lo;
++        for (int x = 0; x < parts.length; x++) {
++            try {
++                final double d = Double.parseDouble(parts[x]);
++                c++;
++
++                if (c==1) {
++                    la = d;
++                } else if (c==2) {
++                    lo = d;
++
++                    dst.setLatitudeE6((int)(la*1E6));
++                    dst.setLongitudeE6((int)(lo*1E6));
++                    return true;
++                }
++
++            } catch (NumberFormatException  e) {
++
++            }
++
++        }
++        return false;
++    }
++
++    public static String geoPointToGeoUri(IGeoPoint src) {
++        StringBuilder b = new StringBuilder();
++        
++        b.append("geo:");
++        b.append(src.getLatitudeE6()/1e6d);
++        b.append(',');
++        b.append(src.getLongitudeE6()/1e6d);
++        
++        return b.toString();
++    }
++
++
++    public static String geoPointToDescription(GeoPoint src) {
++        StringBuilder b = new StringBuilder();
++        
++        b.append("Coordinates:\nLatitude:");
++        b.append(src.getLatitudeE6()/1e6d);
++        b.append("Longitude:");
++        b.append(src.getLongitudeE6()/1e6d);
++        
++        return b.toString();    }
+ }
+diff --git a/src/ch/bailu/aat/helpers/FileAction.java b/src/ch/bailu/aat/helpers/FileAction.java
+index 95280f6f..1bec7e2e 100644
+--- a/src/ch/bailu/aat/helpers/FileAction.java
++++ b/src/ch/bailu/aat/helpers/FileAction.java
+@@ -4,26 +4,21 @@ import java.io.File;
+ import java.io.IOException;
+ 
+ import android.app.Activity;
+-import android.view.ContextMenu;
+-import android.view.MenuInflater;
+-import android.view.MenuItem;
+ import android.view.View;
+ import android.widget.EditText;
+-import android.widget.PopupMenu;
+-import android.widget.PopupMenu.OnMenuItemClickListener;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.activities.AbsServiceLink;
++import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.preferences.AddOverlayDialog;
+ import ch.bailu.aat.preferences.SolidDirectory;
+ import ch.bailu.aat.preferences.SolidMockLocationFile;
+-import ch.bailu.aat.providers.GpxProvider;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.directory.Iterator;
+ 
+-public class FileAction  implements OnMenuItemClickListener {
+-    final File file;
+-    final Activity activity;
+-    final ServiceContext scontext;
++public class FileAction   {
++    private final File file;
++    private final Activity activity;
++    private final ServiceContext scontext;
+ 
+ 
+     public FileAction(AbsServiceLink l, Iterator iterator) {
+@@ -38,59 +33,7 @@ public class FileAction  implements OnMenuItemClickListener {
+     }
+ 
+ 
+-    public void showPopupMenu(View v) {
+-        final PopupMenu popup = new PopupMenu(activity, v);
+-        final MenuInflater inflater = popup.getMenuInflater();
+-
+-        inflater.inflate(R.menu.contextmenu, popup.getMenu());
+-        popup.setOnMenuItemClickListener(this);
+-        popup.show();
+-    }
+-
+-
+-    public void createFileMenu(ContextMenu menu) {
+-        if (activity != null) {
+-            activity.getMenuInflater().inflate(R.menu.contextmenu, menu);
+-            menu.setHeaderTitle(file.getName());
+-        }
+-    }
+-
+-
+-    @Override
+-    public boolean onMenuItemClick(MenuItem item) {
+-        if (item.getItemId()== R.id.m_file_delete) {
+-            delete();
+-
+-        } else if (item.getItemId() == R.id.m_file_reload) {
+-            reloadPreview();
+-
+-        } else if (item.getItemId() == R.id.m_file_rename) {
+-            rename();
+-
+-        } else if (item.getItemId() == R.id.m_file_overlay) {
+-            useAsOverlay();
+-
+-
+-        } else if (item.getItemId() == R.id.m_file_mock) {
+-            useForMockLocation();
+-
+-        } else if (item.getItemId() == R.id.m_file_send) {
+-            sendTo();
+-
+-        } else if (item.getItemId() == R.id.m_file_view) {
+-            view();
+-
+-        } else if (item.getItemId() == R.id.m_file_copy) {
+-            copyTo();
+-
+-        } else  {
+-            return false;
+-        }
+-        return true;
+-
+-    }
+-
+-
++  
+     public void rescanDirectory() {
+         if (file.getParent().equals(new SolidDirectory(activity).getValue())) {
+             scontext.getDirectoryService().rescan();
+@@ -184,4 +127,14 @@ public class FileAction  implements OnMenuItemClickListener {
+         }
+     }
+ 
++
++    public CharSequence getName() {
++        return file.getName();
++    }
++
++
++    public void showPopupMenu(View v) {
++        new FileMenu(this).showAsPopup(activity, v);
++    }
++
+ }
+diff --git a/src/ch/bailu/aat/menus/AbsMenu.java b/src/ch/bailu/aat/menus/AbsMenu.java
+new file mode 100644
+index 00000000..7f50c134
+--- /dev/null
++++ b/src/ch/bailu/aat/menus/AbsMenu.java
+@@ -0,0 +1,39 @@
++package ch.bailu.aat.menus;
++
++import android.content.Context;
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
++import android.view.View;
++import android.widget.PopupMenu;
++
++public abstract class AbsMenu {
++    public abstract void inflate(Menu menu);
++    public abstract void inflateWithHeader(ContextMenu menu);
++    public abstract void prepare(Menu menu);
++
++    public abstract boolean onItemClick(MenuItem item);
++
++
++    
++    
++    public void showAsPopup(Context context, View view) {
++        final PopupMenu popup = new PopupMenu(context, view);
++
++        inflate(popup.getMenu());
++        prepare(popup.getMenu());
++        
++        popup.setOnMenuItemClickListener(new PopupMenu.OnMenuItemClickListener() {
++            @Override
++            public boolean onMenuItemClick(MenuItem item) {
++                return onItemClick(item);
++
++            }});
++
++        popup.show();
++    }
++
++
++    
++    
++}
+diff --git a/src/ch/bailu/aat/menus/FileMenu.java b/src/ch/bailu/aat/menus/FileMenu.java
+new file mode 100644
+index 00000000..6e516e88
+--- /dev/null
++++ b/src/ch/bailu/aat/menus/FileMenu.java
+@@ -0,0 +1,76 @@
++package ch.bailu.aat.menus;
++
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
++import ch.bailu.aat.R;
++import ch.bailu.aat.helpers.FileAction;
++
++public class FileMenu extends AbsMenu {
++    private final  FileAction file;
++    
++    private MenuItem send, view, rename, copy, delete, overlay, reload, mock;
++    
++    
++    public FileMenu(FileAction f) {
++        file = f;
++    }
++    
++    
++    @Override
++    public void inflate(Menu menu) {
++        send = menu.add(R.string.file_send);
++        view = menu.add(R.string.file_view);
++        rename = menu.add(R.string.file_rename);
++        copy = menu.add(R.string.file_copy);
++        delete = menu.add(R.string.file_delete);
++        overlay = menu.add(R.string.file_overlay);
++        reload = menu.add(R.string.file_reload);
++        mock = menu.add(R.string.file_mock);
++    }
++
++    @Override
++    public void inflateWithHeader(ContextMenu menu) {
++        menu.setHeaderTitle(file.getName()); 
++        inflate(menu);
++    }
++
++    @Override
++    public void prepare(Menu menu) {
++        
++    }
++
++    @Override
++    public boolean onItemClick(MenuItem item) {
++        if (item == delete) {
++            file.delete();
++
++        } else if (item == reload) {
++            file.reloadPreview();
++
++        } else if (item == rename) {
++            file.rename();
++
++        } else if (item == overlay) {
++            file.useAsOverlay();
++
++
++        } else if (item == mock) {
++            file.useForMockLocation();
++
++        } else if (item == send) {
++            file.sendTo();
++
++        } else if (item == view) {
++            file.view();
++
++        } else if (item == copy) {
++            file.copyTo();
++
++        } else  {
++            return false;
++        }
++        return true;
++    }
++
++}
+diff --git a/src/ch/bailu/aat/menus/LocationMenu.java b/src/ch/bailu/aat/menus/LocationMenu.java
+new file mode 100644
+index 00000000..9a368c52
+--- /dev/null
++++ b/src/ch/bailu/aat/menus/LocationMenu.java
+@@ -0,0 +1,139 @@
++package ch.bailu.aat.menus;
++
++import org.osmdroid.util.GeoPoint;
++import org.osmdroid.views.MapView;
++
++import android.content.ClipData;
++import android.content.ClipboardManager;
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
++import ch.bailu.aat.R;
++import ch.bailu.aat.coordinates.Coordinates;
++import ch.bailu.aat.helpers.AppLog;
++
++public class LocationMenu extends AbsMenu{
++
++    private final MapView map;
++    private final Context context;
++
++    private MenuItem send, view, copy, paste;
++    
++    
++    public LocationMenu(MapView m) {
++        map = m;
++        context = m.getContext();
++    }
++    
++    @Override
++    public void inflate(Menu menu) {
++        send = menu.add(R.string.location_send);
++        view = menu.add(R.string.location_view);
++        copy = menu.add(R.string.location_copy);
++        paste = menu.add(R.string.location_paste);
++        
++    }
++
++    @Override
++    public void inflateWithHeader(ContextMenu menu) {
++        menu.setHeaderTitle("Center Location*");
++        
++    }
++
++    @Override
++    public void prepare(Menu menu) {
++        
++        paste.setEnabled(getStringFromClipboard() != null);
++    }
++
++    
++    private String getStringFromClipboard() {
++        ClipboardManager clipboard = (ClipboardManager)
++                context.getSystemService(Context.CLIPBOARD_SERVICE);
++
++        ClipData clip = clipboard.getPrimaryClip();
++        if (clip != null) {
++            ClipData.Item i = clipboard.getPrimaryClip().getItemAt(0);
++            if (i!= null) {
++                CharSequence t = i.getText();
++                if (t != null) return t.toString();
++            }
++        }
++        return null; 
++    }
++        
++    
++    
++    @Override
++    public boolean onItemClick(MenuItem item) {
++        if (item == send) {
++            send();
++
++        } else if (item == view) {
++            view();
++
++        } else if (item == copy) {
++            copy();
++
++        } else if (item == paste) {
++            paste();
++        }
++        return false;
++    }
++
++    
++
++    private void paste() {
++        GeoPoint geo = new GeoPoint(0,0);
++        
++        String s = getStringFromClipboard();
++        if (s!=null  && Coordinates.stringToGeoPoint(s, geo)) {
++            map.getController().setCenter(geo);
++        }
++        
++    }
++
++    private void copy() {
++        ClipboardManager clipboard = (ClipboardManager)
++                context.getSystemService(Context.CLIPBOARD_SERVICE);
++
++        ClipData clip = ClipData.newPlainText("GEO location", Coordinates.geoPointToGeoUri(getCenter()));
++        clipboard.setPrimaryClip(clip);
++        
++    }
++
++
++    private void view() {
++        final Intent intent = new Intent(Intent.ACTION_VIEW);
++        final GeoPoint center = getCenter();
++        final Uri uri = Uri.parse(Coordinates.geoPointToGeoUri(center));
++        AppLog.d(this, uri.toString());
++
++        intent.setData(uri);
++        context.startActivity(Intent.createChooser(intent, uri.toString()));
++    }
++
++
++    private void send() {
++        final Intent intent = new Intent(Intent.ACTION_SEND);
++        final GeoPoint center = getCenter();
++
++        final String url = Coordinates.geoPointToGeoUri(center);
++        final String desc = Coordinates.geoPointToDescription(center);
++        final String body = desc+ "\n\n" + url;   
++
++
++        intent.setType("text/plain");
++        intent.putExtra(android.content.Intent.EXTRA_SUBJECT, url);
++        intent.putExtra(android.content.Intent.EXTRA_TEXT, body);
++        context.startActivity(Intent.createChooser(intent, url));
++    }
++    
++    private GeoPoint getCenter() {
++        return map.getBoundingBox().getCenter();
++    }
++    
++}
+diff --git a/src/ch/bailu/aat/menus/OptionsMenu.java b/src/ch/bailu/aat/menus/OptionsMenu.java
+new file mode 100644
+index 00000000..d70c158a
+--- /dev/null
++++ b/src/ch/bailu/aat/menus/OptionsMenu.java
+@@ -0,0 +1,108 @@
++package ch.bailu.aat.menus;
++
++import org.osmdroid.util.BoundingBoxE6;
++
++import ch.bailu.aat.R;
++import ch.bailu.aat.activities.ActivitySwitcher;
++import ch.bailu.aat.activities.NominatimActivity;
++import ch.bailu.aat.preferences.CheckListDialog;
++import ch.bailu.aat.preferences.IndexListDialog;
++import ch.bailu.aat.preferences.SolidAutopause;
++import ch.bailu.aat.preferences.SolidBacklight;
++import ch.bailu.aat.preferences.SolidMapTileStack;
++import ch.bailu.aat.preferences.SolidOverlayFileList;
++import ch.bailu.aat.preferences.SolidPreset;
++import ch.bailu.aat.services.ServiceContext;
++import ch.bailu.aat.services.tracker.State;
++import android.content.Context;
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
++
++public class OptionsMenu extends AbsMenu {
++    private MenuItem start, pause, backlight, autopause, map, overlays, nominatim;
++
++    private final ServiceContext scontext;
++    
++    
++    public OptionsMenu(ServiceContext sc) {
++        scontext = sc;
++    }
++    
++    
++    @Override
++    public void inflate(Menu menu) {
++        start = menu.add(R.string.tracker_start);
++        start.setIcon(R.drawable.media_playback_start_inverse);
++
++        pause = menu.add(R.string.tracker_pause);
++        pause.setIcon(R.drawable.media_playback_pause_inverse);
++
++        nominatim = menu.add(R.string.intro_nominatim);
++        nominatim.setIcon(R.drawable.edit_find_inverse);
++
++        map = menu.add(R.string.p_map);
++
++        overlays = menu.add(R.string.p_overlay);
++        overlays.setIcon(R.drawable.view_paged_inverse);
++
++        backlight = menu.add(R.string.p_backlight_title);
++    }
++
++    @Override
++    public void inflateWithHeader(ContextMenu menu) {
++        menu.setHeaderTitle(R.string.app_sname);
++        inflate(menu);
++    }
++
++    
++    @Override
++    public void prepare(Menu menu) {
++        updateMenuText(scontext.getTrackerService().getState());
++    }
++
++    
++    private void updateMenuText(State state) {
++        start.setTitle(state.getStartStopTextID());
++        start.setIcon(state.getStartStopIconID());
++        pause.setTitle(state.getPauseResumeTextID());
++    }
++    
++    
++    @Override
++    public boolean onItemClick(MenuItem item) {
++        final Context c = scontext.getContext();
++        
++        if (item == start) {
++            scontext.getTrackerService().getState().onStartStop();
++
++        } else if (item == pause) {
++            scontext.getTrackerService().getState().onPauseResume();
++
++        } else if (item == backlight) {
++            new IndexListDialog(c, new SolidBacklight(c, new SolidPreset(c).getIndex()));
++
++        } else if (item == autopause) {
++            new IndexListDialog(c, new SolidAutopause(c, new SolidPreset(c).getIndex()));
++
++        } else if (item == map) {
++            new CheckListDialog(c,new SolidMapTileStack(c, new SolidPreset(c).getIndex()));
++
++        } else if (item == overlays) {
++            new CheckListDialog(c,new SolidOverlayFileList(c));
++
++        } else if (item == nominatim) {
++            ActivitySwitcher.start(c, NominatimActivity.class,new BoundingBoxE6(0,0,0,0));
++
++
++        } else {
++            return false;
++
++        }
++
++
++
++        return true;
++    }
++
++}
+diff --git a/src/ch/bailu/aat/views/MainControlBar.java b/src/ch/bailu/aat/views/MainControlBar.java
+index fbc54fbf..0b21d72a 100644
+--- a/src/ch/bailu/aat/views/MainControlBar.java
++++ b/src/ch/bailu/aat/views/MainControlBar.java
+@@ -1,28 +1,29 @@
+ package ch.bailu.aat.views;
+ 
+-import android.app.Activity;
+ import android.view.View;
+ import ch.bailu.aat.helpers.AppLayout;
++import ch.bailu.aat.menus.OptionsMenu;
++import ch.bailu.aat.services.ServiceContext;
+ 
+ public class MainControlBar extends ControlBar {
+ 
+     private final BusyButton menu;
+     
+-    public MainControlBar(final Activity context) {
++    public MainControlBar(final ServiceContext context) {
+         this(context, DEFAULT_VISIBLE_BUTTON_COUNT);
+         
+     }
+     
+     
+-    public MainControlBar(final Activity context, int button) {
+-        super(context, AppLayout.getOrientationAlongSmallSide(context), button);
+-        menu = new BusyButton(context, ch.bailu.aat.R.drawable.open_menu_inverse);
++    public MainControlBar(final ServiceContext scontext, int button) {
++        super(scontext.getContext(), AppLayout.getOrientationAlongSmallSide(scontext.getContext()), button);
++        menu = new BusyButton(scontext.getContext(), ch.bailu.aat.R.drawable.open_menu_inverse);
+         this.addView(menu);
+         menu.setOnClickListener(new OnClickListener() {
+ 
+             @Override
+             public void onClick(View v) {
+-                context.openOptionsMenu();
++                new OptionsMenu(scontext).showAsPopup(getContext(), menu);
+             }});
+         
+     }
+diff --git a/src/ch/bailu/aat/views/map/overlay/control/InformationBarOverlay.java b/src/ch/bailu/aat/views/map/overlay/control/InformationBarOverlay.java
+index f02394a5..d49e77ed 100644
+--- a/src/ch/bailu/aat/views/map/overlay/control/InformationBarOverlay.java
++++ b/src/ch/bailu/aat/views/map/overlay/control/InformationBarOverlay.java
+@@ -1,22 +1,14 @@
+ package ch.bailu.aat.views.map.overlay.control;
+ 
+-import org.osmdroid.util.GeoPoint;
+-
+-import android.content.Intent;
+-import android.net.Uri;
+-import android.view.MenuInflater;
+-import android.view.MenuItem;
+ import android.view.View;
+ import android.widget.ImageButton;
+-import android.widget.PopupMenu;
+-import android.widget.PopupMenu.OnMenuItemClickListener;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.activities.ActivitySwitcher;
+ import ch.bailu.aat.activities.NominatimActivity;
+ import ch.bailu.aat.activities.OverpassActivity;
+ import ch.bailu.aat.gpx.GpxInformation;
+-import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.ToolTip;
++import ch.bailu.aat.menus.LocationMenu;
+ import ch.bailu.aat.preferences.SolidIndexList;
+ import ch.bailu.aat.preferences.SolidLegend;
+ import ch.bailu.aat.preferences.SolidMapGrid;
+@@ -28,7 +20,7 @@ import ch.bailu.aat.views.map.overlay.gpx.InfoViewNodeSelectorOverlay;
+ public class InformationBarOverlay extends ControlBarOverlay {
+     private final View reload;
+ 
+-    private final ImageButton overpass, nominatim, sendto;
++    private final ImageButton overpass, nominatim, location;
+     private final SolidIndexList sgrid, slegend;
+ 
+     private final InfoViewNodeSelectorOverlay selector;
+@@ -49,7 +41,7 @@ public class InformationBarOverlay extends ControlBarOverlay {
+         nominatim = bar.addImageButton(R.drawable.edit_find);
+         reload = bar.addImageButton(R.drawable.view_refresh);
+ 
+-        sendto = bar.addImageButton(R.drawable.send_to);
++        location = bar.addImageButton(R.drawable.find_location);
+ 
+         selector = new InfoViewNodeSelectorOverlay(o, GpxInformation.ID.INFO_ID_ALL);
+ 
+@@ -75,8 +67,8 @@ public class InformationBarOverlay extends ControlBarOverlay {
+             ActivitySwitcher.start(getContext(), OverpassActivity.class, getMapView().getBoundingBox());
+         } else if (v==nominatim) {
+             ActivitySwitcher.start(getContext(), NominatimActivity.class, getMapView().getBoundingBox());
+-        } else if (v==sendto) {
+-            new LocationAction().showPopupMenu(v);
++        } else if (v==location) {
++            new LocationMenu(getMapView()).showAsPopup(getContext(), location);
+         }
+ 
+ 
+@@ -115,64 +107,5 @@ public class InformationBarOverlay extends ControlBarOverlay {
+ 
+     }
+ 
+-    private class LocationAction implements OnMenuItemClickListener {
+-
+-
+-        public void showPopupMenu(View v) {
+-            final PopupMenu popup = new PopupMenu(getContext(), v);
+-            final MenuInflater inflater = popup.getMenuInflater();
+-
+-            inflater.inflate(R.menu.sendlocation, popup.getMenu());
+-            popup.setOnMenuItemClickListener(this);
+-            popup.show();
+-        }
+-
+-        @Override
+-        public boolean onMenuItemClick(MenuItem item) {
+-            if (item.getItemId()== R.id.m_location_send) {
+-                send();
+-
+-            } else if (item.getItemId() == R.id.m_location_view) {
+-                view();
+-
+-            }
+-            return false;
+-        }
+-
+-        private void view() {
+-            final Intent intent = new Intent(Intent.ACTION_VIEW);
+-
+-
+-            final GeoPoint center = getMapView().getBoundingBox().getCenter();
+-            final double la = center.getLatitudeE6() / 1e6d;
+-            final double lo = center.getLongitudeE6() / 1e6d;
+-
+-            final Uri uri = Uri.parse("geo:" + la + "," + lo);
+-
+-            AppLog.d(this, uri.toString());
+-
+-            intent.setData(uri);
+-            getContext().startActivity(Intent.createChooser(intent, uri.toString()));
+-        }
+-
+-
+-        private void send() {
+-            final Intent intent = new Intent(Intent.ACTION_SEND);
+-            final GeoPoint center = getMapView().getBoundingBox().getCenter();
+-            final double la = center.getLatitudeE6() / 1e6d;
+-            final double lo = center.getLongitudeE6() / 1e6d;
+-
+-            final String url = "geo:" + la + "," + lo;
+-            final String body = "latitude: "+ la + " longitude: " + lo + "\n\n" + url;   
+-
+-
+-            intent.setType("text/plain");
+-            intent.putExtra(android.content.Intent.EXTRA_SUBJECT, url);
+-            intent.putExtra(android.content.Intent.EXTRA_TEXT, body);
+-            getContext().startActivity(Intent.createChooser(intent, url));
+-        }
+-
+-    }
+-
+ 
+ }
+\ No newline at end of file

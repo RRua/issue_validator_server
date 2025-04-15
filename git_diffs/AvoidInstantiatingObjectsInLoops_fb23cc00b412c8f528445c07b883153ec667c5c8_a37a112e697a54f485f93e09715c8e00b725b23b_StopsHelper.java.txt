@@ -1,0 +1,760 @@
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java b/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
+index 183b5d7..fb214ed 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/NearbyStopsActivity.java
+@@ -1,6 +1,5 @@
+ package at.flausch_productions.amsprung;
+ 
+-import android.os.AsyncTask;
+ import android.os.Bundle;
+ import android.support.design.widget.FloatingActionButton;
+ import android.support.design.widget.Snackbar;
+@@ -10,8 +9,6 @@ import android.support.v7.widget.RecyclerView;
+ import android.support.v7.widget.Toolbar;
+ import android.view.View;
+ 
+-import at.flausch_productions.amsprung.persistance.StopsHelper;
+-
+ public class NearbyStopsActivity extends AppCompatActivity {
+ 
+     private static final double LAT = 48.20943;
+@@ -37,27 +34,13 @@ public class NearbyStopsActivity extends AppCompatActivity {
+             }
+         });
+ 
+-
+-
+         recycler = (RecyclerView) findViewById(R.id.recycler);
+         layoutManager = new LinearLayoutManager(this);
+         recycler.setLayoutManager(layoutManager);
+ 
+-        new AsyncTask<Void,Void,NearestStopsAdapter>(){
+-            @Override
+-            protected NearestStopsAdapter doInBackground(Void... params) {
+-
+-                StopsHelper.Cache cache = new StopsHelper.Cache(NearbyStopsActivity.this);
+-                return new NearestStopsAdapter(cache, LNG, LAT);
+-            }
+-
+-            @Override
+-            protected void onPostExecute(NearestStopsAdapter nearestStopsAdapter) {
+-                super.onPostExecute(nearestStopsAdapter);
+-                adapter = nearestStopsAdapter;
+-                recycler.setAdapter(adapter);
+-            }
+-        }.execute();
++        adapter = new NearestStopsAdapter(this);
++        adapter.setLocation(LNG, LAT);
++        recycler.setAdapter(adapter);
+     }
+ 
+ 
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/NearestStopsAdapter.java b/app/src/main/java/at/flausch_productions/amsprung/NearestStopsAdapter.java
+index 01676f1..8dc0d17 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/NearestStopsAdapter.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/NearestStopsAdapter.java
+@@ -1,37 +1,38 @@
+ package at.flausch_productions.amsprung;
+ 
++import android.content.Context;
+ import android.content.Intent;
++import android.location.Location;
++import android.os.AsyncTask;
+ import android.support.v7.widget.RecyclerView;
+-import android.util.TypedValue;
+-import android.view.Gravity;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.LinearLayout;
+ import android.widget.TextView;
+ 
+-import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Map;
++import java.util.TreeMap;
+ 
+-import at.flausch_productions.amsprung.persistance.LineModel;
+-import at.flausch_productions.amsprung.persistance.StopModel;
+-import at.flausch_productions.amsprung.persistance.StopsHelper;
++import at.flausch_productions.amsprung.persistance.room.AppDatabase;
++import at.flausch_productions.amsprung.persistance.room.model.Stop;
+ import at.flausch_productions.amsprung.wienerlinienapi.LineBadgeHelper;
+ 
+ /**
+  * Created by uniq on 20.01.17.
+  */
+ public class NearestStopsAdapter extends RecyclerView.Adapter<NearestStopsAdapter.NearestStopsAdapterViewHolder> {
++    private final Context context;
+ 
+-    private final StopsHelper.Cache cache;
+-    private final Map<Long, StopModel> nearestStops;
++    private Map<Long, Stop> nearestStops = new TreeMap<>();
+ 
+-    NearestStopsAdapter(StopsHelper.Cache cache, double currentLng, double currentLat){
+-        this.cache = cache;
+-        this.nearestStops = StopsHelper.findNearestStops(cache, currentLng, currentLat);
++
++    public NearestStopsAdapter(Context context) {
++        this.context = context.getApplicationContext();
+     }
+ 
++
+     @Override
+     public NearestStopsAdapterViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+ 
+@@ -42,11 +43,13 @@ public class NearestStopsAdapter extends RecyclerView.Adapter<NearestStopsAdapte
+         return vh;
+     }
+ 
++
+     @Override
+     public void onBindViewHolder(NearestStopsAdapterViewHolder holder, int position) {
+ 
+         long dist = (Long) nearestStops.keySet().toArray()[position];
+-        final StopModel stop = nearestStops.get(dist);
++        //final StopModel stop = nearestStops.get(dist);
++        final Stop stop = nearestStops.get(dist);
+ 
+         holder.stopName.setText(stop.getName());
+         holder.communeName.setText(stop.getCommuneName());
+@@ -56,38 +59,7 @@ public class NearestStopsAdapter extends RecyclerView.Adapter<NearestStopsAdapte
+             holder.distance.setText(String.format("%.1fkm", dist * .001));
+         }
+ 
+-        List<String> lineNames = new ArrayList<>();
+-
+-        holder.lines.removeAllViews();
+-        List<LineModel> lines = StopsHelper.findLinesForStop(cache, stop);
+-        for (LineModel line : lines) {
+-
+-            if (!lineNames.contains(line.getName())) {
+-
+-                TextView textView = new TextView(holder.lines.getContext());
+-                textView.setTextSize(TypedValue.COMPLEX_UNIT_SP,10);
+-
+-                final float scale = holder.lines.getResources().getDisplayMetrics().density;
+-                int side_in_dp = 40;
+-                int side_in_px = (int) (side_in_dp * scale * 0.5f);
+-                textView.setGravity(Gravity.CENTER);
+-                textView.setHeight(side_in_px);
+-                textView.setWidth(side_in_px);
+-
+-                int padding_in_dp = 3;
+-                int padding_in_px = (int) (padding_in_dp * scale + 0.5f);
+-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+-                lp.setMargins(padding_in_px, 0, 0, 0);
+-                textView.setLayoutParams(lp);
+-
+-                LineBadgeHelper.format(textView, line.getName(), line.getType());
+-                textView.setText(line.getName());
+-
+-                holder.lines.addView(textView);
+-
+-                lineNames.add(line.getName());
+-            }
+-        }
++        LineBadgeHelper.lineBadgesForStop(stop.getId(), holder.lines);
+ 
+         holder.itemView.setAlpha(0f);
+         holder.itemView.animate().alpha(1f).setDuration(600).start();
+@@ -108,6 +80,48 @@ public class NearestStopsAdapter extends RecyclerView.Adapter<NearestStopsAdapte
+         return nearestStops.size();
+     }
+ 
++    public void setLocation(final double searchLng, final double searchLat) {
++        new AsyncTask<Void, Void, Void>() {
++            @Override
++            protected Void doInBackground(Void... voids) {
++                AppDatabase db = AppDatabase.via(context);
++                // TODO: bounding box?!
++                List<Stop> allStops = db.stopDao().getAll();
++
++                float[] dstResult = new float[3];
++                Map<Long, Stop> nearest = new TreeMap<>();
++                long biggestIn = 0;
++                for (Stop stop : allStops) {
++                    Location.distanceBetween(searchLat, searchLng, stop.getLat(), stop.getLng(), dstResult);
++                    long dist = (long) dstResult[0];
++                    if (nearest.size() < 20) {
++                        nearest.put(dist, stop);
++                        if (dist > biggestIn) {
++                            biggestIn = dist;
++                        }
++                    } else {
++                        if (dist < biggestIn) {
++                            nearest.remove(biggestIn);
++                            nearest.put(dist, stop);
++                            biggestIn = 0;
++                            for (long l : nearest.keySet()) {
++                                biggestIn = l > biggestIn ? l : biggestIn;
++                            }
++                        }
++                    }
++                }
++                NearestStopsAdapter.this.nearestStops = nearest;
++
++                return null;
++            }
++
++            @Override
++            protected void onPostExecute(Void aVoid) {
++                notifyDataSetChanged();
++            }
++        }.execute();
++    }
++
+     public static class NearestStopsAdapterViewHolder extends RecyclerView.ViewHolder {
+ 
+         View clicky;
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/DbHelper.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/DbHelper.java
+deleted file mode 100644
+index 438984f..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/DbHelper.java
++++ /dev/null
+@@ -1,31 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import android.content.Context;
+-import android.database.sqlite.SQLiteDatabase;
+-import android.database.sqlite.SQLiteOpenHelper;
+-
+-/**
+- * Created by uniq on 16.02.16.
+- */
+-public class DbHelper extends SQLiteOpenHelper {
+-
+-    private final static String DATABASE_NAME = "at.fluasch_productions.amsprung.sqlite.db";
+-    private final static int VERSION = 1;
+-
+-    public DbHelper(Context context) {
+-        super(context, DATABASE_NAME, null, VERSION);
+-    }
+-
+-    @Override
+-    public void onCreate(SQLiteDatabase db) {
+-
+-        // create Monitor
+-        db.execSQL(MonitorDbHelper.CREATE_STATEMENT);
+-
+-    }
+-
+-    @Override
+-    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+-
+-    }
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/LineModel.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/LineModel.java
+deleted file mode 100644
+index 11e0187..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/LineModel.java
++++ /dev/null
+@@ -1,14 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import lombok.Getter;
+-import lombok.Setter;
+-
+-/**
+- * Created by uniq on 21.01.17.
+- */
+-public class LineModel {
+-    @Getter @Setter int id;
+-    @Getter @Setter String name;
+-    @Getter @Setter boolean realTimeData;
+-    @Getter @Setter LineType type;
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/LineType.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/LineType.java
+deleted file mode 100644
+index 47edb43..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/LineType.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-/**
+- * Created by uniq on 21.01.17.
+- */
+-public enum LineType {
+-    METRO("ptMetro"),
+-    TRAM("ptTram"),
+-    TRAM_WLB("ptTramWLB"),
+-    TRAM_VRT("ptTramVRT"),
+-    BUS_CITY("ptBusCity"),
+-    BUS_NIGHT("ptBusNight"),
+-    TRAIN_S("ptTrainS");
+-
+-    private final String type;
+-
+-    LineType(String type){
+-        this.type = type;
+-    }
+-
+-    public static LineType fromString(String type){
+-        for (LineType t : LineType.values()){
+-            if (t.type.equals(type)){
+-                return t;
+-            }
+-        }
+-        return null;
+-    }
+-
+-    public String getType() {
+-        return type;
+-    }
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/Monitor.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/Monitor.java
+deleted file mode 100644
+index 606ec14..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/Monitor.java
++++ /dev/null
+@@ -1,23 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import android.content.ContentValues;
+-import android.database.Cursor;
+-
+-import lombok.Getter;
+-import lombok.Setter;
+-
+-import static at.flausch_productions.amsprung.util.StringUtil.joinString;
+-
+-/**
+- * Created by uniq on 04.02.16.
+- */
+-public class Monitor {
+-
+-
+-    @Getter @Setter private long id;
+-
+-    @Getter @Setter private double centerLat;
+-    @Getter @Setter private double centerLng;
+-
+-
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/MonitorDbHelper.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/MonitorDbHelper.java
+deleted file mode 100644
+index 7b39a47..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/MonitorDbHelper.java
++++ /dev/null
+@@ -1,51 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import android.content.ContentValues;
+-import android.database.Cursor;
+-
+-import static at.flausch_productions.amsprung.util.StringUtil.joinString;
+-
+-/**
+- * Created by uniq on 16.02.16.
+- */
+-public class MonitorDbHelper {
+-
+-    public static final String TABLE = "monitor";
+-
+-    public static final String C_ID = "_id";
+-    public static final String C_NAME  = "name";
+-    public static final String C_CENTER_LAT = "center_lat";
+-    public static final String C_CENTER_LNG = "center_lng";
+-
+-    public static final String[] ALL_COLUMNS = new String[]{C_ID, C_CENTER_LAT, C_CENTER_LNG};
+-
+-    public static final String CREATE_STATEMENT = "create table " + TABLE + "("
+-            + C_ID + " integer primary key autoincrement, "
+-            + C_NAME + " text not null, "
+-            + C_CENTER_LAT + " real not null, "
+-            + C_CENTER_LNG + " real not null);";
+-
+-    public static Monitor fromCursor(Cursor cursor){
+-
+-        Monitor m = new Monitor();
+-
+-        m.setId(cursor.getLong(cursor.getColumnIndexOrThrow(C_ID)));
+-        m.setCenterLat(cursor.getDouble(cursor.getColumnIndexOrThrow(C_CENTER_LAT)));
+-        m.setCenterLng(cursor.getDouble(cursor.getColumnIndexOrThrow(C_CENTER_LNG)));
+-
+-        return m;
+-    }
+-
+-    public static ContentValues toContentValues(Monitor monitor){
+-
+-        ContentValues cv = new ContentValues();
+-
+-        cv.put(C_ID, monitor.getId());
+-        cv.put(C_CENTER_LAT, monitor.getCenterLat());
+-        cv.put(C_CENTER_LNG, monitor.getCenterLng());
+-
+-        return cv;
+-    }
+-
+-
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/StairModel.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/StairModel.java
+deleted file mode 100644
+index 2b5b2b0..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/StairModel.java
++++ /dev/null
+@@ -1,17 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import lombok.Getter;
+-import lombok.Setter;
+-
+-/**
+- * Created by uniq on 21.01.17.
+- */
+-
+-public class StairModel {
+-
+-    @Getter @Setter int id;
+-    @Getter @Setter int rbl;
+-
+-    @Getter @Setter int stopId;
+-    @Getter @Setter int lineId;
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/StopModel.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/StopModel.java
+deleted file mode 100644
+index df447e2..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/StopModel.java
++++ /dev/null
+@@ -1,20 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import java.util.List;
+-
+-import lombok.Getter;
+-import lombok.Setter;
+-
+-/**
+- * Created by uniq on 20.01.17.
+- */
+-
+-public class StopModel {
+-
+-    @Getter @Setter int id;
+-    @Getter @Setter String name;
+-    @Getter @Setter String communeName;
+-    @Getter @Setter double lng;
+-    @Getter @Setter double lat;
+-
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/persistance/StopsHelper.java b/app/src/main/java/at/flausch_productions/amsprung/persistance/StopsHelper.java
+deleted file mode 100644
+index 2941ef6..0000000
+--- a/app/src/main/java/at/flausch_productions/amsprung/persistance/StopsHelper.java
++++ /dev/null
+@@ -1,255 +0,0 @@
+-package at.flausch_productions.amsprung.persistance;
+-
+-import android.content.Context;
+-import android.location.Location;
+-
+-import com.google.gson.Gson;
+-import com.opencsv.CSVReader;
+-
+-import java.io.FileNotFoundException;
+-import java.io.IOException;
+-import java.io.InputStreamReader;
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.TreeMap;
+-
+-import at.flausch_productions.amsprung.R;
+-import at.flausch_productions.amsprung.util.MinLog;
+-
+-/**
+- * Created by uniq on 20.01.17.
+- */
+-
+-public class StopsHelper {
+-
+-    public static final char SEPARATOR = ';';
+-    public static final char QUOTE_CHAR = '"';
+-
+-    public static final int IDX_STOP_ID = 0;
+-    public static final int IDX_STOP_TYPE = 1;
+-    public static final int IDX_STOP_DIVA = 2;
+-    public static final int IDX_STOP_NAME = 3;
+-    public static final int IDX_STOP_COMMUNE = 4;
+-    public static final int IDX_STOP_COMMUNE_ID = 5;
+-    public static final int IDX_STOP_LAT = 6;
+-    public static final int IDX_STOP_LNG = 7;
+-    public static final int IDX_STOP_STATUS = 8;
+-
+-    public static final int IDX_STAIR_ID = 0;
+-    public static final int IDX_STAIR_LINE_ID = 1;
+-    public static final int IDX_STAIR_STOP_ID = 2;
+-    public static final int IDX_STAIR_DIRECTION = 3;
+-    public static final int IDX_STAIR_ORDER = 4;
+-    public static final int IDX_STAIR_RBL_NUM = 5;
+-    public static final int IDX_STAIR_AREA = 6;
+-    public static final int IDX_STAIR_PLATFORM = 7;
+-    public static final int IDX_STAIR_LAT = 8;
+-    public static final int IDX_STAIR_LON = 9;
+-    public static final int IDX_STAIR_STATUS = 10;
+-
+-    public static final int IDX_LINE_ID = 0;
+-    public static final int IDX_LINE_NAME = 1;
+-    public static final int IDX_LINE_ORDER = 2;
+-    public static final int IDX_LINE_REALTIME_DATA = 3;
+-    public static final int IDX_LINE_TYPE = 4;
+-    public static final int IDX_LINE_STATUS = 5;
+-
+-    public static StopModel findStopById(Cache cache, int stopId){
+-        return cache.stops.byId.get(stopId);
+-    }
+-
+-    public static List<LineModel> findLinesForStop(Cache cache, StopModel stop) {
+-        List<LineModel> lines = new ArrayList<>();
+-        List<StairModel> stairs = cache.stairs.byStopId.get(stop.getId());
+-        if (stairs != null) {
+-            for (StairModel stair : stairs) {
+-                LineModel line = cache.lines.byId.get(stair.getLineId());
+-                if (line != null) {
+-                    lines.add(line);
+-                }
+-            }
+-        }
+-        return lines;
+-    }
+-
+-    public static List<StairModel> findStairsForStop(Cache cache, StopModel stop) {
+-        List<StairModel> stairs = cache.stairs.byStopId.get(stop.getId());
+-        if (stairs == null){
+-            return new ArrayList<>();
+-        } else {
+-            return stairs;
+-        }
+-    }
+-
+-    public static class StopsCache{
+-        final Map<Integer, StopModel> byId = new HashMap<>();
+-    }
+-
+-    public static class Cache {
+-
+-        final StopsCache stops;
+-        final StairCache stairs;
+-        final LinesCache lines;
+-
+-        public Cache(Context context){
+-            stops = loadAllStops(context);
+-            stairs = loadAllStairs(context);
+-            lines = loadAllLines(context);
+-        }
+-    }
+-
+-    protected static StopsCache loadAllStops(Context context){
+-
+-        StopsCache stopsCache = new StopsCache();
+-
+-        // read list of stops
+-        try {
+-            CSVReader r = new CSVReader(new InputStreamReader(context.getResources().openRawResource(R.raw.wienerlinien_ogd_haltestellen)), SEPARATOR, QUOTE_CHAR);
+-
+-            // skip header
+-            r.readNext();
+-
+-            String[] line = null;
+-            while ((line = r.readNext()) != null) {
+-                try {
+-                    StopModel stop = new StopModel();
+-                    stop.setId(Integer.valueOf(line[IDX_STOP_ID]));
+-                    stop.setName(line[IDX_STOP_NAME]);
+-                    stop.setCommuneName(line[IDX_STOP_COMMUNE]);
+-                    stop.setLat(Double.valueOf(line[IDX_STOP_LAT]));
+-                    stop.setLng(Double.valueOf(line[IDX_STOP_LNG]));
+-                    stopsCache.byId.put(stop.getId(), stop);
+-                } catch (NumberFormatException e){
+-                    // skip line ... when numbers bad
+-                }
+-            }
+-        } catch (FileNotFoundException e) {
+-            MinLog.d(e, "could not open stop-definitions");
+-        } catch (IOException e) {
+-            MinLog.d(e, "could not read stop-definitions");
+-        }
+-
+-        return stopsCache;
+-    }
+-
+-    public static Map<Long, StopModel> findNearestStops(Cache cache, double currentLng, double currentLat) {
+-
+-        Collection<StopModel> stops = cache.stops.byId.values();
+-
+-        float[] dstResult = new float[3];
+-
+-        Map<Long, StopModel> nearestStops = new TreeMap<>();
+-
+-        long biggestDist = 0;
+-
+-        for (StopModel stop : stops) {
+-            Location.distanceBetween(currentLat, currentLng, stop.getLat(), stop.getLng(), dstResult);
+-            long dist = (long) dstResult[0];
+-
+-            if (nearestStops.size() < 20){
+-                nearestStops.put(dist, stop);
+-                if (dist > biggestDist){
+-                    biggestDist = dist;
+-                }
+-            } else {
+-                if (biggestDist > dist) {
+-                    // remove biggest, insert new one
+-                    nearestStops.remove(biggestDist);
+-                    nearestStops.put(dist, stop);
+-                    // get new biggest dist
+-                    biggestDist = 0;
+-                    for (long iterDist : nearestStops.keySet()){
+-                        if (iterDist > biggestDist) {
+-                            biggestDist = iterDist;
+-                        }
+-                    }
+-                }
+-            }
+-        }
+-
+-        for (Map.Entry<Long, StopModel> entry : nearestStops.entrySet()) {
+-            MinLog.d("%s %s - %dm", entry.getValue().getCommuneName(), entry.getValue().getName(), entry.getKey());
+-        }
+-
+-        return nearestStops;
+-    }
+-
+-    public static class StairCache{
+-        final Map<Integer, StairModel> byId = new HashMap<>();
+-        final Map<Integer, List<StairModel>> byStopId = new HashMap<>();
+-        final Map<Integer, List<StairModel>> byLineId = new HashMap<>();
+-    }
+-
+-    protected static StairCache loadAllStairs(Context context){
+-        StairCache stairCache = new StairCache();
+-        try {
+-            CSVReader r = new CSVReader(new InputStreamReader(context.getResources().openRawResource(R.raw.wienerlinien_ogd_steige)), SEPARATOR, QUOTE_CHAR);
+-
+-            // skip header
+-            r.readNext();
+-
+-            String[] line = null;
+-            while ((line = r.readNext()) != null) {
+-                StairModel stair = new StairModel();
+-                stair.setId(Integer.valueOf(line[IDX_STAIR_ID]));
+-                stair.setLineId(Integer.valueOf(line[IDX_STAIR_LINE_ID]));
+-                stair.setStopId(Integer.valueOf(line[IDX_STAIR_STOP_ID]));
+-                try {
+-                    stair.setRbl(Integer.valueOf(line[IDX_STAIR_RBL_NUM]));
+-                } catch (NumberFormatException e){
+-                    // mehhhh somtimes they just don't have one
+-                }
+-
+-                // build id index
+-                stairCache.byId.put(stair.getId(), stair);
+-                // build stopId index
+-                if (stairCache.byStopId.get(stair.getStopId()) == null){
+-                    stairCache.byStopId.put(stair.getStopId(), new ArrayList<StairModel>());
+-                }
+-                stairCache.byStopId.get(stair.getStopId()).add(stair);
+-                // build line id index
+-                if (stairCache.byLineId.get(stair.getLineId()) == null){
+-                    stairCache.byLineId.put(stair.getLineId(), new ArrayList<StairModel>());
+-                }
+-                stairCache.byLineId.get(stair.getLineId()).add(stair);
+-            }
+-        } catch (IOException e) {
+-            MinLog.d(e, "could not read stair-definitions");
+-        }
+-        MinLog.d("stair cache: byId: %d, byLineId: %d, byStopId: %d", stairCache.byId.size(), stairCache.byLineId.size(), stairCache.byStopId.size());
+-        return stairCache;
+-    }
+-
+-    public static class LinesCache{
+-        final Map<Integer, LineModel> byId = new HashMap<>();
+-    }
+-
+-    protected static LinesCache loadAllLines(Context context){
+-        LinesCache linesCache = new LinesCache();
+-        try {
+-            CSVReader r = new CSVReader(new InputStreamReader(context.getResources().openRawResource(R.raw.wienerlinien_ogd_linien)), SEPARATOR, QUOTE_CHAR);
+-
+-            // skip header
+-            r.readNext();
+-
+-            String[] line = null;
+-            while ((line = r.readNext()) != null) {
+-                LineModel l = new LineModel();
+-                l.setId(Integer.valueOf(line[IDX_LINE_ID]));
+-                l.setName(line[IDX_LINE_NAME]);
+-                l.setRealTimeData("1".equals(line[IDX_LINE_REALTIME_DATA]));
+-                l.setType(LineType.fromString(line[IDX_LINE_TYPE]));
+-
+-                linesCache.byId.put(l.getId(), l);
+-                //MinLog.d("line: %s", new Gson().toJson(l));
+-            }
+-
+-        } catch (IOException e) {
+-            MinLog.d(e, "could not read line-definitions");
+-        }
+-        return linesCache;
+-    }
+-}
+diff --git a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/LineBadgeHelper.java b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/LineBadgeHelper.java
+index 34bca3b..2918b73 100644
+--- a/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/LineBadgeHelper.java
++++ b/app/src/main/java/at/flausch_productions/amsprung/wienerlinienapi/LineBadgeHelper.java
+@@ -17,7 +17,6 @@ import at.flausch_productions.amsprung.persistance.room.model.LineType;
+ /**
+  * Created by uniq on 22.01.17.
+  */
+-
+ public class LineBadgeHelper {
+ 
+     public static final void lineBadgesForStop(final int stopId, final LinearLayout linearLayout) {
+@@ -112,46 +111,4 @@ public class LineBadgeHelper {
+         }
+     }
+ 
+-    public static final void format(TextView textView, String lineName, at.flausch_productions.amsprung.persistance.LineType lineType){
+-
+-        switch (lineType){
+-            case METRO:
+-                textView.setTextColor(textView.getContext().getResources().getColor(R.color.white));
+-
+-                switch (lineName){
+-                    case "U1":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u1));
+-                        break;
+-                    case "U2":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u2));
+-                        break;
+-                    case "U3":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u3));
+-                        break;
+-                    case "U4":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u4));
+-                        break;
+-                    case "U5":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u5));
+-                        break;
+-                    case "U6":
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.linetype_u6));
+-                        break;
+-                    default:
+-                        textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.white));
+-                        textView.setTextColor(textView.getContext().getResources().getColor(R.color.black));
+-                }
+-                break;
+-            case TRAM:
+-            case TRAM_VRT:
+-            case TRAM_WLB:
+-                textView.setTextColor(textView.getContext().getResources().getColor(R.color.white));
+-                textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.black));
+-                break;
+-            default:
+-                textView.setTextColor(textView.getContext().getResources().getColor(R.color.black));
+-                textView.setBackgroundColor(textView.getContext().getResources().getColor(R.color.white));
+-        }
+-    }
+-
+ }

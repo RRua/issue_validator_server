@@ -1,0 +1,3849 @@
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTest.java
+index 996c7a20..6047af78 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTest.java
+@@ -9,15 +9,17 @@ import androidx.test.platform.app.InstrumentationRegistry;
+ import com.beemdevelopment.aegis.crypto.CryptoUtils;
+ import com.beemdevelopment.aegis.crypto.SCryptParameters;
+ import com.beemdevelopment.aegis.otp.OtpInfo;
+-import com.beemdevelopment.aegis.vault.Vault;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+ import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepository;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ import com.beemdevelopment.aegis.vault.slots.SlotException;
+ 
+ import org.hamcrest.Matcher;
++import org.junit.Before;
++import org.junit.Rule;
+ 
+ import java.lang.reflect.InvocationTargetException;
+ import java.security.InvalidAlgorithmParameterException;
+@@ -26,28 +28,41 @@ import java.security.NoSuchAlgorithmException;
+ 
+ import javax.crypto.NoSuchPaddingException;
+ import javax.crypto.SecretKey;
++import javax.inject.Inject;
++
++import dagger.hilt.android.testing.HiltAndroidRule;
+ 
+ public abstract class AegisTest {
+     public static final String VAULT_PASSWORD = "test";
+ 
+-    protected AegisApplication getApp() {
+-        return (AegisApplication) InstrumentationRegistry.getInstrumentation().getTargetContext().getApplicationContext();
++    @Rule
++    public HiltAndroidRule hiltRule = new HiltAndroidRule(this);
++
++    @Inject
++    protected VaultManager _vaultManager;
++
++    @Inject
++    protected Preferences _prefs;
++
++    @Before
++    public void init() {
++        hiltRule.inject();
+     }
+ 
+-    protected VaultManager getVault() {
+-        return getApp().getVaultManager();
++    protected AegisApplicationBase getApp() {
++        return (AegisApplicationBase) InstrumentationRegistry.getInstrumentation().getTargetContext().getApplicationContext();
+     }
+ 
+-    protected VaultManager initVault() {
++    protected VaultRepository initVault() {
+         VaultFileCredentials creds = generateCredentials();
+-        VaultManager vault = getApp().initVaultManager(new Vault(), creds);
++        VaultRepository vault;
+         try {
+-            vault.save(false);
+-        } catch (VaultManagerException e) {
++            vault = _vaultManager.init(creds);
++        } catch (VaultRepositoryException e) {
+             throw new RuntimeException(e);
+         }
+ 
+-        getApp().getPreferences().setIntroDone(true);
++        _prefs.setIntroDone(true);
+         return vault;
+     }
+ 
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestApplication.java b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestApplication.java
+new file mode 100644
+index 00000000..62f5b7f2
+--- /dev/null
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestApplication.java
+@@ -0,0 +1,7 @@
++package com.beemdevelopment.aegis;
++
++import dagger.hilt.android.testing.CustomTestApplication;
++
++@CustomTestApplication(AegisApplicationBase.class)
++public interface AegisTestApplication {
++}
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestRunner.java b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestRunner.java
+index d82f6620..44c06845 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestRunner.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/AegisTestRunner.java
+@@ -1,6 +1,7 @@
+ package com.beemdevelopment.aegis;
+ 
+ import android.app.Application;
++import android.app.Instrumentation;
+ import android.content.Context;
+ import android.preference.PreferenceManager;
+ 
+@@ -14,6 +15,12 @@ public class AegisTestRunner extends AndroidJUnitRunner {
+         BuildConfig.TEST.set(true);
+     }
+ 
++    @Override
++    public Application newApplication(ClassLoader cl, String name, Context context)
++            throws ClassNotFoundException, IllegalAccessException, InstantiationException {
++        return Instrumentation.newApplication(AegisTestApplication_Application.class, context);
++    }
++
+     @Override
+     public void callApplicationOnCreate(Application app) {
+         Context context = app.getApplicationContext();
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/DeepLinkTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/DeepLinkTest.java
+index 2fbef7cc..c6572cc8 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/DeepLinkTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/DeepLinkTest.java
+@@ -21,7 +21,10 @@ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
++import dagger.hilt.android.testing.HiltAndroidTest;
++
+ @RunWith(AndroidJUnit4.class)
++@HiltAndroidTest
+ @LargeTest
+ public class DeepLinkTest extends AegisTest {
+     @Before
+@@ -37,7 +40,7 @@ public class DeepLinkTest extends AegisTest {
+ 
+         onView(withId(R.id.action_save)).perform(click());
+ 
+-        VaultEntry createdEntry = (VaultEntry) getVault().getEntries().toArray()[0];
++        VaultEntry createdEntry = (VaultEntry) _vaultManager.getVault().getEntries().toArray()[0];
+         assertTrue(createdEntry.equivalates(entry));
+     }
+ 
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/IntroTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/IntroTest.java
+index ecc40163..ac438b83 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/IntroTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/IntroTest.java
+@@ -1,12 +1,25 @@
+ package com.beemdevelopment.aegis;
+ 
++import static androidx.test.espresso.Espresso.onView;
++import static androidx.test.espresso.action.ViewActions.click;
++import static androidx.test.espresso.action.ViewActions.closeSoftKeyboard;
++import static androidx.test.espresso.action.ViewActions.replaceText;
++import static androidx.test.espresso.action.ViewActions.typeText;
++import static androidx.test.espresso.assertion.ViewAssertions.matches;
++import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
++import static androidx.test.espresso.matcher.ViewMatchers.withId;
++import static junit.framework.TestCase.assertFalse;
++import static junit.framework.TestCase.assertNull;
++import static junit.framework.TestCase.assertTrue;
++import static org.hamcrest.Matchers.not;
++
+ import androidx.test.espresso.ViewInteraction;
+ import androidx.test.ext.junit.rules.ActivityScenarioRule;
+ import androidx.test.ext.junit.runners.AndroidJUnit4;
+ import androidx.test.filters.LargeTest;
+ 
+ import com.beemdevelopment.aegis.ui.IntroActivity;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ import com.beemdevelopment.aegis.vault.slots.SlotList;
+@@ -15,20 +28,10 @@ import org.junit.Rule;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
+-import static androidx.test.espresso.Espresso.onView;
+-import static androidx.test.espresso.action.ViewActions.click;
+-import static androidx.test.espresso.action.ViewActions.closeSoftKeyboard;
+-import static androidx.test.espresso.action.ViewActions.replaceText;
+-import static androidx.test.espresso.action.ViewActions.typeText;
+-import static androidx.test.espresso.assertion.ViewAssertions.matches;
+-import static androidx.test.espresso.matcher.ViewMatchers.isDisplayed;
+-import static androidx.test.espresso.matcher.ViewMatchers.withId;
+-import static junit.framework.TestCase.assertFalse;
+-import static junit.framework.TestCase.assertNull;
+-import static junit.framework.TestCase.assertTrue;
+-import static org.hamcrest.Matchers.not;
++import dagger.hilt.android.testing.HiltAndroidTest;
+ 
+ @RunWith(AndroidJUnit4.class)
++@HiltAndroidTest
+ @LargeTest
+ public class IntroTest extends AegisTest {
+     @Rule
+@@ -50,9 +53,9 @@ public class IntroTest extends AegisTest {
+         next.perform(click());
+         next.perform(click());
+ 
+-        VaultManager vault = getVault();
++        VaultRepository vault = _vaultManager.getVault();
+         assertFalse(vault.isEncryptionEnabled());
+-        assertNull(getVault().getCredentials());
++        assertNull(vault.getCredentials());
+     }
+ 
+     @Test
+@@ -79,8 +82,8 @@ public class IntroTest extends AegisTest {
+         next.perform(click());
+         next.perform(click());
+ 
+-        VaultManager vault = getVault();
+-        SlotList slots = getVault().getCredentials().getSlots();
++        VaultRepository vault = _vaultManager.getVault();
++        SlotList slots = vault.getCredentials().getSlots();
+         assertTrue(vault.isEncryptionEnabled());
+         assertTrue(slots.has(PasswordSlot.class));
+         assertFalse(slots.has(BiometricSlot.class));
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/OverallTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/OverallTest.java
+index f41b4925..ff4e62d9 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/OverallTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/OverallTest.java
+@@ -31,7 +31,7 @@ import com.beemdevelopment.aegis.otp.TotpInfo;
+ import com.beemdevelopment.aegis.otp.YandexInfo;
+ import com.beemdevelopment.aegis.ui.MainActivity;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ 
+ import org.junit.Rule;
+@@ -42,7 +42,10 @@ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+ 
++import dagger.hilt.android.testing.HiltAndroidTest;
++
+ @RunWith(AndroidJUnit4.class)
++@HiltAndroidTest
+ @LargeTest
+ public class OverallTest extends AegisTest {
+     private static final String _groupName = "Test";
+@@ -61,7 +64,7 @@ public class OverallTest extends AegisTest {
+         next.perform(click());
+         onView(withId(R.id.btnNext)).perform(click());
+ 
+-        VaultManager vault = getVault();
++        VaultRepository vault = _vaultManager.getVault();
+         assertTrue(vault.isEncryptionEnabled());
+         assertTrue(vault.getCredentials().getSlots().has(PasswordSlot.class));
+ 
+@@ -122,7 +125,7 @@ public class OverallTest extends AegisTest {
+         onView(withText(R.string.lock)).perform(click());
+         onView(withId(R.id.text_password)).perform(typeText(VAULT_PASSWORD), closeSoftKeyboard());
+         onView(withId(R.id.button_decrypt)).perform(click());
+-        vault = getVault();
++        vault = _vaultManager.getVault();
+ 
+         openContextualActionModeOverflowMenu();
+         onView(withText(R.string.action_settings)).perform(click());
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/PanicTriggerTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/PanicTriggerTest.java
+index c0b38970..13a94741 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/PanicTriggerTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/PanicTriggerTest.java
+@@ -1,25 +1,28 @@
+ package com.beemdevelopment.aegis;
+ 
+ import static org.junit.Assert.assertFalse;
+-import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertThrows;
+ import static org.junit.Assert.assertTrue;
+ 
+ import android.content.Intent;
+ 
+ import androidx.test.ext.junit.runners.AndroidJUnit4;
+-import androidx.test.filters.LargeTest;
++import androidx.test.filters.SmallTest;
+ import androidx.test.rule.ActivityTestRule;
+ 
+ import com.beemdevelopment.aegis.ui.PanicResponderActivity;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ 
+ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
++import dagger.hilt.android.testing.HiltAndroidTest;
++
+ @RunWith(AndroidJUnit4.class)
+-@LargeTest
++@HiltAndroidTest
++@SmallTest
+ public class PanicTriggerTest extends AegisTest {
+     @Before
+     public void before() {
+@@ -28,21 +31,25 @@ public class PanicTriggerTest extends AegisTest {
+ 
+     @Test
+     public void testPanicTriggerDisabled() {
+-        assertFalse(getApp().getPreferences().isPanicTriggerEnabled());
++        assertFalse(_prefs.isPanicTriggerEnabled());
+         launchPanic();
+-        assertFalse(getApp().isVaultLocked());
+-        assertNotNull(getApp().getVaultManager());
+-        assertTrue(VaultManager.fileExists(getApp()));
++        assertTrue(_vaultManager.isVaultLoaded());
++        _vaultManager.getVault();
++        assertFalse(_vaultManager.isVaultFileLoaded());
++        assertNull(_vaultManager.getVaultFileError());
++        assertTrue(VaultRepository.fileExists(getApp()));
+     }
+ 
+     @Test
+     public void testPanicTriggerEnabled() {
+-        getApp().getPreferences().setIsPanicTriggerEnabled(true);
+-        assertTrue(getApp().getPreferences().isPanicTriggerEnabled());
++        _prefs.setIsPanicTriggerEnabled(true);
++        assertTrue(_prefs.isPanicTriggerEnabled());
+         launchPanic();
+-        assertTrue(getApp().isVaultLocked());
+-        assertNull(getApp().getVaultManager());
+-        assertFalse(VaultManager.fileExists(getApp()));
++        assertFalse(_vaultManager.isVaultLoaded());
++        assertThrows(IllegalStateException.class, () -> _vaultManager.getVault());
++        assertFalse(_vaultManager.isVaultFileLoaded());
++        assertNull(_vaultManager.getVaultFileError());
++        assertFalse(VaultRepository.fileExists(getApp()));
+     }
+ 
+     private void launchPanic() {
+diff --git a/app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultManagerTest.java b/app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultRepositoryTest.java
+similarity index 53%
+rename from app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultManagerTest.java
+rename to app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultRepositoryTest.java
+index 163f108f..79a365cb 100644
+--- a/app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultManagerTest.java
++++ b/app/src/androidTest/java/com/beemdevelopment/aegis/vault/VaultRepositoryTest.java
+@@ -1,5 +1,11 @@
+ package com.beemdevelopment.aegis.vault;
+ 
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
+ import androidx.test.ext.junit.runners.AndroidJUnit4;
+ import androidx.test.filters.SmallTest;
+ 
+@@ -10,30 +16,28 @@ import org.junit.Before;
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ 
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.assertFalse;
+-import static org.junit.Assert.assertNotNull;
+-import static org.junit.Assert.assertNull;
+-import static org.junit.Assert.assertTrue;
++import dagger.hilt.android.testing.HiltAndroidTest;
+ 
+ @RunWith(AndroidJUnit4.class)
++@HiltAndroidTest
+ @SmallTest
+-public class VaultManagerTest extends AegisTest {
++public class VaultRepositoryTest extends AegisTest {
+     @Before
+     public void before() {
+         initVault();
+     }
+ 
+     @Test
+-    public void testToggleEncryption() throws VaultManagerException {
+-        getVault().disableEncryption();
+-        assertFalse(getVault().isEncryptionEnabled());
+-        assertNull(getVault().getCredentials());
++    public void testToggleEncryption() throws VaultRepositoryException {
++        VaultRepository vault = _vaultManager.getVault();
++        _vaultManager.disableEncryption();
++        assertFalse(vault.isEncryptionEnabled());
++        assertNull(vault.getCredentials());
+ 
+         VaultFileCredentials creds = generateCredentials();
+-        getVault().enableEncryption(creds);
+-        assertTrue(getVault().isEncryptionEnabled());
+-        assertNotNull(getVault().getCredentials());
+-        assertEquals(getVault().getCredentials().getSlots().findAll(PasswordSlot.class).size(), 1);
++        _vaultManager.enableEncryption(creds);
++        assertTrue(vault.isEncryptionEnabled());
++        assertNotNull(vault.getCredentials());
++        assertEquals(vault.getCredentials().getSlots().findAll(PasswordSlot.class).size(), 1);
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java b/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
+index 9411d4e8..b1c3e223 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/AegisApplication.java
+@@ -1,239 +1,8 @@
+ package com.beemdevelopment.aegis;
+ 
+-import android.app.Application;
+-import android.app.NotificationChannel;
+-import android.app.NotificationManager;
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.pm.ShortcutInfo;
+-import android.content.pm.ShortcutManager;
+-import android.graphics.drawable.Icon;
+-import android.os.Build;
++import dagger.hilt.android.HiltAndroidApp;
+ 
+-import androidx.annotation.NonNull;
+-import androidx.annotation.RequiresApi;
+-import androidx.lifecycle.Lifecycle;
+-import androidx.lifecycle.LifecycleEventObserver;
+-import androidx.lifecycle.LifecycleOwner;
+-import androidx.lifecycle.ProcessLifecycleOwner;
++@HiltAndroidApp
++public class AegisApplication extends AegisApplicationBase {
+ 
+-import com.beemdevelopment.aegis.icons.IconPackManager;
+-import com.beemdevelopment.aegis.services.NotificationService;
+-import com.beemdevelopment.aegis.ui.MainActivity;
+-import com.beemdevelopment.aegis.util.IOUtils;
+-import com.beemdevelopment.aegis.vault.Vault;
+-import com.beemdevelopment.aegis.vault.VaultFile;
+-import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
+-import com.mikepenz.iconics.Iconics;
+-import com.mikepenz.material_design_iconic_typeface_library.MaterialDesignIconic;
+-import com.topjohnwu.superuser.Shell;
+-
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.List;
+-
+-public class AegisApplication extends Application {
+-    private VaultFile _vaultFile;
+-    private VaultManager _manager;
+-    private Preferences _prefs;
+-    private List<LockListener> _lockListeners;
+-    private boolean _blockAutoLock;
+-    private IconPackManager _iconPackManager;
+-
+-    private static final String CODE_LOCK_STATUS_ID = "lock_status_channel";
+-    private static final String CODE_LOCK_VAULT_ACTION = "lock_vault";
+-
+-    static {
+-        // to access other app's internal storage directory, run libsu commands inside the global mount namespace
+-        Shell.setDefaultBuilder(Shell.Builder.create().setFlags(Shell.FLAG_MOUNT_MASTER));
+-    }
+-
+-    @Override
+-    public void onCreate() {
+-        super.onCreate();
+-        _prefs = new Preferences(this);
+-        _lockListeners = new ArrayList<>();
+-        _iconPackManager = new IconPackManager(this);
+-
+-        Iconics.init(this);
+-        Iconics.registerFont(new MaterialDesignIconic());
+-
+-        // listen for SCREEN_OFF events
+-        ScreenOffReceiver receiver = new ScreenOffReceiver();
+-        IntentFilter intentFilter = new IntentFilter();
+-        intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
+-        intentFilter.addAction(CODE_LOCK_VAULT_ACTION);
+-        registerReceiver(receiver, intentFilter);
+-
+-        // lock the app if the user moves the application to the background
+-        ProcessLifecycleOwner.get().getLifecycle().addObserver(new AppLifecycleObserver());
+-
+-        // clear the cache directory on startup, to make sure no temporary vault export files remain
+-        IOUtils.clearDirectory(getCacheDir(), false);
+-
+-        if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+-            initAppShortcuts();
+-        }
+-
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            initNotificationChannels();
+-        }
+-    }
+-
+-    public boolean isVaultLocked() {
+-        return _manager == null;
+-    }
+-
+-    /**
+-     * Loads the vault file from disk at the default location, stores an internal
+-     * reference to it for future use and returns it. This must only be called before
+-     * initVaultManager() or after lock().
+-     */
+-    public VaultFile loadVaultFile() throws VaultManagerException {
+-        if (!isVaultLocked()) {
+-            throw new AssertionError("loadVaultFile() may only be called before initVaultManager() or after lock()");
+-        }
+-
+-        if (_vaultFile == null) {
+-            _vaultFile = VaultManager.readVaultFile(this);
+-        }
+-
+-        return _vaultFile;
+-    }
+-
+-    /**
+-     * Initializes the vault manager by decrypting the given vaultFile with the given
+-     * creds. This removes the internal reference to the raw vault file.
+-     */
+-    public VaultManager initVaultManager(VaultFile vaultFile, VaultFileCredentials creds) throws VaultManagerException {
+-        _vaultFile = null;
+-        _manager = VaultManager.init(this, vaultFile, creds);
+-        return _manager;
+-    }
+-
+-    /**
+-     * Initializes the vault manager with the given vault and creds. This removes the
+-     * internal reference to the raw vault file.
+-     */
+-    public VaultManager initVaultManager(Vault vault, VaultFileCredentials creds) {
+-        _vaultFile = null;
+-        _manager = new VaultManager(this, vault, creds);
+-        return _manager;
+-    }
+-
+-    public VaultManager getVaultManager() {
+-        return _manager;
+-    }
+-
+-    public IconPackManager getIconPackManager() {
+-        return _iconPackManager;
+-    }
+-
+-    public Preferences getPreferences() {
+-        return _prefs;
+-    }
+-
+-    public boolean isAutoLockEnabled(int autoLockType) {
+-        return _prefs.isAutoLockTypeEnabled(autoLockType) && !isVaultLocked() && _manager.isEncryptionEnabled();
+-    }
+-
+-    public void registerLockListener(LockListener listener) {
+-        _lockListeners.add(listener);
+-    }
+-
+-    public void unregisterLockListener(LockListener listener) {
+-        _lockListeners.remove(listener);
+-    }
+-
+-    /**
+-     * Sets whether to block automatic lock on minimization. This should only be called
+-     * by activities before invoking an intent that shows a DocumentsUI, because that
+-     * action leads AppLifecycleObserver to believe that the app has been minimized.
+-     */
+-    public void setBlockAutoLock(boolean block) {
+-        _blockAutoLock = block;
+-    }
+-
+-    /**
+-     * Locks the vault and the app.
+-     * @param userInitiated whether or not the user initiated the lock in MainActivity.
+-     */
+-    public void lock(boolean userInitiated) {
+-        _manager.destroy();
+-        _manager = null;
+-
+-        for (LockListener listener : _lockListeners) {
+-            listener.onLocked(userInitiated);
+-        }
+-
+-        stopService(new Intent(AegisApplication.this, NotificationService.class));
+-    }
+-
+-    @RequiresApi(api = Build.VERSION_CODES.N_MR1)
+-    private void initAppShortcuts() {
+-        ShortcutManager shortcutManager = getSystemService(ShortcutManager.class);
+-        if (shortcutManager == null) {
+-            return;
+-        }
+-
+-        Intent intent = new Intent(this, MainActivity.class);
+-        intent.putExtra("action", "scan");
+-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+-        intent.setAction(Intent.ACTION_MAIN);
+-
+-        ShortcutInfo shortcut = new ShortcutInfo.Builder(this, "shortcut_new")
+-                .setShortLabel(getString(R.string.new_entry))
+-                .setLongLabel(getString(R.string.add_new_entry))
+-                .setIcon(Icon.createWithResource(this, R.drawable.ic_qr_code))
+-                .setIntent(intent)
+-                .build();
+-
+-        shortcutManager.setDynamicShortcuts(Collections.singletonList(shortcut));
+-    }
+-
+-    private void initNotificationChannels() {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            CharSequence name = getString(R.string.channel_name_lock_status);
+-            String description = getString(R.string.channel_description_lock_status);
+-            int importance = NotificationManager.IMPORTANCE_LOW;
+-
+-            NotificationChannel channel = new NotificationChannel(CODE_LOCK_STATUS_ID, name, importance);
+-            channel.setDescription(description);
+-
+-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+-            notificationManager.createNotificationChannel(channel);
+-        }
+-    }
+-
+-    private class AppLifecycleObserver implements LifecycleEventObserver {
+-        @Override
+-        public void onStateChanged(@NonNull LifecycleOwner source, @NonNull Lifecycle.Event event) {
+-            if (event == Lifecycle.Event.ON_STOP
+-                    && isAutoLockEnabled(Preferences.AUTO_LOCK_ON_MINIMIZE)
+-                    && !_blockAutoLock) {
+-                lock(false);
+-            }
+-        }
+-    }
+-
+-    private class ScreenOffReceiver extends BroadcastReceiver {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            if (isAutoLockEnabled(Preferences.AUTO_LOCK_ON_DEVICE_LOCK)) {
+-                lock(false);
+-            }
+-        }
+-    }
+-
+-    public interface LockListener {
+-        /**
+-         * When called, the app/vault has been locked and the listener should perform its cleanup operations.
+-         * @param userInitiated whether or not the user initiated the lock in MainActivity.
+-         */
+-        void onLocked(boolean userInitiated);
+-    }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/AegisApplicationBase.java b/app/src/main/java/com/beemdevelopment/aegis/AegisApplicationBase.java
+new file mode 100644
+index 00000000..bb8a5ec4
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/AegisApplicationBase.java
+@@ -0,0 +1,138 @@
++package com.beemdevelopment.aegis;
++
++import android.app.Application;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.pm.ShortcutInfo;
++import android.content.pm.ShortcutManager;
++import android.graphics.drawable.Icon;
++import android.os.Build;
++
++import androidx.annotation.NonNull;
++import androidx.annotation.RequiresApi;
++import androidx.lifecycle.Lifecycle;
++import androidx.lifecycle.LifecycleEventObserver;
++import androidx.lifecycle.LifecycleOwner;
++import androidx.lifecycle.ProcessLifecycleOwner;
++
++import com.beemdevelopment.aegis.ui.MainActivity;
++import com.beemdevelopment.aegis.util.IOUtils;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.mikepenz.iconics.Iconics;
++import com.mikepenz.material_design_iconic_typeface_library.MaterialDesignIconic;
++import com.topjohnwu.superuser.Shell;
++
++import java.util.Collections;
++
++import dagger.hilt.InstallIn;
++import dagger.hilt.android.EarlyEntryPoint;
++import dagger.hilt.android.EarlyEntryPoints;
++import dagger.hilt.components.SingletonComponent;
++
++public abstract class AegisApplicationBase extends Application {
++    private static final String CODE_LOCK_STATUS_ID = "lock_status_channel";
++    private static final String CODE_LOCK_VAULT_ACTION = "lock_vault";
++
++    private VaultManager _vaultManager;
++
++    static {
++        // to access other app's internal storage directory, run libsu commands inside the global mount namespace
++        Shell.setDefaultBuilder(Shell.Builder.create().setFlags(Shell.FLAG_MOUNT_MASTER));
++    }
++
++    @Override
++    public void onCreate() {
++        super.onCreate();
++        _vaultManager = EarlyEntryPoints.get(this, EntryPoint.class).getVaultManager();
++
++        Iconics.init(this);
++        Iconics.registerFont(new MaterialDesignIconic());
++
++        // listen for SCREEN_OFF events
++        ScreenOffReceiver receiver = new ScreenOffReceiver();
++        IntentFilter intentFilter = new IntentFilter();
++        intentFilter.addAction(Intent.ACTION_SCREEN_OFF);
++        intentFilter.addAction(CODE_LOCK_VAULT_ACTION);
++        registerReceiver(receiver, intentFilter);
++
++        // lock the app if the user moves the application to the background
++        ProcessLifecycleOwner.get().getLifecycle().addObserver(new AppLifecycleObserver());
++
++        // clear the cache directory on startup, to make sure no temporary vault export files remain
++        IOUtils.clearDirectory(getCacheDir(), false);
++
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
++            initAppShortcuts();
++        }
++
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            initNotificationChannels();
++        }
++    }
++
++    @RequiresApi(api = Build.VERSION_CODES.N_MR1)
++    private void initAppShortcuts() {
++        ShortcutManager shortcutManager = getSystemService(ShortcutManager.class);
++        if (shortcutManager == null) {
++            return;
++        }
++
++        Intent intent = new Intent(this, MainActivity.class);
++        intent.putExtra("action", "scan");
++        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
++        intent.setAction(Intent.ACTION_MAIN);
++
++        ShortcutInfo shortcut = new ShortcutInfo.Builder(this, "shortcut_new")
++                .setShortLabel(getString(R.string.new_entry))
++                .setLongLabel(getString(R.string.add_new_entry))
++                .setIcon(Icon.createWithResource(this, R.drawable.ic_qr_code))
++                .setIntent(intent)
++                .build();
++
++        shortcutManager.setDynamicShortcuts(Collections.singletonList(shortcut));
++    }
++
++    private void initNotificationChannels() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            CharSequence name = getString(R.string.channel_name_lock_status);
++            String description = getString(R.string.channel_description_lock_status);
++            int importance = NotificationManager.IMPORTANCE_LOW;
++
++            NotificationChannel channel = new NotificationChannel(CODE_LOCK_STATUS_ID, name, importance);
++            channel.setDescription(description);
++
++            NotificationManager notificationManager = getSystemService(NotificationManager.class);
++            notificationManager.createNotificationChannel(channel);
++        }
++    }
++
++    private class AppLifecycleObserver implements LifecycleEventObserver {
++        @Override
++        public void onStateChanged(@NonNull LifecycleOwner source, @NonNull Lifecycle.Event event) {
++            if (event == Lifecycle.Event.ON_STOP
++                    && _vaultManager.isAutoLockEnabled(Preferences.AUTO_LOCK_ON_MINIMIZE)
++                    && !_vaultManager.isAutoLockBlocked()) {
++                _vaultManager.lock(false);
++            }
++        }
++    }
++
++    private class ScreenOffReceiver extends BroadcastReceiver {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            if (_vaultManager.isAutoLockEnabled(Preferences.AUTO_LOCK_ON_DEVICE_LOCK)) {
++                _vaultManager.lock(false);
++            }
++        }
++    }
++
++    @EarlyEntryPoint
++    @InstallIn(SingletonComponent.class)
++    interface EntryPoint {
++        VaultManager getVaultManager();
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/AegisBackupAgent.java b/app/src/main/java/com/beemdevelopment/aegis/AegisBackupAgent.java
+index 1a55396b..df989a7d 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/AegisBackupAgent.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/AegisBackupAgent.java
+@@ -10,22 +10,31 @@ import android.util.Log;
+ 
+ import com.beemdevelopment.aegis.util.IOUtils;
+ import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ 
+ import java.io.File;
+ import java.io.FileInputStream;
+-import java.io.FileOutputStream;
+ import java.io.IOException;
+ import java.io.InputStream;
+ 
++import dagger.hilt.InstallIn;
++import dagger.hilt.android.EarlyEntryPoint;
++import dagger.hilt.android.EarlyEntryPoints;
++import dagger.hilt.components.SingletonComponent;
++
+ public class AegisBackupAgent extends BackupAgent {
+     private static final String TAG = AegisBackupAgent.class.getSimpleName();
+ 
++    private VaultManager _vaultManager;
+     private Preferences _prefs;
+ 
+     @Override
+     public void onCreate() {
+         super.onCreate();
+-        _prefs = new Preferences(this);
++
++        EntryPoint entryPoint = EarlyEntryPoints.get(this, EntryPoint.class);
++        _vaultManager = entryPoint.getVaultManager();
++        _prefs = entryPoint.getPreferences();
+     }
+ 
+     @Override
+@@ -47,9 +56,8 @@ public class AegisBackupAgent extends BackupAgent {
+         // first copy the vault to the files/backup directory
+         createBackupDir();
+         File vaultBackupFile = getVaultBackupFile();
+-        try (FileInputStream inStream = VaultManager.getAtomicFile(this).openRead();
+-             FileOutputStream outStream = new FileOutputStream(vaultBackupFile)) {
+-            IOUtils.copy(inStream, outStream);
++        try {
++            _vaultManager.getVault().backupTo(vaultBackupFile);
+         } catch (IOException e) {
+             Log.e(TAG, String.format("onFullBackup() failed: %s", e));
+             deleteBackupDir();
+@@ -77,7 +85,7 @@ public class AegisBackupAgent extends BackupAgent {
+         File vaultBackupFile = getVaultBackupFile();
+         if (destination.getCanonicalFile().equals(vaultBackupFile.getCanonicalFile())) {
+             try (InputStream inStream = new FileInputStream(vaultBackupFile)) {
+-                VaultManager.writeToFile(this, inStream);
++                VaultRepository.writeToFile(this, inStream);
+             } catch (IOException e) {
+                 Log.e(TAG, String.format("onRestoreFile() failed: dest=%s, error=%s", destination, e));
+                 throw e;
+@@ -118,6 +126,13 @@ public class AegisBackupAgent extends BackupAgent {
+     }
+ 
+     private File getVaultBackupFile() {
+-        return new File(new File(getFilesDir(), "backup"), VaultManager.FILENAME);
++        return new File(new File(getFilesDir(), "backup"), VaultRepository.FILENAME);
++    }
++
++    @EarlyEntryPoint
++    @InstallIn(SingletonComponent.class)
++    interface EntryPoint {
++        Preferences getPreferences();
++        VaultManager getVaultManager();
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/AegisModule.java b/app/src/main/java/com/beemdevelopment/aegis/AegisModule.java
+new file mode 100644
+index 00000000..6172c122
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/AegisModule.java
+@@ -0,0 +1,35 @@
++package com.beemdevelopment.aegis;
++
++import android.content.Context;
++
++import com.beemdevelopment.aegis.icons.IconPackManager;
++import com.beemdevelopment.aegis.vault.VaultManager;
++
++import javax.inject.Singleton;
++
++import dagger.Module;
++import dagger.Provides;
++import dagger.hilt.InstallIn;
++import dagger.hilt.android.qualifiers.ApplicationContext;
++import dagger.hilt.components.SingletonComponent;
++
++@Module
++@InstallIn(SingletonComponent.class)
++public class AegisModule {
++    @Provides
++    @Singleton
++    public static IconPackManager provideIconPackManager(@ApplicationContext Context context) {
++        return new IconPackManager(context);
++    }
++
++    @Provides
++    @Singleton
++    public static VaultManager provideVaultManager(@ApplicationContext Context context) {
++        return new VaultManager(context);
++    }
++
++    @Provides
++    public static Preferences providePreferences(@ApplicationContext Context context) {
++        return new Preferences(context);
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AboutActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AboutActivity.java
+index f732e398..823708b1 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AboutActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AboutActivity.java
+@@ -41,8 +41,11 @@ public class AboutActivity extends AegisActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         LayoutInflaterCompat.setFactory2(getLayoutInflater(), new IconicsLayoutInflater2(getDelegate()));
+-
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
++
+         setContentView(R.layout.activity_about);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+@@ -124,7 +127,7 @@ public class AboutActivity extends AegisActivity {
+         mailIntent.putExtra(Intent.EXTRA_EMAIL, mailaddress);
+         mailIntent.putExtra(Intent.EXTRA_SUBJECT, R.string.app_name_full);
+ 
+-        startActivity(Intent.createChooser(mailIntent, this.getString(R.string.email)));
++        startActivity(Intent.createChooser(mailIntent, getString(R.string.email)));
+     }
+ 
+     private void showThirdPartyLicenseDialog() {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+index 8d0ba026..e90bc7ba 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AegisActivity.java
+@@ -2,7 +2,6 @@ package com.beemdevelopment.aegis.ui;
+ 
+ import android.annotation.SuppressLint;
+ import android.app.Activity;
+-import android.content.ActivityNotFoundException;
+ import android.content.Intent;
+ import android.content.res.Configuration;
+ import android.os.Bundle;
+@@ -10,58 +9,60 @@ import android.view.WindowManager;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.CallSuper;
+-import androidx.annotation.Nullable;
+ import androidx.appcompat.app.AppCompatActivity;
+-import androidx.fragment.app.Fragment;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+ import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.Theme;
+ import com.beemdevelopment.aegis.ThemeMap;
+-import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.icons.IconPackManager;
++import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ 
+ import java.lang.reflect.InvocationTargetException;
+ import java.lang.reflect.Method;
+ import java.util.Locale;
+ import java.util.Map;
+ 
+-public abstract class AegisActivity extends AppCompatActivity implements AegisApplication.LockListener {
+-    private AegisApplication _app;
++import javax.inject.Inject;
++
++import dagger.hilt.InstallIn;
++import dagger.hilt.android.AndroidEntryPoint;
++import dagger.hilt.android.EarlyEntryPoint;
++import dagger.hilt.android.EarlyEntryPoints;
++import dagger.hilt.components.SingletonComponent;
++
++@AndroidEntryPoint
++public abstract class AegisActivity extends AppCompatActivity implements VaultManager.LockListener {
++    protected Preferences _prefs;
++
++    @Inject
++    protected VaultManager _vaultManager;
++
++    @Inject
++    protected IconPackManager _iconPackManager;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+-        _app = (AegisApplication) getApplication();
+-
+         // set the theme and locale before creating the activity
+-        Preferences prefs = getPreferences();
++        _prefs = EarlyEntryPoints.get(this, PrefEntryPoint.class).getPreferences();
+         onSetTheme();
+-        setLocale(prefs.getLocale());
++        setLocale(_prefs.getLocale());
+         super.onCreate(savedInstanceState);
+ 
+-        // if the app was killed, relaunch MainActivity and close everything else
+-        if (savedInstanceState != null && isOrphan()) {
+-            Intent intent = new Intent(this, MainActivity.class);
+-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+-            startActivity(intent);
+-            finish();
+-            return;
+-        }
+-
+         // set FLAG_SECURE on the window of every AegisActivity
+-        if (getPreferences().isSecureScreenEnabled()) {
++        if (_prefs.isSecureScreenEnabled()) {
+             getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+         }
+ 
+         // register a callback to listen for lock events
+-        _app.registerLockListener(this);
++        _vaultManager.registerLockListener(this);
+     }
+ 
+     @Override
+     @CallSuper
+     protected void onDestroy() {
+-        _app.unregisterLockListener(this);
++        _vaultManager.unregisterLockListener(this);
+         super.onDestroy();
+     }
+ 
+@@ -69,7 +70,7 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+     @Override
+     protected void onResume() {
+         super.onResume();
+-        _app.setBlockAutoLock(false);
++        _vaultManager.setBlockAutoLock(false);
+     }
+ 
+     @SuppressLint("SoonBlockedPrivateApi")
+@@ -86,14 +87,6 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+         }
+     }
+ 
+-    protected AegisApplication getApp() {
+-        return _app;
+-    }
+-
+-    protected Preferences getPreferences() {
+-        return _app.getPreferences();
+-    }
+-
+     /**
+      * Called when the activity is expected to set its theme.
+      */
+@@ -111,7 +104,7 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+     }
+ 
+     protected Theme getConfiguredTheme() {
+-        Theme theme = getPreferences().getCurrentTheme();
++        Theme theme = _prefs.getCurrentTheme();
+ 
+         if (theme == Theme.SYSTEM || theme == Theme.SYSTEM_AMOLED) {
+             int currentNightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+@@ -131,87 +124,60 @@ public abstract class AegisActivity extends AppCompatActivity implements AegisAp
+         Configuration config = new Configuration();
+         config.locale = locale;
+ 
+-        this.getResources().updateConfiguration(config, this.getResources().getDisplayMetrics());
++        getResources().updateConfiguration(config, getResources().getDisplayMetrics());
+     }
+ 
+-    protected boolean saveVault(boolean backup) {
++    protected boolean saveVault() {
+         try {
+-            getApp().getVaultManager().save(backup);
++            _vaultManager.save();
+             return true;
+-        } catch (VaultManagerException e) {
++        } catch (VaultRepositoryException e) {
+             Toast.makeText(this, getString(R.string.saving_error), Toast.LENGTH_LONG).show();
+             return false;
+         }
+     }
+ 
+-    /**
+-     * Reports whether this Activity instance has become an orphan. This can happen if
+-     * the vault was locked by an external trigger while the Activity was still open.
+-     */
+-    protected boolean isOrphan() {
+-        return !(this instanceof MainActivity) && !(this instanceof AuthActivity) && !(this instanceof IntroActivity) && _app.isVaultLocked();
+-    }
+-
+-    public static class Helper {
+-        private Helper() {
+-
++    protected boolean saveAndBackupVault() {
++        try {
++            _vaultManager.saveAndBackup();
++            return true;
++        } catch (VaultRepositoryException e) {
++            Toast.makeText(this, getString(R.string.saving_error), Toast.LENGTH_LONG).show();
++            return false;
+         }
++    }
+ 
+-        /**
+-         * Starts an external activity, temporarily blocks automatic lock of Aegis and
+-         * shows an error dialog if the target activity is not found.
+-         */
+-        public static void startExtActivityForResult(Activity activity, Intent intent, int requestCode) {
+-            AegisApplication app = (AegisApplication) activity.getApplication();
+-            app.setBlockAutoLock(true);
+-
+-            try {
+-                activity.startActivityForResult(intent, requestCode, null);
+-            } catch (ActivityNotFoundException e) {
+-                e.printStackTrace();
+-
+-                if (isDocsAction(intent.getAction())) {
+-                    Dialogs.showErrorDialog(activity, R.string.documentsui_error, e);
+-                } else {
+-                    throw e;
+-                }
+-            }
++    /**
++     * Closes this activity if it has become an orphan (isOrphan() == true) and launches MainActivity.
++     * @param savedInstanceState the bundle passed to onCreate.
++     * @return whether to abort onCreate.
++     */
++    protected boolean abortIfOrphan(Bundle savedInstanceState) {
++        if (savedInstanceState == null || !isOrphan()) {
++            return false;
+         }
+ 
+-        /**
+-         * Starts an external activity, temporarily blocks automatic lock of Aegis and
+-         * shows an error dialog if the target activity is not found.
+-         */
+-        public static void startExtActivity(Fragment fragment, Intent intent) {
+-            startExtActivityForResult(fragment, intent, -1);
+-        }
++        Intent intent = new Intent(this, MainActivity.class);
++        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
++        startActivity(intent);
++        finish();
++        return true;
++    }
+ 
+-        /**
+-         * Starts an external activity, temporarily blocks automatic lock of Aegis and
+-         * shows an error dialog if the target activity is not found.
+-         */
+-        public static void startExtActivityForResult(Fragment fragment, Intent intent, int requestCode) {
+-            AegisApplication app = (AegisApplication) fragment.getActivity().getApplication();
+-            app.setBlockAutoLock(true);
+-
+-            try {
+-                fragment.startActivityForResult(intent, requestCode, null);
+-            } catch (ActivityNotFoundException e) {
+-                e.printStackTrace();
+-
+-                if (isDocsAction(intent.getAction())) {
+-                    Dialogs.showErrorDialog(fragment.getContext(), R.string.documentsui_error, e);
+-                } else {
+-                    throw e;
+-                }
+-            }
+-        }
++    /**
++     * Reports whether this Activity instance has become an orphan. This can happen if
++     * the vault was killed/locked by an external trigger while the Activity was still open.
++     */
++    private boolean isOrphan() {
++        return !(this instanceof MainActivity)
++                && !(this instanceof AuthActivity)
++                && !(this instanceof IntroActivity)
++                && !_vaultManager.isVaultLoaded();
++    }
+ 
+-        private static boolean isDocsAction(@Nullable String action) {
+-            return action != null && (action.equals(Intent.ACTION_GET_CONTENT)
+-                    || action.equals(Intent.ACTION_CREATE_DOCUMENT)
+-                    || action.equals(Intent.ACTION_OPEN_DOCUMENT)
+-                    || action.equals(Intent.ACTION_OPEN_DOCUMENT_TREE));
+-        }
++    @EarlyEntryPoint
++    @InstallIn(SingletonComponent.class)
++    public interface PrefEntryPoint {
++        Preferences getPreferences();
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+index b8282644..14ec3e93 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/AuthActivity.java
+@@ -22,8 +22,6 @@ import androidx.annotation.NonNull;
+ import androidx.appcompat.app.AlertDialog;
+ import androidx.biometric.BiometricPrompt;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+-import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.ThemeMap;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+@@ -37,7 +35,7 @@ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.ui.tasks.PasswordSlotDecryptTask;
+ import com.beemdevelopment.aegis.vault.VaultFile;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ import com.beemdevelopment.aegis.vault.slots.Slot;
+@@ -64,12 +62,9 @@ public class AuthActivity extends AegisActivity {
+     // biometric prompt by setting 'inhibitBioPrompt' to true through the intent
+     private boolean _inhibitBioPrompt;
+ 
+-    private Preferences _prefs;
+-
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        _prefs = new Preferences(this);
+         setContentView(R.layout.activity_auth);
+         _textPassword = findViewById(R.id.text_password);
+         LinearLayout boxBiometricInfo = findViewById(R.id.box_biometric_info);
+@@ -94,15 +89,14 @@ public class AuthActivity extends AegisActivity {
+             _inhibitBioPrompt = savedInstanceState.getBoolean("inhibitBioPrompt", false);
+         }
+ 
+-        try {
+-            VaultFile vaultFile = getApp().loadVaultFile();
+-            _slots = vaultFile.getHeader().getSlots();
+-        } catch (VaultManagerException e) {
+-            e.printStackTrace();
+-            Dialogs.showErrorDialog(this, R.string.vault_load_error, e, (dialog, which) -> onBackPressed());
++        if (_vaultManager.getVaultFileError() != null) {
++            Dialogs.showErrorDialog(this, R.string.vault_load_error, _vaultManager.getVaultFileError(), (dialog, which) -> onBackPressed());
+             return;
+         }
+ 
++        VaultFile vaultFile = _vaultManager.getVaultFile();
++        _slots = vaultFile.getHeader().getSlots();
++
+         // only show the biometric prompt if the api version is new enough, permission is granted, a scanner is found and a biometric slot is found
+         if (_slots.has(BiometricSlot.class) && BiometricsHelper.isAvailable(this)) {
+             boolean invalidated = false;
+@@ -266,12 +260,11 @@ public class AuthActivity extends AegisActivity {
+         VaultFileCredentials creds = new VaultFileCredentials(key, _slots);
+ 
+         try {
+-            AegisApplication app = getApp();
+-            app.initVaultManager(app.loadVaultFile(), creds);
++            _vaultManager.unlock(creds);
+             if (isSlotRepaired) {
+-                saveVault(true);
++                saveAndBackupVault();
+             }
+-        } catch (VaultManagerException e) {
++        } catch (VaultRepositoryException e) {
+             e.printStackTrace();
+             Dialogs.showErrorDialog(this, R.string.decryption_corrupt_error, e);
+             return;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+index 87e17d82..948299d7 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/EditEntryActivity.java
+@@ -55,7 +55,7 @@ import com.beemdevelopment.aegis.ui.views.IconAdapter;
+ import com.beemdevelopment.aegis.util.Cloner;
+ import com.beemdevelopment.aegis.util.IOUtils;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ import com.bumptech.glide.Glide;
+ import com.bumptech.glide.load.engine.DiskCacheStrategy;
+ import com.bumptech.glide.request.target.CustomTarget;
+@@ -118,16 +118,16 @@ public class EditEntryActivity extends AegisActivity {
+     private RelativeLayout _advancedSettingsHeader;
+     private RelativeLayout _advancedSettings;
+ 
+-    private VaultManager _vault;
+-
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_edit_entry);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+-        _vault = getApp().getVaultManager();
+-        _groups = _vault.getGroups();
++        _groups = _vaultManager.getVault().getGroups();
+ 
+         ActionBar bar = getSupportActionBar();
+         bar.setHomeAsUpIndicator(R.drawable.ic_close);
+@@ -137,7 +137,7 @@ public class EditEntryActivity extends AegisActivity {
+         Intent intent = getIntent();
+         UUID entryUUID = (UUID) intent.getSerializableExtra("entryUUID");
+         if (entryUUID != null) {
+-            _origEntry = _vault.getEntryByUUID(entryUUID);
++            _origEntry = _vaultManager.getVault().getEntryByUUID(entryUUID);
+         } else {
+             _origEntry = (VaultEntry) intent.getSerializableExtra("newEntry");
+             _isManual = intent.getBooleanExtra("isManual", false);
+@@ -170,7 +170,7 @@ public class EditEntryActivity extends AegisActivity {
+         DropdownHelper.fillDropdown(this, _dropdownGroup, _dropdownGroupList);
+ 
+         // if this is NOT a manually entered entry, move the "Secret" field from basic to advanced settings
+-        if (!_isNew || (_isNew && !_isManual)) {
++        if (!_isNew || !_isManual) {
+             int secretIndex = 0;
+             LinearLayout layoutSecret = findViewById(R.id.layout_secret);
+             LinearLayout layoutBasic = findViewById(R.id.layout_basic);
+@@ -313,7 +313,7 @@ public class EditEntryActivity extends AegisActivity {
+             }
+         });
+ 
+-        _textUsageCount.setText(getPreferences().getUsageCount(entryUUID).toString());
++        _textUsageCount.setText(_prefs.getUsageCount(entryUUID).toString());
+     }
+ 
+     private void updateAdvancedFieldStatus(String otpType) {
+@@ -476,16 +476,16 @@ public class EditEntryActivity extends AegisActivity {
+ 
+         Intent chooserIntent = Intent.createChooser(galleryIntent, getString(R.string.select_icon));
+         chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[] { fileIntent });
+-        AegisActivity.Helper.startExtActivityForResult(this, chooserIntent, PICK_IMAGE_REQUEST);
++        _vaultManager.startActivityForResult(this, chooserIntent, PICK_IMAGE_REQUEST);
+     }
+ 
+     private void resetUsageCount() {
+-        getPreferences().resetUsageCount(_origEntry.getUUID());
++        _prefs.resetUsageCount(_origEntry.getUUID());
+         _textUsageCount.setText("0");
+     }
+ 
+     private void startIconSelection() {
+-        List<IconPack> iconPacks = getApp().getIconPackManager().getIconPacks().stream()
++        List<IconPack> iconPacks = _iconPackManager.getIconPacks().stream()
+                 .sorted(Comparator.comparing(IconPack::getName))
+                 .collect(Collectors.toList());
+         if (iconPacks.size() == 0) {
+@@ -579,17 +579,18 @@ public class EditEntryActivity extends AegisActivity {
+         // vault to disk failed, causing the user to tap 'Save' again. Calling addEntry
+         // again would cause a crash in that case, so the isEntryDuplicate check prevents
+         // that.
+-        if (_isNew && !_vault.isEntryDuplicate(entry)) {
+-            _vault.addEntry(entry);
++        VaultRepository vault = _vaultManager.getVault();
++        if (_isNew && !vault.isEntryDuplicate(entry)) {
++            vault.addEntry(entry);
+         } else {
+-            _vault.replaceEntry(entry);
++            vault.replaceEntry(entry);
+         }
+ 
+         saveAndFinish(entry, false);
+     }
+ 
+     private void deleteAndFinish(VaultEntry entry) {
+-        _vault.removeEntry(entry);
++        _vaultManager.getVault().removeEntry(entry);
+         saveAndFinish(entry, true);
+     }
+ 
+@@ -598,7 +599,7 @@ public class EditEntryActivity extends AegisActivity {
+         intent.putExtra("entryUUID", entry.getUUID());
+         intent.putExtra("delete", delete);
+ 
+-        if (saveVault(true)) {
++        if (saveAndBackupVault()) {
+             setResult(RESULT_OK, intent);
+             finish();
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/GroupManagerActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/GroupManagerActivity.java
+index 1e7b81f0..e842c6fb 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/GroupManagerActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/GroupManagerActivity.java
+@@ -26,6 +26,9 @@ public class GroupManagerActivity extends AegisActivity implements GroupAdapter.
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_groups);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java
+index a4fc4ccf..02399c76 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/ImportEntriesActivity.java
+@@ -27,7 +27,7 @@ import com.beemdevelopment.aegis.ui.models.ImportEntry;
+ import com.beemdevelopment.aegis.ui.views.ImportEntriesAdapter;
+ import com.beemdevelopment.aegis.util.UUIDMap;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ import com.google.android.material.floatingactionbutton.FloatingActionButton;
+ import com.topjohnwu.superuser.Shell;
+ 
+@@ -47,6 +47,9 @@ public class ImportEntriesActivity extends AegisActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_import_entries);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+@@ -71,7 +74,7 @@ public class ImportEntriesActivity extends AegisActivity {
+ 
+         FloatingActionButton fab = findViewById(R.id.fab);
+         fab.setOnClickListener(v -> {
+-            if (getApp().getVaultManager().getEntries().size() > 0
++            if (_vaultManager.getVault().getEntries().size() > 0
+                     && _menu.findItem(R.id.toggle_wipe_vault).isChecked()) {
+                 showWipeEntriesDialog();
+             } else {
+@@ -200,7 +203,7 @@ public class ImportEntriesActivity extends AegisActivity {
+                 .setMessage(message)
+                 .setPositiveButton(android.R.string.ok, null)
+                 .setNeutralButton(android.R.string.copy, (dialog2, which2) -> {
+-                    ClipboardManager clipboard = (ClipboardManager) this.getSystemService(Context.CLIPBOARD_SERVICE);
++                    ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                     ClipData clip = ClipData.newPlainText("text/plain", message);
+                     clipboard.setPrimaryClip(clip);
+                     Toast.makeText(this, R.string.errors_copied, Toast.LENGTH_SHORT).show();
+@@ -217,7 +220,7 @@ public class ImportEntriesActivity extends AegisActivity {
+     }
+ 
+     private void saveAndFinish(boolean wipeEntries) {
+-        VaultManager vault = getApp().getVaultManager();
++        VaultRepository vault = _vaultManager.getVault();
+         if (wipeEntries) {
+             vault.wipeEntries();
+         }
+@@ -234,7 +237,7 @@ public class ImportEntriesActivity extends AegisActivity {
+             vault.addEntry(entry);
+         }
+ 
+-        if (saveVault(true)) {
++        if (saveAndBackupVault()) {
+             String toastMessage = getResources().getQuantityString(R.plurals.imported_entries_count, selectedEntries.size(), selectedEntries.size());
+             Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show();
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
+index eb9846da..12e1ca43 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/IntroActivity.java
+@@ -1,5 +1,10 @@
+ package com.beemdevelopment.aegis.ui;
+ 
++import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_BIOMETRIC;
++import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_INVALID;
++import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_NONE;
++import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_PASS;
++
+ import android.os.Bundle;
+ import android.view.inputmethod.InputMethodManager;
+ 
+@@ -12,22 +17,11 @@ import com.beemdevelopment.aegis.ui.slides.DoneSlide;
+ import com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide;
+ import com.beemdevelopment.aegis.ui.slides.SecuritySetupSlide;
+ import com.beemdevelopment.aegis.ui.slides.WelcomeSlide;
+-import com.beemdevelopment.aegis.vault.Vault;
+-import com.beemdevelopment.aegis.vault.VaultFile;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultFileException;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ 
+-import org.json.JSONObject;
+-
+-import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_BIOMETRIC;
+-import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_INVALID;
+-import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_NONE;
+-import static com.beemdevelopment.aegis.ui.slides.SecurityPickerSlide.CRYPT_TYPE_PASS;
+-
+ public class IntroActivity extends IntroBaseActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -73,31 +67,16 @@ public class IntroActivity extends IntroBaseActivity {
+             throw new RuntimeException(String.format("State of SecuritySetupSlide not properly propagated, cryptType: %d, creds: %s", cryptType, creds));
+         }
+ 
+-        Vault vault = new Vault();
+-        VaultFile vaultFile = new VaultFile();
+         try {
+-            JSONObject obj = vault.toJson();
+-            if (cryptType == CRYPT_TYPE_NONE) {
+-                vaultFile.setContent(obj);
+-            } else {
+-                vaultFile.setContent(obj, creds);
+-            }
+-
+-            VaultManager.save(getApplicationContext(), vaultFile);
+-        } catch (VaultManagerException | VaultFileException e) {
++            _vaultManager.init(creds);
++        } catch (VaultRepositoryException e) {
+             e.printStackTrace();
+             Dialogs.showErrorDialog(this, R.string.vault_init_error, e);
+             return;
+         }
+ 
+-        if (cryptType == CRYPT_TYPE_NONE) {
+-            getApp().initVaultManager(vault, null);
+-        } else {
+-            getApp().initVaultManager(vault, creds);
+-        }
+-
+         // skip the intro from now on
+-        getPreferences().setIntroDone(true);
++        _prefs.setIntroDone(true);
+ 
+         setResult(RESULT_OK);
+         finish();
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+index 2b0442b3..495b1cd3 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/MainActivity.java
+@@ -17,11 +17,9 @@ import android.view.View;
+ import android.widget.LinearLayout;
+ import android.widget.Toast;
+ 
+-import androidx.annotation.NonNull;
+ import androidx.appcompat.view.ActionMode;
+ import androidx.appcompat.widget.SearchView;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+ import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.SortCategory;
+@@ -33,13 +31,10 @@ import com.beemdevelopment.aegis.helpers.QrCodeAnalyzer;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfoException;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+-import com.beemdevelopment.aegis.ui.fragments.BackupsPreferencesFragment;
+-import com.beemdevelopment.aegis.ui.fragments.PreferencesFragment;
++import com.beemdevelopment.aegis.ui.fragments.preferences.BackupsPreferencesFragment;
++import com.beemdevelopment.aegis.ui.fragments.preferences.PreferencesFragment;
+ import com.beemdevelopment.aegis.ui.views.EntryListView;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+-import com.beemdevelopment.aegis.vault.VaultFile;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
+ import com.google.android.material.bottomsheet.BottomSheetDialog;
+ import com.google.android.material.floatingactionbutton.FloatingActionButton;
+ import com.google.zxing.BinaryBitmap;
+@@ -58,6 +53,7 @@ import java.io.InputStream;
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Map;
++import java.util.TreeSet;
+ import java.util.UUID;
+ 
+ public class MainActivity extends AegisActivity implements EntryListView.Listener {
+@@ -74,13 +70,8 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     private static final int CODE_PERM_CAMERA = 0;
+     private static final int CODE_PERM_READ_STORAGE = 1;
+ 
+-    private AegisApplication _app;
+-    private VaultManager _vault;
+     private boolean _loaded;
+     private boolean _searchSubmitted;
+-
+-    private boolean _isAuthenticating;
+-    private boolean _isDoingIntro;
+     private boolean _isRecreated;
+ 
+     private List<VaultEntry> _selectedEntries;
+@@ -100,29 +91,24 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.activity_main);
+         setSupportActionBar(findViewById(R.id.toolbar));
+-
+-        _app = (AegisApplication) getApplication();
+-        _vault = _app.getVaultManager();
+         _loaded = false;
+ 
+         if (savedInstanceState != null) {
+             _isRecreated = true;
+-            _isAuthenticating = savedInstanceState.getBoolean("isAuthenticating");
+-            _isDoingIntro = savedInstanceState.getBoolean("isDoingIntro");
+         }
+ 
+         _entryListView = (EntryListView) getSupportFragmentManager().findFragmentById(R.id.key_profiles);
+         _entryListView.setListener(this);
+-        _entryListView.setCodeGroupSize(getPreferences().getCodeGroupSize());
+-        _entryListView.setShowAccountName(getPreferences().isAccountNameVisible());
+-        _entryListView.setHighlightEntry(getPreferences().isEntryHighlightEnabled());
+-        _entryListView.setPauseFocused(getPreferences().isPauseFocusedEnabled());
+-        _entryListView.setTapToReveal(getPreferences().isTapToRevealEnabled());
+-        _entryListView.setTapToRevealTime(getPreferences().getTapToRevealTime());
+-        _entryListView.setSortCategory(getPreferences().getCurrentSortCategory(), false);
+-        _entryListView.setViewMode(getPreferences().getCurrentViewMode());
+-        _entryListView.setIsCopyOnTapEnabled(getPreferences().isCopyOnTapEnabled());
+-        _entryListView.setPrefGroupFilter(getPreferences().getGroupFilter());
++        _entryListView.setCodeGroupSize(_prefs.getCodeGroupSize());
++        _entryListView.setShowAccountName(_prefs.isAccountNameVisible());
++        _entryListView.setHighlightEntry(_prefs.isEntryHighlightEnabled());
++        _entryListView.setPauseFocused(_prefs.isPauseFocusedEnabled());
++        _entryListView.setTapToReveal(_prefs.isTapToRevealEnabled());
++        _entryListView.setTapToRevealTime(_prefs.getTapToRevealTime());
++        _entryListView.setSortCategory(_prefs.getCurrentSortCategory(), false);
++        _entryListView.setViewMode(_prefs.getCurrentViewMode());
++        _entryListView.setIsCopyOnTapEnabled(_prefs.isCopyOnTapEnabled());
++        _entryListView.setPrefGroupFilter(_prefs.getGroupFilter());
+ 
+          FloatingActionButton fab = findViewById(R.id.fab);
+          fab.setOnClickListener(v -> {
+@@ -155,13 +141,6 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         _selectedEntries = new ArrayList<>();
+     }
+ 
+-    @Override
+-    protected void onSaveInstanceState(@NonNull Bundle outState) {
+-        super.onSaveInstanceState(outState);
+-        outState.putBoolean("isAuthenticating", _isAuthenticating);
+-        outState.putBoolean("isDoingIntro", _isDoingIntro);
+-    }
+-
+     @Override
+     protected void onDestroy() {
+         _entryListView.setListener(null);
+@@ -172,18 +151,14 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     protected void onPause() {
+         Map<UUID, Integer> usageMap = _entryListView.getUsageCounts();
+         if (usageMap != null) {
+-            getPreferences().setUsageCount(usageMap);
++            _prefs.setUsageCount(usageMap);
+         }
+ 
+         super.onPause();
+     }
+ 
+-
+     @Override
+     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+-        _isAuthenticating = false;
+-        _isDoingIntro = false;
+-
+         if (resultCode != RESULT_OK) {
+             return;
+         }
+@@ -199,7 +174,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                 onEditEntryResult(data);
+                 break;
+             case CODE_DO_INTRO:
+-                onDoIntroResult();
++                onIntroResult();
+                 break;
+             case CODE_DECRYPT:
+                 onDecryptResult();
+@@ -239,14 +214,14 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             if (data.getBooleanExtra("needsRecreate", false)) {
+                 recreate();
+             } else if (data.getBooleanExtra("needsRefresh", false)) {
+-                boolean showAccountName = getPreferences().isAccountNameVisible();
+-                int codeGroupSize = getPreferences().getCodeGroupSize();
+-                boolean highlightEntry = getPreferences().isEntryHighlightEnabled();
+-                boolean pauseFocused = getPreferences().isPauseFocusedEnabled();
+-                boolean tapToReveal = getPreferences().isTapToRevealEnabled();
+-                int tapToRevealTime = getPreferences().getTapToRevealTime();
+-                ViewMode viewMode = getPreferences().getCurrentViewMode();
+-                boolean copyOnTap = getPreferences().isCopyOnTapEnabled();
++                boolean showAccountName = _prefs.isAccountNameVisible();
++                int codeGroupSize = _prefs.getCodeGroupSize();
++                boolean highlightEntry = _prefs.isEntryHighlightEnabled();
++                boolean pauseFocused = _prefs.isPauseFocusedEnabled();
++                boolean tapToReveal = _prefs.isTapToRevealEnabled();
++                int tapToRevealTime = _prefs.getTapToRevealTime();
++                ViewMode viewMode = _prefs.getCurrentViewMode();
++                boolean copyOnTap = _prefs.isCopyOnTapEnabled();
+                 _entryListView.setShowAccountName(showAccountName);
+                 _entryListView.setCodeGroupSize(codeGroupSize);
+                 _entryListView.setHighlightEntry(highlightEntry);
+@@ -286,20 +261,20 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             startEditEntryActivityForNew(CODE_ADD_ENTRY, entries.get(0));
+         } else {
+             for (VaultEntry entry : entries) {
+-                _vault.addEntry(entry);
++                _vaultManager.getVault().addEntry(entry);
+                 if (_loaded) {
+                     _entryListView.addEntry(entry);
+                 }
+             }
+ 
+-            saveVault(true);
++            saveAndBackupVault();
+         }
+     }
+ 
+     private void onAddEntryResult(Intent data) {
+         if (_loaded) {
+             UUID entryUUID = (UUID) data.getSerializableExtra("entryUUID");
+-            VaultEntry entry = _vault.getEntryByUUID(entryUUID);
++            VaultEntry entry = _vaultManager.getVault().getEntryByUUID(entryUUID);
+             _entryListView.addEntry(entry, true);
+         }
+     }
+@@ -311,7 +286,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             if (data.getBooleanExtra("delete", false)) {
+                 _entryListView.removeEntry(entryUUID);
+             } else {
+-                VaultEntry entry = _vault.getEntryByUUID(entryUUID);
++                VaultEntry entry = _vaultManager.getVault().getEntryByUUID(entryUUID);
+                 _entryListView.replaceEntry(entryUUID, entry);
+             }
+         }
+@@ -352,19 +327,18 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     private void updateSortCategoryMenu() {
+-        SortCategory category = getPreferences().getCurrentSortCategory();
++        SortCategory category = _prefs.getCurrentSortCategory();
+         _menu.findItem(category.getMenuItem()).setChecked(true);
+     }
+ 
+-    private void onDoIntroResult() {
+-        _vault = _app.getVaultManager();
++    private void onIntroResult() {
+         loadEntries();
+         checkTimeSyncSetting();
+     }
+ 
+     private void checkTimeSyncSetting() {
+         boolean autoTime = Settings.Global.getInt(getContentResolver(), Settings.Global.AUTO_TIME, 1) == 1;
+-        if (!autoTime && getPreferences().isTimeSyncWarningEnabled()) {
++        if (!autoTime && _prefs.isTimeSyncWarningEnabled()) {
+             Dialogs.showTimeSyncWarningDialog(this, (dialog, which) -> {
+                 Intent intent = new Intent(Settings.ACTION_DATE_SETTINGS);
+                 startActivity(intent);
+@@ -373,7 +347,6 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     private void onDecryptResult() {
+-        _vault = _app.getVaultManager();
+         loadEntries();
+         checkTimeSyncSetting();
+     }
+@@ -396,7 +369,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+         Intent chooserIntent = Intent.createChooser(galleryIntent, getString(R.string.select_picture));
+         chooserIntent.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[] { fileIntent });
+-        AegisActivity.Helper.startExtActivityForResult(this, chooserIntent, CODE_SCAN_IMAGE);
++        _vaultManager.startActivityForResult(this, chooserIntent, CODE_SCAN_IMAGE);
+     }
+ 
+     private void startPreferencesActivity() {
+@@ -413,7 +386,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     private void doShortcutActions() {
+         Intent intent = getIntent();
+         String action = intent.getStringExtra("action");
+-        if (action == null || _app.isVaultLocked()) {
++        if (action == null || !_vaultManager.isVaultLoaded()) {
+             return;
+         }
+ 
+@@ -427,7 +400,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     private void handleDeeplink() {
+-        if (_app.isVaultLocked()) {
++        if (!_vaultManager.isVaultLoaded()) {
+             return;
+         }
+ 
+@@ -453,7 +426,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     }
+ 
+     private void handleSharedImage() {
+-        if (_app.isVaultLocked()) {
++        if (!_vaultManager.isVaultLoaded()) {
+             return;
+         }
+ 
+@@ -473,40 +446,28 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+     protected void onResume() {
+         super.onResume();
+ 
+-        if (_vault == null) {
+-            // start the intro if the vault file doesn't exist
+-            if (!_isDoingIntro && !VaultManager.fileExists(this)) {
+-                if (getPreferences().isIntroDone()) {
+-                    Toast.makeText(this, getString(R.string.vault_not_found), Toast.LENGTH_SHORT).show();
+-                }
+-                Intent intro = new Intent(this, IntroActivity.class);
+-                startActivityForResult(intro, CODE_DO_INTRO);
+-                _isDoingIntro = true;
+-                return;
++        if (_vaultManager.isVaultInitNeeded()) {
++            if (_prefs.isIntroDone()) {
++                Toast.makeText(this, getString(R.string.vault_not_found), Toast.LENGTH_SHORT).show();
+             }
++            Intent intro = new Intent(this, IntroActivity.class);
++            startActivityForResult(intro, CODE_DO_INTRO);
++            return;
++        }
+ 
+-            // read the vault from disk
+-            // if this fails, show the error to the user and close the app
+-            try {
+-                VaultFile vaultFile = _app.loadVaultFile();
+-                if (!vaultFile.isEncrypted()) {
+-                    _vault = _app.initVaultManager(vaultFile, null);
+-                }
+-            } catch (VaultManagerException e) {
+-                e.printStackTrace();
+-                Dialogs.showErrorDialog(this, R.string.vault_load_error, e, (dialog1, which) -> finish());
+-                return;
+-            }
++        if (!_vaultManager.isVaultLoaded() && !_vaultManager.isVaultFileLoaded()) {
++            Dialogs.showErrorDialog(this, R.string.vault_load_error, _vaultManager.getVaultFileError(), (dialog1, which) -> finish());
++            return;
+         }
+ 
+-        if (_app.isVaultLocked()) {
++        if (!_vaultManager.isVaultLoaded()) {
+             startAuthActivity(false);
+         } else if (_loaded) {
+             // update the list of groups in the entry list view so that the chip gets updated
+-            _entryListView.setGroups(_vault.getGroups());
++            _entryListView.setGroups(_vaultManager.getVault().getGroups());
+ 
+-            // update the usage counts in case they are edited outside of the entrylistview
+-            _entryListView.setUsageCounts(getPreferences().getUsageCounts());
++            // update the usage counts in case they are edited outside of the EntryListView
++            _entryListView.setUsageCounts(_prefs.getUsageCounts());
+ 
+             // refresh all codes to prevent showing old ones
+             _entryListView.refresh(false);
+@@ -533,8 +494,8 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+             return;
+         }
+ 
+-        if (_app.isAutoLockEnabled(Preferences.AUTO_LOCK_ON_BACK_BUTTON)) {
+-            _app.lock(false);
++        if (_vaultManager.isAutoLockEnabled(Preferences.AUTO_LOCK_ON_BACK_BUTTON)) {
++            _vaultManager.lock(false);
+             return;
+         }
+ 
+@@ -543,11 +504,11 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     private void deleteEntries(List<VaultEntry> entries) {
+         for (VaultEntry entry: entries) {
+-            VaultEntry oldEntry = _vault.removeEntry(entry);
++            VaultEntry oldEntry = _vaultManager.getVault().removeEntry(entry);
+             _entryListView.removeEntry(oldEntry);
+         }
+ 
+-        saveVault(true);
++        saveAndBackupVault();
+     }
+ 
+     @Override
+@@ -556,7 +517,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         getMenuInflater().inflate(R.menu.menu_main, menu);
+         updateLockIcon();
+         if (_loaded) {
+-            _entryListView.setGroups(_vault.getGroups());
++            _entryListView.setGroups(_vaultManager.getVault().getGroups());
+             updateSortCategoryMenu();
+         }
+ 
+@@ -565,7 +526,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         _searchView = (SearchView) searchViewMenuItem.getActionView();
+ 
+         _searchView.setQueryHint(getString(R.string.search));
+-        if (getPreferences().getFocusSearchEnabled() && !_isRecreated) {
++        if (_prefs.getFocusSearchEnabled() && !_isRecreated) {
+             _searchView.setIconified(false);
+             _searchView.setFocusable(true);
+             _searchView.requestFocus();
+@@ -612,7 +573,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                 return true;
+             }
+             case R.id.action_lock:
+-                _app.lock(true);
++                _vaultManager.lock(true);
+                 return true;
+             default:
+                 if (item.getGroupId() == R.id.action_sort_category) {
+@@ -642,7 +603,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+                     }
+ 
+                     _entryListView.setSortCategory(sortCategory, true);
+-                    getPreferences().setCurrentSortCategory(sortCategory);
++                    _prefs.setCurrentSortCategory(sortCategory);
+                 }
+                 return super.onOptionsItemSelected(item);
+         }
+@@ -655,34 +616,31 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     private void loadEntries() {
+         if (!_loaded) {
+-            _entryListView.setUsageCounts(getPreferences().getUsageCounts());
+-            _entryListView.addEntries(_vault.getEntries());
++            _entryListView.setUsageCounts(_prefs.getUsageCounts());
++            _entryListView.addEntries(_vaultManager.getVault().getEntries());
+             _entryListView.runEntriesAnimation();
+             _loaded = true;
+         }
+     }
+ 
+     private void startAuthActivity(boolean inhibitBioPrompt) {
+-        if (!_isAuthenticating) {
+-            Intent intent = new Intent(this, AuthActivity.class);
+-            intent.putExtra("inhibitBioPrompt", inhibitBioPrompt);
+-            startActivityForResult(intent, CODE_DECRYPT);
+-            _isAuthenticating = true;
+-        }
++        Intent intent = new Intent(this, AuthActivity.class);
++        intent.putExtra("inhibitBioPrompt", inhibitBioPrompt);
++        startActivityForResult(intent, CODE_DECRYPT);
+     }
+ 
+     private void updateLockIcon() {
+         // hide the lock icon if the vault is not unlocked
+-        if (_menu != null && !_app.isVaultLocked()) {
++        if (_menu != null && _vaultManager.isVaultLoaded()) {
+             MenuItem item = _menu.findItem(R.id.action_lock);
+-            item.setVisible(_vault.isEncryptionEnabled());
++            item.setVisible(_vaultManager.getVault().isEncryptionEnabled());
+         }
+     }
+ 
+     private void updateBackupErrorBar() {
+         String error = null;
+-        if (_app.getPreferences().isBackupsEnabled()) {
+-            error = _app.getPreferences().getBackupsError();
++        if (_prefs.isBackupsEnabled()) {
++            error = _prefs.getBackupsError();
+         }
+ 
+         _btnBackupError.setVisibility(error == null ? View.GONE : View.VISIBLE);
+@@ -725,22 +683,22 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+         _selectedEntries.add(entry);
+         _entryListView.setActionModeState(true, entry);
+-        _actionMode = this.startSupportActionMode(_actionModeCallbacks);
++        _actionMode = startSupportActionMode(_actionModeCallbacks);
+     }
+ 
+     @Override
+     public void onEntryMove(VaultEntry entry1, VaultEntry entry2) {
+-        _vault.swapEntries(entry1, entry2);
++        _vaultManager.getVault().swapEntries(entry1, entry2);
+     }
+ 
+     @Override
+     public void onEntryDrop(VaultEntry entry) {
+-        saveVault(false);
++        saveVault();
+     }
+ 
+     @Override
+     public void onEntryChange(VaultEntry entry) {
+-        saveVault(true);
++        saveAndBackupVault();
+     }
+ 
+     public void onEntryCopy(VaultEntry entry) {
+@@ -757,7 +715,7 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+     @Override
+     public void onSaveGroupFilter(List<String> groupFilter) {
+-        getPreferences().setGroupFilter(groupFilter);
++        _prefs.setGroupFilter(groupFilter);
+     }
+ 
+     @Override
+@@ -772,7 +730,6 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+         _entryListView.clearEntries();
+         _loaded = false;
+ 
+-
+         if (userInitiated) {
+             startAuthActivity(true);
+         } else {
+@@ -832,8 +789,9 @@ public class MainActivity extends AegisActivity implements EntryListView.Listene
+ 
+                             for (VaultEntry entry : _selectedEntries) {
+                                 if (entry.getGroup() != null) {
+-                                    if (!_vault.getGroups().contains(entry.getGroup())) {
+-                                        _entryListView.setGroups(_vault.getGroups());
++                                    TreeSet<String> groups = _vaultManager.getVault().getGroups();
++                                    if (!groups.contains(entry.getGroup())) {
++                                        _entryListView.setGroups(groups);
+                                         break;
+                                     }
+                                 }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PanicResponderActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PanicResponderActivity.java
+index 95d5deb5..8453e385 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PanicResponderActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PanicResponderActivity.java
+@@ -5,10 +5,9 @@ import android.os.Bundle;
+ import android.widget.Toast;
+ 
+ import com.beemdevelopment.aegis.BuildConfig;
+-import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.crypto.pins.GuardianProjectFDroidRSA2048;
+-import com.beemdevelopment.aegis.vault.VaultManager;
++import com.beemdevelopment.aegis.vault.VaultRepository;
+ 
+ import info.guardianproject.GuardianProjectRSA4096;
+ import info.guardianproject.trustedintents.TrustedIntents;
+@@ -19,9 +18,8 @@ public class PanicResponderActivity extends AegisActivity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        Preferences prefs = getPreferences();
+ 
+-        if (!prefs.isPanicTriggerEnabled()) {
++        if (!_prefs.isPanicTriggerEnabled()) {
+             Toast.makeText(this, R.string.panic_trigger_ignore_toast, Toast.LENGTH_SHORT).show();
+             finish();
+             return;
+@@ -39,8 +37,8 @@ public class PanicResponderActivity extends AegisActivity {
+         }
+ 
+         if (intent != null && PANIC_TRIGGER_ACTION.equals(intent.getAction())) {
+-            getApp().lock(false);
+-            VaultManager.deleteFile(this);
++            VaultRepository.deleteFile(this);
++            _vaultManager.lock(false);
+             finishApp();
+             return;
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
+index 2300dcc5..60068adb 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/PreferencesActivity.java
+@@ -8,8 +8,8 @@ import androidx.preference.Preference;
+ import androidx.preference.PreferenceFragmentCompat;
+ 
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.ui.fragments.MainPreferencesFragment;
+-import com.beemdevelopment.aegis.ui.fragments.PreferencesFragment;
++import com.beemdevelopment.aegis.ui.fragments.preferences.MainPreferencesFragment;
++import com.beemdevelopment.aegis.ui.fragments.preferences.PreferencesFragment;
+ 
+ public class PreferencesActivity extends AegisActivity implements
+         PreferenceFragmentCompat.OnPreferenceStartFragmentCallback {
+@@ -18,6 +18,9 @@ public class PreferencesActivity extends AegisActivity implements
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_preferences);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
+index 3de6e87e..0b5b4637 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/ScannerActivity.java
+@@ -51,6 +51,9 @@ public class ScannerActivity extends AegisActivity implements QrCodeAnalyzer.Lis
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_scanner);
+         setSupportActionBar(findViewById(R.id.toolbar));
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
+index f44d55e0..aaab4eb8 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/SlotManagerActivity.java
+@@ -39,6 +39,9 @@ public class SlotManagerActivity extends AegisActivity implements SlotAdapter.Li
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_slots);
+         setSupportActionBar(findViewById(R.id.toolbar));
+         _edited = false;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/TransferEntriesActivity.java b/app/src/main/java/com/beemdevelopment/aegis/ui/TransferEntriesActivity.java
+index cf11d1e7..21af2021 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/TransferEntriesActivity.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/TransferEntriesActivity.java
+@@ -17,7 +17,6 @@ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.Theme;
+ import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+ import com.google.zxing.BarcodeFormat;
+ import com.google.zxing.WriterException;
+ import com.google.zxing.common.BitMatrix;
+@@ -34,16 +33,16 @@ public class TransferEntriesActivity extends AegisActivity {
+     private TextView _entriesCount;
+     private Button _nextButton;
+     private Button _previousButton;
+-
+-    private VaultManager _vault;
+     private int _currentEntryCount = 1;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (abortIfOrphan(savedInstanceState)) {
++            return;
++        }
+         setContentView(R.layout.activity_share_entry);
+         setSupportActionBar(findViewById(R.id.toolbar));
+-        _vault = getApp().getVaultManager();
+ 
+         _qrImage = findViewById(R.id.ivQrCode);
+         _issuer = findViewById(R.id.tvIssuer);
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/AppearancePreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/AppearancePreferencesFragment.java
+similarity index 87%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/AppearancePreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/AppearancePreferencesFragment.java
+index dde4edcf..095845c0 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/AppearancePreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/AppearancePreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+@@ -8,12 +8,11 @@ import android.os.Bundle;
+ import androidx.appcompat.app.AlertDialog;
+ import androidx.preference.Preference;
+ 
+-import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.Theme;
+ import com.beemdevelopment.aegis.ViewMode;
+-import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.ui.GroupManagerActivity;
++import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+ import java.util.ArrayList;
+@@ -27,12 +26,11 @@ public class AppearancePreferencesFragment extends PreferencesFragment {
+     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+         super.onCreatePreferences(savedInstanceState, rootKey);
+         addPreferencesFromResource(R.xml.preferences_appearance);
+-        Preferences prefs = getPreferences();
+ 
+         _groupsPreference = findPreference("pref_groups");
+         _groupsPreference.setOnPreferenceClickListener(preference -> {
+             Intent intent = new Intent(getActivity(), GroupManagerActivity.class);
+-            intent.putExtra("groups", new ArrayList<>(getVault().getGroups()));
++            intent.putExtra("groups", new ArrayList<>(_vaultManager.getVault().getGroups()));
+             startActivityForResult(intent, CODE_GROUPS);
+             return true;
+         });
+@@ -42,23 +40,23 @@ public class AppearancePreferencesFragment extends PreferencesFragment {
+             Dialogs.showSecureDialog(new AlertDialog.Builder(getActivity())
+                     .setTitle(R.string.preference_reset_usage_count)
+                     .setMessage(R.string.preference_reset_usage_count_dialog)
+-                    .setPositiveButton(android.R.string.yes, (dialog, which) -> getPreferences().clearUsageCount())
++                    .setPositiveButton(android.R.string.yes, (dialog, which) -> _prefs.clearUsageCount())
+                     .setNegativeButton(android.R.string.no, null)
+                     .create());
+             return true;
+         });
+ 
+-        int currentTheme = prefs.getCurrentTheme().ordinal();
++        int currentTheme = _prefs.getCurrentTheme().ordinal();
+         Preference darkModePreference = findPreference("pref_dark_mode");
+         darkModePreference.setSummary(String.format("%s: %s", getString(R.string.selected), getResources().getStringArray(R.array.theme_titles)[currentTheme]));
+         darkModePreference.setOnPreferenceClickListener(preference -> {
+-            int currentTheme1 = prefs.getCurrentTheme().ordinal();
++            int currentTheme1 = _prefs.getCurrentTheme().ordinal();
+ 
+             Dialogs.showSecureDialog(new AlertDialog.Builder(getActivity())
+                     .setTitle(R.string.choose_theme)
+                     .setSingleChoiceItems(R.array.theme_titles, currentTheme1, (dialog, which) -> {
+                         int i = ((AlertDialog) dialog).getListView().getCheckedItemPosition();
+-                        prefs.setCurrentTheme(Theme.fromInteger(i));
++                        _prefs.setCurrentTheme(Theme.fromInteger(i));
+ 
+                         dialog.dismiss();
+ 
+@@ -83,17 +81,17 @@ public class AppearancePreferencesFragment extends PreferencesFragment {
+             langPreference.setVisible(false);
+         }
+ 
+-        int currentViewMode = prefs.getCurrentViewMode().ordinal();
++        int currentViewMode = _prefs.getCurrentViewMode().ordinal();
+         Preference viewModePreference = findPreference("pref_view_mode");
+         viewModePreference.setSummary(String.format("%s: %s", getString(R.string.selected), getResources().getStringArray(R.array.view_mode_titles)[currentViewMode]));
+         viewModePreference.setOnPreferenceClickListener(preference -> {
+-            int currentViewMode1 = prefs.getCurrentViewMode().ordinal();
++            int currentViewMode1 = _prefs.getCurrentViewMode().ordinal();
+ 
+             Dialogs.showSecureDialog(new AlertDialog.Builder(getActivity())
+                     .setTitle(R.string.choose_view_mode)
+                     .setSingleChoiceItems(R.array.view_mode_titles, currentViewMode1, (dialog, which) -> {
+                         int i = ((AlertDialog) dialog).getListView().getCheckedItemPosition();
+-                        prefs.setCurrentViewMode(ViewMode.fromInteger(i));
++                        _prefs.setCurrentViewMode(ViewMode.fromInteger(i));
+                         viewModePreference.setSummary(String.format("%s: %s", getString(R.string.selected), getResources().getStringArray(R.array.view_mode_titles)[i]));
+                         getResult().putExtra("needsRefresh", true);
+                         dialog.dismiss();
+@@ -133,12 +131,12 @@ public class AppearancePreferencesFragment extends PreferencesFragment {
+ 
+         HashSet<String> groups = new HashSet<>(data.getStringArrayListExtra("groups"));
+ 
+-        for (VaultEntry entry : getVault().getEntries()) {
++        for (VaultEntry entry : _vaultManager.getVault().getEntries()) {
+             if (!groups.contains(entry.getGroup())) {
+                 entry.setGroup(null);
+             }
+         }
+ 
+-        saveVault();
++        saveAndBackupVault();
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BackupsPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BackupsPreferencesFragment.java
+similarity index 77%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BackupsPreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BackupsPreferencesFragment.java
+index 5504092a..46c60c57 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BackupsPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BackupsPreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+@@ -9,11 +9,9 @@ import android.widget.Toast;
+ import androidx.preference.Preference;
+ import androidx.preference.SwitchPreferenceCompat;
+ 
+-import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+-import com.beemdevelopment.aegis.ui.AegisActivity;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ 
+ public class BackupsPreferencesFragment extends PreferencesFragment {
+     private SwitchPreferenceCompat _androidBackupsPreference;
+@@ -32,14 +30,13 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+         super.onCreatePreferences(savedInstanceState, rootKey);
+         addPreferencesFromResource(R.xml.preferences_backups);
+-        Preferences prefs = getPreferences();
+ 
+         _backupsPreference = findPreference("pref_backups");
+         _backupsPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+             if ((boolean) newValue) {
+                 selectBackupsLocation();
+             } else {
+-                prefs.setIsBackupsEnabled(false);
++                _prefs.setIsBackupsEnabled(false);
+                 updateBackupPreference();
+             }
+ 
+@@ -48,13 +45,13 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+ 
+         _androidBackupsPreference = findPreference("pref_android_backups");
+         _androidBackupsPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+-            prefs.setIsAndroidBackupsEnabled((boolean) newValue);
++            _prefs.setIsAndroidBackupsEnabled((boolean) newValue);
+             updateBackupPreference();
+-            getVault().androidBackupDataChanged();
++            _vaultManager.scheduleAndroidBackup();
+             return false;
+         });
+ 
+-        Uri backupLocation = prefs.getBackupsLocation();
++        Uri backupLocation = _prefs.getBackupsLocation();
+         _backupsLocationPreference = findPreference("pref_backups_location");
+         if (backupLocation != null) {
+             _backupsLocationPreference.setSummary(String.format("%s: %s", getString(R.string.pref_backups_location_summary), Uri.decode(backupLocation.toString())));
+@@ -66,11 +63,11 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+ 
+         _backupsTriggerPreference = findPreference("pref_backups_trigger");
+         _backupsTriggerPreference.setOnPreferenceClickListener(preference -> {
+-            if (prefs.isBackupsEnabled()) {
++            if (_prefs.isBackupsEnabled()) {
+                 try {
+-                    getVault().backup();
++                    _vaultManager.scheduleBackup();
+                     Toast.makeText(getActivity(), R.string.backup_successful, Toast.LENGTH_LONG).show();
+-                } catch (VaultManagerException e) {
++                } catch (VaultRepositoryException e) {
+                     e.printStackTrace();
+                     Dialogs.showErrorDialog(getContext(), R.string.backup_error, e);
+                 }
+@@ -79,12 +76,12 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+         });
+ 
+         _backupsVersionsPreference = findPreference("pref_backups_versions");
+-        _backupsVersionsPreference.setSummary(getResources().getQuantityString(R.plurals.pref_backups_versions_summary, prefs.getBackupsVersionCount(), prefs.getBackupsVersionCount()));
++        _backupsVersionsPreference.setSummary(getResources().getQuantityString(R.plurals.pref_backups_versions_summary, _prefs.getBackupsVersionCount(), _prefs.getBackupsVersionCount()));
+         _backupsVersionsPreference.setOnPreferenceClickListener(preference -> {
+             Dialogs.showBackupVersionsPickerDialog(getActivity(), number -> {
+                 number = number * 5 + 5;
+-                prefs.setBackupsVersionCount(number);
+-                _backupsVersionsPreference.setSummary(getResources().getQuantityString(R.plurals.pref_backups_versions_summary, prefs.getBackupsVersionCount(), prefs.getBackupsVersionCount()));
++                _prefs.setBackupsVersionCount(number);
++                _backupsVersionsPreference.setSummary(getResources().getQuantityString(R.plurals.pref_backups_versions_summary, _prefs.getBackupsVersionCount(), _prefs.getBackupsVersionCount()));
+             });
+             return false;
+         });
+@@ -106,18 +103,17 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+         int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+         getContext().getContentResolver().takePersistableUriPermission(data.getData(), flags);
+ 
+-        Preferences prefs = getPreferences();
+-        prefs.setBackupsLocation(uri);
+-        prefs.setIsBackupsEnabled(true);
+-        prefs.setBackupsError(null);
++        _prefs.setBackupsLocation(uri);
++        _prefs.setIsBackupsEnabled(true);
++        _prefs.setBackupsError(null);
+         _backupsLocationPreference.setSummary(String.format("%s: %s", getString(R.string.pref_backups_location_summary), Uri.decode(uri.toString())));
+         updateBackupPreference();
+     }
+ 
+     private void updateBackupPreference() {
+-        boolean encrypted = getVault().isEncryptionEnabled();
+-        boolean androidBackupEnabled = getPreferences().isAndroidBackupsEnabled() && encrypted;
+-        boolean backupEnabled = getPreferences().isBackupsEnabled() && encrypted;
++        boolean encrypted = _vaultManager.getVault().isEncryptionEnabled();
++        boolean androidBackupEnabled = _prefs.isAndroidBackupsEnabled() && encrypted;
++        boolean backupEnabled = _prefs.isBackupsEnabled() && encrypted;
+         _androidBackupsPreference.setChecked(androidBackupEnabled);
+         _androidBackupsPreference.setEnabled(encrypted);
+         _backupsPreference.setChecked(backupEnabled);
+@@ -134,6 +130,6 @@ public class BackupsPreferencesFragment extends PreferencesFragment {
+                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                 | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+ 
+-        AegisActivity.Helper.startExtActivityForResult(this, intent, CODE_BACKUPS);
++        _vaultManager.startActivityForResult(this, intent, CODE_BACKUPS);
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BehaviorPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BehaviorPreferencesFragment.java
+similarity index 89%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BehaviorPreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BehaviorPreferencesFragment.java
+index e48f8e2f..9f68b033 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/BehaviorPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/BehaviorPreferencesFragment.java
+@@ -1,15 +1,12 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.os.Bundle;
+ 
+ import androidx.preference.Preference;
+ 
+-import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ 
+ public class BehaviorPreferencesFragment extends PreferencesFragment {
+-
+-    private Preferences _prefs;
+     private Preference _entryPausePreference;
+ 
+     @Override
+@@ -17,8 +14,6 @@ public class BehaviorPreferencesFragment extends PreferencesFragment {
+         super.onCreatePreferences(savedInstanceState, rootKey);
+         addPreferencesFromResource(R.xml.preferences_behavior);
+ 
+-        _prefs = getPreferences();
+-
+         Preference copyOnTapPreference = findPreference("pref_copy_on_tap");
+         copyOnTapPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+             getResult().putExtra("needsRefresh", true);
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/IconPacksManagerFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/IconPacksManagerFragment.java
+similarity index 94%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/IconPacksManagerFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/IconPacksManagerFragment.java
+index ff6ed57e..13e52379 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/IconPacksManagerFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/IconPacksManagerFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+@@ -15,27 +15,35 @@ import androidx.fragment.app.Fragment;
+ import androidx.recyclerview.widget.LinearLayoutManager;
+ import androidx.recyclerview.widget.RecyclerView;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.helpers.FabScrollHelper;
+ import com.beemdevelopment.aegis.icons.IconPack;
+ import com.beemdevelopment.aegis.icons.IconPackException;
+ import com.beemdevelopment.aegis.icons.IconPackExistsException;
+ import com.beemdevelopment.aegis.icons.IconPackManager;
+-import com.beemdevelopment.aegis.ui.AegisActivity;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.ui.tasks.ImportIconPackTask;
+ import com.beemdevelopment.aegis.ui.views.IconPackAdapter;
++import com.beemdevelopment.aegis.vault.VaultManager;
+ import com.google.android.material.floatingactionbutton.FloatingActionButton;
+ 
++import javax.inject.Inject;
++
++import dagger.hilt.android.AndroidEntryPoint;
++
++@AndroidEntryPoint
+ public class IconPacksManagerFragment extends Fragment implements IconPackAdapter.Listener {
+     private static final int CODE_IMPORT = 0;
+ 
+-    private IconPackAdapter _adapter;
+-    private IconPackManager _iconPackManager;
++    @Inject
++    IconPackManager _iconPackManager;
++
++    @Inject
++    VaultManager _vaultManager;
+ 
+     private View _iconPacksView;
+     private RecyclerView _iconPacksRecyclerView;
++    private IconPackAdapter _adapter;
+     private LinearLayout _noIconPacksView;
+     private FabScrollHelper _fabScrollHelper;
+ 
+@@ -45,8 +53,6 @@ public class IconPacksManagerFragment extends Fragment implements IconPackAdapte
+ 
+     @Override
+     public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
+-        _iconPackManager = ((AegisApplication) getContext().getApplicationContext()).getIconPackManager();
+-
+         FloatingActionButton fab = view.findViewById(R.id.fab);
+         fab.setOnClickListener(v -> startImportIconPack());
+         _fabScrollHelper = new FabScrollHelper(fab);
+@@ -145,7 +151,7 @@ public class IconPacksManagerFragment extends Fragment implements IconPackAdapte
+     private void startImportIconPack() {
+         Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+         intent.setType("application/zip");
+-        AegisActivity.Helper.startExtActivityForResult(this, intent, CODE_IMPORT);
++        _vaultManager.startActivityForResult(this, intent, CODE_IMPORT);
+     }
+ 
+     private void updateEmptyState() {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/ImportExportPreferencesFragment.java
+similarity index 90%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/ImportExportPreferencesFragment.java
+index 5660b303..8e488d4e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/ImportExportPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/ImportExportPreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+@@ -22,15 +22,14 @@ import com.beemdevelopment.aegis.BuildConfig;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.helpers.DropdownHelper;
+ import com.beemdevelopment.aegis.importers.DatabaseImporter;
+-import com.beemdevelopment.aegis.ui.AegisActivity;
+ import com.beemdevelopment.aegis.ui.ImportEntriesActivity;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.ui.tasks.ExportTask;
+ import com.beemdevelopment.aegis.ui.tasks.ImportFileTask;
+ import com.beemdevelopment.aegis.vault.VaultBackupManager;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepository;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ import com.beemdevelopment.aegis.vault.slots.Slot;
+ import com.beemdevelopment.aegis.vault.slots.SlotException;
+ 
+@@ -61,7 +60,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+ 
+                 Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                 intent.setType("*/*");
+-                AegisActivity.Helper.startExtActivityForResult(this, intent, CODE_IMPORT_SELECT);
++                _vaultManager.startActivityForResult(this, intent, CODE_IMPORT_SELECT);
+             });
+             return true;
+         });
+@@ -184,7 +183,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+                         .addCategory(Intent.CATEGORY_OPENABLE)
+                         .setType(getExportMimeType(requestCode))
+                         .putExtra(Intent.EXTRA_TITLE, fileInfo.toString());
+-                AegisActivity.Helper.startExtActivityForResult(this, intent, requestCode);
++                _vaultManager.startActivityForResult(this, intent, requestCode);
+             });
+ 
+             btnNeutral.setOnClickListener(v -> {
+@@ -209,7 +208,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+                 startExportVault(requestCode, cb -> {
+                     try (OutputStream stream = new FileOutputStream(file)) {
+                         cb.exportVault(stream);
+-                    } catch (IOException | VaultManagerException e) {
++                    } catch (IOException | VaultRepositoryException e) {
+                         e.printStackTrace();
+                         Dialogs.showErrorDialog(getContext(), R.string.exporting_vault_error, e);
+                         return;
+@@ -221,7 +220,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+                             .setType(getExportMimeType(requestCode))
+                             .putExtra(Intent.EXTRA_STREAM, uri);
+                     Intent chooser = Intent.createChooser(intent, getString(R.string.pref_export_summary));
+-                    AegisActivity.Helper.startExtActivity(this, chooser);
++                    _vaultManager.startActivity(this, chooser);
+                 });
+             });
+         });
+@@ -239,11 +238,11 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+ 
+     private static VaultBackupManager.FileInfo getExportFileInfo(int spinnerPos, boolean encrypt) {
+         if (spinnerPos == 0) {
+-            String filename = encrypt ? VaultManager.FILENAME_PREFIX_EXPORT : VaultManager.FILENAME_PREFIX_EXPORT_PLAIN;
++            String filename = encrypt ? VaultRepository.FILENAME_PREFIX_EXPORT : VaultRepository.FILENAME_PREFIX_EXPORT_PLAIN;
+             return new VaultBackupManager.FileInfo(filename);
+         }
+ 
+-        return new VaultBackupManager.FileInfo(VaultManager.FILENAME_PREFIX_EXPORT_URI, "txt");
++        return new VaultBackupManager.FileInfo(VaultRepository.FILENAME_PREFIX_EXPORT_URI, "txt");
+     }
+ 
+     private static String getExportMimeType(int requestCode) {
+@@ -262,8 +261,8 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+     private void startExportVault(int requestCode, StartExportCallback cb) {
+         switch (requestCode) {
+             case CODE_EXPORT:
+-                if (getVault().isEncryptionEnabled()) {
+-                    cb.exportVault(stream -> getVault().export(stream));
++                if (_vaultManager.getVault().isEncryptionEnabled()) {
++                    cb.exportVault(stream -> _vaultManager.getVault().export(stream));
+                 } else {
+                     Dialogs.showSetPasswordDialog(getActivity(), new Dialogs.SlotListener() {
+                         @Override
+@@ -278,7 +277,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+                                 return;
+                             }
+ 
+-                            cb.exportVault(stream -> getVault().export(stream, creds));
++                            cb.exportVault(stream -> _vaultManager.getVault().export(stream, creds));
+                         }
+ 
+                         @Override
+@@ -289,10 +288,10 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+                 }
+                 break;
+             case CODE_EXPORT_PLAIN:
+-                cb.exportVault((stream) -> getVault().export(stream, null));
++                cb.exportVault((stream) -> _vaultManager.getVault().export(stream, null));
+                 break;
+             case CODE_EXPORT_GOOGLE_URI:
+-                cb.exportVault((stream) -> getVault().exportGoogleUris(stream));
++                cb.exportVault((stream) -> _vaultManager.getVault().exportGoogleUris(stream));
+                 break;
+         }
+     }
+@@ -307,12 +306,12 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+             File file;
+             OutputStream outStream = null;
+             try {
+-                file = File.createTempFile(VaultManager.FILENAME_PREFIX_EXPORT + "-", ".json", getExportCacheDir());
++                file = File.createTempFile(VaultRepository.FILENAME_PREFIX_EXPORT + "-", ".json", getExportCacheDir());
+                 outStream = new FileOutputStream(file);
+                 cb.exportVault(outStream);
+ 
+                 new ExportTask(getContext(), new ExportResultListener()).execute(getLifecycle(), new ExportTask.Params(file, uri));
+-            } catch (VaultManagerException | IOException e) {
++            } catch (VaultRepositoryException | IOException e) {
+                 e.printStackTrace();
+                 Dialogs.showErrorDialog(getContext(), R.string.exporting_vault_error, e);
+             } finally {
+@@ -350,7 +349,7 @@ public class ImportExportPreferencesFragment extends PreferencesFragment {
+     }
+ 
+     private interface FinishExportCallback {
+-        void exportVault(OutputStream stream) throws IOException, VaultManagerException;
++        void exportVault(OutputStream stream) throws IOException, VaultRepositoryException;
+     }
+ 
+     private interface StartExportCallback {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/MainPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/MainPreferencesFragment.java
+similarity index 85%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/MainPreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/MainPreferencesFragment.java
+index be183f3b..3172fd85 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/MainPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/MainPreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.os.Bundle;
+ 
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/PreferencesFragment.java
+similarity index 70%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/PreferencesFragment.java
+index 0d89348b..0bf036f9 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/PreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/PreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import android.app.Activity;
+ import android.content.Intent;
+@@ -7,13 +7,17 @@ import android.os.Bundle;
+ import androidx.annotation.CallSuper;
+ import androidx.preference.PreferenceFragmentCompat;
+ 
+-import com.beemdevelopment.aegis.AegisApplication;
+ import com.beemdevelopment.aegis.Preferences;
+ import com.beemdevelopment.aegis.R;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.vault.VaultManager;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ 
++import javax.inject.Inject;
++
++import dagger.hilt.android.AndroidEntryPoint;
++
++@AndroidEntryPoint
+ public abstract class PreferencesFragment extends PreferenceFragmentCompat {
+     // activity request codes
+     public static final int CODE_IMPORT_SELECT = 0;
+@@ -25,18 +29,17 @@ public abstract class PreferencesFragment extends PreferenceFragmentCompat {
+     public static final int CODE_EXPORT_GOOGLE_URI = 7;
+     public static final int CODE_BACKUPS = 8;
+ 
+-    private AegisApplication _app;
+     private Intent _result;
+-    private Preferences _prefs;
+-    private VaultManager _vault;
++
++    @Inject
++    Preferences _prefs;
++
++    @Inject
++    VaultManager _vaultManager;
+ 
+     @Override
+     @CallSuper
+     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+-        _app = (AegisApplication) getActivity().getApplication();
+-        _prefs = _app.getPreferences();
+-        _vault = _app.getVaultManager();
+-
+         setResult(new Intent());
+     }
+ 
+@@ -62,22 +65,10 @@ public abstract class PreferencesFragment extends PreferenceFragmentCompat {
+         getActivity().setResult(Activity.RESULT_OK, _result);
+     }
+ 
+-    protected AegisApplication getApp() {
+-        return _app;
+-    }
+-
+-    protected Preferences getPreferences() {
+-        return _prefs;
+-    }
+-
+-    protected VaultManager getVault() {
+-        return _vault;
+-    }
+-
+-    protected boolean saveVault() {
++    protected boolean saveAndBackupVault() {
+         try {
+-            _vault.save(true);
+-        } catch (VaultManagerException e) {
++            _vaultManager.saveAndBackup();
++        } catch (VaultRepositoryException e) {
+             e.printStackTrace();
+             Dialogs.showErrorDialog(getContext(), R.string.saving_error, e);
+             return false;
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/SecurityPreferencesFragment.java b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/SecurityPreferencesFragment.java
+similarity index 86%
+rename from app/src/main/java/com/beemdevelopment/aegis/ui/fragments/SecurityPreferencesFragment.java
+rename to app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/SecurityPreferencesFragment.java
+index 523a1792..6afffb21 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/SecurityPreferencesFragment.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/fragments/preferences/SecurityPreferencesFragment.java
+@@ -1,4 +1,4 @@
+-package com.beemdevelopment.aegis.ui.fragments;
++package com.beemdevelopment.aegis.ui.fragments.preferences;
+ 
+ import static android.text.TextUtils.isDigitsOnly;
+ 
+@@ -23,13 +23,12 @@ import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
+ import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
+ import com.beemdevelopment.aegis.helpers.BiometricSlotInitializer;
+ import com.beemdevelopment.aegis.helpers.BiometricsHelper;
+-import com.beemdevelopment.aegis.services.NotificationService;
+ import com.beemdevelopment.aegis.ui.SlotManagerActivity;
+ import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ import com.beemdevelopment.aegis.ui.preferences.SwitchPreference;
+ import com.beemdevelopment.aegis.ui.tasks.PasswordSlotDecryptTask;
+ import com.beemdevelopment.aegis.vault.VaultFileCredentials;
+-import com.beemdevelopment.aegis.vault.VaultManagerException;
++import com.beemdevelopment.aegis.vault.VaultRepositoryException;
+ import com.beemdevelopment.aegis.vault.slots.BiometricSlot;
+ import com.beemdevelopment.aegis.vault.slots.PasswordSlot;
+ import com.beemdevelopment.aegis.vault.slots.Slot;
+@@ -80,10 +79,10 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+         });
+ 
+         Preference tapToRevealTimePreference = findPreference("pref_tap_to_reveal_time");
+-        tapToRevealTimePreference.setSummary(getPreferences().getTapToRevealTime() + " seconds");
++        tapToRevealTimePreference.setSummary(_prefs.getTapToRevealTime() + " seconds");
+         tapToRevealTimePreference.setOnPreferenceClickListener(preference -> {
+             Dialogs.showNumberPickerDialog(getActivity(), number -> {
+-                getPreferences().setTapToRevealTime(number);
++                _prefs.setTapToRevealTime(number);
+                 tapToRevealTimePreference.setSummary(number + " seconds");
+                 getResult().putExtra("needsRefresh", true);
+             });
+@@ -92,7 +91,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+ 
+         _encryptionPreference = findPreference("pref_encryption");
+         _encryptionPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+-            if (!getVault().isEncryptionEnabled()) {
++            if (!_vaultManager.getVault().isEncryptionEnabled()) {
+                 Dialogs.showSetPasswordDialog(getActivity(), new EnableEncryptionListener());
+             } else {
+                 Dialogs.showSecureDialog(new AlertDialog.Builder(getActivity())
+@@ -100,24 +99,15 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                         .setMessage(getText(R.string.disable_encryption_description))
+                         .setPositiveButton(android.R.string.yes, (dialog, which) -> {
+                             try {
+-                                getVault().disableEncryption();
+-                            } catch (VaultManagerException e) {
++                                _vaultManager.disableEncryption();
++                            } catch (VaultRepositoryException e) {
+                                 e.printStackTrace();
+                                 Dialogs.showErrorDialog(getContext(), R.string.disable_encryption_error, e);
+                                 return;
+                             }
+ 
+-                            // clear the KeyStore
+-                            try {
+-                                KeyStoreHandle handle = new KeyStoreHandle();
+-                                handle.clear();
+-                            } catch (KeyStoreHandleException e) {
+-                                e.printStackTrace();
+-                            }
+-
+-                            getActivity().stopService(new Intent(getActivity(), NotificationService.class));
+-                            getPreferences().setIsBackupsEnabled(false);
+-                            getPreferences().setIsAndroidBackupsEnabled(false);
++                            _prefs.setIsBackupsEnabled(false);
++                            _prefs.setIsAndroidBackupsEnabled(false);
+                             updateEncryptionPreferences();
+                         })
+                         .setNegativeButton(android.R.string.no, null)
+@@ -129,7 +119,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+ 
+         _biometricsPreference = findPreference("pref_biometrics");
+         _biometricsPreference.setOnPreferenceChangeListener((preference, newValue) -> {
+-            VaultFileCredentials creds = getVault().getCredentials();
++            VaultFileCredentials creds = _vaultManager.getVault().getCredentials();
+             SlotList slots = creds.getSlots();
+ 
+             if (!slots.has(BiometricSlot.class)) {
+@@ -145,7 +135,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                 // remove the biometric slot
+                 BiometricSlot slot = slots.find(BiometricSlot.class);
+                 slots.remove(slot);
+-                getVault().setCredentials(creds);
++                _vaultManager.getVault().setCredentials(creds);
+ 
+                 // remove the KeyStore key
+                 try {
+@@ -155,7 +145,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                     e.printStackTrace();
+                 }
+ 
+-                saveVault();
++                saveAndBackupVault();
+                 updateEncryptionPreferences();
+             }
+ 
+@@ -171,7 +161,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+         _slotsPreference = findPreference("pref_slots");
+         _slotsPreference.setOnPreferenceClickListener(preference -> {
+             Intent intent = new Intent(getActivity(), SlotManagerActivity.class);
+-            intent.putExtra("creds", getVault().getCredentials());
++            intent.putExtra("creds", _vaultManager.getVault().getCredentials());
+             startActivityForResult(intent, CODE_SLOTS);
+             return true;
+         });
+@@ -184,7 +174,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+ 
+             Dialogs.showPasswordInputDialog(getActivity(), R.string.set_password_confirm, R.string.pin_keyboard_description, password -> {
+                 if (isDigitsOnly(new String(password))) {
+-                    List<PasswordSlot> slots = getVault().getCredentials().getSlots().findAll(PasswordSlot.class);
++                    List<PasswordSlot> slots = _vaultManager.getVault().getCredentials().getSlots().findAll(PasswordSlot.class);
+                     PasswordSlotDecryptTask.Params params = new PasswordSlotDecryptTask.Params(slots, password);
+                     PasswordSlotDecryptTask task = new PasswordSlotDecryptTask(getActivity(), new PasswordConfirmationListener());
+                     task.execute(getLifecycle(), params);
+@@ -210,7 +200,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+             final String[] textItems = getResources().getStringArray(R.array.pref_auto_lock_types);
+             final boolean[] checkedItems = new boolean[items.length];
+             for (int i = 0; i < items.length; i++) {
+-                checkedItems[i] = getPreferences().isAutoLockTypeEnabled(items[i]);
++                checkedItems[i] = _prefs.isAutoLockTypeEnabled(items[i]);
+             }
+ 
+             AlertDialog.Builder builder = new AlertDialog.Builder(getActivity())
+@@ -224,7 +214,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                             }
+                         }
+ 
+-                        getPreferences().setAutoLockMask(autoLock);
++                        _prefs.setAutoLockMask(autoLock);
+                         _autoLockPreference.setSummary(getAutoLockSummary());
+                     })
+                     .setNegativeButton(android.R.string.cancel, null);
+@@ -236,7 +226,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+         _passwordReminderPreference = findPreference("pref_password_reminder_freq");
+         _passwordReminderPreference.setSummary(getPasswordReminderSummary());
+         _passwordReminderPreference.setOnPreferenceClickListener((preference) -> {
+-            final PassReminderFreq currFreq = getPreferences().getPasswordReminderFrequency();
++            final PassReminderFreq currFreq = _prefs.getPasswordReminderFrequency();
+             final PassReminderFreq[] items = PassReminderFreq.values();
+             final String[] textItems = Arrays.stream(items)
+                     .map(f -> getString(f.getStringRes()))
+@@ -247,7 +237,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                     .setSingleChoiceItems(textItems, currFreq.ordinal(), (dialog, which) -> {
+                         int i = ((AlertDialog) dialog).getListView().getCheckedItemPosition();
+                         PassReminderFreq freq = PassReminderFreq.fromInteger(i);
+-                        getPreferences().setPasswordReminderFrequency(freq);
++                        _prefs.setPasswordReminderFrequency(freq);
+                         _passwordReminderPreference.setSummary(getPasswordReminderSummary());
+                         dialog.dismiss();
+                     })
+@@ -270,13 +260,13 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+         }
+ 
+         VaultFileCredentials creds = (VaultFileCredentials) data.getSerializableExtra("creds");
+-        getVault().setCredentials(creds);
+-        saveVault();
++        _vaultManager.getVault().setCredentials(creds);
++        saveAndBackupVault();
+         updateEncryptionPreferences();
+     }
+ 
+     private void updateEncryptionPreferences() {
+-        boolean encrypted = getVault().isEncryptionEnabled();
++        boolean encrypted = _vaultManager.getVault().isEncryptionEnabled();
+         _encryptionPreference.setChecked(encrypted, true);
+         _setPasswordPreference.setVisible(encrypted);
+         _biometricsPreference.setVisible(encrypted);
+@@ -285,7 +275,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+         _pinKeyboardPreference.setVisible(encrypted);
+ 
+         if (encrypted) {
+-            SlotList slots = getVault().getCredentials().getSlots();
++            SlotList slots = _vaultManager.getVault().getCredentials().getSlots();
+             boolean multiPassword = slots.findAll(PasswordSlot.class).size() > 1;
+             boolean multiBio = slots.findAll(BiometricSlot.class).size() > 1;
+             boolean showSlots = BuildConfig.DEBUG || multiPassword || multiBio;
+@@ -305,7 +295,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+     }
+ 
+     private String getPasswordReminderSummary() {
+-        PassReminderFreq freq = getPreferences().getPasswordReminderFrequency();
++        PassReminderFreq freq = _prefs.getPasswordReminderFrequency();
+         if (freq == PassReminderFreq.NEVER) {
+             return getString(R.string.pref_password_reminder_summary_disabled);
+         }
+@@ -320,7 +310,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+ 
+         StringBuilder builder = new StringBuilder();
+         for (int i = 0; i < settings.length; i++) {
+-            if (getPreferences().isAutoLockTypeEnabled(settings[i])) {
++            if (_prefs.isAutoLockTypeEnabled(settings[i])) {
+                 if (builder.length() != 0) {
+                     builder.append(", ");
+                 }
+@@ -339,7 +329,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+     private class SetPasswordListener implements Dialogs.SlotListener {
+         @Override
+         public void onSlotResult(Slot slot, Cipher cipher) {
+-            VaultFileCredentials creds = getVault().getCredentials();
++            VaultFileCredentials creds = _vaultManager.getVault().getCredentials();
+             SlotList slots = creds.getSlots();
+ 
+             try {
+@@ -359,10 +349,10 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                 return;
+             }
+ 
+-            getVault().setCredentials(creds);
+-            saveVault();
++            _vaultManager.getVault().setCredentials(creds);
++            saveAndBackupVault();
+ 
+-            if (getPreferences().isPinKeyboardEnabled()) {
++            if (_prefs.isPinKeyboardEnabled()) {
+                 _pinKeyboardPreference.setChecked(false);
+                 Toast.makeText(getContext(), R.string.pin_keyboard_disabled, Toast.LENGTH_SHORT).show();
+             }
+@@ -379,7 +369,7 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+     private class RegisterBiometricsListener implements BiometricSlotInitializer.Listener {
+         @Override
+         public void onInitializeSlot(BiometricSlot slot, Cipher cipher) {
+-            VaultFileCredentials creds = getVault().getCredentials();
++            VaultFileCredentials creds = _vaultManager.getVault().getCredentials();
+             try {
+                 slot.setKey(creds.getKey(), cipher);
+             } catch (SlotException e) {
+@@ -388,9 +378,9 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+                 return;
+             }
+             creds.getSlots().add(slot);
+-            getVault().setCredentials(creds);
++            _vaultManager.getVault().setCredentials(creds);
+ 
+-            saveVault();
++            saveAndBackupVault();
+             updateEncryptionPreferences();
+         }
+ 
+@@ -410,13 +400,12 @@ public class SecurityPreferencesFragment extends PreferencesFragment {
+             try {
+                 slot.setKey(creds.getKey(), cipher);
+                 creds.getSlots().add(slot);
+-                getVault().enableEncryption(creds);
+-            } catch (VaultManagerException | SlotException e) {
++                _vaultManager.enableEncryption(creds);
++            } catch (VaultRepositoryException | SlotException e) {
+                 onException(e);
+                 return;
+             }
+ 
+-            getActivity().startService(new Intent(getActivity(), NotificationService.class));
+             _pinKeyboardPreference.setChecked(false);
+             updateEncryptionPreferences();
+         }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
+index 7179f647..c1a631f6 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/ui/views/EntryListView.java
+@@ -2,7 +2,6 @@ package com.beemdevelopment.aegis.ui.views;
+ 
+ import android.annotation.SuppressLint;
+ import android.content.Context;
+-import android.content.res.ColorStateList;
+ import android.graphics.Rect;
+ import android.graphics.drawable.Drawable;
+ import android.os.Bundle;
+@@ -412,7 +411,7 @@ public class EntryListView extends Fragment implements EntryAdapter.Listener {
+             chipGroup.removeAllViews();
+ 
+             for (String group : _groups) {
+-                Chip chip = (Chip) this.getLayoutInflater().inflate(R.layout.chip_material, null, false);
++                Chip chip = (Chip) getLayoutInflater().inflate(R.layout.chip_material, null, false);
+                 chip.setText(group);
+                 chip.setCheckable(true);
+                 chip.setChecked(_groupFilter != null && _groupFilter.contains(group));
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultBackupManager.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultBackupManager.java
+index bf020f7d..4a7ed0e7 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultBackupManager.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultBackupManager.java
+@@ -48,24 +48,19 @@ public class VaultBackupManager {
+         _executor = Executors.newSingleThreadExecutor();
+     }
+ 
+-    public void destroy() {
+-        Log.i(TAG, "Shutting down backup manager thread");
+-        _executor.shutdown();
+-    }
+-
+     public void scheduleBackup(File tempFile, Uri dirUri, int versionsToKeep) {
+         _executor.execute(() -> {
+             try {
+                 createBackup(tempFile, dirUri, versionsToKeep);
+                 _prefs.setBackupsError(null);
+-            } catch (VaultManagerException e) {
++            } catch (VaultRepositoryException e) {
+                 e.printStackTrace();
+                 _prefs.setBackupsError(e);
+             }
+         });
+     }
+ 
+-    private void createBackup(File tempFile, Uri dirUri, int versionsToKeep) throws VaultManagerException {
++    private void createBackup(File tempFile, Uri dirUri, int versionsToKeep) throws VaultRepositoryException {
+         FileInfo fileInfo = new FileInfo(FILENAME_PREFIX);
+         DocumentFile dir = DocumentFile.fromTreeUri(_context, dirUri);
+ 
+@@ -73,28 +68,28 @@ public class VaultBackupManager {
+             Log.i(TAG, String.format("Creating backup at %s: %s", Uri.decode(dir.getUri().toString()), fileInfo.toString()));
+ 
+             if (!hasPermissionsAt(dirUri)) {
+-                throw new VaultManagerException("No persisted URI permissions");
++                throw new VaultRepositoryException("No persisted URI permissions");
+             }
+ 
+             // If we create a file with a name that already exists, SAF will append a number
+             // to the filename and write to that instead. We can't overwrite existing files, so
+             // just avoid that altogether by checking beforehand.
+             if (dir.findFile(fileInfo.toString()) != null) {
+-                throw new VaultManagerException("Backup file already exists");
++                throw new VaultRepositoryException("Backup file already exists");
+             }
+ 
+             DocumentFile file = dir.createFile("application/json", fileInfo.toString());
+             if (file == null) {
+-                throw new VaultManagerException("createFile returned null");
++                throw new VaultRepositoryException("createFile returned null");
+             }
+ 
+             try (FileInputStream inStream = new FileInputStream(tempFile);
+                  OutputStream outStream = _context.getContentResolver().openOutputStream(file.getUri())) {
+                 IOUtils.copy(inStream, outStream);
+             } catch (IOException e) {
+-                throw new VaultManagerException(e);
++                throw new VaultRepositoryException(e);
+             }
+-        } catch (VaultManagerException e) {
++        } catch (VaultRepositoryException e) {
+             Log.e(TAG, String.format("Unable to create backup: %s", e.toString()));
+             throw e;
+         } finally {
+@@ -252,7 +247,7 @@ public class VaultBackupManager {
+             int posIndex = pos.getIndex();
+             Date d = super.parse(text, pos);
+             if (!isLenient() && d != null) {
+-                String format = this.format(d);
++                String format = format(d);
+                 if (posIndex + format.length() != text.length() ||
+                         !text.endsWith(format)) {
+                     d = null; // Not exact match
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+index 1b68a432..7d92bda3 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManager.java
+@@ -1,207 +1,187 @@
+ package com.beemdevelopment.aegis.vault;
+ 
++import android.app.Activity;
+ import android.app.backup.BackupManager;
++import android.content.ActivityNotFoundException;
+ import android.content.Context;
++import android.content.Intent;
+ 
+-import androidx.core.util.AtomicFile;
++import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
++import androidx.fragment.app.Fragment;
+ 
+ import com.beemdevelopment.aegis.Preferences;
+-import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
+-import com.beemdevelopment.aegis.util.IOUtils;
++import com.beemdevelopment.aegis.R;
++import com.beemdevelopment.aegis.crypto.KeyStoreHandle;
++import com.beemdevelopment.aegis.crypto.KeyStoreHandleException;
++import com.beemdevelopment.aegis.services.NotificationService;
++import com.beemdevelopment.aegis.ui.dialogs.Dialogs;
+ 
+-import org.json.JSONObject;
+-
+-import java.io.ByteArrayInputStream;
+ import java.io.File;
+-import java.io.FileOutputStream;
++import java.io.FileNotFoundException;
+ import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.OutputStream;
+-import java.io.PrintStream;
+-import java.nio.charset.StandardCharsets;
+-import java.text.Collator;
+-import java.util.Collection;
+-import java.util.TreeSet;
+-import java.util.UUID;
++import java.util.ArrayList;
++import java.util.List;
+ 
+ public class VaultManager {
+-    public static final String FILENAME = "aegis.json";
+-    public static final String FILENAME_PREFIX_EXPORT = "aegis-export";
+-    public static final String FILENAME_PREFIX_EXPORT_PLAIN = "aegis-export-plain";
+-    public static final String FILENAME_PREFIX_EXPORT_URI = "aegis-export-uri";
++    private final Context _context;
++    private final Preferences _prefs;
++
++    private VaultFile _vaultFile;
++    private VaultRepositoryException _vaultFileError;
++    private VaultRepository _repo;
+ 
+-    private Vault _vault;
+-    private VaultFileCredentials _creds;
++    private final VaultBackupManager _backups;
++    private final BackupManager _androidBackups;
+ 
+-    private Context _context;
+-    private Preferences _prefs;
+-    private VaultBackupManager _backups;
+-    private BackupManager _androidBackups;
++    private final List<LockListener> _lockListeners;
++    private boolean _blockAutoLock;
+ 
+-    public VaultManager(Context context, Vault vault, VaultFileCredentials creds) {
++    public VaultManager(@NonNull Context context) {
+         _context = context;
+-        _prefs = new Preferences(context);
+-        _backups = new VaultBackupManager(context);
++        _prefs = new Preferences(_context);
++        _backups = new VaultBackupManager(_context);
+         _androidBackups = new BackupManager(context);
+-        _vault = vault;
+-        _creds = creds;
+-    }
+-
+-    public VaultManager(Context context, Vault vault) {
+-        this(context, vault, null);
++        _lockListeners = new ArrayList<>();
++        loadVaultFile();
+     }
+ 
+-    public static AtomicFile getAtomicFile(Context context) {
+-        return new AtomicFile(new File(context.getFilesDir(), FILENAME));
+-    }
+-
+-    public static boolean fileExists(Context context) {
+-        File file = getAtomicFile(context).getBaseFile();
+-        return file.exists() && file.isFile();
+-    }
++    private void loadVaultFile() {
++        try {
++            _vaultFile = VaultRepository.readVaultFile(_context);
++        } catch (VaultRepositoryException e) {
++            e.printStackTrace();
++            if (!(e.getCause() instanceof FileNotFoundException)) {
++                _vaultFileError = e;
++            }
++        }
+ 
+-    public static void deleteFile(Context context) {
+-        getAtomicFile(context).delete();
++        if (_vaultFile != null && !_vaultFile.isEncrypted()) {
++            try {
++                load(_vaultFile, null);
++            } catch (VaultRepositoryException e) {
++                e.printStackTrace();
++                _vaultFile = null;
++                _vaultFileError = e;
++            }
++        }
+     }
+ 
+-    public static VaultFile readVaultFile(Context context) throws VaultManagerException {
+-        AtomicFile file = getAtomicFile(context);
+-
+-        try {
+-            byte[] fileBytes = file.readFully();
+-            return VaultFile.fromBytes(fileBytes);
+-        } catch (IOException | VaultFileException e) {
+-            throw new VaultManagerException(e);
++    /**
++     * Initializes the vault repository with a new empty vault and the given creds. It can
++     * only be called if isVaultLoaded() returns false.
++     *
++     * Calling this method removes the manager's internal reference to the raw vault file (if it had one).
++     */
++    @NonNull
++    public VaultRepository init(@Nullable VaultFileCredentials creds) throws VaultRepositoryException {
++        if (isVaultLoaded()) {
++            throw new IllegalStateException("Vault manager is already initialized");
+         }
+-    }
+ 
+-    public static void writeToFile(Context context, InputStream inStream) throws IOException {
+-        AtomicFile file = VaultManager.getAtomicFile(context);
++        _vaultFile = null;
++        _vaultFileError = null;
++        _repo = new VaultRepository(_context, new Vault(), creds);
++        save();
+ 
+-        FileOutputStream outStream = null;
+-        try {
+-            outStream = file.startWrite();
+-            IOUtils.copy(inStream, outStream);
+-            file.finishWrite(outStream);
+-        } catch (IOException e) {
+-            if (outStream != null) {
+-                file.failWrite(outStream);
+-            }
+-            throw e;
++        if (getVault().isEncryptionEnabled()) {
++            startNotificationService();
+         }
++
++        return getVault();
+     }
+ 
+-    public static VaultManager init(Context context, VaultFile file, VaultFileCredentials creds) throws VaultManagerException {
+-        if (file.isEncrypted() && creds == null) {
+-            throw new IllegalArgumentException("The VaultFile is encrypted but the given VaultFileCredentials is null");
++    /**
++     * Initializes the vault repository by decrypting the given vaultFile with the given
++     * creds. It can only be called if isVaultLoaded() returns false.
++     *
++     * Calling this method removes the manager's internal reference to the raw vault file (if it had one).
++     */
++    @NonNull
++    public VaultRepository load(@NonNull VaultFile vaultFile, @Nullable VaultFileCredentials creds) throws VaultRepositoryException {
++        if (isVaultLoaded()) {
++            throw new IllegalStateException("Vault manager is already initialized");
+         }
+ 
+-        Vault vault;
+-        try {
+-            JSONObject obj;
+-            if (!file.isEncrypted()) {
+-                obj = file.getContent();
+-            } else {
+-                obj = file.getContent(creds);
+-            }
++        _vaultFile = null;
++        _vaultFileError = null;
++        _repo = VaultRepository.fromFile(_context, vaultFile, creds);
+ 
+-            vault = Vault.fromJson(obj);
+-        } catch (VaultException | VaultFileException e) {
+-            throw new VaultManagerException(e);
++        if (getVault().isEncryptionEnabled()) {
++            startNotificationService();
+         }
+ 
+-        return new VaultManager(context, vault, creds);
++        return getVault();
+     }
+ 
+-    public static void save(Context context, VaultFile vaultFile) throws VaultManagerException {
+-        try {
+-            byte[] bytes = vaultFile.toBytes();
+-            writeToFile(context, new ByteArrayInputStream(bytes));
+-        } catch (IOException e) {
+-            throw new VaultManagerException(e);
++    @NonNull
++    public VaultRepository unlock(@NonNull VaultFileCredentials creds) throws VaultRepositoryException {
++        VaultRepository repo = load(getVaultFile(), creds);
++        startNotificationService();
++        return repo;
++    }
++
++    /**
++     * Locks the vault and the app.
++     * @param userInitiated whether or not the user initiated the lock in MainActivity.
++     */
++    public void lock(boolean userInitiated) {
++        _repo = null;
++
++        for (LockListener listener : _lockListeners) {
++            listener.onLocked(userInitiated);
+         }
++
++        stopNotificationService();
++        loadVaultFile();
+     }
+ 
+-    public void destroy() {
+-        _backups.destroy();
++    public void enableEncryption(VaultFileCredentials creds) throws VaultRepositoryException {
++        getVault().setCredentials(creds);
++        saveAndBackup();
++        startNotificationService();
+     }
+ 
+-    public void save(boolean backup) throws VaultManagerException {
++    public void disableEncryption() throws VaultRepositoryException {
++        getVault().setCredentials(null);
++        save();
++
++        // remove any keys that are stored in the KeyStore
+         try {
+-            JSONObject obj = _vault.toJson();
++            KeyStoreHandle handle = new KeyStoreHandle();
++            handle.clear();
++        } catch (KeyStoreHandleException e) {
++            // this cleanup operation is not strictly necessary, so we ignore any exceptions here
++            e.printStackTrace();
++        }
+ 
+-            VaultFile file = new VaultFile();
+-            if (isEncryptionEnabled()) {
+-                file.setContent(obj, _creds);
+-            } else {
+-                file.setContent(obj);
+-            }
++        stopNotificationService();
++    }
+ 
+-            save(_context, file);
+-        } catch (VaultFileException e) {
+-            throw new VaultManagerException(e);
+-        }
++    public void save() throws VaultRepositoryException {
++        getVault().save();
++    }
++
++    public void saveAndBackup() throws VaultRepositoryException {
++        save();
+ 
+-        if (backup) {
++        if (getVault().isEncryptionEnabled()) {
+             if (_prefs.isBackupsEnabled()) {
+                 try {
+-                    backup();
++                    scheduleBackup();
+                     _prefs.setBackupsError(null);
+-                } catch (VaultManagerException e) {
++                } catch (VaultRepositoryException e) {
+                     _prefs.setBackupsError(e);
+                 }
+             }
+ 
+             if (_prefs.isAndroidBackupsEnabled()) {
+-                androidBackupDataChanged();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Exports the vault bt serializing it and writing it to the given OutputStream. If encryption
+-     * is enabled, the vault will be encrypted automatically.
+-     */
+-    public void export(OutputStream stream) throws VaultManagerException {
+-        export(stream, getCredentials());
+-    }
+-
+-    /**
+-     * Exports the vault by serializing it and writing it to the given OutputStream. If creds is
+-     * not null, it will be used to encrypt the vault first.
+-     */
+-    public void export(OutputStream stream, VaultFileCredentials creds) throws VaultManagerException {
+-        try {
+-            VaultFile vaultFile = new VaultFile();
+-            if (creds != null) {
+-                vaultFile.setContent(_vault.toJson(), creds);
+-            } else {
+-                vaultFile.setContent(_vault.toJson());
++                scheduleAndroidBackup();
+             }
+-
+-            byte[] bytes = vaultFile.toBytes();
+-            stream.write(bytes);
+-        } catch (IOException | VaultFileException e) {
+-            throw new VaultManagerException(e);
+-        }
+-    }
+-
+-    /**
+-     * Exports the vault by serializing the list of entries to a newline-separated list of
+-     * Google Authenticator URI's and writing it to the given OutputStream.
+-     */
+-    public void exportGoogleUris(OutputStream outStream) throws VaultManagerException {
+-        try (PrintStream stream = new PrintStream(outStream, false, StandardCharsets.UTF_8.name())) {
+-            for (VaultEntry entry : getEntries()) {
+-                GoogleAuthInfo info = new GoogleAuthInfo(entry.getInfo(), entry.getName(), entry.getIssuer());
+-                stream.println(info.getUri().toString());
+-            }
+-        } catch (IOException e) {
+-            throw new VaultManagerException(e);
+         }
+     }
+ 
+-    public void backup() throws VaultManagerException {
++    public void scheduleBackup() throws VaultRepositoryException {
+         try {
+             File dir = new File(_context.getCacheDir(), "backup");
+             if (!dir.exists() && !dir.mkdir()) {
+@@ -209,83 +189,154 @@ public class VaultManager {
+             }
+ 
+             File tempFile = File.createTempFile(VaultBackupManager.FILENAME_PREFIX, ".json", dir);
+-            try (InputStream inStream = getAtomicFile(_context).openRead();
+-                OutputStream outStream = new FileOutputStream(tempFile)) {
+-                IOUtils.copy(inStream, outStream);
+-            }
+-
++            getVault().backupTo(tempFile);
+             _backups.scheduleBackup(tempFile, _prefs.getBackupsLocation(), _prefs.getBackupsVersionCount());
+         } catch (IOException e) {
+-            throw new VaultManagerException(e);
++            throw new VaultRepositoryException(e);
+         }
+     }
+ 
+-    public void androidBackupDataChanged() {
++    public void scheduleAndroidBackup() {
+         _androidBackups.dataChanged();
+     }
+ 
+-    public void addEntry(VaultEntry entry) {
+-        _vault.getEntries().add(entry);
++    public boolean isAutoLockEnabled(int autoLockType) {
++        return _prefs.isAutoLockTypeEnabled(autoLockType)
++                && isVaultLoaded()
++                && getVault().isEncryptionEnabled();
++    }
++
++    public void registerLockListener(LockListener listener) {
++        _lockListeners.add(listener);
+     }
+ 
+-    public VaultEntry getEntryByUUID(UUID uuid) {
+-        return _vault.getEntries().getByUUID(uuid);
++    public void unregisterLockListener(LockListener listener) {
++        _lockListeners.remove(listener);
+     }
+ 
+-    public VaultEntry removeEntry(VaultEntry entry) {
+-        return _vault.getEntries().remove(entry);
++    /**
++     * Sets whether to block automatic lock on minimization. This should only be called
++     * by activities before invoking an intent that shows a DocumentsUI, because that
++     * action leads AppLifecycleObserver to believe that the app has been minimized.
++     */
++    public void setBlockAutoLock(boolean block) {
++        _blockAutoLock = block;
+     }
+ 
+-    public void wipeEntries() {
+-        _vault.getEntries().wipe();
++    /**
++     * Reports whether automatic lock on minimization is currently blocked.
++     */
++    public boolean isAutoLockBlocked() {
++        return _blockAutoLock;
+     }
+ 
+-    public VaultEntry replaceEntry(VaultEntry entry) {
+-        return _vault.getEntries().replace(entry);
++    public boolean isVaultLoaded() {
++        return _repo != null;
+     }
+ 
+-    public void swapEntries(VaultEntry entry1, VaultEntry entry2) {
+-        _vault.getEntries().swap(entry1, entry2);
++    public boolean isVaultFileLoaded() {
++        return _vaultFile != null;
+     }
+ 
+-    public boolean isEntryDuplicate(VaultEntry entry) {
+-        return _vault.getEntries().has(entry);
++    public boolean isVaultInitNeeded() {
++        return !isVaultLoaded() && !isVaultFileLoaded() && getVaultFileError() == null;
+     }
+ 
+-    public Collection<VaultEntry> getEntries() {
+-        return _vault.getEntries().getValues();
++    @NonNull
++    public VaultRepository getVault() {
++        if (!isVaultLoaded()) {
++            throw new IllegalStateException("Vault manager is not initialized");
++        }
++
++        return _repo;
+     }
+ 
+-    public TreeSet<String> getGroups() {
+-        TreeSet<String> groups = new TreeSet<>(Collator.getInstance());
+-        for (VaultEntry entry : getEntries()) {
+-            String group = entry.getGroup();
+-            if (group != null) {
+-                groups.add(group);
++    @NonNull
++    public VaultFile getVaultFile() {
++        if (_vaultFile == null) {
++            throw new IllegalStateException("Vault file is not in memory");
++        }
++
++        return _vaultFile;
++    }
++
++    @Nullable
++    public VaultRepositoryException getVaultFileError() {
++        return _vaultFileError;
++    }
++
++    /**
++     * Starts an external activity, temporarily blocks automatic lock of Aegis and
++     * shows an error dialog if the target activity is not found.
++     */
++    public void startActivityForResult(Activity activity, Intent intent, int requestCode) {
++        setBlockAutoLock(true);
++
++        try {
++            activity.startActivityForResult(intent, requestCode, null);
++        } catch (ActivityNotFoundException e) {
++            e.printStackTrace();
++
++            if (isDocsAction(intent.getAction())) {
++                Dialogs.showErrorDialog(activity, R.string.documentsui_error, e);
++            } else {
++                throw e;
++            }
++        }
++    }
++
++    /**
++     * Starts an external activity, temporarily blocks automatic lock of Aegis and
++     * shows an error dialog if the target activity is not found.
++     */
++    public void startActivity(Fragment fragment, Intent intent) {
++        startActivityForResult(fragment, intent, -1);
++    }
++
++    /**
++     * Starts an external activity, temporarily blocks automatic lock of Aegis and
++     * shows an error dialog if the target activity is not found.
++     */
++    public void startActivityForResult(Fragment fragment, Intent intent, int requestCode) {
++        setBlockAutoLock(true);
++
++        try {
++            fragment.startActivityForResult(intent, requestCode, null);
++        } catch (ActivityNotFoundException e) {
++            e.printStackTrace();
++
++            if (isDocsAction(intent.getAction())) {
++                Dialogs.showErrorDialog(fragment.getContext(), R.string.documentsui_error, e);
++            } else {
++                throw e;
+             }
+         }
+-        return groups;
+     }
+ 
+-    public VaultFileCredentials getCredentials() {
+-        return _creds;
++    private void startNotificationService() {
++        _context.startService(getNotificationServiceIntent());
+     }
+ 
+-    public void setCredentials(VaultFileCredentials creds) {
+-        _creds = creds;
++    private void stopNotificationService() {
++        _context.stopService(getNotificationServiceIntent());
+     }
+ 
+-    public boolean isEncryptionEnabled() {
+-        return _creds != null;
++    private Intent getNotificationServiceIntent() {
++        return new Intent(_context, NotificationService.class);
+     }
+ 
+-    public void enableEncryption(VaultFileCredentials creds) throws VaultManagerException {
+-        _creds = creds;
+-        save(true);
++    private static boolean isDocsAction(@Nullable String action) {
++        return action != null && (action.equals(Intent.ACTION_GET_CONTENT)
++                || action.equals(Intent.ACTION_CREATE_DOCUMENT)
++                || action.equals(Intent.ACTION_OPEN_DOCUMENT)
++                || action.equals(Intent.ACTION_OPEN_DOCUMENT_TREE));
+     }
+ 
+-    public void disableEncryption() throws VaultManagerException {
+-        _creds = null;
+-        save(true);
++    public interface LockListener {
++        /**
++         * Called when the vault lock status changes
++         * @param userInitiated whether or not the user initiated the lock in MainActivity.
++         */
++        void onLocked(boolean userInitiated);
+     }
+ }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java
+deleted file mode 100644
+index 3ac44b50..00000000
+--- a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultManagerException.java
++++ /dev/null
+@@ -1,11 +0,0 @@
+-package com.beemdevelopment.aegis.vault;
+-
+-public class VaultManagerException extends Exception {
+-    public VaultManagerException(Throwable cause) {
+-        super(cause);
+-    }
+-
+-    public VaultManagerException(String message) {
+-        super(message);
+-    }
+-}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepository.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepository.java
+new file mode 100644
+index 00000000..aa857803
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepository.java
+@@ -0,0 +1,236 @@
++package com.beemdevelopment.aegis.vault;
++
++import android.content.Context;
++
++import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
++import androidx.core.util.AtomicFile;
++
++import com.beemdevelopment.aegis.otp.GoogleAuthInfo;
++import com.beemdevelopment.aegis.util.IOUtils;
++
++import org.json.JSONObject;
++
++import java.io.ByteArrayInputStream;
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.io.PrintStream;
++import java.nio.charset.StandardCharsets;
++import java.text.Collator;
++import java.util.Collection;
++import java.util.TreeSet;
++import java.util.UUID;
++
++public class VaultRepository {
++    public static final String FILENAME = "aegis.json";
++    public static final String FILENAME_PREFIX_EXPORT = "aegis-export";
++    public static final String FILENAME_PREFIX_EXPORT_PLAIN = "aegis-export-plain";
++    public static final String FILENAME_PREFIX_EXPORT_URI = "aegis-export-uri";
++
++    @NonNull
++    private final Vault _vault;
++
++    @Nullable
++    private VaultFileCredentials _creds;
++
++    @NonNull
++    private final Context _context;
++
++    public VaultRepository(@NonNull Context context, @NonNull Vault vault, @Nullable VaultFileCredentials creds) {
++        _context = context;
++        _vault = vault;
++        _creds = creds;
++    }
++
++    private static AtomicFile getAtomicFile(Context context) {
++        return new AtomicFile(new File(context.getFilesDir(), FILENAME));
++    }
++
++    public static boolean fileExists(Context context) {
++        File file = getAtomicFile(context).getBaseFile();
++        return file.exists() && file.isFile();
++    }
++
++    public static void deleteFile(Context context) {
++        getAtomicFile(context).delete();
++    }
++
++    public static VaultFile readVaultFile(Context context) throws VaultRepositoryException {
++        AtomicFile file = getAtomicFile(context);
++
++        try {
++            byte[] fileBytes = file.readFully();
++            return VaultFile.fromBytes(fileBytes);
++        } catch (IOException | VaultFileException e) {
++            throw new VaultRepositoryException(e);
++        }
++    }
++
++    public static void writeToFile(Context context, InputStream inStream) throws IOException {
++        AtomicFile file = VaultRepository.getAtomicFile(context);
++
++        FileOutputStream outStream = null;
++        try {
++            outStream = file.startWrite();
++            IOUtils.copy(inStream, outStream);
++            file.finishWrite(outStream);
++        } catch (IOException e) {
++            if (outStream != null) {
++                file.failWrite(outStream);
++            }
++            throw e;
++        }
++    }
++
++    public static VaultRepository fromFile(Context context, VaultFile file, VaultFileCredentials creds) throws VaultRepositoryException {
++        if (file.isEncrypted() && creds == null) {
++            throw new IllegalArgumentException("The VaultFile is encrypted but the given VaultFileCredentials is null");
++        }
++
++        Vault vault;
++        try {
++            JSONObject obj;
++            if (!file.isEncrypted()) {
++                obj = file.getContent();
++            } else {
++                obj = file.getContent(creds);
++            }
++
++            vault = Vault.fromJson(obj);
++        } catch (VaultException | VaultFileException e) {
++            throw new VaultRepositoryException(e);
++        }
++
++        return new VaultRepository(context, vault, creds);
++    }
++
++    void save() throws VaultRepositoryException {
++        try {
++            JSONObject obj = _vault.toJson();
++
++            VaultFile file = new VaultFile();
++            if (isEncryptionEnabled()) {
++                file.setContent(obj, _creds);
++            } else {
++                file.setContent(obj);
++            }
++
++            try {
++                byte[] bytes = file.toBytes();
++                writeToFile(_context, new ByteArrayInputStream(bytes));
++            } catch (IOException e) {
++                throw new VaultRepositoryException(e);
++            }
++        } catch (VaultFileException e) {
++            throw new VaultRepositoryException(e);
++        }
++    }
++
++    /**
++     * Exports the vault bt serializing it and writing it to the given OutputStream. If encryption
++     * is enabled, the vault will be encrypted automatically.
++     */
++    public void export(OutputStream stream) throws VaultRepositoryException {
++        export(stream, getCredentials());
++    }
++
++    /**
++     * Exports the vault by serializing it and writing it to the given OutputStream. If creds is
++     * not null, it will be used to encrypt the vault first.
++     */
++    public void export(OutputStream stream, VaultFileCredentials creds) throws VaultRepositoryException {
++        try {
++            VaultFile vaultFile = new VaultFile();
++            if (creds != null) {
++                vaultFile.setContent(_vault.toJson(), creds);
++            } else {
++                vaultFile.setContent(_vault.toJson());
++            }
++
++            byte[] bytes = vaultFile.toBytes();
++            stream.write(bytes);
++        } catch (IOException | VaultFileException e) {
++            throw new VaultRepositoryException(e);
++        }
++    }
++
++    /**
++     * Exports the vault by serializing the list of entries to a newline-separated list of
++     * Google Authenticator URI's and writing it to the given OutputStream.
++     */
++    public void exportGoogleUris(OutputStream outStream) throws VaultRepositoryException {
++        try (PrintStream stream = new PrintStream(outStream, false, StandardCharsets.UTF_8.name())) {
++            for (VaultEntry entry : getEntries()) {
++                GoogleAuthInfo info = new GoogleAuthInfo(entry.getInfo(), entry.getName(), entry.getIssuer());
++                stream.println(info.getUri().toString());
++            }
++        } catch (IOException e) {
++            throw new VaultRepositoryException(e);
++        }
++    }
++
++    public void backupTo(File destFile) throws IOException {
++        try (InputStream inStream = getAtomicFile(_context).openRead();
++             OutputStream outStream = new FileOutputStream(destFile)) {
++            IOUtils.copy(inStream, outStream);
++        }
++    }
++
++    public void addEntry(VaultEntry entry) {
++        _vault.getEntries().add(entry);
++    }
++
++    public VaultEntry getEntryByUUID(UUID uuid) {
++        return _vault.getEntries().getByUUID(uuid);
++    }
++
++    public VaultEntry removeEntry(VaultEntry entry) {
++        return _vault.getEntries().remove(entry);
++    }
++
++    public void wipeEntries() {
++        _vault.getEntries().wipe();
++    }
++
++    public VaultEntry replaceEntry(VaultEntry entry) {
++        return _vault.getEntries().replace(entry);
++    }
++
++    public void swapEntries(VaultEntry entry1, VaultEntry entry2) {
++        _vault.getEntries().swap(entry1, entry2);
++    }
++
++    public boolean isEntryDuplicate(VaultEntry entry) {
++        return _vault.getEntries().has(entry);
++    }
++
++    public Collection<VaultEntry> getEntries() {
++        return _vault.getEntries().getValues();
++    }
++
++    public TreeSet<String> getGroups() {
++        TreeSet<String> groups = new TreeSet<>(Collator.getInstance());
++        for (VaultEntry entry : getEntries()) {
++            String group = entry.getGroup();
++            if (group != null) {
++                groups.add(group);
++            }
++        }
++        return groups;
++    }
++
++    public VaultFileCredentials getCredentials() {
++        return _creds;
++    }
++
++    public void setCredentials(VaultFileCredentials creds) {
++        _creds = creds;
++    }
++
++    public boolean isEncryptionEnabled() {
++        return _creds != null;
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepositoryException.java b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepositoryException.java
+new file mode 100644
+index 00000000..f3e8bff6
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/vault/VaultRepositoryException.java
+@@ -0,0 +1,11 @@
++package com.beemdevelopment.aegis.vault;
++
++public class VaultRepositoryException extends Exception {
++    public VaultRepositoryException(Throwable cause) {
++        super(cause);
++    }
++
++    public VaultRepositoryException(String message) {
++        super(message);
++    }
++}

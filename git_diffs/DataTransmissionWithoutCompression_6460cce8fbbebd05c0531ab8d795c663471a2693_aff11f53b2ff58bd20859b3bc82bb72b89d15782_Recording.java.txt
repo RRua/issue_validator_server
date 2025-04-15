@@ -1,0 +1,488 @@
+diff --git a/app/src/main/java/com/intervigil/micdroid/AutotalentTask.java b/app/src/main/java/com/intervigil/micdroid/AutotalentTask.java
+index d82be16..8dcebf5 100644
+--- a/app/src/main/java/com/intervigil/micdroid/AutotalentTask.java
++++ b/app/src/main/java/com/intervigil/micdroid/AutotalentTask.java
+@@ -110,13 +110,11 @@ public class AutotalentTask {
+             WaveWriter writer = null;
+             short[] buf = new short[AUTOTALENT_CHUNK_SIZE];
+             try {
+-                reader = new WaveReader(
+-                        context.getCacheDir().getAbsolutePath(),
+-                        context.getString(R.string.default_recording_name));
++                FileInputStream in = context.openFileInput("direct_recording.wav");
++                FileOutputStream out = context.openFileOutput(file, Context.MODE_WORLD_READABLE);
++                reader = new WaveReader(in);
+                 reader.openWave();
+-                writer = new WaveWriter(
+-                        ApplicationHelper.getLibraryDirectory(),
+-                        file,
++                writer = new WaveWriter(out,
+                         reader.getSampleRate(),
+                         reader.getChannels(),
+                         reader.getPcmFormat());
+@@ -139,6 +137,7 @@ public class AutotalentTask {
+                     }
+                     if (reader != null) {
+                         writer.closeWaveFile();
++                        context.deleteFile("direct_recording.wav");
+                     }
+                 } catch (IOException e) {
+                     // I hate you sometimes java
+diff --git a/app/src/main/java/com/intervigil/micdroid/LibraryActivity.java b/app/src/main/java/com/intervigil/micdroid/LibraryActivity.java
+index d7267ad..07f72ac 100644
+--- a/app/src/main/java/com/intervigil/micdroid/LibraryActivity.java
++++ b/app/src/main/java/com/intervigil/micdroid/LibraryActivity.java
+@@ -116,8 +116,7 @@ public class LibraryActivity extends Activity implements OnItemClickListener {
+ 
+     @Override
+     public Object onRetainNonConfigurationInstance() {
+-        final ArrayList<Recording> recordingList = recordings;
+-        return recordingList;
++        return recordings;
+     }
+ 
+     @Override
+@@ -134,7 +133,7 @@ public class LibraryActivity extends Activity implements OnItemClickListener {
+                             + ".wav";
+                     File destination = new File(ApplicationHelper.getLibraryDirectory()
+                             + File.separator + destinationName);
+-                    r.moveTo(destination);
++                    // TODO: Allow file moves
+                     recordings.add(r);
+                     libraryAdapter.notifyDataSetChanged();
+                 }
+@@ -184,7 +183,7 @@ public class LibraryActivity extends Activity implements OnItemClickListener {
+                     public void onClick(DialogInterface dialog, int which) {
+                         switch (which) {
+                             case DialogInterface.BUTTON_POSITIVE:
+-                                r.delete();
++                                getApplicationContext().deleteFile(r.getName());
+                                 libraryAdapter.remove(r);
+                                 libraryAdapter.notifyDataSetChanged();
+                                 dialog.dismiss();
+@@ -301,27 +300,23 @@ public class LibraryActivity extends Activity implements OnItemClickListener {
+ 
+         @Override
+         protected Void doInBackground(Void... params) {
+-            File libraryDir = new File(ApplicationHelper.getLibraryDirectory());
+-            File[] waveFiles = libraryDir.listFiles();
+-
+-            if (waveFiles != null) {
+-                for (int i = 0; i < waveFiles.length; i++) {
+-                    if (waveFiles[i].isFile()) {
+-                        Recording r = null;
+-                        try {
+-                            r = new Recording(waveFiles[i]);
+-                            recordings.add(r);
+-                        } catch (FileNotFoundException e) {
+-                            Log.i(TAG,
+-                                    String.format("File %s not found in library directory!",
+-                                            waveFiles[i].getName()));
+-                        } catch (InvalidWaveException e) {
+-                            Log.i(TAG,
+-                                    String.format("Non-wave file %s found in library directory!",
+-                                            waveFiles[i].getName()));
+-                        } catch (IOException e) {
+-                            // can't recover
+-                        }
++            String[] wavFiles = getApplicationContext().fileList();
++
++            Log.i(TAG, "doInBackground: Found files: " + wavFiles);
++
++            if (wavFiles != null) {
++                for (int i = 0; i < wavFiles.length; i++) {
++                    Recording r;
++                    try {
++                        r = new Recording(wavFiles[i], openFileInput(wavFiles[i]));
++                        recordings.add(r);
++                    } catch (FileNotFoundException e) {
++                        Log.w(TAG, wavFiles[i] + " not found in library directory!");
++                    } catch (InvalidWaveException e) {
++                        Log.i(TAG, "Non-wav file " + wavFiles[i] + " found in library directory!");
++                    } catch (IOException e) {
++                        // can't recover
++                        Log.e(TAG, "Error opening file: " + wavFiles[i], e);
+                     }
+                 }
+             }
+diff --git a/app/src/main/java/com/intervigil/micdroid/MicApplication.java b/app/src/main/java/com/intervigil/micdroid/MicApplication.java
+index 96f387f..27dbf1a 100644
+--- a/app/src/main/java/com/intervigil/micdroid/MicApplication.java
++++ b/app/src/main/java/com/intervigil/micdroid/MicApplication.java
+@@ -31,7 +31,7 @@ public class MicApplication extends Application {
+     public void onCreate() {
+         super.onCreate();
+ 
+-        File libraryDir = new File(ApplicationHelper.getLibraryDirectory());
++        File libraryDir = ApplicationHelper.getLibraryDirectory();
+         if (!libraryDir.exists()) {
+             libraryDir.mkdirs();
+         }
+@@ -41,4 +41,4 @@ public class MicApplication extends Application {
+     public void onTerminate() {
+         super.onTerminate();
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/intervigil/micdroid/RecordingPlayer.java b/app/src/main/java/com/intervigil/micdroid/RecordingPlayer.java
+index c782c52..ffaf8a2 100644
+--- a/app/src/main/java/com/intervigil/micdroid/RecordingPlayer.java
++++ b/app/src/main/java/com/intervigil/micdroid/RecordingPlayer.java
+@@ -33,6 +33,8 @@ import android.widget.TextView;
+ 
+ import com.intervigil.micdroid.model.Recording;
+ 
++import java.io.File;
++
+ public class RecordingPlayer extends Activity implements OnClickListener {
+ 
+     private static final String CLASS_RECORDING_PLAYER = "RecordingPlayer";
+@@ -67,7 +69,9 @@ public class RecordingPlayer extends Activity implements OnClickListener {
+                 .setText(recording.getName());
+ 
+         mediaSeekBar.setMax(SEEKBAR_RESOLUTION);
+-        mediaPlayer = new SeekableMediaPlayer(recording.getAbsolutePath(),
++        File privateRootDir = getApplicationContext().getFilesDir();
++        File recordingFile = new File(privateRootDir, recording.getName());
++        mediaPlayer = new SeekableMediaPlayer(recordingFile.getAbsolutePath(),
+                 mediaSeekBar);
+     }
+ 
+diff --git a/app/src/main/java/com/intervigil/micdroid/helper/ApplicationHelper.java b/app/src/main/java/com/intervigil/micdroid/helper/ApplicationHelper.java
+index 56ddf07..2018883 100644
+--- a/app/src/main/java/com/intervigil/micdroid/helper/ApplicationHelper.java
++++ b/app/src/main/java/com/intervigil/micdroid/helper/ApplicationHelper.java
+@@ -39,8 +39,7 @@ public class ApplicationHelper {
+         return versionCode;
+     }
+ 
+-    public static String getLibraryDirectory() {
+-        return Environment.getExternalStorageDirectory() + File.separator
+-                + "MicDroid" + File.separator + "recordings";
++    public static File getLibraryDirectory() {
++        return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC);
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/intervigil/micdroid/helper/MediaStoreHelper.java b/app/src/main/java/com/intervigil/micdroid/helper/MediaStoreHelper.java
+index 8785ff7..9dcc7fd 100644
+--- a/app/src/main/java/com/intervigil/micdroid/helper/MediaStoreHelper.java
++++ b/app/src/main/java/com/intervigil/micdroid/helper/MediaStoreHelper.java
+@@ -30,107 +30,17 @@ import android.util.Log;
+ import com.intervigil.micdroid.Constants;
+ import com.intervigil.micdroid.model.Recording;
+ 
+-public class MediaStoreHelper {
+-
+-    public static boolean isInserted(Context context, Recording r) {
+-        ContentResolver resolver = context.getContentResolver();
+-        if (resolver != null) {
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, r.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, r.getName());
+-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, r.getName());
+-
+-            Uri contentUri = MediaStore.Audio.Media.getContentUriForPath(r
+-                    .getAbsolutePath());
+-
+-            Cursor results = resolver.query(contentUri,
+-                    new String[]{"_display_name"}, "_display_name=?",
+-                    new String[]{r.getName()}, null);
+-
+-            int count = 0;
+-            if (results != null) {
+-                count = results.getCount();
+-                results.close();
+-            }
+-
+-            return (count > 0);
+-        }
+-        return false;
+-    }
+-
+-    public static void insertRecording(Context context, Recording r) {
+-        ContentResolver resolver = context.getContentResolver();
+-        if (resolver != null) {
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, r.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, r.getName());
+-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, r.getName());
+-            values.put(MediaStore.MediaColumns.SIZE, r.getSize());
+-            values.put(MediaStore.MediaColumns.MIME_TYPE, Constants.MIME_AUDIO_WAV);
+-
+-            values.put(MediaStore.Audio.Media.ARTIST, "MicDroid");
+-            values.put(MediaStore.Audio.Media.ALBUM, "MicDroid");
+-            values.put(MediaStore.Audio.Media.DURATION, r.getLengthInMs()
+-                    * Recording.MILLISECONDS_IN_SECOND);
++import java.io.File;
+ 
+-            values.put(MediaStore.Audio.Media.IS_RINGTONE, true);
+-            values.put(MediaStore.Audio.Media.IS_NOTIFICATION, true);
+-            values.put(MediaStore.Audio.Media.IS_ALARM, false);
+-            values.put(MediaStore.Audio.Media.IS_MUSIC, true);
+-
+-            Uri contentUri = MediaStore.Audio.Media.getContentUriForPath(r
+-                    .getAbsolutePath());
+-
+-            Cursor results = resolver.query(contentUri,
+-                    new String[]{"_display_name"}, "_display_name=?",
+-                    new String[]{r.getName()}, null);
+-            if (results != null && results.getCount() > 0) {
+-                resolver.delete(contentUri, "_display_name=?", new String[]{r
+-                        .getName()});
+-                results.close();
+-            }
+-
+-            Log.i("MediaStoreHelper", String.format("is contentUri null? %b",
+-                    contentUri == null));
+-            Log.i("MediaStoreHelper", String.format("is values null? %b",
+-                    values == null));
+-            Log.i("MediaStoreHelper", String.format("is resolver null? %b",
+-                    resolver == null));
+-
+-            resolver.insert(contentUri, values);
+-            resolver = null;
+-        }
+-    }
+-
+-    public static void removeRecording(Context context, Recording r) {
+-        ContentResolver resolver = context.getContentResolver();
+-        if (resolver != null) {
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, r.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, r.getName());
+-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, r.getName());
+-
+-            Uri contentUri = MediaStore.Audio.Media.getContentUriForPath(r
+-                    .getAbsolutePath());
+-
+-            Cursor results = resolver.query(contentUri,
+-                    new String[]{"_display_name"}, "_display_name=?",
+-                    new String[]{r.getName()}, null);
+-            if (results != null && results.getCount() > 0) {
+-                resolver.delete(contentUri, "_display_name=?", new String[]{r
+-                        .getName()});
+-                results.close();
+-            }
+-            resolver = null;
+-        }
+-    }
++public class MediaStoreHelper {
+ 
+     public static Uri getRecordingUri(Context context, Recording recording) {
+         ContentResolver resolver = context.getContentResolver();
+         if (resolver != null) {
+             ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, recording
+-                    .getAbsolutePath());
++            File privateRootDir = context.getFilesDir();
++            File recordingFile = new File(privateRootDir, recording.getName());
++            values.put(MediaStore.MediaColumns.DATA, recordingFile.getAbsolutePath());
+             values.put(MediaStore.MediaColumns.TITLE, recording.getName());
+             values.put(MediaStore.MediaColumns.DISPLAY_NAME, recording
+                     .getName());
+@@ -148,11 +58,10 @@ public class MediaStoreHelper {
+             values.put(MediaStore.Audio.Media.IS_MUSIC, true);
+ 
+             Uri contentUri = MediaStore.Audio.Media
+-                    .getContentUriForPath(recording.getAbsolutePath());
++                    .getContentUriForPath(recordingFile.getAbsolutePath());
+             resolver.delete(contentUri, "_display_name=?",
+                     new String[]{recording.getName()});
+             Uri recordingUri = resolver.insert(contentUri, values);
+-            resolver = null;
+             return recordingUri;
+         }
+         return null;
+diff --git a/app/src/main/java/com/intervigil/micdroid/helper/RecordingOptionsHelper.java b/app/src/main/java/com/intervigil/micdroid/helper/RecordingOptionsHelper.java
+index d4a57c7..b6a6045 100644
+--- a/app/src/main/java/com/intervigil/micdroid/helper/RecordingOptionsHelper.java
++++ b/app/src/main/java/com/intervigil/micdroid/helper/RecordingOptionsHelper.java
+@@ -30,12 +30,16 @@ import com.intervigil.micdroid.Constants;
+ import com.intervigil.micdroid.RecordingPlayer;
+ import com.intervigil.micdroid.model.Recording;
+ 
++import java.io.File;
++
+ public class RecordingOptionsHelper {
+ 
+     public static void playRecording(Context context, Recording recording) {
+         try {
+             Intent playIntent = new Intent(Intent.ACTION_VIEW);
+-            playIntent.setDataAndType(Uri.fromFile(recording.asFile()), Constants.MIME_AUDIO_WAV);
++            File privateRootDir = context.getFilesDir();
++            File recordingFile = new File(privateRootDir, recording.getName());
++            playIntent.setDataAndType(Uri.fromFile(recordingFile), Constants.MIME_AUDIO_WAV);
+             context.startActivity(playIntent);
+         } catch (ActivityNotFoundException e) {
+             Intent playIntent = new Intent(context, RecordingPlayer.class);
+@@ -69,7 +73,9 @@ public class RecordingOptionsHelper {
+ 
+     public static void shareRecording(Context context, Recording recording) {
+         Intent shareIntent = new Intent(Intent.ACTION_SEND);
+-        shareIntent.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(recording.asFile()));
++        File privateRootDir = context.getFilesDir();
++        File recordingFile = new File(privateRootDir, recording.getName());
++        shareIntent.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(recordingFile));
+         shareIntent.setType(Constants.MIME_AUDIO_WAV);
+         context.startActivity(Intent.createChooser(shareIntent, "Share"));
+     }
+diff --git a/app/src/main/java/com/intervigil/micdroid/model/Recording.java b/app/src/main/java/com/intervigil/micdroid/model/Recording.java
+index aa44b9b..f216a5d 100644
+--- a/app/src/main/java/com/intervigil/micdroid/model/Recording.java
++++ b/app/src/main/java/com/intervigil/micdroid/model/Recording.java
+@@ -25,7 +25,9 @@ import android.os.Parcelable;
+ import com.intervigil.wave.WaveReader;
+ import com.intervigil.wave.exception.InvalidWaveException;
+ 
++import java.io.BufferedInputStream;
+ import java.io.File;
++import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
+ 
+@@ -33,7 +35,6 @@ public class Recording implements Parcelable {
+     public static final int WAVE_HEADER_SIZE = 44;
+     public static final int MILLISECONDS_IN_SECOND = 1000;
+ 
+-    private String recordingPath;
+     private String recordingName;
+     private int recordingLength;
+     private int recordingSize;
+@@ -51,26 +52,22 @@ public class Recording implements Parcelable {
+     public Recording() {
+     }
+ 
+-    public Recording(File file) throws FileNotFoundException, InvalidWaveException, IOException {
+-        WaveReader reader = new WaveReader(file);
++    public Recording(String name, FileInputStream stream) throws IOException {
++        WaveReader reader = new WaveReader(stream);
+         reader.openWave();
+-        this.recordingPath = file.getParent();
+-        this.recordingName = file.getName();
++        this.recordingName = name;
+         this.recordingLength = reader.getLength();
+         this.recordingSize = reader.getDataSize() + WAVE_HEADER_SIZE;
+         reader.closeWaveFile();
+-        reader = null;
+     }
+ 
+     private Recording(Parcel in) {
+-        this.recordingPath = in.readString();
+         this.recordingName = in.readString();
+         this.recordingLength = in.readInt();
+         this.recordingSize = in.readInt();
+     }
+ 
+-    public Recording(String path, String name, int length, int size) {
+-        this.recordingPath = path;
++    public Recording(String name, int length, int size) {
+         this.recordingName = name;
+         this.recordingLength = length;
+         this.recordingSize = size;
+@@ -81,20 +78,11 @@ public class Recording implements Parcelable {
+     }
+ 
+     public void writeToParcel(Parcel out, int flags) {
+-        out.writeString(recordingPath);
+         out.writeString(recordingName);
+         out.writeInt(recordingLength);
+         out.writeInt(recordingSize);
+     }
+ 
+-    public File asFile() {
+-        return new File(recordingPath + File.separator + recordingName);
+-    }
+-
+-    public String getAbsolutePath() {
+-        return recordingPath + File.separator + recordingName;
+-    }
+-
+     public String getName() {
+         // gets recording name, typically the file name
+         return recordingName;
+@@ -115,34 +103,12 @@ public class Recording implements Parcelable {
+         return recordingSize;
+     }
+ 
+-    public void setPath(String path) {
+-        // sets the recording path, where it is located
+-        recordingPath = path;
+-    }
+-
+     public void setName(String name) {
+         // sets recording name, typically the file name
+         recordingName = name;
+     }
+ 
+-    public void setLength(int length) {
+-        // sets recording length, in number of seconds
+-        recordingLength = length;
+-    }
+-
+     public void setSize(int size) {
+         recordingSize = size;
+     }
+-
+-    public boolean delete() {
+-        return new File(recordingPath + File.separator + recordingName).delete();
+-    }
+-
+-    public void moveTo(File destination) {
+-        File recordingFile = new File(recordingPath + File.separator
+-                + recordingName);
+-        recordingPath = destination.getParent();
+-        recordingName = destination.getName();
+-        recordingFile.renameTo(destination);
+-    }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/intervigil/micdroid/recorder/SipdroidRecorder.java b/app/src/main/java/com/intervigil/micdroid/recorder/SipdroidRecorder.java
+index b5249ae..7c08ffe 100644
+--- a/app/src/main/java/com/intervigil/micdroid/recorder/SipdroidRecorder.java
++++ b/app/src/main/java/com/intervigil/micdroid/recorder/SipdroidRecorder.java
+@@ -43,6 +43,7 @@ import com.intervigil.wave.exception.InvalidWaveException;
+ import net.sourceforge.autotalent.Autotalent;
+ 
+ import java.io.FileNotFoundException;
++import java.io.FileOutputStream;
+ import java.io.IOException;
+ 
+ public class SipdroidRecorder implements Recorder {
+@@ -128,7 +129,7 @@ public class SipdroidRecorder implements Recorder {
+     private class MicWriter extends Thread {
+         private final AudioRecord audioRecord;
+         private AudioTrack audioTrack;
+-        private final WaveWriter writer;
++        private WaveWriter writer;
+         private final int frameSize;
+         private final int frameRate;
+         private final long framePeriod;
+@@ -142,13 +143,17 @@ public class SipdroidRecorder implements Recorder {
+             this.bufSize = frameSize * (frameRate + 1);
+             this.running = false;
+             this.audioRecord = AudioHelper.getRecorder(context);
+-            this.writer = new WaveWriter(context.getCacheDir().getAbsolutePath(),
+-                    context.getString(R.string.default_recording_name), sampleRate,
+-                    AudioHelper.getChannelConfig(Constants.DEFAULT_CHANNEL_CONFIG),
+-                    AudioHelper.getPcmEncoding(Constants.DEFAULT_PCM_FORMAT));
+-
+-            if (isLiveMode) {
+-                this.audioTrack = AudioHelper.getPlayer(context);
++            try {
++                FileOutputStream out = context.openFileOutput("direct_recording.wav",
++                        Context.MODE_PRIVATE);
++                this.writer = new WaveWriter(out, sampleRate,
++                        AudioHelper.getChannelConfig(Constants.DEFAULT_CHANNEL_CONFIG),
++                        AudioHelper.getPcmEncoding(Constants.DEFAULT_PCM_FORMAT));
++                if (isLiveMode) {
++                    this.audioTrack = AudioHelper.getPlayer(context);
++                }
++            } catch (IOException e) {
++                Log.e(CLASS_SIPDROID_RECORDER, "Unable to write WAV file", e);
+             }
+         }
+ 

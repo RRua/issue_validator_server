@@ -1,0 +1,894 @@
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/Simulator.java b/app/src/main/java/com/dirkgassen/wator/simulator/Simulator.java
+index a4e5eca..b30ffe7 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/Simulator.java
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/Simulator.java
+@@ -41,10 +41,27 @@ import java.util.Random;
+  * inspectore stores a snapshot of the world at the time it was requested. The world can progress while the inspector
+  * is in use but the inspector won't be affected.
+  *
+- * Note that
+- * to avoid excessive object creation (which also puts strain on the garbage collector) {@link WorldInspector#release()}
++ * Note that to avoid excessive object creation (which also puts strain on the garbage collector) {@link WorldInspector#release()}
+  * when the world inspector is no longer being used.
+  */
++// Note that this class can tick the world with multiple threads. The idea behind it is to separate access to the data
++// instead of synchronizing the threads. The world is processed in multiple chunks. The chunks are divided into two
++// sets such that each chunk in each set does not affect any other chunk in the same set.
++//
++// Imagine this:
++// For two threads divide the world into four chunks, e.g.:
++//   A: cells 0 to 99,
++//   B: cells 100 to 199,
++//   C: cells 200 to 299,
++//   and D: cells 300 to 399.
++// The first set would contain chunks A and C while the second set would contain B and D. Now chunks A and C can
++// be calculated simultaniously since none of the cells affected would be anywhere near chunk C. The same is true
++// for chunks B and D. Therefore, we can let two threads calculate chunks A and B, then wait until both are done and
++// then let two threads calculate chunks B and D.
++//
++// To minimize memory allocation we use WorldCalculatorState objects for each thread and a calculatorThread array.
++// The calculatorThread array contains CalculatorThread thread objects that in their "run" loop block until they receive
++// a world chunk to calculate. Details see in the CalculatorThread class documentation.
+ final public class Simulator {
+ 
+ 	/**
+@@ -381,6 +398,16 @@ final public class Simulator {
+ 	 *
+ 	 * To make a thread work on a chunk call {@link #startCalculatingWorld(int, int)}. To wait for the calculation
+ 	 * to be complete call {@link #waitForWorkDone()}.
++	 *
++	 * The class has one of the states: {@link #STATE_STARTING}, {@link #STATE_WAITING_FOR_WORK},
++	 * {@link #STATE_WORKING} or {@link #STATE_DEAD}.
++	 *
++	 * The {@link #run()} loop is a never ending loop that blocks at the beginning (transitioning from
++	 * {@link #STATE_STARTING} to {@link #STATE_WAITING_FOR_WORK}. Calling {@link #startCalculatingWorld(int, int)}
++	 * changes the internal {@link WorldCalculatorState} to the chunk to calculate and then resumes the {@link #run()}
++	 * loop, which makes the thread transition to {@link #STATE_WORKING}. Once the chunk is calculated the state changes
++	 * to {@link #STATE_WAITING_FOR_WORK} again. The {@link #run()} loop exits when an exception happens (including
++	 * {@link InterruptedException}).
+ 	 */
+ 	class CalculatorThread extends Thread {
+ 
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/SimulatorRunnable.java b/app/src/main/java/com/dirkgassen/wator/simulator/SimulatorRunnable.java
+index 1d0dfc8..18f38e8 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/SimulatorRunnable.java
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/SimulatorRunnable.java
+@@ -17,16 +17,32 @@
+ 
+ package com.dirkgassen.wator.simulator;
+ 
++import com.dirkgassen.wator.utils.RollingAverage;
++
+ import android.util.Log;
+ 
+ /**
+  * A class that "ticks" a simulator. This is a {@link Runnable} object that updates a {@link Simulator}
+  * with a desired frame rate (see {@link #getTargetFps()}}. If the frame rate cannot be achieved it tries to run
+  * as fast as possible (but leaves a couple of ms between each frame).
++ * <p/>
++ * A class that is interested to learn when this runnable has finished updating its world should implement
++ * {@link SimulatorRunnableObserver} and register with this runnable with
++ * {@link #registerSimulatorRunnableObserver(SimulatorRunnableObserver)}. Once a
++ * {@link SimulatorRunnableObserver} is no longer interested in updates it should be unregistered
++ * with {@link #unregisterSimulatorObserver(SimulatorRunnableObserver)}.
+  */
+ public class SimulatorRunnable implements Runnable {
+ 
+-	/** Classes should implement this interface if they are interested whenever a simulator tick is finished. */
++	/**
++	 * Classes should implement this interface if they are interested whenever a {@link SimulatorRunnable} has finished
++	 * calculating a tick.
++	 * <p/>
++	 * An observer can be registered with a {@link SimulatorRunnable} with
++	 * {@link SimulatorRunnable#registerSimulatorRunnableObserver(SimulatorRunnableObserver)}.
++	 * If an observer should no longer receive updates it should be unregistered with
++	 * {@link SimulatorRunnable#unregisterSimulatorObserver(SimulatorRunnableObserver)}.
++	 */
+ 	public interface SimulatorRunnableObserver {
+ 
+ 		/** This method is called whenever one simulator tick is finished */
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/WorldHost.java b/app/src/main/java/com/dirkgassen/wator/simulator/WorldHost.java
+index 8823c80..9ad7ed2 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/WorldHost.java
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/WorldHost.java
+@@ -18,12 +18,23 @@
+ package com.dirkgassen.wator.simulator;
+ 
+ /**
+- * @author dirk.
++ * This interface should be implemented by classes who run a {@link Simulator}. It provides a common interface to
++ * allow for registering/unregistering a {@link WorldObserver}.
+  */
+ public interface WorldHost {
+ 
++	/**
++	 * Register a new {@link WorldObserver}.
++	 *
++	 * @param newObserver new observer
++	 */
+ 	void registerSimulatorObserver(WorldObserver newObserver);
+ 
++	/**
++	 * Unregister a {@link WorldObserver}
++	 *
++	 * @param goneObserver observer to be unregistered
++	 */
+ 	void unregisterSimulatorObserver(WorldObserver goneObserver);
+ 
+ 
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/WorldObserver.java b/app/src/main/java/com/dirkgassen/wator/simulator/WorldObserver.java
+index 450f66e..a2ca9a1 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/WorldObserver.java
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/WorldObserver.java
+@@ -18,10 +18,16 @@
+ package com.dirkgassen.wator.simulator;
+ 
+ /**
+- * @author dirk.
++ * Classes that wish to be notified of updates of a {@link Simulator} should implement this interface.
+  */
+ public interface WorldObserver {
+ 
++	/**
++	 * Called when a {@link Simulator} is updated.
++	 *
++	 * @param world {@link com.dirkgassen.wator.simulator.Simulator.WorldInspector} of the {@link Simulator} that
++	 *              has been updated
++	 */
+ 	void worldUpdated(Simulator.WorldInspector world);
+ 
+ }
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/WorldParameters.java b/app/src/main/java/com/dirkgassen/wator/simulator/WorldParameters.java
+index bcddb40..ae85b36 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/WorldParameters.java
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/WorldParameters.java
+@@ -18,86 +18,148 @@
+ package com.dirkgassen.wator.simulator;
+ 
+ /**
+- * @author dirk.
++ * Class to store parameters for a world ({@link Simulator}). Objects of this class can be used to create a new
++ * {@link Simulator}.
+  */
+ public class WorldParameters {
++
++	/** Width of a world */
+ 	private short width = 300;
++
++	/** Height of a height */
+ 	private short height = 200;
++
++	/** Initial number of fish in a world */
+ 	private int initialFishCount = 1000;
++
++	/** Initial number of shark in a world */
+ 	private int initialSharkCount = 600;
++
++	/** Ticks until a fish reaches maturity and reproduces */
+ 	private short fishBreedTime = 14;
++
++	/** Ticks until a shark reaches maturity and reproduces */
+ 	private short sharkBreedTime = 13;
++
++	/** Ticks a shark can go without eating a fish before it dies */
+ 	private short sharkStarveTime = 12;
+-	private short sharkNewbornHunger = -50;
+ 
++	/** @return width of the described world */
+ 	public short getWidth() {
+ 		return width;
+ 	}
+ 
++	/** @return height of the described world */
+ 	public short getHeight() {
+ 		return height;
+ 	}
+ 
++	/** @return initial number of fish in the described world */
+ 	public int getInitialFishCount() {
+ 		return initialFishCount;
+ 	}
+ 
++	/** @return initial number of shark in the described world */
+ 	public int getInitialSharkCount() {
+ 		return initialSharkCount;
+ 	}
+ 
++	/** @return ticks until a fish reaches maturity and reproduces */
+ 	public short getFishBreedTime() {
+ 		return fishBreedTime;
+ 	}
+ 
++	/** @return ticks until a shark reaches maturity and reproduces */
+ 	public short getSharkBreedTime() {
+ 		return sharkBreedTime;
+ 	}
+ 
++	/** @return ticks a shark can survive without eating a fish */
+ 	public short getSharkStarveTime() {
+ 		return sharkStarveTime;
+ 	}
+ 
++	/**
++	 * Sets the width of the described world.
++	 *
++	 * @param width new width
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setWidth(short width) {
+ 		this.width = width;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the height of the described world.
++	 *
++	 * @param height new height
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setHeight(short height) {
+ 		this.height = height;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the initial number of fish the described world.
++	 *
++	 * @param initialFishCount initial number of fish
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setInitialFishCount(int initialFishCount) {
+ 		this.initialFishCount = initialFishCount;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the initial number of shark the described world.
++	 *
++	 * @param initialSharkCount initial number of shark
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setInitialSharkCount(int initialSharkCount) {
+ 		this.initialSharkCount = initialSharkCount;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the number of ticks until a fish reaches maturity and reproduces.
++	 *
++	 * @param fishBreedTime ticks until a fish reaches maturity and reproduces
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setFishBreedTime(short fishBreedTime) {
+ 		this.fishBreedTime = fishBreedTime;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the number of ticks until a shark reaches maturity and reproduces.
++	 *
++	 * @param sharkBreedTime ticks until a shark reaches maturity and reproduces
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setSharkBreedTime(short sharkBreedTime) {
+ 		this.sharkBreedTime = sharkBreedTime;
+ 		return this;
+ 	}
+ 
++	/**
++	 * Sets the number of ticks a shark can go without eating a fish.
++	 *
++	 * @param sharkStarveTime ticks a shark can go without eating a fish
++	 * @return {@code this}
++	 */
+ 	public WorldParameters setSharkStarveTime(short sharkStarveTime) {
+ 		this.sharkStarveTime = sharkStarveTime;
+ 		return this;
+ 	}
+ 
+-	public WorldParameters setSharkNewbornHunger(short sharkNewbornHunger) {
+-		this.sharkNewbornHunger = sharkNewbornHunger;
+-		return this;
+-	}
+-
++	/**
++	 * Verify the sanity of the parameters. Throws {@link IllegalArgumentException} if the parameters are not
++	 * consistent.
++	 */
+ 	protected void verify() {
+ 		if (initialFishCount + initialSharkCount > width * height) {
+ 			throw new IllegalArgumentException("Can't have " + initialFishCount + " fish and " + initialSharkCount + " sharks in a world with " + (width * height) + " cells");
+@@ -112,7 +174,6 @@ public class WorldParameters {
+ 			throw new IllegalArgumentException("Shark max hunger " + sharkStarveTime + " too large (max " + Simulator.MAX_SHARK_STARVE_TIME + ")");
+ 		}
+ 
+-
+ 	}
+ 
+ }
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/package-info.java b/app/src/main/java/com/dirkgassen/wator/simulator/package-info.java
+new file mode 100644
+index 0000000..b87fd21
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/simulator/package-info.java
+@@ -0,0 +1,29 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains classes related to simulating a Wa-Tor world.
++ * <p/>
++ * The {@link com.dirkgassen.wator.simulator.Simulator} simulates a Wa-Tor world.
++ * {@link com.dirkgassen.wator.simulator.WorldParameters} objects describe a world and can be used to create a new
++ * {@link com.dirkgassen.wator.simulator.Simulator}.
++ * <p/>
++ * A class can implement {@link com.dirkgassen.wator.simulator.WorldObserver} in order to be registered with a {@link com.dirkgassen.wator.simulator.WorldHost} to be called whenever a {@link com.dirkgassen.wator.simulator.Simulator} is ticked (updated).
++ * <p/>
++ * A {@link com.dirkgassen.wator.simulator.SimulatorRunnable} can be used to periodically tick (update) a {@link com.dirkgassen.wator.simulator.Simulator}.
++ */
++package com.dirkgassen.wator.simulator;
+\ No newline at end of file
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/MainActivity.java b/app/src/main/java/com/dirkgassen/wator/ui/activity/MainActivity.java
+similarity index 99%
+rename from app/src/main/java/com/dirkgassen/wator/ui/MainActivity.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/activity/MainActivity.java
+index 7c96b44..957f454 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/MainActivity.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/activity/MainActivity.java
+@@ -15,13 +15,15 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.activity;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+ import com.dirkgassen.wator.R;
+-import com.dirkgassen.wator.simulator.RollingAverage;
++import com.dirkgassen.wator.ui.fragment.NewWorld;
++import com.dirkgassen.wator.ui.view.RangeSlider;
++import com.dirkgassen.wator.utils.RollingAverage;
+ import com.dirkgassen.wator.simulator.Simulator;
+ import com.dirkgassen.wator.simulator.SimulatorRunnable;
+ import com.dirkgassen.wator.simulator.WorldHost;
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/activity/package-info.java b/app/src/main/java/com/dirkgassen/wator/ui/activity/package-info.java
+new file mode 100644
+index 0000000..3a0aa5a
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/ui/activity/package-info.java
+@@ -0,0 +1,21 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains the activities of the app.
++ */
++package com.dirkgassen.wator.ui.activity;
+\ No newline at end of file
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/NewWorld.java b/app/src/main/java/com/dirkgassen/wator/ui/fragment/NewWorld.java
+similarity index 99%
+rename from app/src/main/java/com/dirkgassen/wator/ui/NewWorld.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/fragment/NewWorld.java
+index d7e4eb4..736537f 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/NewWorld.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/fragment/NewWorld.java
+@@ -15,7 +15,7 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.fragment;
+ 
+ import java.util.Locale;
+ 
+@@ -49,7 +49,7 @@ public class NewWorld extends Fragment {
+ 	/**
+ 	 * Interface that the host must implement.
+ 	 */
+-	interface WorldCreator
++	public interface WorldCreator
+ 		/** @return the world parameters that were previously used to create a world */{
+ 		WorldParameters getPreviousWorldParameters();
+ 
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/WatorDisplay.java b/app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorDisplay.java
+similarity index 72%
+rename from app/src/main/java/com/dirkgassen/wator/ui/WatorDisplay.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorDisplay.java
+index 3469f23..8332714 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/WatorDisplay.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorDisplay.java
+@@ -15,12 +15,12 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.fragment;
+ 
+ import com.dirkgassen.wator.R;
+ import com.dirkgassen.wator.simulator.Simulator;
+-import com.dirkgassen.wator.simulator.WorldObserver;
+ import com.dirkgassen.wator.simulator.WorldHost;
++import com.dirkgassen.wator.simulator.WorldObserver;
+ 
+ import android.content.Context;
+ import android.graphics.Bitmap;
+@@ -38,29 +38,49 @@ import android.view.ViewGroup;
+ import android.widget.ImageView;
+ 
+ /**
+- * @author dirk.
++ * A fragment that displays a 2D view of a {@link Simulator} (world). The fragment must be placed into an activity that
++ * implements {@link WorldHost}. It registers itself as a {@link WorldObserver} to that {@link WorldHost} to receive
++ * notifcations that the simulator has ticked.
+  */
+ public class WatorDisplay extends Fragment implements WorldObserver {
+ 
+-
++	/** {@link ImageView} to display the world in */
+ 	private ImageView watorDisplay;
+ 
++	/** A precalculated color ramp from the "new fish" color (index 0) to "old fish" color (last index) */
+ 	private int[] fishAgeColors;
+ 
++	/** A precalculated color ramp from the "new shark" color (index 0) to "old shark" color (last index) */
+ 	private int[] sharkAgeColors;
+ 
++	/** Color of the water */
+ 	private int waterColor;
+ 
++	/** The hosting activity */
+ 	private WorldHost displayHost;
+ 
++	/** Bitmap for the world */
+ 	private Bitmap planetBitmap;
+ 
++	/** Pixel array that is calculated from the world and then dumped into the {@link #planetBitmap} */
+ 	private int[] pixels;
+ 
++	/** Handler to run stuff on the UI thread */
+ 	private Handler handler;
+ 
++	/**
++	 * A {@link @Runnable} that can be posted to the UI thread to set the bitmap of the {@link #watorDisplay}
++	 * {@link ImageView} */
+ 	private Runnable updateImageRunner;
+ 
++	/**
++	 * Calculates a color ramp from {@code youngColor} to {@code oldColor} and returns that array.
++	 *
++	 * @param max        maximum age; defines the number of individual colors calculated
++	 * @param youngColor young (starting) color
++	 * @param oldColor   old (ending) color
++	 * @return array with the color ramp
++	 */
+ 	private int[] calculateIndividualAgeColors(int max, int youngColor, int oldColor) {
+ 		final int[] colors = new int[max];
+ 		final float[] youngColorHsv = new float[3];
+@@ -78,6 +98,14 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		return colors;
+ 	}
+ 
++	/**
++	 * Called to have the fragment instantiates its user interface view. Inflates the view of this fragment.
++	 *
++	 * @param inflater           used to inflate the view
++	 * @param container          If not {@code null}, this is the parent view that the fragment's UI should be attached to
++	 * @param savedInstanceState previous state of the framgent (ignored)
++	 * @return view to use for this fragment
++	 */
+ 	@Nullable
+ 	@Override
+ 	public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+@@ -86,6 +114,10 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		return v;
+ 	}
+ 
++	/**
++	 * Called to do initial creation of this fragment.
++	 * @param savedInstanceState possibly a saved state of this fragment (ignored)
++	 */
+ 	@Override
+ 	public void onCreate(@Nullable Bundle savedInstanceState) {
+ 		super.onCreate(savedInstanceState);
+@@ -103,6 +135,7 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		waterColor = ContextCompat.getColor(this.getContext(), R.color.water);
+ 	}
+ 
++	/** Called when this framgent is no longer in use */
+ 	@Override
+ 	public void onDestroy() {
+ 		super.onDestroy();
+@@ -112,6 +145,7 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/** Called when the fragment is paused. */
+ 	@Override
+ 	public void onPause() {
+ 		super.onPause();
+@@ -120,6 +154,7 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/** Called when the fragment is resumed. */
+ 	@Override
+ 	public void onResume() {
+ 		super.onResume();
+@@ -128,6 +163,11 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/**
++	 * Called when this fragment is first attached to a {@link Context}.
++	 *
++	 * @param context context this fragment is attached to
++	 */
+ 	@Override
+ 	public void onAttach(Context context) {
+ 		super.onAttach(context);
+@@ -139,6 +179,12 @@ public class WatorDisplay extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/**
++	 * Called when the {@link WorldHost} has updated its simulator. This method repaints the bitmap for the view.
++	 *
++	 * @param world {@link com.dirkgassen.wator.simulator.Simulator.WorldInspector} of the {@link Simulator} that was
++	 *              updated
++	 */
+ 	@Override
+ 	public void worldUpdated(Simulator.WorldInspector world) {
+ 		if (Log.isLoggable("Wa-Tor", Log.VERBOSE)) { Log.v("Wa-Tor", "Updating image"); }
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/WatorStatistics.java b/app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorStatistics.java
+similarity index 63%
+rename from app/src/main/java/com/dirkgassen/wator/ui/WatorStatistics.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorStatistics.java
+index 735c0b8..32e0883 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/WatorStatistics.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/fragment/WatorStatistics.java
+@@ -15,12 +15,13 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.fragment;
+ 
+ import com.dirkgassen.wator.R;
+ import com.dirkgassen.wator.simulator.Simulator;
+ import com.dirkgassen.wator.simulator.WorldObserver;
+ import com.dirkgassen.wator.simulator.WorldHost;
++import com.dirkgassen.wator.ui.view.RollingGraphView;
+ 
+ import android.content.Context;
+ import android.os.Bundle;
+@@ -32,16 +33,26 @@ import android.view.View;
+ import android.view.ViewGroup;
+ 
+ /**
+- * @author dirk.
++ * A fragment that shows a rolling graph of the statistics of fish and shark in a {@link Simulator}. The fragment must
++ * be placed into an activity that implements {@link WorldHost}.It registers itself as a {@link WorldObserver} to that {@link WorldHost} to receive
++ * notifcations that the simulator has ticked.
+  */
+ public class WatorStatistics extends Fragment implements WorldObserver {
+ 
++	/** A preallocated array used to add new values to {@link #rollingGraphView} */
+ 	private final float[] newStatsValues = new float[2];
+ 
++	/** The {@link RollingGraphView} that shows the statistics */
+ 	private RollingGraphView rollingGraphView;
+ 
++	/** The hosting activity */
+ 	private WorldHost displayHost;
+ 
++	/**
++	 * Called when this fragment is first attached to a {@link Context}.
++	 *
++	 * @param context context this fragment is attached to
++	 */
+ 	@Override
+ 	public void onAttach(Context context) {
+ 		super.onAttach(context);
+@@ -53,6 +64,14 @@ public class WatorStatistics extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/**
++	 * Called to have the fragment instantiates its user interface view. Inflates the view of this fragment.
++	 *
++	 * @param inflater           used to inflate the view
++	 * @param container          If not {@code null}, this is the parent view that the fragment's UI should be attached to
++	 * @param savedInstanceState previous state of the framgent (ignored)
++	 * @return view to use for this fragment
++	 */
+ 	@Nullable
+ 	@Override
+ 	public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+@@ -61,6 +80,7 @@ public class WatorStatistics extends Fragment implements WorldObserver {
+ 		return v;
+ 	}
+ 
++	/** Called when the fragment is paused. */
+ 	@Override
+ 	public void onPause() {
+ 		super.onPause();
+@@ -69,6 +89,7 @@ public class WatorStatistics extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
++	/** Called when the fragment is resumed. */
+ 	@Override
+ 	public void onResume() {
+ 		super.onResume();
+@@ -77,7 +98,12 @@ public class WatorStatistics extends Fragment implements WorldObserver {
+ 		}
+ 	}
+ 
+-	@Override
++	/**
++	 * Called when the {@link WorldHost} has updated its simulator. This method repaints the bitmap for the view.
++	 *
++	 * @param world {@link com.dirkgassen.wator.simulator.Simulator.WorldInspector} of the {@link Simulator} that was
++	 */
++	 @Override
+ 	public void worldUpdated(Simulator.WorldInspector world) {
+ 		if (rollingGraphView != null) {
+ 			synchronized (newStatsValues) {
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/fragment/package-info.java b/app/src/main/java/com/dirkgassen/wator/ui/fragment/package-info.java
+new file mode 100644
+index 0000000..dc5a1a8
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/ui/fragment/package-info.java
+@@ -0,0 +1,21 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains the fragments for this app.
++ */
++package com.dirkgassen.wator.ui.fragment;
+\ No newline at end of file
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/package-info.java b/app/src/main/java/com/dirkgassen/wator/ui/package-info.java
+new file mode 100644
+index 0000000..d5eb5c8
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/ui/package-info.java
+@@ -0,0 +1,21 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains classes that form the UI of the app (activities, fragments, views).
++ */
++package com.dirkgassen.wator.ui;
+\ No newline at end of file
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/RangeSlider.java b/app/src/main/java/com/dirkgassen/wator/ui/view/RangeSlider.java
+similarity index 99%
+rename from app/src/main/java/com/dirkgassen/wator/ui/RangeSlider.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/view/RangeSlider.java
+index aaae411..2b8ac12 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/RangeSlider.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/view/RangeSlider.java
+@@ -15,7 +15,7 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.view;
+ 
+ import java.util.Arrays;
+ import java.util.Locale;
+@@ -61,7 +61,7 @@ public class RangeSlider extends View {
+ 	private static final int MAX_CLICK_DURATION = 1000;
+ 
+ 	/**  Interface to implement to listen for changes of the current value. */
+-	interface OnValueChangeListener {
++	public interface OnValueChangeListener {
+ 
+ 		/**
+ 		 * Called upon a change of the current value.
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/RollingGraphView.java b/app/src/main/java/com/dirkgassen/wator/ui/view/RollingGraphView.java
+similarity index 99%
+rename from app/src/main/java/com/dirkgassen/wator/ui/RollingGraphView.java
+rename to app/src/main/java/com/dirkgassen/wator/ui/view/RollingGraphView.java
+index e0f28e3..8634658 100644
+--- a/app/src/main/java/com/dirkgassen/wator/ui/RollingGraphView.java
++++ b/app/src/main/java/com/dirkgassen/wator/ui/view/RollingGraphView.java
+@@ -15,7 +15,7 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.ui;
++package com.dirkgassen.wator.ui.view;
+ 
+ import java.security.InvalidParameterException;
+ 
+diff --git a/app/src/main/java/com/dirkgassen/wator/ui/view/package-info.java b/app/src/main/java/com/dirkgassen/wator/ui/view/package-info.java
+new file mode 100644
+index 0000000..660fcb3
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/ui/view/package-info.java
+@@ -0,0 +1,21 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains views that the app uses.
++ */
++package com.dirkgassen.wator.ui.view;
+\ No newline at end of file
+diff --git a/app/src/main/java/com/dirkgassen/wator/simulator/RollingAverage.java b/app/src/main/java/com/dirkgassen/wator/utils/RollingAverage.java
+similarity index 54%
+rename from app/src/main/java/com/dirkgassen/wator/simulator/RollingAverage.java
+rename to app/src/main/java/com/dirkgassen/wator/utils/RollingAverage.java
+index 91e89ff..5339be1 100644
+--- a/app/src/main/java/com/dirkgassen/wator/simulator/RollingAverage.java
++++ b/app/src/main/java/com/dirkgassen/wator/utils/RollingAverage.java
+@@ -15,21 +15,40 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.dirkgassen.wator.simulator;
++package com.dirkgassen.wator.utils;
+ 
+ /**
+- * @author dirk.
++ * Class to provide a rolling average over some history of values, e.g., the last 60 values (default).
++ * New values can be added by calling {@link #add(long)} while values outside of the specified sliding window
++ * are disregarded automatically.
+  */
+ public class RollingAverage {
+ 
++	/**
++	 * Stores the values in the average. {@link #valueCurrentNo} is the index in this array where the next
++	 * new value is stored. This index is decremented and wrapepd around to start at the end of the array again.
++	 *
++	 * The array must be one element bigger than the history size to accommodate for a spot to save the next value.
++	 */
+ 	private long[] valueHistory;
+ 
++	/** Current sum of all values in {@link #valueHistory}. */
+ 	private long valueHistorySum = 0;
+ 
++	/**
++	 * Index in {@link #valueHistory} where the next new value is going to be stored. The array is filled backwards
++	 * (no idea why I made this choice to begin with) and when this index reaches the beginning it wraps around to the
++	 * end.
++	 */
+ 	private int valueCurrentNo = 0;
+ 
++	/**
++	 * Number of values in {@link #valueHistory}. The numbers stored can be less than the size of the array so we
++	 * need to keep track of how full the array is.
++	 */
+ 	private int valueCount = 0;
+ 
++	/** @return average of all n most recent values added (0 if no values have been addedy) */
+ 	final public float getAverage() {
+ 		if (valueCount == 0) {
+ 			return 0f;
+@@ -37,6 +56,11 @@ public class RollingAverage {
+ 		return (float) valueHistorySum / valueCount;
+ 	}
+ 
++	/**
++	 * Add a new value to the rolling average.
++	 *
++	 * @param newValue value to add
++	 */
+ 	final public void add(long newValue) {
+ 		valueHistory[valueCurrentNo] = newValue;
+ 		if (valueCurrentNo == 0) {
+diff --git a/app/src/main/java/com/dirkgassen/wator/utils/package-info.java b/app/src/main/java/com/dirkgassen/wator/utils/package-info.java
+new file mode 100644
+index 0000000..d5bfedf
+--- /dev/null
++++ b/app/src/main/java/com/dirkgassen/wator/utils/package-info.java
+@@ -0,0 +1,21 @@
++/*
++ * package-info.java is part of Wa-Tor (C) 2016 by Dirk Gassen.
++ *
++ * Wa-Tor is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * Wa-Tor is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++/**
++ * This package contains utility classes.
++ */
++package com.dirkgassen.wator.utils;
+\ No newline at end of file
+diff --git a/app/src/test/java/RollingAverageTest.java b/app/src/test/java/RollingAverageTest.java
+index b9afd8b..717b106 100644
+--- a/app/src/test/java/RollingAverageTest.java
++++ b/app/src/test/java/RollingAverageTest.java
+@@ -17,7 +17,7 @@
+ 
+ import org.junit.Test;
+ 
+-import com.dirkgassen.wator.simulator.RollingAverage;
++import com.dirkgassen.wator.utils.RollingAverage;
+ 
+ import junit.framework.Assert;
+ 

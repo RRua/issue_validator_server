@@ -1,0 +1,1209 @@
+diff --git a/app/src/main/java/com/chess/clock/ClockApplication.java b/app/src/main/java/com/chess/clock/ClockApplication.java
+new file mode 100644
+index 0000000..72365c8
+--- /dev/null
++++ b/app/src/main/java/com/chess/clock/ClockApplication.java
+@@ -0,0 +1,17 @@
++package com.chess.clock;
++
++import android.app.Application;
++
++import com.chess.clock.manager.ChessClockManager;
++import com.chess.clock.manager.ChessClockManagerImpl;
++
++public class ClockApplication extends Application {
++    private static ChessClockManager clockManager;
++
++    public static ChessClockManager getClockManager() {
++        if (clockManager == null) {
++            clockManager = new ChessClockManagerImpl();
++        }
++        return clockManager;
++    }
++}
+diff --git a/app/src/main/java/com/chess/clock/activities/BaseActivity.java b/app/src/main/java/com/chess/clock/activities/BaseActivity.java
+index 3fd7f5d..d73fb9a 100644
+--- a/app/src/main/java/com/chess/clock/activities/BaseActivity.java
++++ b/app/src/main/java/com/chess/clock/activities/BaseActivity.java
+@@ -6,8 +6,10 @@ import android.view.WindowManager;
+ import androidx.annotation.Nullable;
+ import androidx.appcompat.app.AppCompatActivity;
+ 
++import com.chess.clock.ClockApplication;
+ import com.chess.clock.R;
+ import com.chess.clock.entities.AppTheme;
++import com.chess.clock.manager.ChessClockManager;
+ import com.chess.clock.statics.AppData;
+ 
+ public class BaseActivity extends AppCompatActivity {
+@@ -22,12 +24,17 @@ public class BaseActivity extends AppCompatActivity {
+     protected void onCreate(@Nullable Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         appData = new AppData(getApplicationContext());
++        selectedTheme = appData.getSelectedTheme();
+     }
+ 
+     @Override
+     protected void onResume() {
+         super.onResume();
+-        selectedTheme = appData.getSelectedTheme();
++        this.selectedTheme = appData.getSelectedTheme();
++    }
++
++    public ChessClockManager getClockManager() {
++        return ClockApplication.getClockManager();
+     }
+ 
+     public void hideStatusBar() {
+diff --git a/app/src/main/java/com/chess/clock/activities/ClockTimersActivity.java b/app/src/main/java/com/chess/clock/activities/ClockTimersActivity.java
+index 98e0f19..2c976a9 100644
+--- a/app/src/main/java/com/chess/clock/activities/ClockTimersActivity.java
++++ b/app/src/main/java/com/chess/clock/activities/ClockTimersActivity.java
+@@ -20,13 +20,16 @@ import androidx.fragment.app.DialogFragment;
+ 
+ import com.chess.clock.R;
+ import com.chess.clock.dialog.AdjustTimeDialogFragment;
++import com.chess.clock.engine.ClockPlayer;
+ import com.chess.clock.engine.CountDownTimer;
+ import com.chess.clock.engine.Stage;
++import com.chess.clock.engine.TimeControlParser;
++import com.chess.clock.engine.TimeControlWrapper;
+ import com.chess.clock.views.ClockButton;
+ import com.chess.clock.views.ClockMenu;
+ import com.chess.clock.views.ViewUtils;
+ 
+-public class ClockTimersActivity extends TimerServiceActivity implements AdjustTimeDialogFragment.TimeAdjustmentsListener {
++public class ClockTimersActivity extends BaseActivity implements AdjustTimeDialogFragment.TimeAdjustmentsListener {
+ 
+     private static final String TAG = ClockTimersActivity.class.getName();
+     /**
+@@ -186,6 +189,8 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+             mTimersState = TimersState.PAUSED;
+             mTimersStatePreviousToPause = TimersState.PAUSED;
+         }
++
++        initClock();
+     }
+ 
+     /**
+@@ -287,37 +292,27 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+ 
+     @Override
+     public void onBackPressed() {
+-
+-        if (serviceBound && (mTimersState != TimersState.PAUSED)) {
++        if (mTimersState != TimersState.PAUSED) {
+             pauseClock();
+         }
+-
+         super.onBackPressed();
+     }
+ 
+-    @Override
+-    void bindUiOnServiceConnected() {
+-        clockService.setPlayerOneListener(playerOneCallback);
+-        clockService.setPlayerTwoListener(playerTwoCallback);
++    void initClock() {
++        getClockManager().setListeners(playerOneCallback, playerTwoCallback);
+ 
+ 			/*
+-            Check if Service is already started. Started Service means that Time Controls were set in the clock.
+-			If no time control were set, start a new Service with last used Time Controls.
++            Check if timer is already started. Started timer means that Time Controls were set in the clock.
++			If no time control were set, restore a new timer with last used Time Controls.
+ 			*/
+-        if (!clockService.isServiceStarted()) {
+-            startLastTimeControlSafely();
++        if (!getClockManager().isClockStarted()) {
++            TimeControlWrapper selectedControl = TimeControlParser.getLastTimeControlOrDefault(this);
++            getClockManager().setupClock(selectedControl);
++            Log.d(TAG, "Last controls set.");
+         } else {
+-				/*
+-				Service is already started. Every time this Activity goes to background, the
+-				timers state are saved on shared preferences, before the clock is paused. And
+-				here, they must be restored in order to resume state properly.
+-				*/
++
+             restoreTimersState();
+ 
+-				/*
+-				Only update UI if game was finished OR in the case of configuration change the
+-				game was previously running.
+-				*/
+             if (mTimersState == TimersState.PLAYER_ONE_FINISHED || mTimersState == TimersState.PLAYER_TWO_FINISHED) {
+                 updateUIState();
+             } else {
+@@ -330,7 +325,7 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+                     Log.v(TAG, "Configuration change lasted " + elapsedTime + " milliseconds.");
+                     if (elapsedTime < 2000 && (mTimersState == TimersState.PLAYER_TWO_RUNNING ||
+                             mTimersState == TimersState.PLAYER_ONE_RUNNING)) {
+-                        resumeClockSafely();
++                        getClockManager().resumeClock();
+                         updateUIState();
+                     } else {
+                         // If pause took too long, reset state to paused.
+@@ -345,34 +340,26 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+      * Reset the clock.
+      */
+     public void resetClock() {
+-        if (serviceBound) {
+ 
+-            clockService.resetClock();
++        getClockManager().resetClock();
+ 
+-            // Both states at pause means it's the beginning of the game.
+-            mTimersState = TimersState.PAUSED;
+-            mTimersStatePreviousToPause = TimersState.PAUSED;
+-        }
++        // Both states at pause means it's the beginning of the game.
++        mTimersState = TimersState.PAUSED;
++        mTimersStatePreviousToPause = TimersState.PAUSED;
+         updateUIState();
+         soundManager.playSound(ClockSound.RESET_CLOCK);
+     }
+ 
+-    /**
+-     * Pause button visibility.
+-     */
+     public void pauseClock() {
++        if (mTimersState == TimersState.PLAYER_ONE_RUNNING || mTimersState == TimersState.PLAYER_TWO_RUNNING) {
++            Log.i(TAG, "Clock paused.");
++            mTimersStatePreviousToPause = mTimersState;
++            mTimersState = TimersState.PAUSED;
++            Log.d(TAG, "Previous state: " + mTimersStatePreviousToPause +
++                    " , current state: " + mTimersState);
++            getClockManager().pauseClock();
+ 
+-        if (serviceBound) {
+-            if (mTimersState == TimersState.PLAYER_ONE_RUNNING || mTimersState == TimersState.PLAYER_TWO_RUNNING) {
+-                Log.i(TAG, "Clock paused.");
+-                mTimersStatePreviousToPause = mTimersState;
+-                mTimersState = TimersState.PAUSED;
+-                Log.d(TAG, "Previous state: " + mTimersStatePreviousToPause +
+-                        " , current state: " + mTimersState);
+-                clockService.pauseClock();
+-
+-                updateUIState();
+-            }
++            updateUIState();
+         }
+     }
+ 
+@@ -404,7 +391,8 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+ 
+         @Override
+         public void onClickOptions() {
+-            long time = firstPlayer ? clockService.firstPlayerTime() : clockService.secondPlayerTime();
++            ClockPlayer player = firstPlayer ? ClockPlayer.ONE : ClockPlayer.TWO;
++            long time = getClockManager().getTimeForPlayer(player);
+             AdjustTimeDialogFragment
+                     .newInstance(time, firstPlayer)
+                     .show(getSupportFragmentManager(), AdjustTimeDialogFragment.TAG);
+@@ -505,39 +493,19 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+     }
+ 
+     private void onPlayerClockClicked(boolean firstPlayer) {
++        ClockPlayer player = ClockPlayer.ofBoolean(firstPlayer);
+         TimersState playerTimerRunning = firstPlayer ? TimersState.PLAYER_ONE_RUNNING : TimersState.PLAYER_TWO_RUNNING;
+-        TimersState otherPlayerTimerRunning = firstPlayer ? TimersState.PLAYER_TWO_RUNNING : TimersState.PLAYER_ONE_RUNNING;
+-        TimersState playerTimerFinished = firstPlayer ? TimersState.PLAYER_ONE_FINISHED : TimersState.PLAYER_TWO_FINISHED;
+-        TimersState otherPlayerTimerFinished = firstPlayer ? TimersState.PLAYER_TWO_FINISHED : TimersState.PLAYER_ONE_FINISHED;
+-        String logPlayerNumber = firstPlayer ? "one" : "two";
+ 
+-        Log.i(TAG, "Player " + logPlayerNumber + " pressed the clock with state: " + mTimersState + " (previous: " + mTimersStatePreviousToPause + ")");
+-        // Set pause btn visibility
++        Log.i(TAG, "Player " + player.name() + " pressed the clock with state: " + mTimersState + " (previous: " + mTimersStatePreviousToPause + ")");
+         if (mTimersState == TimersState.PAUSED && mTimersStatePreviousToPause == TimersState.PAUSED) {
+             clockMenu.showPause();
+         }
+         if (mTimersState == playerTimerRunning || mTimersState == TimersState.PAUSED) {
+-            // If bound to clock service, press clock and update UI state.
+-            if (serviceBound) {
+-                // First or continuation move
+-                if ((mTimersState == TimersState.PAUSED && mTimersStatePreviousToPause == TimersState.PAUSED) ||
+-                        (mTimersState == TimersState.PAUSED && mTimersStatePreviousToPause == playerTimerRunning) ||
+-                        mTimersState == playerTimerRunning) {
+-                    if (firstPlayer) clockService.pressPlayerOneClock();
+-                    else clockService.pressPlayerTwoClock();
+-                    mTimersState = otherPlayerTimerRunning;
+-                }
+-                // Resuming clock
+-                else {
+-                    resumeClockSafely();
+-                    mTimersState = mTimersStatePreviousToPause;
+-                    mTimersStatePreviousToPause = TimersState.PAUSED;
+-                }
+-                soundManager.playSound(ClockSound.PLAYER_ONE_MOVE);
+-                updateUIState();
+-            }
+-        } else if (mTimersState == playerTimerFinished ||
+-                mTimersState == otherPlayerTimerFinished) {
++            getClockManager().pressClock(player);
++            mTimersState = firstPlayer ? TimersState.PLAYER_TWO_RUNNING : TimersState.PLAYER_ONE_RUNNING;
++            soundManager.playSound(ClockSound.PLAYER_ONE_MOVE);
++            updateUIState();
++        } else if (mTimersState == TimersState.PLAYER_ONE_FINISHED || mTimersState == TimersState.PLAYER_TWO_FINISHED) {
+             showResetClockDialog();
+         }
+     }
+@@ -578,11 +546,13 @@ public class ClockTimersActivity extends TimerServiceActivity implements AdjustT
+ 
+     @Override
+     public void onTimeAdjustmentsConfirmed(long timeMs, boolean firstPlayer) {
++        getClockManager().setPlayerTime(
++                ClockPlayer.ofBoolean(firstPlayer),
++                timeMs
++        );
+         if (firstPlayer) {
+-            clockService.setFirstPlayerTime(timeMs);
+             playerOneButton.setTime(timeMs);
+         } else {
+-            clockService.setSecondPlayerTime(timeMs);
+             playerTwoButton.setTime(timeMs);
+         }
+     }
+diff --git a/app/src/main/java/com/chess/clock/activities/TimerServiceActivity.java b/app/src/main/java/com/chess/clock/activities/TimerServiceActivity.java
+deleted file mode 100644
+index a26f0c5..0000000
+--- a/app/src/main/java/com/chess/clock/activities/TimerServiceActivity.java
++++ /dev/null
+@@ -1,138 +0,0 @@
+-package com.chess.clock.activities;
+-
+-import android.content.ComponentName;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.ServiceConnection;
+-import android.os.IBinder;
+-import android.util.Log;
+-
+-import androidx.annotation.NonNull;
+-import androidx.lifecycle.DefaultLifecycleObserver;
+-import androidx.lifecycle.Lifecycle;
+-import androidx.lifecycle.LifecycleObserver;
+-import androidx.lifecycle.LifecycleOwner;
+-
+-import com.chess.clock.engine.TimeControl;
+-import com.chess.clock.engine.TimeControlParser;
+-import com.chess.clock.engine.TimeControlWrapper;
+-import com.chess.clock.service.ChessClockLocalService;
+-
+-public abstract class TimerServiceActivity extends BaseActivity implements LifecycleObserver {
+-
+-    private static final String TAG = TimerServiceActivity.class.getName();
+-
+-    /**
+-     * Chess clock local service (clock engine).
+-     */
+-    protected ChessClockLocalService clockService;
+-
+-    /**
+-     * State
+-     */
+-    protected boolean serviceBound = false;
+-
+-    /**
+-     * Defines callbacks for service binding, passed to bindService()
+-     */
+-    private final ServiceConnection mConnection = new ServiceConnection() {
+-
+-        @Override
+-        public void onServiceConnected(ComponentName className, IBinder service) {
+-            // We've bound to LocalService, cast the IBinder and get LocalService instance
+-            ChessClockLocalService.ChessClockLocalServiceBinder binder
+-                    = (ChessClockLocalService.ChessClockLocalServiceBinder) service;
+-            clockService = binder.getService();
+-            serviceBound = true;
+-
+-            Log.i(TAG, "Service bound connected");
+-
+-            bindUiOnServiceConnected();
+-        }
+-
+-        @Override
+-        public void onServiceDisconnected(ComponentName arg0) {
+-            serviceBound = false;
+-            Log.i(TAG, "Service bound disconnected");
+-        }
+-    };
+-
+-    @Override
+-    protected void onStart() {
+-        super.onStart();
+-
+-        // Bind to Local Chess clock Service.
+-        Intent intent = new Intent(this, ChessClockLocalService.class);
+-
+-        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+-
+-        Log.i(TAG, "Binding UI to Chess Clock Service.");
+-    }
+-
+-    @Override
+-    protected void onStop() {
+-        super.onStop();
+-
+-        // Unbind from the chess clock service.
+-        if (serviceBound) {
+-            unbindService(mConnection);
+-            serviceBound = false;
+-            Log.i(TAG, "Unbinding UI from Chess Clock Service.");
+-        }
+-    }
+-
+-    /**
+-     * Start clock service with last know time control or default one.
+-     */
+-    protected void startLastTimeControlSafely() {
+-        if (isAtLeastOnResume()) {
+-            startServiceWithLastTimeControlInternal();
+-        } else {
+-            Log.d(TAG, "Starting of service postponed.");
+-            getLifecycle().addObserver(new DefaultLifecycleObserver() {
+-                @Override
+-                public void onResume(@NonNull LifecycleOwner owner) {
+-                    DefaultLifecycleObserver.super.onResume(owner);
+-                    startServiceWithLastTimeControlInternal();
+-                    getLifecycle().removeObserver(this);
+-                }
+-            });
+-        }
+-    }
+-
+-    protected void resumeClockSafely() {
+-        if (isAtLeastOnResume()) {
+-            clockService.resumeClock();
+-        } else {
+-            Log.d(TAG, "Resuming of clock postponed.");
+-            getLifecycle().addObserver(new DefaultLifecycleObserver() {
+-                @Override
+-                public void onResume(@NonNull LifecycleOwner owner) {
+-                    DefaultLifecycleObserver.super.onResume(owner);
+-                    Log.d(TAG, "Resume clock.");
+-                    clockService.resumeClock();
+-                    getLifecycle().removeObserver(this);
+-                }
+-            });
+-        }
+-    }
+-
+-    private void startServiceWithLastTimeControlInternal() {
+-        Context ctx = this;
+-        TimeControlWrapper selectedControl = TimeControlParser.getLastTimeControlOrDefault(ctx);
+-        TimeControl playerOne = selectedControl.getTimeControlPlayerOne();
+-        TimeControl playerTwo = selectedControl.getTimeControlPlayerTwo();
+-
+-        Intent startServiceIntent =
+-                ChessClockLocalService.getChessClockServiceIntent(ctx, playerOne, playerTwo);
+-        ctx.startService(startServiceIntent);
+-        Log.d(TAG, "Start service.");
+-    }
+-
+-    private boolean isAtLeastOnResume() {
+-        Lifecycle.State currentState = getLifecycle().getCurrentState();
+-        return currentState.isAtLeast(Lifecycle.State.RESUMED);
+-    }
+-
+-    abstract void bindUiOnServiceConnected();
+-}
+diff --git a/app/src/main/java/com/chess/clock/activities/TimerSettingsActivity.java b/app/src/main/java/com/chess/clock/activities/TimerSettingsActivity.java
+index e10e50f..c8b76ad 100644
+--- a/app/src/main/java/com/chess/clock/activities/TimerSettingsActivity.java
++++ b/app/src/main/java/com/chess/clock/activities/TimerSettingsActivity.java
+@@ -24,7 +24,7 @@ import java.util.Set;
+ /**
+  * Activity that manages TimeControl list in the Settings and also TimeControl form.
+  */
+-public class TimerSettingsActivity extends TimerServiceActivity implements TimeSettingsFragment.OnSettingsListener, TimeControlFragment.OnTimeControlListener, TimeControlManager.Callback {
++public class TimerSettingsActivity extends BaseActivity implements TimeSettingsFragment.OnSettingsListener, TimeControlFragment.OnTimeControlListener, TimeControlManager.Callback {
+     /**
+      * Fragments TAG
+      */
+@@ -79,11 +79,6 @@ public class TimerSettingsActivity extends TimerServiceActivity implements TimeS
+         showPopupOrFinish(null);
+     }
+ 
+-    @Override
+-    void bindUiOnServiceConnected() {
+-        // no-op
+-    }
+-
+     private void showPopupOrFinish(Integer resultToSet) {
+         Fragment frag = getSupportFragmentManager().findFragmentByTag(TAG_TIME_CONTROL_FRAGMENT);
+         if (frag != null && frag.isVisible()) {
+@@ -125,7 +120,7 @@ public class TimerSettingsActivity extends TimerServiceActivity implements TimeS
+      * @return True if clock was started before settings changes
+      */
+     public boolean showResetWarning() {
+-        return serviceBound && clockService.isClockStarted();
++        return getClockManager().isClockStarted();
+     }
+ 
+     /**
+diff --git a/app/src/main/java/com/chess/clock/engine/ClockPlayer.java b/app/src/main/java/com/chess/clock/engine/ClockPlayer.java
+new file mode 100644
+index 0000000..0312f77
+--- /dev/null
++++ b/app/src/main/java/com/chess/clock/engine/ClockPlayer.java
+@@ -0,0 +1,9 @@
++package com.chess.clock.engine;
++
++public enum ClockPlayer {
++    ONE, TWO;
++
++    public static ClockPlayer ofBoolean(boolean playerOne) {
++        return playerOne ? ONE : TWO;
++    }
++}
+diff --git a/app/src/main/java/com/chess/clock/engine/CountDownTimer.java b/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
+index 44eaec2..b1341f4 100644
+--- a/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
++++ b/app/src/main/java/com/chess/clock/engine/CountDownTimer.java
+@@ -214,8 +214,8 @@ public class CountDownTimer implements TimeControl.TimeControlListener {
+         if (mTimeControl != null) {
+             Log.d(TAG, "#" + this.hashCode() + " started.");
+ 
+-            // Only starts the clock if currently stopped (ignores state Finished)
+-            if (mTimerState == CountDownTimer.TimerState.STOPPED) {
++            // Only starts the clock if currently stopped or paused(ignores state Finished)
++            if (mTimerState == TimerState.STOPPED || mTimerState == TimerState.PAUSED) {
+                 TimeIncrement increment = currentTimeIncrement();
+                 if (increment.getType() == TimeIncrement.Type.DELAY) {
+                     forceStartDelayed(increment.getValue());
+diff --git a/app/src/main/java/com/chess/clock/fragments/TimeSettingsFragment.java b/app/src/main/java/com/chess/clock/fragments/TimeSettingsFragment.java
+index f900335..a7e1919 100644
+--- a/app/src/main/java/com/chess/clock/fragments/TimeSettingsFragment.java
++++ b/app/src/main/java/com/chess/clock/fragments/TimeSettingsFragment.java
+@@ -38,10 +38,8 @@ import com.chess.clock.activities.AppSettingsActivity;
+ import com.chess.clock.activities.TimerSettingsActivity;
+ import com.chess.clock.adapters.TimeRowMoveCallback;
+ import com.chess.clock.adapters.TimesAdapter;
+-import com.chess.clock.engine.TimeControl;
+ import com.chess.clock.engine.TimeControlWrapper;
+ import com.chess.clock.entities.AppTheme;
+-import com.chess.clock.service.ChessClockLocalService;
+ import com.chess.clock.views.StyledButton;
+ import com.chess.clock.views.ViewUtils;
+ 
+@@ -413,11 +411,8 @@ public class TimeSettingsFragment extends BaseFragment implements ActionMode.Cal
+         TimeControlWrapper wrapper = adapter.getSelectedTimeControlWrapper();
+         Log.d(TAG, "Starting new clock: " + wrapper);
+         if (wrapper != null) {
+-            TimeControl playerOne = wrapper.getTimeControlPlayerOne();
+-            TimeControl playerTwo = wrapper.getTimeControlPlayerTwo();
+-            FragmentActivity activity = requireActivity();
+-            Intent startServiceIntent = ChessClockLocalService.getChessClockServiceIntent(activity.getApplicationContext(), playerOne, playerTwo);
+-            activity.startService(startServiceIntent);
++            TimerSettingsActivity activity = (TimerSettingsActivity) requireActivity();
++            activity.getClockManager().setupClock(wrapper);
+             activity.setResult(Activity.RESULT_OK);
+             activity.finish();
+             activity.overridePendingTransition(R.anim.left_to_right_in, R.anim.left_to_right_full);
+diff --git a/app/src/main/java/com/chess/clock/manager/ChessClockManager.java b/app/src/main/java/com/chess/clock/manager/ChessClockManager.java
+new file mode 100644
+index 0000000..9f3aa8a
+--- /dev/null
++++ b/app/src/main/java/com/chess/clock/manager/ChessClockManager.java
+@@ -0,0 +1,57 @@
++package com.chess.clock.manager;
++
++import com.chess.clock.engine.ClockPlayer;
++import com.chess.clock.engine.CountDownTimer;
++import com.chess.clock.engine.TimeControlWrapper;
++
++
++public interface ChessClockManager {
++
++    /**
++     * Add new time controls to Chess Clock and resetTimeControl timer if needed.
++     *
++     * @param timeControlWrapper selected time control to set
++     */
++    void setupClock(TimeControlWrapper timeControlWrapper);
++
++    /**
++     * Notifies that ClockPlayer pressed the clock.
++     */
++    void pressClock(ClockPlayer player);
++
++    /**
++     * Pauses the global state of the chess clock.
++     */
++    void pauseClock();
++
++    /**
++     * @return current time for selected player in milliseconds
++     */
++    long getTimeForPlayer(ClockPlayer player);
++
++    /**
++     * @return true if any countdown timer is running
++     */
++    boolean isClockStarted();
++
++    /**
++     * Resumes the global state of the chess clock.
++     */
++    void resumeClock();
++
++    /**
++     * Registers a callbacks to be invoked on players statuses updates.
++     */
++    void setListeners(CountDownTimer.Callback playerOneCallback, CountDownTimer.Callback playerTwoCallback);
++
++    /**
++     * Resets the timer and time control state of both players.
++     */
++    void resetClock();
++
++    /**
++     * Set selected player time regardless of the current settings
++     */
++    void setPlayerTime(ClockPlayer ofBoolean, long timeMs);
++}
++
+diff --git a/app/src/main/java/com/chess/clock/manager/ChessClockManagerImpl.java b/app/src/main/java/com/chess/clock/manager/ChessClockManagerImpl.java
+new file mode 100644
+index 0000000..080f9bf
+--- /dev/null
++++ b/app/src/main/java/com/chess/clock/manager/ChessClockManagerImpl.java
+@@ -0,0 +1,190 @@
++package com.chess.clock.manager;
++
++import android.util.Log;
++
++import com.chess.clock.engine.ClockPlayer;
++import com.chess.clock.engine.CountDownTimer;
++import com.chess.clock.engine.TimeControlWrapper;
++import com.chess.clock.entities.ClockTime;
++import com.chess.clock.util.Args;
++
++public class ChessClockManagerImpl implements ChessClockManager {
++
++    /**
++     * Logs stuff
++     */
++    private static final String TAG = ChessClockManager.class.getName();
++
++    /**
++     * True if the game is on-going. Note: pause state still counts as game running.
++     */
++    private boolean chessGameRunning;
++
++    /**
++     * Count down timers for both players.
++     */
++    private final CountDownTimer mPlayerOneTimer;
++    private final CountDownTimer mPlayerTwoTimer;
++
++
++    public ChessClockManagerImpl() {
++        chessGameRunning = false;
++
++        long DEFAULT_COUNT_DOWN_INTERVAL_MS = 100;
++        mPlayerOneTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL_MS);
++        mPlayerTwoTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL_MS);
++
++        CountDownTimer.FinishCallback mFinishListener = new CountDownTimer.FinishCallback() {
++            @Override
++            public void onClockFinish() {
++
++                chessGameRunning = false;
++                mPlayerOneTimer.stop();
++                mPlayerTwoTimer.stop();
++
++                log("Game finished.");
++            }
++        };
++        mPlayerOneTimer.setFinishListener(mFinishListener);
++        mPlayerTwoTimer.setFinishListener(mFinishListener);
++    }
++
++    @Override
++    public void setupClock(TimeControlWrapper timeControlWrapper) {
++        Args.checkForNull(timeControlWrapper);
++
++        // Finish running game
++        if (chessGameRunning) {
++            log("Finishing current timers.");
++            // Reset the clock to new time controls
++            resetClock();
++            chessGameRunning = false;
++        }
++
++        mPlayerOneTimer.setTimeControl(timeControlWrapper.getTimeControlPlayerOne());
++        mPlayerTwoTimer.setTimeControl(timeControlWrapper.getTimeControlPlayerTwo());
++
++        log("Time Control set.");
++    }
++
++
++    @Override
++    public void pressClock(ClockPlayer player) {
++        switch (player) {
++            case ONE:
++                log("(1) pressed the clock.");
++                pressPlayerClock(mPlayerOneTimer, mPlayerTwoTimer);
++                break;
++            case TWO:
++                log("(2) pressed the clock.");
++                pressPlayerClock(mPlayerTwoTimer, mPlayerOneTimer);
++                break;
++        }
++    }
++
++    @Override
++    public void pauseClock() {
++        // The pause instruction only affects the time control which has
++        // the count down timer in the state CountDownTimer.TimerState.RUNNING.
++        if (mPlayerOneTimer != null && mPlayerTwoTimer != null) {
++
++            mPlayerOneTimer.pause();
++            mPlayerTwoTimer.pause();
++
++            log("Paused the clock timers.");
++        }
++    }
++
++    @Override
++    public void resumeClock() {
++        mPlayerOneTimer.resume();
++        mPlayerTwoTimer.resume();
++        log("Resumed the clock timers.");
++    }
++
++    @Override
++    public void resetClock() {
++        mPlayerOneTimer.resetTimeControl();
++        mPlayerTwoTimer.resetTimeControl();
++        chessGameRunning = false;
++    }
++
++    @Override
++    public long getTimeForPlayer(ClockPlayer player) {
++        long time = 0L;
++        switch (player) {
++            case ONE:
++                time = mPlayerOneTimer.getTime();
++                break;
++            case TWO:
++                time = mPlayerTwoTimer.getTime();
++                break;
++        }
++        return time;
++    }
++
++    @Override
++    public void setPlayerTime(ClockPlayer player, long timeMs) {
++        switch (player) {
++            case ONE:
++                mPlayerOneTimer.setTime(timeMs);
++                break;
++            case TWO:
++                mPlayerTwoTimer.setTime(timeMs);
++                break;
++        }
++    }
++
++
++    /**
++     * Notifies the Chess Clock Service that a player made a move.
++     *
++     * @param playerTimer   The player timer which made a move.
++     * @param opponentTimer The opponent timer.
++     */
++    private void pressPlayerClock(CountDownTimer playerTimer, CountDownTimer opponentTimer) {
++
++        // Ignore clock press if timers are not initiated or opponent timer already finished.
++        if (!opponentTimer.isFinished() && !playerTimer.isFinished()) {
++
++            // Game already running? stop player timer and start the opponent timer.
++            if (chessGameRunning) {
++                playerTimer.stop();
++                opponentTimer.start();
++
++                log("Move number: " + playerTimer.getTotalMoveCount() + ", time left: " + ClockTime.raw(playerTimer.getTime()).toReadableFormat());
++            }
++            // First move: do not stop player clock to avoid invalid initial time increment.
++            else {
++                opponentTimer.start();
++                chessGameRunning = true;
++
++                log("Game started.");
++            }
++        } else {
++            log("Discarded clock press due to Time Controls not available or game finished already.");
++        }
++    }
++
++    @Override
++    public boolean isClockStarted() {
++        return mPlayerOneTimer.isStarted() || mPlayerTwoTimer.isStarted();
++    }
++
++    @Override
++    public void setListeners(CountDownTimer.Callback playerOneCallback, CountDownTimer.Callback playerTwoCallback) {
++        if (playerOneCallback != null) {
++            log("(1)registered listener: #" + playerOneCallback.hashCode());
++        }
++        mPlayerOneTimer.setClockTimerListener(playerOneCallback);
++
++        if (playerTwoCallback != null) {
++            log("(2) registered listener: #" + playerTwoCallback.hashCode());
++        }
++        mPlayerTwoTimer.setClockTimerListener(playerTwoCallback);
++    }
++
++    private void log(String message) {
++        Log.d(TAG, message);
++    }
++}
+diff --git a/app/src/main/java/com/chess/clock/service/ChessClockLocalService.java b/app/src/main/java/com/chess/clock/service/ChessClockLocalService.java
+deleted file mode 100644
+index d7c4694..0000000
+--- a/app/src/main/java/com/chess/clock/service/ChessClockLocalService.java
++++ /dev/null
+@@ -1,442 +0,0 @@
+-package com.chess.clock.service;
+-
+-import android.annotation.SuppressLint;
+-import android.app.Notification;
+-import android.app.NotificationChannel;
+-import android.app.NotificationManager;
+-import android.app.PendingIntent;
+-import android.app.Service;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.os.Binder;
+-import android.os.Build;
+-import android.os.IBinder;
+-import android.util.Log;
+-
+-import androidx.core.app.NotificationCompat;
+-
+-import com.chess.clock.R;
+-import com.chess.clock.activities.ClockTimersActivity;
+-import com.chess.clock.engine.CountDownTimer;
+-import com.chess.clock.engine.TimeControl;
+-import com.chess.clock.entities.ClockTime;
+-import com.chess.clock.util.Args;
+-
+-// Get access to the app resources, since this class is in a sub-package.
+-
+-/**
+- * Background Service used to manage a Chess Clock.
+- */
+-public class ChessClockLocalService extends Service {
+-
+-    public static final String NOTIFICATION_CHANNEL_ID = "10001";
+-    /**
+-     * Logs stuff
+-     */
+-    private static final String TAG = ChessClockLocalService.class.getName();
+-    private static final boolean VERBOSE = true;
+-
+-    /**
+-     * Action that starts the ChessClockLocalService.
+-     */
+-    private static final String ACTION_START_CHESS_CLOCK = "com.chess.clock.service.startclock";
+-
+-    /**
+-     * Optional extras supplied in ACTION_START_CHESS_CLOCK intent.
+-     */
+-    private static final String EXTRA_PLAYER_ONE_TIME_CONTROL = "player_one_time_control";
+-    private static final String EXTRA_PLAYER_TWO_TIME_CONTROL = "player_two_time_control";
+-
+-    /**
+-     * Local Service Binder.
+-     */
+-    private final IBinder mBinder = new ChessClockLocalServiceBinder();
+-
+-    /**
+-     * The interval along the way for each clock tick in milliseconds.
+-     */
+-    private final long DEFAULT_COUNT_DOWN_INTERVAL = 100;
+-
+-    /**
+-     * True if the game is on-going. Note: pause state still counts as game running.
+-     */
+-    private boolean mChessGameRunning;
+-
+-    /**
+-     * Count down timer callback implementation to run when a timer is finished.
+-     * Removes foreground status and notification since the a player's clock is stopped.
+-     */
+-    private final CountDownTimer.FinishCallback mFinishListener = new CountDownTimer.FinishCallback() {
+-        @Override
+-        public void onClockFinish() {
+-            stopForeground(true);
+-            mChessGameRunning = false;
+-
+-            mPlayerOneTimer.stop();
+-            mPlayerTwoTimer.stop();
+-
+-            if (VERBOSE) Log.i(TAG, "#" + this.hashCode() + " Service and Game finished.");
+-        }
+-    };
+-
+-    /**
+-     * True if the Service was started already.
+-     */
+-    private boolean mIsServiceStarted;
+-
+-    /**
+-     * Count down timers for both players.
+-     */
+-    private CountDownTimer mPlayerOneTimer;
+-    private CountDownTimer mPlayerTwoTimer;
+-
+-    /**
+-     * Builds the Intent to be supplied to Context.startService(Intent).
+-     *
+-     * @param playerOneTimeControl Time Control of player One.
+-     * @param playerTwoTimeControl Time Control of player Two.
+-     * @return The Intent used to start this service.
+-     */
+-    public static Intent getChessClockServiceIntent(Context context,
+-                                                    TimeControl playerOneTimeControl,
+-                                                    TimeControl playerTwoTimeControl) {
+-
+-        Intent intent = new Intent(context, ChessClockLocalService.class);
+-        intent.setAction(ACTION_START_CHESS_CLOCK);
+-
+-        if (playerOneTimeControl != null && playerTwoTimeControl != null) {
+-            intent.putExtra(EXTRA_PLAYER_ONE_TIME_CONTROL, playerOneTimeControl);
+-            intent.putExtra(EXTRA_PLAYER_TWO_TIME_CONTROL, playerTwoTimeControl);
+-        }
+-
+-        return intent;
+-    }
+-
+-    /**
+-     * The Local Service is being created.
+-     */
+-    @Override
+-    public void onCreate() {
+-        if (VERBOSE) Log.d(TAG, "#" + this.hashCode() + " created. ");
+-
+-        mChessGameRunning = false;
+-        mPlayerOneTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL);
+-        mPlayerTwoTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL);
+-        mPlayerOneTimer.setFinishListener(mFinishListener);
+-        mPlayerTwoTimer.setFinishListener(mFinishListener);
+-    }
+-
+-    @Override
+-    public void onDestroy() {
+-        super.onDestroy();
+-        if (VERBOSE) Log.d(TAG, "#" + this.hashCode() + " destroyed.");
+-    }
+-
+-    /**
+-     * Return the communication channel to the Service.
+-     *
+-     * @param intent The Intent that was used to bind to this service.
+-     * @return IBinder through which clients can call on to the service.
+-     */
+-    @Override
+-    public IBinder onBind(Intent intent) {
+-        return mBinder;
+-    }
+-
+-    /**
+-     * Called by the system every time a client explicitly starts the service by calling startService(Intent)
+-     *
+-     * @param intent  The Intent supplied to startService(Intent), as given.
+-     * @param flags   Additional data about this start request.
+-     * @param startId A unique integer representing this specific request to start.
+-     * @return The return value indicates what semantics the system should use for the service's current started state.
+-     */
+-    @Override
+-    public int onStartCommand(Intent intent, int flags, int startId) {
+-
+-        if (intent != null) {
+-            if (VERBOSE) Log.d(TAG, "#" + this.hashCode() + " started. Id:" + startId);
+-
+-            String action = intent.getAction();
+-            TimeControl playerOneTimeControlExtra = intent.getParcelableExtra(EXTRA_PLAYER_ONE_TIME_CONTROL);
+-            TimeControl playerTwoTimeControlExtra = intent.getParcelableExtra(EXTRA_PLAYER_TWO_TIME_CONTROL);
+-
+-            if (ACTION_START_CHESS_CLOCK.equals(action)) {
+-
+-                // Supply time controls if provided on starting the Service.
+-                if (playerOneTimeControlExtra != null && playerTwoTimeControlExtra != null) {
+-                    setupTimeControl(playerOneTimeControlExtra, playerTwoTimeControlExtra);
+-                }
+-            }
+-
+-            mIsServiceStarted = true;
+-
+-        } else {
+-            if (VERBOSE) Log.w(TAG, "Restarted. New #" + this.hashCode());
+-        }
+-
+-        // If we get killed, after returning from here, restart
+-        return START_STICKY;
+-    }
+-
+-    /**
+-     * Set the Service with Foreground priority (harder to get killed by OS).
+-     * Add a status bar notification of the clock running.
+-     */
+-    private void startServiceInForeground() {
+-
+-        Intent notificationIntent = new Intent(getApplicationContext(), ClockTimersActivity.class);
+-        PendingIntent contentIntent = PendingIntent.getActivity(getApplicationContext(), 0,
+-                notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+-
+-        // Create the NotificationChannel, but only on API 26+ because
+-        // the NotificationChannel class is new and not in the support library
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+-            CharSequence name = getString(R.string.channel_name);
+-            String description = getString(R.string.channel_description);
+-            int importance = NotificationManager.IMPORTANCE_LOW; // No sound is needed
+-            NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL_ID, name, importance);
+-            channel.setDescription(description);
+-            // Register the channel with the system; you can't change the importance
+-            // or other notification behaviors after this
+-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
+-            notificationManager.createNotificationChannel(channel);
+-        }
+-
+-
+-        Notification notification =
+-                new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+-                        .setContentIntent(contentIntent)
+-                        .setContentTitle(getText(R.string.foreground_service_started))
+-                        .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+-                        .build();
+-
+-        startForeground(R.string.foreground_service_started, notification);
+-    }
+-
+-    /**
+-     * *************************************
+-     * Bound Service public methods.
+-     * /****************************************
+-     * <p/>
+-     * /**
+-     * Registers a callback to be invoked when player One status updates.
+-     *
+-     * @param listener The callback that will run
+-     */
+-    public void setPlayerOneListener(CountDownTimer.Callback listener) {
+-        if (listener != null) {
+-            if (VERBOSE) Log.d(TAG, "#" + this.hashCode()
+-                    + " (1) registered listener: #" + listener.hashCode() + ".");
+-        }
+-        mPlayerOneTimer.setClockTimerListener(listener);
+-    }
+-
+-    /**
+-     * Registers a callback to be invoked when player One status updates.
+-     *
+-     * @param listener The callback that will run
+-     */
+-    public void setPlayerTwoListener(CountDownTimer.Callback listener) {
+-        if (listener != null) {
+-            if (VERBOSE) Log.d(TAG, "#" + this.hashCode()
+-                    + " (2) registered listener: #" + listener.hashCode() + ".");
+-        }
+-        mPlayerTwoTimer.setClockTimerListener(listener);
+-    }
+-
+-    /**
+-     * Add new time controls to Chess Clock and resetTimeControl timer. The only way to provide
+-     * time controls to the service is through starting command with ACTION_START_CHESS_CLOCK.
+-     *
+-     * @param playerOneTimeControl Time Control of player One.
+-     * @param playerTwoTimeControl Time Control of player Two.
+-     * @throws java.lang.NullPointerException If playerOneTimeControl is not provided.
+-     * @throws java.lang.NullPointerException If playerTwoTimeControl is not provided.
+-     * @see #getChessClockServiceIntent(Context, com.chess.clock.engine.TimeControl, com.chess.clock.engine.TimeControl)
+-     */
+-    private void setupTimeControl(TimeControl playerOneTimeControl, TimeControl playerTwoTimeControl) {
+-        Args.checkForNull(playerOneTimeControl);
+-        Args.checkForNull(playerTwoTimeControl);
+-
+-        // Sanity check..
+-        if (mPlayerOneTimer == null || mPlayerTwoTimer == null) {
+-            mPlayerOneTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL);
+-            mPlayerTwoTimer = new CountDownTimer(DEFAULT_COUNT_DOWN_INTERVAL);
+-        }
+-
+-        // Finish running game
+-        if (mChessGameRunning) {
+-            if (VERBOSE) Log.d(TAG, "Finishing current timers.");
+-            // Reset the clock to new time controls
+-            resetClock();
+-            mChessGameRunning = false;
+-        }
+-
+-        mPlayerOneTimer.setTimeControl(playerOneTimeControl);
+-        mPlayerTwoTimer.setTimeControl(playerTwoTimeControl);
+-
+-        if (VERBOSE) Log.d(TAG, "#" + this.hashCode() + " Time Control set.");
+-
+-        // Remove foreground status and notification since the clocks
+-        // are stopped due to new time control added.
+-        stopForeground(true);
+-    }
+-
+-    public boolean isServiceStarted() {
+-        return mIsServiceStarted;
+-    }
+-
+-    /**
+-     * Notifies Chess Clock Service that Player One pressed the clock.
+-     */
+-    public void pressPlayerOneClock() {
+-        if (VERBOSE) Log.v(TAG, "#" + this.hashCode() + " (1) pressed the clock.");
+-        pressPlayerClock(mPlayerOneTimer, mPlayerTwoTimer);
+-    }
+-
+-    /**
+-     * Notifies Chess Clock Service that Player Two pressed the clock.
+-     */
+-    public void pressPlayerTwoClock() {
+-        if (VERBOSE) Log.v(TAG, "#" + this.hashCode() + " (2) pressed the clock.");
+-        pressPlayerClock(mPlayerTwoTimer, mPlayerOneTimer);
+-    }
+-
+-    /**
+-     * Pauses the global state of the chess clock.
+-     */
+-    public void pauseClock() {
+-        // The pause instruction only affects the time control which has
+-        // the count down timer in the state CountDownTimer.TimerState.RUNNING.
+-        if (mPlayerOneTimer != null && mPlayerTwoTimer != null) {
+-
+-            mPlayerOneTimer.pause();
+-            mPlayerTwoTimer.pause();
+-
+-            if (VERBOSE) Log.v(TAG, "#" + this.hashCode() + " paused the clock timers.");
+-
+-            // Remove this service from foreground state, allowing it to be killed if
+-            // more memory is needed. The notification previously provided to
+-            // startForeground(int, Notification) will be removed.
+-            stopForeground(true);
+-        }
+-    }
+-
+-    /**
+-     * Resumes the global state of the chess clock.
+-     */
+-    public void resumeClock() {
+-        if (mPlayerOneTimer != null && mPlayerTwoTimer != null) {
+-            mPlayerOneTimer.resume();
+-            mPlayerTwoTimer.resume();
+-
+-            startServiceInForeground();
+-
+-            if (VERBOSE) Log.v(TAG, "#" + this.hashCode() + " resumed the clock timers.");
+-        }
+-    }
+-
+-    /**
+-     * Resets the timer and time control state of both players.
+-     */
+-    public void resetClock() {
+-        if (mPlayerOneTimer != null && mPlayerTwoTimer != null) {
+-
+-            mPlayerOneTimer.resetTimeControl();
+-            mPlayerTwoTimer.resetTimeControl();
+-
+-            mChessGameRunning = false;
+-
+-            // Remove this service from foreground state, allowing it to be killed if
+-            // more memory is needed. The notification previously provided to
+-            // startForeground(int, Notification) will be removed.
+-            stopForeground(true);
+-        }
+-    }
+-
+-    /****************************************
+-     * Callbacks Definition.
+-     ***************************************/
+-
+-    /**
+-     * Notifies the Chess Clock Service that a player made a move.
+-     *
+-     * @param playerTimer   The player timer which made a move.
+-     * @param opponentTimer The opponent timer.
+-     */
+-    private void pressPlayerClock(CountDownTimer playerTimer, CountDownTimer opponentTimer) {
+-
+-        // Ignore clock press if timers are not initiated or opponent timer already finished.
+-        if (playerTimer != null && opponentTimer != null
+-                && !opponentTimer.isFinished() && !playerTimer.isFinished()) {
+-
+-            // Game already running? stop player timer and start the opponent timer.
+-            if (mChessGameRunning) {
+-                playerTimer.stop();
+-                opponentTimer.start();
+-
+-                if (VERBOSE) Log.d(TAG, "Move number: " + playerTimer.getTotalMoveCount()
+-                        + ", time left: " + formatTime(playerTimer.getTime()));
+-            }
+-            // First move: do not stop player clock to avoid invalid initial time increment.
+-            else {
+-                opponentTimer.start();
+-                mChessGameRunning = true;
+-
+-                // As game started, set service in foreground.
+-                startServiceInForeground();
+-
+-                if (VERBOSE) Log.i(TAG, "#" + this.hashCode() + " Game started.");
+-            }
+-        } else {
+-            if (VERBOSE) Log.w(TAG, "Discarded clock press due to Time Controls"
+-                    + " not available or game finished already.");
+-        }
+-    }
+-
+-    /****************************************
+-     * Private stuff..
+-     ****************************************/
+-
+-    /**
+-     * @param time Player time in milliseconds.
+-     * @return Readable String format of time.
+-     */
+-    @SuppressLint("DefaultLocale")
+-    private String formatTime(long time) {
+-        ClockTime clockTime = ClockTime.raw(time);
+-        return String.format("%02d:%02d:%02d", clockTime.hours, clockTime.minutes, clockTime.seconds);
+-    }
+-
+-    public Long firstPlayerTime() {
+-        return mPlayerOneTimer.getTime();
+-    }
+-
+-    public Long secondPlayerTime() {
+-        return mPlayerTwoTimer.getTime();
+-    }
+-
+-    public void setFirstPlayerTime(long timeMs) {
+-        mPlayerOneTimer.setTime(timeMs);
+-    }
+-
+-    public void setSecondPlayerTime(long timeMs) {
+-        mPlayerTwoTimer.setTime(timeMs);
+-    }
+-
+-    public boolean isClockStarted() {
+-        return mPlayerOneTimer.isStarted() || mPlayerTwoTimer.isStarted();
+-    }
+-
+-    /**
+-     * Class used for the Service client Binder. Because we know this is a local service
+-     * (runs in the same process as its clients) we don't need to deal with IPC.
+-     */
+-    public class ChessClockLocalServiceBinder extends Binder {
+-        public ChessClockLocalService getService() {
+-            // Return the Service instance so clients can call Service public methods directly.
+-            return ChessClockLocalService.this;
+-        }
+-    }
+-}

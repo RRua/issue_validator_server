@@ -1,0 +1,336 @@
+diff --git a/app/src/main/java/ca/louisbourque/freenetassistant/FileUploadMessage.java b/app/src/main/java/ca/louisbourque/freenetassistant/FileUploadMessage.java
+index af3b27d..138ed1c 100644
+--- a/app/src/main/java/ca/louisbourque/freenetassistant/FileUploadMessage.java
++++ b/app/src/main/java/ca/louisbourque/freenetassistant/FileUploadMessage.java
+@@ -1,15 +1,19 @@
+ package ca.louisbourque.freenetassistant;
+ 
++import android.net.Uri;
++
+ public class FileUploadMessage {
+ 	
+-	private String filemanagerstring;
++	private Uri uri;
+ 	private String mimeType;
+ 	private String key;
+-	public String getFilemanagerstring() {
+-		return filemanagerstring;
++    private String name;
++    private long size;
++	public Uri getUri() {
++		return uri;
+ 	}
+-	public void setFilemanagerstring(String filemanagerstring) {
+-		this.filemanagerstring = filemanagerstring;
++	public void setUri(Uri uri) {
++		this.uri = uri;
+ 	}
+ 	public String getMimeType() {
+ 		return mimeType;
+@@ -23,5 +27,20 @@ public class FileUploadMessage {
+ 	public void setKey(String key) {
+ 		this.key = key;
+ 	}
+-	
++
++    public void setName(String name) {
++        this.name = name;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public void setSize(long size) {
++        this.size = size;
++    }
++
++    public long getSize() {
++        return size;
++    }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/ca/louisbourque/freenetassistant/FreenetUtil.java b/app/src/main/java/ca/louisbourque/freenetassistant/FreenetUtil.java
+index e2db5c7..b63b99b 100644
+--- a/app/src/main/java/ca/louisbourque/freenetassistant/FreenetUtil.java
++++ b/app/src/main/java/ca/louisbourque/freenetassistant/FreenetUtil.java
+@@ -8,6 +8,7 @@ import java.net.ConnectException;
+ import java.util.concurrent.BlockingQueue;
+ import java.util.concurrent.LinkedBlockingQueue;
+ 
++import android.content.ContentResolver;
+ import android.content.Context;
+ import android.os.Message;
+ import net.pterodactylus.fcp.*;
+@@ -59,18 +60,19 @@ public class FreenetUtil extends Thread{
+ 		try {
+ 			String identifier;
+ 			if(msg.getKey().equals(Constants.KEY_TYPE_CHK)){
+-				identifier = Constants.KEY_TYPE_CHK+msg.getFilemanagerstring();
++				identifier = Constants.KEY_TYPE_CHK+msg.getName().toString();
+ 			}else{
+-				identifier = Constants.KEY_TYPE_SSK+msg.getFilemanagerstring();
++				identifier = Constants.KEY_TYPE_SSK+msg.getName().toString();
+ 			}
+ 			ClientPut cp = new ClientPut(msg.getKey(), identifier, UploadFrom.direct);
+-			File file = new File(msg.getFilemanagerstring());
+-			cp.setDataLength(file.length());
+-			BufferedInputStream payloadInputStream = new BufferedInputStream(new FileInputStream(file));
++			cp.setDataLength(msg.getSize());
++            ContentResolver cR = context.getContentResolver();
++
++			BufferedInputStream payloadInputStream = new BufferedInputStream(cR.openInputStream(msg.getUri()));
+ 			cp.setPayloadInputStream(payloadInputStream);
+ 			cp.setGlobal(true);
+ 			cp.setPersistence(Persistence.forever);
+-			cp.setTargetFilename(file.getName());
++			cp.setTargetFilename(msg.getName());
+ 			cp.setMetadataContentType(msg.getMimeType());
+ 			fcpConnection.sendMessage(cp);
+ 		} catch (IOException e) {
+diff --git a/app/src/main/java/ca/louisbourque/freenetassistant/MainActivity.java b/app/src/main/java/ca/louisbourque/freenetassistant/MainActivity.java
+index 3de4fb1..ec6bf70 100644
+--- a/app/src/main/java/ca/louisbourque/freenetassistant/MainActivity.java
++++ b/app/src/main/java/ca/louisbourque/freenetassistant/MainActivity.java
+@@ -199,15 +199,13 @@ public class MainActivity extends ActionBarActivity implements ActionBar.TabList
+ 	public void onActivityResult(int requestCode, int resultCode, Intent data) {
+ 		System.out.println("Handling onActivityResult...");
+ 		if(requestCode == Constants.Activity_File_Upload && resultCode == Activity.RESULT_OK){
+-			ActionBar actionBar = getActionBar();
+-			actionBar.setSelectedNavigationItem(Constants.PagerPositionUploads);
++            mViewPager.setCurrentItem(Constants.PagerPositionUploads);
+ 		}
+ 		if(requestCode == Constants.Activity_Settings && resultCode == Activity.RESULT_OK){
+ 			this.gs.sendRedrawAll();
+ 		}
+ 		if(requestCode == Constants.Activity_Reference && resultCode == Activity.RESULT_OK){
+-			ActionBar actionBar = getActionBar();
+-			actionBar.setSelectedNavigationItem(Constants.PagerPositionPeers);
++            mViewPager.setCurrentItem(Constants.PagerPositionPeers);
+ 		}
+ 	}
+ 
+diff --git a/app/src/main/java/ca/louisbourque/freenetassistant/UploadActivity.java b/app/src/main/java/ca/louisbourque/freenetassistant/UploadActivity.java
+index 34d32c9..a72afda 100644
+--- a/app/src/main/java/ca/louisbourque/freenetassistant/UploadActivity.java
++++ b/app/src/main/java/ca/louisbourque/freenetassistant/UploadActivity.java
+@@ -7,6 +7,9 @@ import java.io.IOException;
+ import java.io.InputStream;
+ 
+ import net.pterodactylus.fcp.SSKKeypair;
++
++import android.annotation.SuppressLint;
++import android.annotation.TargetApi;
+ import android.app.Activity;
+ import android.content.ContentResolver;
+ import android.content.Intent;
+@@ -17,10 +20,12 @@ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+ import android.net.Uri;
+ import android.os.AsyncTask;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Message;
+ import android.preference.PreferenceManager;
+ import android.provider.MediaStore;
++import android.provider.OpenableColumns;
+ import android.support.v7.app.ActionBarActivity;
+ import android.support.v7.widget.Toolbar;
+ import android.view.View;
+@@ -31,7 +36,8 @@ import android.widget.TextView;
+ public class UploadActivity extends ActionBarActivity {
+  
+ 	private static final int SELECT_FILE = 0;
+-	private ImageButton thumbnail;
++    private static final int SELECT_FILE_KITKAT = 1;
++    private ImageButton thumbnail;
+ 	private FileUploadMessage fileUploadMessage;
+ 	private GlobalState gs;
+ 	private SSKKeypair anSSKey;
+@@ -64,13 +70,17 @@ public class UploadActivity extends ActionBarActivity {
+     }
+     
+     public void pickFile(View view) {
+-    	//TODO: launch the photo picker
+-    	Intent intent = new Intent();
+-    	 intent.setType("*/*");
+-    	 intent.setAction(Intent.ACTION_GET_CONTENT);
+-    	 startActivityForResult(Intent.createChooser(intent,
+-    	 "Select File"), SELECT_FILE);
+-    	
++        if (Build.VERSION.SDK_INT <19){
++            Intent intent = new Intent();
++            intent.setType("image/jpeg");
++            intent.setAction(Intent.ACTION_GET_CONTENT);
++            startActivityForResult(Intent.createChooser(intent, getResources().getString(R.string.select_file)),SELECT_FILE);
++        } else {
++            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++            intent.addCategory(Intent.CATEGORY_OPENABLE);
++            intent.setType("*/*");
++            startActivityForResult(intent, SELECT_FILE_KITKAT);
++        }
+     }
+     
+     public void updateKeyType(View view){
+@@ -94,85 +104,88 @@ public class UploadActivity extends ActionBarActivity {
+     	 }
+     }
+     
++    @TargetApi(Build.VERSION_CODES.KITKAT)
+     @Override
+     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+     	super.onActivityResult(requestCode, resultCode, data);
+-    	if(resultCode == RESULT_OK) {
+-    		if (requestCode == SELECT_FILE) {
+-    			
+-    			ImageButton uploadButton = (ImageButton) this.findViewById(R.id.file_upload_button);
+-    			ImageButton pickButton = (ImageButton) this.findViewById(R.id.file_picker_button);
+-    			TextView exifRemoved = (TextView) this.findViewById(R.id.remove_exif);
+-    			exifRemoved.setVisibility(View.GONE);
+-    			pickButton.setVisibility(View.GONE);
+-    			uploadButton.setVisibility(View.VISIBLE);
+-    			thumbnail.setVisibility(View.VISIBLE);
+-    			TextView instructions = (TextView) this.findViewById(R.id.file_upload_instructions);
+-    			instructions.setText(R.string.file_upload_instructions_another);
+-    			
+-    			Uri selectedFileUri = data.getData();
++    	if(resultCode != RESULT_OK || data == null) return;
++        if (requestCode != SELECT_FILE && requestCode != SELECT_FILE_KITKAT) return;
++        Uri selectedFileUri = null;
++        if (requestCode == SELECT_FILE) {
++            selectedFileUri = data.getData();
++        } else if (requestCode == SELECT_FILE_KITKAT) {
++            selectedFileUri = data.getData();
++            final int takeFlags = data.getFlags()
++                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION
++                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++            // Check for the freshest data.
++
++            //noinspection ResourceType
++            getContentResolver().takePersistableUriPermission(selectedFileUri, takeFlags);
++        }
++        if(selectedFileUri == null) return;
++
++        ImageButton uploadButton = (ImageButton) this.findViewById(R.id.file_upload_button);
++        ImageButton pickButton = (ImageButton) this.findViewById(R.id.file_picker_button);
++        TextView exifRemoved = (TextView) this.findViewById(R.id.remove_exif);
++        exifRemoved.setVisibility(View.GONE);
++        pickButton.setVisibility(View.GONE);
++        uploadButton.setVisibility(View.VISIBLE);
++        thumbnail.setVisibility(View.VISIBLE);
++        TextView instructions = (TextView) this.findViewById(R.id.file_upload_instructions);
++        instructions.setText(R.string.file_upload_instructions_another);
++
++
++        fileUploadMessage.setUri(selectedFileUri);
++        //just to display the imagepath
++        //Toast.makeText(this.getApplicationContext(), filemanagerstring, Toast.LENGTH_SHORT).show();
++        ContentResolver cR = getApplicationContext().getContentResolver();
++        fileUploadMessage.setMimeType(cR.getType(selectedFileUri));
++        if(fileUploadMessage.getMimeType().startsWith("image/")){
++            try {
++                BitmapFactory.Options options = new BitmapFactory.Options();
++                InputStream is = null;
++                is = cR.openInputStream(selectedFileUri);
++                BitmapFactory.decodeStream(is,null,options);
++                is.close();
++                is = cR.openInputStream(selectedFileUri);
++                // here w and h are the desired width and height
++                options.inSampleSize = Math.max(options.outWidth/512, options.outHeight/512);
++                // bitmap is the resized bitmap
++                Bitmap bitmap = BitmapFactory.decodeStream(is,null,options);
++                thumbnail.setImageBitmap(bitmap);
++
++                Cursor returnCursor =
++                        getContentResolver().query(selectedFileUri, null, null, null, null);
++                int nameIndex = returnCursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
++                int sizeIndex = returnCursor.getColumnIndex(OpenableColumns.SIZE);
++                returnCursor.moveToFirst();
++                fileUploadMessage.setName(returnCursor.getString(nameIndex));
++                fileUploadMessage.setSize(returnCursor.getLong(sizeIndex));
++
++            } catch (FileNotFoundException e) {
++                // TODO Auto-generated catch block
++                e.printStackTrace();
++            } catch (IOException e) {
++                // TODO Auto-generated catch block
++                e.printStackTrace();
++            }
++            if(fileUploadMessage.getMimeType().equals("image/jpeg")){
++                exifRemoved.setVisibility(View.VISIBLE);
++            }
++        }else{
++            //TODO: check for other common file types
++            thumbnail.setImageResource(R.drawable.ic_action_photo);
++        }
++        RadioButton chk_rb = (RadioButton) this.findViewById(R.id.radio_button_CHK);
++        if(chk_rb.isChecked()){
++            fileUploadMessage.setKey(Constants.KEY_TYPE_CHK);
++        }else{
++            fileUploadMessage.setKey(anSSKey.getInsertURI()+fileUploadMessage.getName());
++        }
+ 
+-    			fileUploadMessage.setFilemanagerstring(getPath(selectedFileUri));
+-    			if(fileUploadMessage.getFilemanagerstring() == null){
+-    				fileUploadMessage.setFilemanagerstring(selectedFileUri.getPath());
+-    			}
+-    			//just to display the imagepath
+-    			//Toast.makeText(this.getApplicationContext(), filemanagerstring, Toast.LENGTH_SHORT).show();
+-    			ContentResolver cR = getApplicationContext().getContentResolver();
+-    			fileUploadMessage.setMimeType(cR.getType(selectedFileUri));
+-    			if(fileUploadMessage.getMimeType().startsWith("image/")){
+-    				try {
+-    					BitmapFactory.Options options = new BitmapFactory.Options();
+-        				InputStream is = null;
+-						is = new FileInputStream(fileUploadMessage.getFilemanagerstring());
+-						BitmapFactory.decodeStream(is,null,options);
+-	    				is.close();
+-	    				is = new FileInputStream(fileUploadMessage.getFilemanagerstring());
+-	    				// here w and h are the desired width and height
+-	    				options.inSampleSize = Math.max(options.outWidth/512, options.outHeight/512);
+-	    				// bitmap is the resized bitmap
+-	    				Bitmap bitmap = BitmapFactory.decodeStream(is,null,options);
+-	    				thumbnail.setImageBitmap(bitmap);
+-					} catch (FileNotFoundException e) {
+-						// TODO Auto-generated catch block
+-						e.printStackTrace();
+-					} catch (IOException e) {
+-						// TODO Auto-generated catch block
+-						e.printStackTrace();
+-					}
+-    				if(fileUploadMessage.getMimeType().equals("image/jpeg")){
+-    	    			exifRemoved.setVisibility(View.VISIBLE);
+-    				}
+-    			}else{
+-    				//TODO: check for other common file types
+-    				thumbnail.setImageResource(R.drawable.ic_action_photo);
+-    			}
+-    			RadioButton chk_rb = (RadioButton) this.findViewById(R.id.radio_button_CHK);
+-    			if(chk_rb.isChecked()){
+-    				fileUploadMessage.setKey(Constants.KEY_TYPE_CHK);
+-    			}else{
+-    				File file = new File(fileUploadMessage.getFilemanagerstring());
+-    				fileUploadMessage.setKey(anSSKey.getInsertURI()+file.getName());
+-    			}
+-    		}
+-    	}
+     }
+     
+-    private String getPath(Uri uri) {
+-		String[] projection = { MediaStore.Images.Media.DATA };
+-		Cursor cursor = getContentResolver().query(uri, projection, null, null, null);
+-		if(cursor!=null)
+-		{
+-		//HERE YOU WILL GET A NULLPOINTER IF CURSOR IS NULL
+-		//THIS CAN BE, IF YOU USED OI FILE MANAGER FOR PICKING THE MEDIA
+-		int column_index = cursor
+-		.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+-		cursor.moveToFirst();
+-		return cursor.getString(column_index);
+-		}
+-		else return null;
+-	}
+-    
+     public void uploadFile(View view) {
+     	try {
+ 			executeMultipartPost();

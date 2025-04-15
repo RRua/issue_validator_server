@@ -1,0 +1,894 @@
+diff --git a/src/com/innodroid/mongo/MongoHelper.java b/src/com/innodroid/mongo/MongoHelper.java
+new file mode 100644
+index 0000000..c67142a
+--- /dev/null
++++ b/src/com/innodroid/mongo/MongoHelper.java
+@@ -0,0 +1,23 @@
++package com.innodroid.mongo;
++
++import java.net.UnknownHostException;
++import java.util.Set;
++
++import com.mongodb.DB;
++import com.mongodb.Mongo;
++
++import android.util.Log;
++
++public class MongoHelper {
++    public void trygomongo() throws UnknownHostException {
++    	Mongo m = new Mongo("alex.mongohq.com", 10053);
++    	DB db = m.getDB("getupandgreen");
++    	db.authenticate("admin", new char[] { 'h', 'e', 'l', 'l', 'o', '1', '2', '3' });
++    	Set<String> names = db.getCollectionNames();
++    	
++    	for (String name : names)
++    	{
++    		Log.i("COLLECTION_NAME", name);
++    	}
++    }
++}
+diff --git a/src/com/innodroid/mongobrowser/ConnectionDetailActivity.java b/src/com/innodroid/mongobrowser/ConnectionDetailActivity.java
+new file mode 100644
+index 0000000..dcacef4
+--- /dev/null
++++ b/src/com/innodroid/mongobrowser/ConnectionDetailActivity.java
+@@ -0,0 +1,125 @@
++package com.innodroid.mongobrowser;
++
++import android.annotation.SuppressLint;
++import android.app.AlertDialog;
++import android.content.ContentUris;
++import android.content.DialogInterface;
++import android.content.Intent;
++import android.net.Uri;
++import android.os.AsyncTask;
++import android.os.Build;
++import android.os.Bundle;
++import android.support.v4.app.DialogFragment;
++import android.support.v4.app.FragmentActivity;
++import android.support.v4.app.NavUtils;
++import android.support.v4.content.LocalBroadcastManager;
++import android.view.Menu;
++import android.view.MenuInflater;
++import android.view.MenuItem;
++
++import com.innodroid.mongobrowser.data.MongoBrowserProvider;
++
++public class ConnectionDetailActivity extends FragmentActivity {
++
++    @SuppressLint("NewApi")
++	@Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_connection_detail);
++
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
++        	getActionBar().setDisplayHomeAsUpEnabled(true);
++
++        if (savedInstanceState == null) {
++            Bundle arguments = new Bundle();
++            arguments.putLong(ConnectionDetailFragment.ARG_CONNECTION_ID, getIntent().getLongExtra(ConnectionDetailFragment.ARG_CONNECTION_ID, 0));
++            ConnectionDetailFragment fragment = new ConnectionDetailFragment();
++            fragment.setArguments(arguments);
++            getSupportFragmentManager().beginTransaction().add(R.id.connection_detail_container, fragment).commit();
++        }
++    }
++
++    @Override
++    public boolean onCreateOptionsMenu(Menu menu) {
++    	MenuInflater mi = getMenuInflater();
++        mi.inflate(R.menu.connection_detail_menu, menu);
++        return true;
++    }
++
++    @Override
++    public boolean onOptionsItemSelected(MenuItem item) {
++    	switch (item.getItemId()) {
++    		case R.id.connection_detail_menu_edit:
++    			editConnection();
++    			return true;
++    		case R.id.connection_detail_menu_delete:
++    			deleteConnection();
++    			return true;
++    		case android.R.id.home:
++                NavUtils.navigateUpTo(this, new Intent(this, ConnectionListActivity.class));
++                return true;
++    		default:
++               	break;
++    	}
++
++        return super.onOptionsItemSelected(item);
++    }
++    
++    private void editConnection() {
++    	long id = getIntent().getLongExtra(ConnectionDetailFragment.ARG_CONNECTION_ID, 0);
++        DialogFragment fragment = ConnectionSetupDialogFragment.create(id);
++        fragment.show(getSupportFragmentManager(), null);
++    }
++    
++    private void deleteConnection() {
++        new AlertDialog.Builder(this)
++	        .setIcon(android.R.drawable.ic_menu_delete)
++	        .setMessage(R.string.confirm_delete_connection)
++	        .setTitle(R.string.confirm_delete_title)
++	        .setCancelable(true)
++	        .setPositiveButton(android.R.string.ok,
++	            new DialogInterface.OnClickListener() {
++	                public void onClick(DialogInterface dialog, int whichButton) {
++	                	doDeleteConnection();
++	                }
++	            }
++	        )
++	        .setNegativeButton(android.R.string.cancel,
++	            new DialogInterface.OnClickListener() {
++	                public void onClick(DialogInterface dialog, int whichButton) {
++	                	//
++	                }
++	            }
++	        )
++	        .create().show();
++    }
++    
++    private void doDeleteConnection() {
++    	long id = getIntent().getLongExtra(ConnectionDetailFragment.ARG_CONNECTION_ID, 0);
++    	new DeleteConnectionTask(id).execute();
++    }
++    
++    private class DeleteConnectionTask extends AsyncTask<Void, Void, Boolean> {
++    	private long mID;
++    	
++    	public DeleteConnectionTask(long id) {
++    		mID = id;
++    	}
++    	
++		@Override
++		protected Boolean doInBackground(Void... arg0) {
++			Uri uri = ContentUris.withAppendedId(MongoBrowserProvider.CONNECTION_URI, mID);
++			getContentResolver().delete(uri, null, null);
++			return true;
++		}
++		
++		@Override
++		protected void onPostExecute(Boolean result) {
++			super.onPostExecute(result);
++			
++	    	Intent intent = new Intent(Constants.MessageRefreshConnectionList);
++	    	LocalBroadcastManager.getInstance(ConnectionDetailActivity.this).sendBroadcast(intent);
++			finish();
++		}
++    }    
++}
+diff --git a/src/com/innodroid/mongobrowser/ConnectionDetailFragment.java b/src/com/innodroid/mongobrowser/ConnectionDetailFragment.java
+new file mode 100644
+index 0000000..97dd770
+--- /dev/null
++++ b/src/com/innodroid/mongobrowser/ConnectionDetailFragment.java
+@@ -0,0 +1,55 @@
++package com.innodroid.mongobrowser;
++
++import com.innodroid.mongobrowser.data.MongoBrowserProvider;
++
++import android.content.ContentUris;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Bundle;
++import android.support.v4.app.Fragment;
++import android.support.v4.app.LoaderManager.LoaderCallbacks;
++import android.support.v4.content.CursorLoader;
++import android.support.v4.content.Loader;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.TextView;
++
++public class ConnectionDetailFragment extends Fragment implements LoaderCallbacks<Cursor> {
++
++	private TextView mTitle;
++	private TextView mInfo;
++    public static final String ARG_CONNECTION_ID = "item_id";
++
++    public ConnectionDetailFragment() {
++    }
++
++    @Override
++    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
++		View rootView = inflater.inflate(R.layout.fragment_connection_detail, container, false);
++        mTitle = (TextView) rootView.findViewById(R.id.connection_detail_title);
++        mInfo = (TextView) rootView.findViewById(R.id.connection_detail_info);
++        
++        getLoaderManager().initLoader(0, getArguments(), this);
++        
++        return rootView;
++    }
++    
++	public Loader<Cursor> onCreateLoader(int arg0, Bundle args) {
++		Uri uri = ContentUris.withAppendedId(MongoBrowserProvider.CONNECTION_URI, args.getLong(ARG_CONNECTION_ID));
++	    return new CursorLoader(getActivity(), uri, null, null, null, null);
++	}
++
++	public void onLoadFinished(Loader<Cursor> loader, Cursor cursor) {
++		if (!cursor.moveToFirst())
++			return;
++		
++		mTitle.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_NAME));
++		mInfo.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_DB) + " on " + cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_SERVER));
++
++		getActivity().setProgressBarIndeterminateVisibility(false);
++	}
++
++	public void onLoaderReset(Loader<Cursor> arg0) {
++	}
++}
+diff --git a/src/com/innodroid/mongobrowser/MongoConnectionListActivity.java b/src/com/innodroid/mongobrowser/ConnectionListActivity.java
+similarity index 50%
+rename from src/com/innodroid/mongobrowser/MongoConnectionListActivity.java
+rename to src/com/innodroid/mongobrowser/ConnectionListActivity.java
+index 1a0c39c..e2fbf73 100644
+--- a/src/com/innodroid/mongobrowser/MongoConnectionListActivity.java
++++ b/src/com/innodroid/mongobrowser/ConnectionListActivity.java
+@@ -1,34 +1,37 @@
+ package com.innodroid.mongobrowser;
+ 
++import com.innodroid.mongobrowser.data.MongoBrowserProviderHelper;
++
+ import android.annotation.SuppressLint;
+ import android.content.Intent;
+-import android.os.Build;
++import android.os.AsyncTask;
+ import android.os.Bundle;
++import android.support.v4.app.DialogFragment;
+ import android.support.v4.app.FragmentActivity;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.widget.Toast;
+ 
+-public class MongoConnectionListActivity extends FragmentActivity implements MongoConnectionListFragment.Callbacks {
+-
++public class ConnectionListActivity extends FragmentActivity implements ConnectionListFragment.Callbacks {
+     private boolean mTwoPane;
+ 
+     @SuppressLint("NewApi")
+ 	@Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_mongoconnection_list);
+ 
+-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.HONEYCOMB)
+-        	getActionBar().setDisplayHomeAsUpEnabled(true);
++        setTitle(R.string.title_connection_list);
++        setContentView(R.layout.activity_connection_list);
+ 
+-        if (findViewById(R.id.mongoconnection_detail_container) != null) {
++        if (findViewById(R.id.connection_detail_container) != null) {
+             mTwoPane = true;
+-            ((MongoConnectionListFragment) getSupportFragmentManager()
++            ((ConnectionListFragment) getSupportFragmentManager()
+                     .findFragmentById(R.id.mongoconnection_list))
+                     .setActivateOnItemClick(true);
+         }
++        
++        new AddConnectionIfNoneExistTask().execute();
+     }
+ 
+     @Override
+@@ -42,7 +45,7 @@ public class MongoConnectionListActivity extends FragmentActivity implements Mon
+     public boolean onOptionsItemSelected(MenuItem item) {
+         switch (item.getItemId()) {
+             case R.id.connection_list_menu_add:
+-            	Toast.makeText(this, "Add Item", Toast.LENGTH_LONG).show();
++            	editConnection();
+                 return true;
+             case R.id.connection_list_menu_configure:
+             	Toast.makeText(this, "Configure", Toast.LENGTH_LONG).show();
+@@ -52,21 +55,41 @@ public class MongoConnectionListActivity extends FragmentActivity implements Mon
+     	return super.onOptionsItemSelected(item);
+     }
+ 
+-    @Override
++	@Override
+     public void onItemSelected(long id) {
+         if (mTwoPane) {
+             Bundle arguments = new Bundle();
+-            arguments.putLong(MongoConnectionDetailFragment.ARG_ITEM_ID, id);
+-            MongoConnectionDetailFragment fragment = new MongoConnectionDetailFragment();
++            arguments.putLong(ConnectionDetailFragment.ARG_CONNECTION_ID, id);
++            ConnectionDetailFragment fragment = new ConnectionDetailFragment();
+             fragment.setArguments(arguments);
+             getSupportFragmentManager().beginTransaction()
+-                    .replace(R.id.mongoconnection_detail_container, fragment)
++                    .replace(R.id.connection_detail_container, fragment)
+                     .commit();
+ 
+         } else {
+-            Intent detailIntent = new Intent(this, MongoConnectionDetailActivity.class);
+-            detailIntent.putExtra(MongoConnectionDetailFragment.ARG_ITEM_ID, id);
++            Intent detailIntent = new Intent(this, ConnectionDetailActivity.class);
++            detailIntent.putExtra(ConnectionDetailFragment.ARG_CONNECTION_ID, id);
+             startActivity(detailIntent);
+         }
+     }
++	
++    private void editConnection() {
++        DialogFragment fragment = ConnectionSetupDialogFragment.create(0);
++        fragment.show(getSupportFragmentManager(), null);
++    }
++    
++    private class AddConnectionIfNoneExistTask extends AsyncTask<Void, Void, Boolean> {
++		@Override
++		protected Boolean doInBackground(Void... arg0) {
++			return new MongoBrowserProviderHelper(getContentResolver()).getConnectionCount() == 0;
++		}
++
++		@Override
++		protected void onPostExecute(Boolean res) {
++			super.onPostExecute(res);
++			
++			if (res)
++				editConnection();
++		}
++    }
+ }
+diff --git a/src/com/innodroid/mongobrowser/MongoConnectionListFragment.java b/src/com/innodroid/mongobrowser/ConnectionListFragment.java
+similarity index 52%
+rename from src/com/innodroid/mongobrowser/MongoConnectionListFragment.java
+rename to src/com/innodroid/mongobrowser/ConnectionListFragment.java
+index b8edf4e..bd854a9 100644
+--- a/src/com/innodroid/mongobrowser/MongoConnectionListFragment.java
++++ b/src/com/innodroid/mongobrowser/ConnectionListFragment.java
+@@ -1,20 +1,33 @@
+ package com.innodroid.mongobrowser;
+ 
+ 
++import android.annotation.TargetApi;
+ import android.app.Activity;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
+ import android.database.Cursor;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.support.v4.app.ListFragment;
+ import android.support.v4.app.LoaderManager.LoaderCallbacks;
+ import android.support.v4.content.CursorLoader;
+ import android.support.v4.content.Loader;
++import android.support.v4.content.LocalBroadcastManager;
++import android.view.ActionMode;
++import android.view.Menu;
++import android.view.MenuInflater;
++import android.view.MenuItem;
+ import android.view.View;
++import android.widget.AbsListView.MultiChoiceModeListener;
+ import android.widget.ListView;
++import android.widget.Toast;
+ 
+ import com.innodroid.mongobrowser.data.MongoBrowserProvider;
+ import com.innodroid.mongobrowser.data.MongoConnectionAdapter;
+ 
+-public class MongoConnectionListFragment extends ListFragment implements LoaderCallbacks<Cursor> {
++public class ConnectionListFragment extends ListFragment implements LoaderCallbacks<Cursor> {
+ 
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+ 
+@@ -26,7 +39,7 @@ public class MongoConnectionListFragment extends ListFragment implements LoaderC
+         public void onItemSelected(long id);
+     }
+ 
+-    public MongoConnectionListFragment() {
++    public ConnectionListFragment() {
+     }
+ 
+     @Override
+@@ -45,11 +58,64 @@ public class MongoConnectionListFragment extends ListFragment implements LoaderC
+         if (savedInstanceState != null && savedInstanceState.containsKey(STATE_ACTIVATED_POSITION)) {
+             setActivatedPosition(savedInstanceState.getInt(STATE_ACTIVATED_POSITION));
+         }
++       
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB)
++        	setupContextActionBar();
+     }
++    
++    @TargetApi(11)
++	private void setupContextActionBar() {
++        ListView listView = getListView();
++        listView.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE_MODAL);
++        listView.setMultiChoiceModeListener(new MultiChoiceModeListener() {
++	        @Override
++	        public void onItemCheckedStateChanged(ActionMode mode, int position, long id, boolean checked) {
++	            // Here you can do something when items are selected/de-selected,
++	            // such as update the title in the CAB
++	        }
++	
++	        @Override
++	        public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
++	            // Respond to clicks on the actions in the CAB
++	            switch (item.getItemId()) {
++	                case R.id.connection_list_menu_delete:
++	                    Toast.makeText(getActivity(), "delete", Toast.LENGTH_SHORT).show();
++	                    mode.finish(); // Action picked, so close the CAB
++	                    return true;
++	                default:
++	                    return false;
++	            }
++	        }
++	
++	        @Override
++	        public boolean onCreateActionMode(ActionMode mode, Menu menu) {
++	            // Inflate the menu for the CAB
++	            MenuInflater inflater = mode.getMenuInflater();
++	            inflater.inflate(R.menu.connection_list_context, menu);
++	            return true;
++	        }
++	
++	        @Override
++	        public void onDestroyActionMode(ActionMode mode) {
++	            // Here you can make any necessary updates to the activity when
++	            // the CAB is removed. By default, selected items are deselected/unchecked.
++	        }
++	
++	        @Override
++	        public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
++	            // Here you can perform updates to the CAB due to
++	            // an invalidate() request
++	            return false;
++	        }
++        });
++    };
+ 
+     @Override
+     public void onAttach(Activity activity) {
+         super.onAttach(activity);
++
++        LocalBroadcastManager.getInstance(activity).registerReceiver(mMessageReceiver, new IntentFilter(Constants.MessageRefreshConnectionList));
++
+         if (!(activity instanceof Callbacks)) {
+             throw new IllegalStateException("Activity must implement fragment's callbacks.");
+         }
+@@ -59,8 +125,9 @@ public class MongoConnectionListFragment extends ListFragment implements LoaderC
+ 
+     @Override
+     public void onDetach() {
+-        super.onDetach();
++        LocalBroadcastManager.getInstance(getActivity()).unregisterReceiver(mMessageReceiver);
+         mCallbacks = null;
++        super.onDetach();
+     }
+ 
+     @Override
+@@ -106,4 +173,11 @@ public class MongoConnectionListFragment extends ListFragment implements LoaderC
+ 	public void onLoaderReset(Loader<Cursor> loader) {
+ 		mAdapter.swapCursor(null);
+ 	}
++
++	private BroadcastReceiver mMessageReceiver = new BroadcastReceiver() {
++		@Override
++		public void onReceive(Context context, Intent intent) {
++			getLoaderManager().initLoader(0, null, ConnectionListFragment.this);
++		}
++	};
+ }
+diff --git a/src/com/innodroid/mongobrowser/ConnectionSetupDialogFragment.java b/src/com/innodroid/mongobrowser/ConnectionSetupDialogFragment.java
+new file mode 100644
+index 0000000..2c2f406
+--- /dev/null
++++ b/src/com/innodroid/mongobrowser/ConnectionSetupDialogFragment.java
+@@ -0,0 +1,134 @@
++package com.innodroid.mongobrowser;
++
++import android.app.AlertDialog;
++import android.app.Dialog;
++import android.content.ContentUris;
++import android.content.DialogInterface;
++import android.content.Intent;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Bundle;
++import android.support.v4.app.DialogFragment;
++import android.support.v4.app.LoaderManager.LoaderCallbacks;
++import android.support.v4.content.CursorLoader;
++import android.support.v4.content.Loader;
++import android.support.v4.content.LocalBroadcastManager;
++import android.view.View;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import com.innodroid.mongobrowser.data.MongoBrowserProvider;
++import com.innodroid.mongobrowser.data.MongoBrowserProviderHelper;
++
++public class ConnectionSetupDialogFragment extends DialogFragment implements LoaderCallbacks<Cursor> {
++	private static String ARG_CONNECTION_ID = "connid";
++	
++	private long mID;
++	private TextView mNameView;
++	private TextView mServerView;
++	private TextView mPortView;
++	private TextView mDatabaseView;
++	private TextView mUserView;
++	private TextView mPasswordView;
++
++    static ConnectionSetupDialogFragment create(long id) {
++    	ConnectionSetupDialogFragment fragment = new ConnectionSetupDialogFragment();
++    	Bundle args = new Bundle();
++    	args.putLong(ARG_CONNECTION_ID, id);
++    	fragment.setArguments(args);
++    	return fragment;
++    }
++
++    @Override
++    public Dialog onCreateDialog(Bundle savedInstanceState) {
++    	View view = getActivity().getLayoutInflater().inflate(R.layout.fragment_setup_connection, null);
++
++    	mID = getArguments().getLong(ARG_CONNECTION_ID, 0);
++    	mNameView = (TextView)view.findViewById(R.id.setup_connection_name);
++    	mServerView = (TextView)view.findViewById(R.id.setup_connection_server);
++    	mPortView = (TextView)view.findViewById(R.id.setup_connection_port);
++    	mDatabaseView = (TextView)view.findViewById(R.id.setup_connection_db);
++    	mUserView = (TextView)view.findViewById(R.id.setup_connection_user);
++    	mPasswordView = (TextView)view.findViewById(R.id.setup_connection_pass);
++    	
++    	if (mID != 0)
++    		getLoaderManager().initLoader(0, getArguments(), this);
++
++        return new AlertDialog.Builder(getActivity())
++                .setIcon(android.R.drawable.ic_menu_edit)
++                .setView(view)
++                .setTitle(R.string.title_setup_connection)
++                .setCancelable(true)
++                .setPositiveButton(android.R.string.ok,
++                    new DialogInterface.OnClickListener() {
++                        public void onClick(DialogInterface dialog, int whichButton) {
++                        	if (saveConnection())
++                        		dialog.dismiss();
++                        }
++                    }
++                )
++                .setNegativeButton(android.R.string.cancel,
++                    new DialogInterface.OnClickListener() {
++                        public void onClick(DialogInterface dialog, int whichButton) {
++                        	//
++                        }
++                    }
++                )
++                .create();
++    }
++
++    private boolean saveConnection() {    	
++    	String name = mNameView.getText().toString();
++    	String server = mServerView.getText().toString();
++    	String porttxt = mPortView.getText().toString();
++    	String db = mDatabaseView.getText().toString();
++    	String user = mUserView.getText().toString();
++    	String pass = mPasswordView.getText().toString();
++
++    	if (name.length() == 0 || server.length() == 0 || porttxt.length() == 0 || db.length() == 0) {
++    		Toast.makeText(getActivity(), "Required values not provided", Toast.LENGTH_SHORT).show();
++    		return false;
++    	}
++   
++    	int port = 0;
++    	try {
++    		port = Integer.parseInt(porttxt);
++    	} catch (Exception e) {
++    		Toast.makeText(getActivity(), "Port must be a number", Toast.LENGTH_SHORT).show();
++    		return false;
++    	}
++
++    	MongoBrowserProviderHelper helper = new MongoBrowserProviderHelper(getActivity().getContentResolver());
++
++    	if (mID == 0)
++    		helper.addConnection(name, server, port, db, user, pass);
++    	else
++    		helper.updateConnection(mID, name, server, port, db, user, pass);
++    	
++    	Intent intent = new Intent(Constants.MessageRefreshConnectionList);
++    	LocalBroadcastManager.getInstance(getActivity()).sendBroadcast(intent);
++    	return true;
++    }
++    
++	public Loader<Cursor> onCreateLoader(int arg0, Bundle args) {
++		Uri uri = ContentUris.withAppendedId(MongoBrowserProvider.CONNECTION_URI, args.getLong(ARG_CONNECTION_ID));
++	    return new CursorLoader(getActivity(), uri, null, null, null, null);
++	}
++
++	public void onLoadFinished(Loader<Cursor> loader, Cursor cursor) {
++		if (!cursor.moveToFirst())
++			return;
++		
++    	mNameView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_NAME));
++    	mServerView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_SERVER));
++    	mPortView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_PORT));
++    	mDatabaseView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_DB));
++    	mUserView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_USER));
++    	mPasswordView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_PASSWORD));    	
++	}
++
++	public void onLoaderReset(Loader<Cursor> arg0) {
++	}
++}
++
++
+diff --git a/src/com/innodroid/mongobrowser/Constants.java b/src/com/innodroid/mongobrowser/Constants.java
+new file mode 100644
+index 0000000..a3ec9d7
+--- /dev/null
++++ b/src/com/innodroid/mongobrowser/Constants.java
+@@ -0,0 +1,5 @@
++package com.innodroid.mongobrowser;
++
++public class Constants {
++	public static String MessageRefreshConnectionList = "refresh-conn-list";
++}
+diff --git a/src/com/innodroid/mongobrowser/MongoConnectionDetailActivity.java b/src/com/innodroid/mongobrowser/MongoConnectionDetailActivity.java
+deleted file mode 100644
+index 7bdd33b..0000000
+--- a/src/com/innodroid/mongobrowser/MongoConnectionDetailActivity.java
++++ /dev/null
+@@ -1,40 +0,0 @@
+-package com.innodroid.mongobrowser;
+-
+-import android.annotation.SuppressLint;
+-import android.content.Intent;
+-import android.os.Build;
+-import android.os.Bundle;
+-import android.support.v4.app.FragmentActivity;
+-import android.support.v4.app.NavUtils;
+-import android.view.MenuItem;
+-
+-public class MongoConnectionDetailActivity extends FragmentActivity {
+-
+-    @SuppressLint("NewApi")
+-	@Override
+-    protected void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_mongoconnection_detail);
+-
+-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.HONEYCOMB)
+-        	getActionBar().setDisplayHomeAsUpEnabled(true);
+-
+-        if (savedInstanceState == null) {
+-            Bundle arguments = new Bundle();
+-            arguments.putString(MongoConnectionDetailFragment.ARG_ITEM_ID, getIntent().getStringExtra(MongoConnectionDetailFragment.ARG_ITEM_ID));
+-            MongoConnectionDetailFragment fragment = new MongoConnectionDetailFragment();
+-            fragment.setArguments(arguments);
+-            getSupportFragmentManager().beginTransaction().add(R.id.mongoconnection_detail_container, fragment).commit();
+-        }
+-    }
+-
+-    @Override
+-    public boolean onOptionsItemSelected(MenuItem item) {
+-        if (item.getItemId() == android.R.id.home) {
+-            NavUtils.navigateUpTo(this, new Intent(this, MongoConnectionListActivity.class));
+-            return true;
+-        }
+-
+-        return super.onOptionsItemSelected(item);
+-    }
+-}
+diff --git a/src/com/innodroid/mongobrowser/MongoConnectionDetailFragment.java b/src/com/innodroid/mongobrowser/MongoConnectionDetailFragment.java
+deleted file mode 100644
+index c3be5f2..0000000
+--- a/src/com/innodroid/mongobrowser/MongoConnectionDetailFragment.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package com.innodroid.mongobrowser;
+-
+-import android.os.Bundle;
+-import android.support.v4.app.Fragment;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-
+-public class MongoConnectionDetailFragment extends Fragment {
+-
+-    public static final String ARG_ITEM_ID = "item_id";
+-
+-    public MongoConnectionDetailFragment() {
+-    }
+-
+-    @Override
+-    public void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-
+-        if (getArguments().containsKey(ARG_ITEM_ID)) {
+-        	//long id = getArguments().getLong(ARG_ITEM_ID);
+-        }
+-    }
+-
+-    @Override
+-    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-        View rootView = inflater.inflate(R.layout.fragment_mongoconnection_detail, container, false);
+-        //if (mItem != null) {
+-            //((TextView) rootView.findViewById(R.id.mongoconnection_detail)).setText(mItem.content);
+-        //}
+-        return rootView;
+-    }
+-}
+diff --git a/src/com/innodroid/mongobrowser/data/MongoBrowserProvider.java b/src/com/innodroid/mongobrowser/data/MongoBrowserProvider.java
+index 5c62971..5aced9a 100644
+--- a/src/com/innodroid/mongobrowser/data/MongoBrowserProvider.java
++++ b/src/com/innodroid/mongobrowser/data/MongoBrowserProvider.java
+@@ -18,7 +18,7 @@ public class MongoBrowserProvider extends ContentProvider {
+ 	private static final String LOG_TAG = "MongoBrowserProvider";
+ 	private static final String DATABASE_NAME = "mongobrowser.db";
+ 	public static final String TABLE_NAME_CONNECTIONS = "connections";
+-	private static final int DATABASE_VERSION = 1;
++	private static final int DATABASE_VERSION = 3;
+ 
+ 	public static final int INDEX_CONNECTION_ID = 0;
+ 	public static final int INDEX_CONNECTION_NAME = 1;
+@@ -27,6 +27,7 @@ public class MongoBrowserProvider extends ContentProvider {
+     public static final int INDEX_CONNECTION_DB = 4; 
+ 	public static final int INDEX_CONNECTION_USER = 5;
+ 	public static final int INDEX_CONNECTION_PASSWORD = 6;
++	public static final int INDEX_CONNECTION_FLAGS = 7;
+ 	
+ 	public static final String NAME_CONNECTION_NAME = "name";
+ 	public static final String NAME_CONNECTION_SERVER = "server";
+@@ -34,6 +35,7 @@ public class MongoBrowserProvider extends ContentProvider {
+     public static final String NAME_CONNECTION_DB = "dbname"; 
+ 	public static final String NAME_CONNECTION_USER = "usernm";
+ 	public static final String NAME_CONNECTION_PASSWORD = "pass";
++	public static final String NAME_CONNECTION_FLAGS = "cflags";
+ 
+ 	//setup authority for provider
+ 	private static final String AUTHORITY = "com.innodroid.provider.mongobrowser";
+@@ -176,8 +178,10 @@ public class MongoBrowserProvider extends ContentProvider {
+ 				 + NAME_CONNECTION_NAME + " TEXT, "
+ 				 + NAME_CONNECTION_SERVER + " TEXT, "
+ 				 + NAME_CONNECTION_PORT + " INTEGER, "
++				 + NAME_CONNECTION_DB + " TEXT, "
+ 				 + NAME_CONNECTION_USER + " TEXT, "
+-				 + NAME_CONNECTION_PASSWORD + " TEXT"
++				 + NAME_CONNECTION_PASSWORD + " TEXT, "
++				 + NAME_CONNECTION_FLAGS + " INTEGER"
+ 				 + " );"
+ 			);
+ 		}
+diff --git a/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java b/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
+index 33d029b..1454719 100644
+--- a/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
++++ b/src/com/innodroid/mongobrowser/data/MongoBrowserProviderHelper.java
+@@ -2,6 +2,7 @@ package com.innodroid.mongobrowser.data;
+ 
+ import android.content.ContentResolver;
+ import android.content.ContentValues;
++import android.database.Cursor;
+ import android.provider.BaseColumns;
+ import android.util.Log;
+ 
+@@ -15,7 +16,7 @@ public class MongoBrowserProviderHelper {
+ 
+ 	public void addConnection(String name, String server, int port, String db, String user, String pass) {
+ 		Log.i(LOG_TAG, "Adding Connection");
+-		
++
+ 		ContentValues values = getContentValuesForConnection(name, server, port, db, user, pass);
+ 		mResolver.insert(MongoBrowserProvider.CONNECTION_URI, values);
+ 	}
+@@ -48,5 +49,12 @@ public class MongoBrowserProviderHelper {
+ 		cv.put(MongoBrowserProvider.NAME_CONNECTION_PASSWORD, pass);
+ 		return cv;
+ 	}
++
++	public int getConnectionCount() {
++		Cursor cursor = mResolver.query(MongoBrowserProvider.CONNECTION_URI, null, null, null, null);
++		int count = cursor.getCount();
++		cursor.close();
++		return count;
++	}
+ }
+ 
+diff --git a/src/com/innodroid/mongobrowser/data/MongoConnectionAdapter.java b/src/com/innodroid/mongobrowser/data/MongoConnectionAdapter.java
+index 905f0fc..19a5aa8 100644
+--- a/src/com/innodroid/mongobrowser/data/MongoConnectionAdapter.java
++++ b/src/com/innodroid/mongobrowser/data/MongoConnectionAdapter.java
+@@ -1,17 +1,23 @@
+ package com.innodroid.mongobrowser.data;
+ 
+ import android.app.Activity;
++import android.content.ContentUris;
++import android.content.ContentValues;
+ import android.content.Context;
+ import android.database.Cursor;
++import android.net.Uri;
++import android.os.AsyncTask;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.CheckBox;
++import android.widget.CompoundButton;
++import android.widget.CompoundButton.OnCheckedChangeListener;
+ import android.widget.TextView;
+ 
+ import com.innodroid.mongobrowser.R;
+ 
+ public class MongoConnectionAdapter extends android.support.v4.widget.CursorAdapter {
+-	@SuppressWarnings("unused")
+ 	private Context mContext;
+ 	
+ 	public MongoConnectionAdapter(Context context, Cursor c, boolean autoRequery) {
+@@ -23,41 +29,70 @@ public class MongoConnectionAdapter extends android.support.v4.widget.CursorAdap
+ 	@Override
+ 	public void bindView(View view, Context context, Cursor cursor) {
+ 		ViewHolder holder = (ViewHolder)view.getTag();
+-		//.Id = cursor.getLong(MongoBrowserProvider.INDEX_CONNECTION_ID);
++		holder.Id = cursor.getLong(MongoBrowserProvider.INDEX_CONNECTION_ID);
+ 		holder.NameView.setText(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_NAME));
+-		holder.UrlView.setText(getConnectionUrlText(cursor));
++		holder.InfoView.setText(getConnectionInfo(cursor));
++		holder.StarCheckbox.setChecked(cursor.getLong(MongoBrowserProvider.INDEX_CONNECTION_FLAGS) != 0);
+ 	}
+ 
+-	private CharSequence getConnectionUrlText(Cursor cursor) {
++	private CharSequence getConnectionInfo(Cursor cursor) {
+ 		StringBuilder sb = new StringBuilder();
+ 		
+-		sb.append("mongo://");
+-		sb.append(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_SERVER));
+-		sb.append(":");
+-		sb.append(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_PORT));
+-		sb.append("/");
+ 		sb.append(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_DB));
++		sb.append(" on ");
++		sb.append(cursor.getString(MongoBrowserProvider.INDEX_CONNECTION_SERVER));
+ 		
+ 		return sb.toString();
+ 	}
+ 
+ 	@Override
+-	public View newView(Context context, Cursor cursor, ViewGroup parent) {
++	public View newView(Context context, Cursor cursor, final ViewGroup parent) {
+         LayoutInflater inflater = ((Activity)context).getLayoutInflater();
+ 
+         View view = inflater.inflate(R.layout.list_item_connection, null);
+         
+         ViewHolder holder = new ViewHolder();
++        holder.StarCheckbox = (CheckBox)view.findViewById(R.id.list_item_connection_checked);
+         holder.NameView = (TextView)view.findViewById(R.id.list_item_connection_name);
+-        holder.UrlView = (TextView)view.findViewById(R.id.list_item_connection_url);
++        holder.InfoView = (TextView)view.findViewById(R.id.list_item_connection_info);
+         view.setTag(holder);
+-                
++        holder.StarCheckbox.setTag(holder);
++
++        holder.StarCheckbox.setOnCheckedChangeListener(new OnCheckedChangeListener() {
++			@Override
++			public void onCheckedChanged(CompoundButton arg0, boolean arg1) {
++				CheckBox btn = (CheckBox)arg0;
++				ViewHolder holder = (ViewHolder)btn.getTag();
++				new SetFlagsTask(holder.Id, btn.isChecked() ? 1 : 0).execute((Void)null);
++			}
++        });
++        
+         return view;
+ 	}
+ 
+ 	private class ViewHolder {
+-		//public long Id;
++		public long Id;
++		public CheckBox StarCheckbox;
+ 		public TextView NameView;
+-		public TextView UrlView;
++		public TextView InfoView;
+ 	}	
++
++    private class SetFlagsTask extends AsyncTask<Void, Void, Boolean> {
++    	private long mID;
++    	private long mFlags;
++    	
++    	public SetFlagsTask(long id, long flags) {
++    		mID = id;
++    		mFlags = flags;
++    	}
++    	
++		@Override
++		protected Boolean doInBackground(Void... arg0) {
++			ContentValues cv = new ContentValues();
++			cv.put(MongoBrowserProvider.NAME_CONNECTION_FLAGS, mFlags);
++			Uri uri = ContentUris.withAppendedId(MongoBrowserProvider.CONNECTION_URI, mID);
++			mContext.getContentResolver().update(uri, cv, null, null);
++			return true;
++		}		
++    }    
+ }

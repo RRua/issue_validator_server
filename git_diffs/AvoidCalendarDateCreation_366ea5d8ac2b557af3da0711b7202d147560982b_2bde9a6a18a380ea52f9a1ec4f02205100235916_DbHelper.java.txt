@@ -1,0 +1,811 @@
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/AlarmReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/AlarmReceiver.java
+deleted file mode 100644
+index 09e157b..0000000
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/AlarmReceiver.java
++++ /dev/null
+@@ -1,17 +0,0 @@
+-package com.github.yeriomin.smsscheduler;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-
+-public class AlarmReceiver extends WakefulBroadcastReceiver {
+-
+-    public static final String INTENT_FILTER = "com.github.yeriomin.smsscheduler.AlarmReceiver.INTENT_FILTER";
+-
+-    @Override
+-    public void onReceive(Context context, Intent intent) {
+-        Intent service = new Intent(context, SmsSenderService.class);
+-        service.putExtras(intent.getExtras());
+-        startWakefulService(context, service);
+-    }
+-
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/BootReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/BootReceiver.java
+index eb28ce4..e8b6d45 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/BootReceiver.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/BootReceiver.java
+@@ -1,41 +1,28 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+-import android.app.AlarmManager;
+-import android.app.PendingIntent;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
++import android.text.TextUtils;
++import android.util.Log;
+ 
+ import java.util.ArrayList;
+ import java.util.Iterator;
+ 
+ public class BootReceiver extends BroadcastReceiver {
+ 
+-    private Context context;
+-
+     @Override
+     public void onReceive(Context context, Intent intent) {
+-        if (intent.getAction().equals(Intent.ACTION_BOOT_COMPLETED)) {
+-            this.context = context;
+-            ArrayList<SmsModel> pendingSms = getPendingSms();
+-            Iterator<SmsModel> i = pendingSms.iterator();
+-            SmsModel sms;
+-            while (i.hasNext()) {
+-                sms = i.next();
+-                scheduleAlarm(sms);
+-            }
++        Log.i(getClass().getName(), "Rescheduling all the sms");
++        String action = intent.getAction();
++        if (TextUtils.isEmpty(action) || !action.equals(Intent.ACTION_BOOT_COMPLETED)) {
++            return;
++        }
++        ArrayList<SmsModel> pendingSms = DbHelper.getDbHelper(context).get(SmsModel.STATUS_PENDING);
++        Iterator<SmsModel> i = pendingSms.iterator();
++        Scheduler scheduler = new Scheduler(context);
++        while (i.hasNext()) {
++            scheduler.schedule(i.next());
+         }
+-    }
+-
+-    private ArrayList<SmsModel> getPendingSms() {
+-        return DbHelper.getDbHelper(context).get(SmsModel.STATUS_PENDING);
+-    }
+-
+-    private void scheduleAlarm(SmsModel sms) {
+-        AlarmManager alarmMgr = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        Intent intent = new Intent(AlarmReceiver.INTENT_FILTER);
+-        intent.putExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, sms.getTimestampCreated());
+-        PendingIntent alarmIntent = PendingIntent.getBroadcast(context, sms.getId(), intent, PendingIntent.FLAG_UPDATE_CURRENT & Intent.FILL_IN_DATA);
+-        alarmMgr.set(AlarmManager.RTC_WAKEUP, sms.getTimestampScheduled(), alarmIntent);
+     }
+ }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/DbHelper.java b/app/src/main/java/com/github/yeriomin/smsscheduler/DbHelper.java
+index 10bc0ba..017fd8d 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/DbHelper.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/DbHelper.java
+@@ -7,7 +7,6 @@ import android.database.sqlite.SQLiteDatabase;
+ import android.database.sqlite.SQLiteOpenHelper;
+ 
+ import java.util.ArrayList;
+-import java.util.Calendar;
+ 
+ public class DbHelper extends SQLiteOpenHelper {
+ 
+@@ -83,7 +82,7 @@ public class DbHelper extends SQLiteOpenHelper {
+             String[] whereArgs = new String[] {sms.getTimestampCreated().toString()};
+             dbHelper.getWritableDatabase().update(TABLE_SMS, values, whereClause, whereArgs);
+         } else {
+-            long timestampCreated = Calendar.getInstance().getTimeInMillis();
++            long timestampCreated = System.currentTimeMillis();
+             sms.setTimestampCreated(timestampCreated);
+             values.put(COLUMN_TIMESTAMP_CREATED, timestampCreated);
+             dbHelper.getWritableDatabase().insert(TABLE_SMS, null, values);
+@@ -91,8 +90,7 @@ public class DbHelper extends SQLiteOpenHelper {
+     }
+ 
+     public Cursor getCursor() {
+-        String selection = "";
+-        return getCursor(selection);
++        return getCursor("");
+     }
+ 
+     public Cursor getCursor(String status) {
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderReceiver.java
+new file mode 100644
+index 0000000..bb2a603
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderReceiver.java
+@@ -0,0 +1,9 @@
++package com.github.yeriomin.smsscheduler;
++
++public class ReminderReceiver extends WakefulBroadcastReceiver {
++
++    @Override
++    protected Class getServiceClass() {
++        return ReminderService.class;
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderService.java
+new file mode 100644
+index 0000000..58e3eaf
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/ReminderService.java
+@@ -0,0 +1,50 @@
++package com.github.yeriomin.smsscheduler;
++
++import android.app.PendingIntent;
++import android.content.Context;
++import android.content.Intent;
++import android.util.Log;
++
++import com.github.yeriomin.smsscheduler.activity.SmsListActivity;
++import com.github.yeriomin.smsscheduler.notification.NotificationManagerWrapper;
++
++public class ReminderService extends SmsIntentService {
++
++    public ReminderService() {
++        super("ReminderService");
++    }
++
++    @Override
++    protected void onHandleIntent(Intent intent) {
++        super.onHandleIntent(intent);
++        if (timestampCreated == 0) {
++            return;
++        }
++        SmsModel sms = DbHelper.getDbHelper(getApplicationContext()).get(timestampCreated);
++        if (null == sms) {
++            Log.i(getClass().getName(), "No sms created at " + timestampCreated + " found");
++            return;
++        }
++        Log.i(getClass().getName(), "Reminding about sms " + timestampCreated);
++        remind(getApplicationContext(), sms);
++        WakefulBroadcastReceiver.completeWakefulIntent(intent);
++    }
++
++    static private void remind(Context context, SmsModel sms) {
++        Intent intentUnschedule = new Intent(context, UnscheduleService.class);
++        intentUnschedule.putExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, sms.getTimestampCreated());
++        new NotificationManagerWrapper(context).show(
++            sms.getId() + 1,
++            NotificationManagerWrapper.getBuilder(context)
++                .setTitle(context.getString(R.string.notification_title_will_send_in_an_hour))
++                .setMessage(context.getString(R.string.notification_message_will_send_in_an_hour, sms.getRecipientName()))
++                .setIntent(new Intent(context, SmsListActivity.class))
++                .addAction(
++                    android.R.drawable.ic_menu_close_clear_cancel,
++                    R.string.form_button_cancel,
++                    PendingIntent.getService(context, sms.getId(), intentUnschedule, PendingIntent.FLAG_UPDATE_CURRENT & Intent.FILL_IN_DATA)
++                )
++                .build()
++        );
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/Scheduler.java b/app/src/main/java/com/github/yeriomin/smsscheduler/Scheduler.java
+index b0f0482..dcf44a5 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/Scheduler.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/Scheduler.java
+@@ -5,40 +5,61 @@ import android.app.PendingIntent;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.os.Build;
++import android.preference.PreferenceManager;
++
++import com.github.yeriomin.smsscheduler.activity.SmsSchedulerPreferenceActivity;
+ 
+ public class Scheduler {
+ 
++    static private final long HOUR = 1000L*60L*60L;
++
+     private Context context;
++    private AlarmManager alarmManager;
+ 
+     public Scheduler(Context context) {
+         this.context = context;
++        alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+     }
+ 
+     public void schedule(SmsModel sms) {
+-        AlarmManager alarmMgr = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
++        if (null == alarmManager) {
++            return;
++        }
++        setAlarm(sms.getTimestampScheduled(), getAlarmPendingIntent(sms.getTimestampCreated(), SmsSenderReceiver.class));
++        if (PreferenceManager
++            .getDefaultSharedPreferences(context)
++            .getBoolean(SmsSchedulerPreferenceActivity.PREFERENCE_REMINDERS, false)
++        ) {
++            setAlarm(sms.getTimestampScheduled() - HOUR, getAlarmPendingIntent(sms.getTimestampCreated(), ReminderReceiver.class));
++        }
++    }
++
++    public void unschedule(long timestampCreated) {
++        if (null == alarmManager) {
++            return;
++        }
++        alarmManager.cancel(getAlarmPendingIntent(timestampCreated, SmsSenderReceiver.class));
++        alarmManager.cancel(getAlarmPendingIntent(timestampCreated, ReminderReceiver.class));
++    }
++
++    private void setAlarm(long timestamp, PendingIntent intent) {
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+-            alarmMgr.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, sms.getTimestampScheduled(), getAlarmPendingIntent(sms));
++            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, timestamp, intent);
+         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+-            alarmMgr.setExact(AlarmManager.RTC_WAKEUP, sms.getTimestampScheduled(), getAlarmPendingIntent(sms));
++            alarmManager.setExact(AlarmManager.RTC_WAKEUP, timestamp, intent);
+         } else {
+-            alarmMgr.set(AlarmManager.RTC_WAKEUP, sms.getTimestampScheduled(), getAlarmPendingIntent(sms));
++            alarmManager.set(AlarmManager.RTC_WAKEUP, timestamp, intent);
+         }
+     }
+ 
+-    public void unschedule(SmsModel sms) {
+-        AlarmManager alarmMgr = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        alarmMgr.cancel(getAlarmPendingIntent(sms));
+-    }
+-
+-    private PendingIntent getAlarmPendingIntent(SmsModel sms) {
+-        Intent intent = new Intent(AlarmReceiver.INTENT_FILTER);
+-        intent.putExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, sms.getTimestampCreated());
++    private PendingIntent getAlarmPendingIntent(long timestampCreated, Class receiverClass) {
++        Intent intent = new Intent(context, receiverClass);
++        intent.putExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, timestampCreated);
+         return PendingIntent.getBroadcast(
+             context,
+-            sms.getId(),
++            (int) (timestampCreated / 1000L),
+             intent,
+             PendingIntent.FLAG_UPDATE_CURRENT & Intent.FILL_IN_DATA
+         );
+     }
+-
+ }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredReceiver.java
+index a330921..5a77d21 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredReceiver.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredReceiver.java
+@@ -1,17 +1,9 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+-import android.content.Context;
+-import android.content.Intent;
+-
+ public class SmsDeliveredReceiver extends WakefulBroadcastReceiver {
+ 
+-    static public final String RESULT_CODE = "resultCode";
+-
+     @Override
+-    public void onReceive(Context context, Intent intent) {
+-        Intent service = new Intent(context, SmsDeliveredService.class);
+-        service.putExtras(intent.getExtras());
+-        service.putExtra(RESULT_CODE, getResultCode());
+-        startWakefulService(context, service);
++    protected Class getServiceClass() {
++        return SmsDeliveredService.class;
+     }
+ }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredService.java
+index 1560136..50437da 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredService.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsDeliveredService.java
+@@ -1,26 +1,22 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+-import android.app.IntentService;
+-import android.content.Context;
+ import android.content.Intent;
+ 
+-public class SmsDeliveredService extends IntentService {
+-
+-    private final static String SERVICE_NAME = "SmsDeliveredService";
++public class SmsDeliveredService extends SmsIntentService {
+ 
+     public SmsDeliveredService() {
+-        super(SERVICE_NAME);
++        super("SmsDeliveredService");
+     }
+ 
+     @Override
+     protected void onHandleIntent(Intent intent) {
+-        long smsId = intent.getExtras().getLong(DbHelper.COLUMN_TIMESTAMP_CREATED, 0);
+-        if (smsId == 0) {
+-            throw new RuntimeException("No SMS id provided with intent");
++        super.onHandleIntent(intent);
++        if (timestampCreated == 0) {
++            return;
+         }
+-        Context context = getApplicationContext();
+-        SmsModel sms = DbHelper.getDbHelper(context).get(smsId);
++        SmsModel sms = DbHelper.getDbHelper(this).get(timestampCreated);
+         sms.setStatus(SmsModel.STATUS_DELIVERED);
+-        DbHelper.getDbHelper(context).save(sms);
++        DbHelper.getDbHelper(this).save(sms);
++        WakefulBroadcastReceiver.completeWakefulIntent(intent);
+     }
+ }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsIntentService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsIntentService.java
+new file mode 100644
+index 0000000..28418da
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsIntentService.java
+@@ -0,0 +1,23 @@
++package com.github.yeriomin.smsscheduler;
++
++import android.app.IntentService;
++import android.content.Intent;
++import android.util.Log;
++
++abstract public class SmsIntentService extends IntentService {
++
++    protected long timestampCreated;
++
++    public SmsIntentService(String name) {
++        super(name);
++    }
++
++    @Override
++    protected void onHandleIntent(Intent intent) {
++        Log.i(getClass().getName(), "Handling intent");
++        timestampCreated = intent.getLongExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, 0L);
++        if (timestampCreated == 0) {
++            Log.i(getClass().getName(), "Cannot identify sms: no creation timestamp provided");
++        }
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderReceiver.java
+new file mode 100644
+index 0000000..5abbc90
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderReceiver.java
+@@ -0,0 +1,9 @@
++package com.github.yeriomin.smsscheduler;
++
++public class SmsSenderReceiver extends WakefulBroadcastReceiver {
++
++    @Override
++    protected Class getServiceClass() {
++        return SmsSenderService.class;
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderService.java
+index 68fa4f9..637ec00 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderService.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSenderService.java
+@@ -1,32 +1,30 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+-import android.app.IntentService;
+ import android.app.PendingIntent;
+ import android.content.Intent;
+-import android.content.SharedPreferences;
+ import android.preference.PreferenceManager;
+ import android.telephony.SmsManager;
++import android.util.Log;
+ 
+-import com.github.yeriomin.smsscheduler.Activity.SmsSchedulerPreferenceActivity;
++import com.github.yeriomin.smsscheduler.activity.SmsSchedulerPreferenceActivity;
+ 
+ import java.util.ArrayList;
+ 
+-public class SmsSenderService extends IntentService {
+-
+-    private final static String SERVICE_NAME = "SmsSenderService";
++public class SmsSenderService extends SmsIntentService {
+ 
+     public SmsSenderService() {
+-        super(SERVICE_NAME);
++        super("SmsSenderService");
+     }
+ 
+     @Override
+     protected void onHandleIntent(Intent intent) {
+-        long smsId = intent.getExtras().getLong(DbHelper.COLUMN_TIMESTAMP_CREATED, 0);
+-        if (smsId == 0) {
+-            throw new RuntimeException("No SMS id provided with intent");
++        super.onHandleIntent(intent);
++        if (timestampCreated == 0) {
++            return;
+         }
+-        SmsModel sms = DbHelper.getDbHelper(this).get(smsId);
+-        sendSms(sms);
++        Log.i(getClass().getName(), "Sending sms " + timestampCreated);
++        sendSms(DbHelper.getDbHelper(this).get(timestampCreated));
++        WakefulBroadcastReceiver.completeWakefulIntent(intent);
+     }
+ 
+     private void sendSms(SmsModel sms) {
+@@ -41,10 +39,12 @@ public class SmsSenderService extends IntentService {
+         PendingIntent sentPendingIntent = PendingIntent.getBroadcast(this, 0, sentIntent, 0);
+ 
+         PendingIntent deliveredPendingIntent = null;
+-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+-        boolean deliveryReports = prefs.getBoolean(SmsSchedulerPreferenceActivity.PREFERENCE_DELIVERY_REPORTS, false);
++        boolean deliveryReports = PreferenceManager
++            .getDefaultSharedPreferences(getApplicationContext())
++            .getBoolean(SmsSchedulerPreferenceActivity.PREFERENCE_DELIVERY_REPORTS, false)
++        ;
+         if (deliveryReports) {
+-            deliveredPendingIntents = new ArrayList<PendingIntent>();
++            deliveredPendingIntents = new ArrayList<>();
+             Intent deliveredIntent = new Intent(this, SmsDeliveredReceiver.class);
+             deliveredIntent.setAction(smsId.toString());
+             deliveredIntent.putExtra(DbHelper.COLUMN_TIMESTAMP_CREATED, smsId);
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentReceiver.java
+index 2cef86a..778ce11 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentReceiver.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentReceiver.java
+@@ -1,17 +1,9 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+-import android.content.Context;
+-import android.content.Intent;
+-
+ public class SmsSentReceiver extends WakefulBroadcastReceiver {
+ 
+-    static public final String RESULT_CODE = "resultCode";
+-
+     @Override
+-    public void onReceive(Context context, Intent intent) {
+-        Intent service = new Intent(context, SmsSentService.class);
+-        service.putExtras(intent.getExtras());
+-        service.putExtra(RESULT_CODE, getResultCode());
+-        startWakefulService(context, service);
++    protected Class getServiceClass() {
++        return SmsSentService.class;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentService.java
+index 8b9ac1b..bd813c2 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentService.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/SmsSentService.java
+@@ -1,70 +1,69 @@
+ package com.github.yeriomin.smsscheduler;
+ 
+ import android.app.Activity;
+-import android.app.IntentService;
+ import android.app.Notification;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.telephony.SmsManager;
++import android.util.Log;
+ 
+-import com.github.yeriomin.smsscheduler.Activity.SmsListActivity;
++import com.github.yeriomin.smsscheduler.activity.SmsListActivity;
+ import com.github.yeriomin.smsscheduler.notification.NotificationManagerWrapper;
+ 
+-public class SmsSentService extends IntentService {
+-
+-    private final static String SERVICE_NAME = "SmsSentService";
++public class SmsSentService extends SmsIntentService {
+ 
+     public SmsSentService() {
+-        super(SERVICE_NAME);
++        super("SmsSentService");
+     }
+ 
+     @Override
+     protected void onHandleIntent(Intent intent) {
+-        Context context = getApplicationContext();
+-        long smsId = intent.getExtras().getLong(DbHelper.COLUMN_TIMESTAMP_CREATED, 0);
+-        if (smsId == 0) {
+-            throw new RuntimeException("No SMS id provided with intent");
++        super.onHandleIntent(intent);
++        if (timestampCreated == 0) {
++            return;
+         }
+-        SmsModel sms = DbHelper.getDbHelper(context).get(smsId);
++        Log.i(getClass().getName(), "Notifying that sms " + timestampCreated + " is sent");
++        SmsModel sms = DbHelper.getDbHelper(this).get(timestampCreated);
+         String errorId = "";
+         String errorString = "";
+-        String title = context.getString(R.string.notification_title_failure);
++        String title = getString(R.string.notification_title_failure);
+         String message = "";
+         sms.setStatus(SmsModel.STATUS_FAILED);
+ 
+-        switch (intent.getExtras().getInt(SmsSentReceiver.RESULT_CODE, 0)) {
++        switch (intent.getIntExtra(SmsSentReceiver.RESULT_CODE, 0)) {
+             case Activity.RESULT_OK:
+-                title = context.getString(R.string.notification_title_success);
+-                message = context.getString(R.string.notification_message_success, sms.getRecipientName());
++                title = getString(R.string.notification_title_success);
++                message = getString(R.string.notification_message_success, sms.getRecipientName());
+                 sms.setStatus(SmsModel.STATUS_SENT);
+                 break;
+             case SmsManager.RESULT_ERROR_GENERIC_FAILURE:
+                 errorId = SmsModel.ERROR_GENERIC;
+-                errorString = context.getString(R.string.error_generic);
++                errorString = getString(R.string.error_generic);
+                 break;
+             case SmsManager.RESULT_ERROR_NO_SERVICE:
+                 errorId = SmsModel.ERROR_NO_SERVICE;
+-                errorString = context.getString(R.string.error_no_service);
++                errorString = getString(R.string.error_no_service);
+                 break;
+             case SmsManager.RESULT_ERROR_NULL_PDU:
+                 errorId = SmsModel.ERROR_NULL_PDU;
+-                errorString = context.getString(R.string.error_null_pdu);
++                errorString = getString(R.string.error_null_pdu);
+                 break;
+             case SmsManager.RESULT_ERROR_RADIO_OFF:
+                 errorId = SmsModel.ERROR_RADIO_OFF;
+-                errorString = context.getString(R.string.error_radio_off);
++                errorString = getString(R.string.error_radio_off);
+                 break;
+             default:
+                 errorId = SmsModel.ERROR_UNKNOWN;
+-                errorString = context.getString(R.string.error_unknown);
++                errorString = getString(R.string.error_unknown);
+                 break;
+         }
+         if (errorId.length() > 0) {
+             sms.setResult(errorId);
+-            message = context.getString(R.string.notification_message_failure, sms.getRecipientName(), errorString);
++            message = getString(R.string.notification_message_failure, sms.getRecipientName(), errorString);
+         }
+-        DbHelper.getDbHelper(context).save(sms);
+-        notify(context, title, message, sms.getId());
++        DbHelper.getDbHelper(this).save(sms);
++        notify(this, title, message, sms.getId());
++        WakefulBroadcastReceiver.completeWakefulIntent(intent);
+     }
+ 
+     private void notify(Context context, String title, String message, int id) {
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/UnscheduleService.java b/app/src/main/java/com/github/yeriomin/smsscheduler/UnscheduleService.java
+new file mode 100644
+index 0000000..2eb3cab
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/UnscheduleService.java
+@@ -0,0 +1,32 @@
++package com.github.yeriomin.smsscheduler;
++
++import android.content.Context;
++import android.content.Intent;
++import android.util.Log;
++
++import com.github.yeriomin.smsscheduler.notification.NotificationManagerWrapper;
++
++public class UnscheduleService extends SmsIntentService {
++
++    public UnscheduleService() {
++        super("UnscheduleService");
++    }
++
++    @Override
++    protected void onHandleIntent(Intent intent) {
++        super.onHandleIntent(intent);
++        if (timestampCreated == 0) {
++            return;
++        }
++        Log.i(getClass().getName(), "Removing sms " + timestampCreated);
++        unschedule(getApplicationContext(), timestampCreated);
++    }
++
++    static private void unschedule(Context context, long timestampCreated) {
++        new Scheduler(context).unschedule(timestampCreated);
++        DbHelper.getDbHelper(context).delete(timestampCreated);
++        int id = (int) (timestampCreated / 1000) + 1;
++        Log.i(UnscheduleService.class.getName(), "Deleting notification with id " + id);
++        new NotificationManagerWrapper(context).cancel(id);
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/WakefulBroadcastReceiver.java b/app/src/main/java/com/github/yeriomin/smsscheduler/WakefulBroadcastReceiver.java
+index 6c73517..460bafc 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/WakefulBroadcastReceiver.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/WakefulBroadcastReceiver.java
+@@ -131,4 +131,19 @@ public abstract class WakefulBroadcastReceiver extends BroadcastReceiver {
+             return true;
+         }
+     }
++
++    static public final String RESULT_CODE = "resultCode";
++
++    @Override
++    public void onReceive(Context context, Intent intent) {
++        Log.i(getClass().getName(), "Received intent");
++        Intent serviceIntent = new Intent(context, getServiceClass());
++        if (null != intent.getExtras()) {
++            serviceIntent.putExtras(intent.getExtras());
++        }
++        serviceIntent.putExtra(RESULT_CODE, getResultCode());
++        startWakefulService(context, serviceIntent);
++    }
++
++    abstract protected Class getServiceClass();
+ }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilder.java b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilder.java
+index 07b4e12..e0ded2d 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilder.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilder.java
+@@ -18,10 +18,6 @@ abstract public class NotificationBuilder {
+         return this;
+     }
+ 
+-    public NotificationBuilder setProgress(int max, int progress) {
+-        return this;
+-    }
+-
+     public NotificationBuilder(Context context) {
+         this.context = context;
+     }
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderIcs.java b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderIcs.java
+deleted file mode 100644
+index 3f30e04..0000000
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderIcs.java
++++ /dev/null
+@@ -1,19 +0,0 @@
+-package com.github.yeriomin.smsscheduler.notification;
+-
+-import android.annotation.TargetApi;
+-import android.content.Context;
+-import android.os.Build;
+-
+-@TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH)
+-class NotificationBuilderIcs extends NotificationBuilderHoneycomb {
+-
+-    @Override
+-    public NotificationBuilder setProgress(int max, int progress) {
+-        builder.setProgress(max, progress, false);
+-        return this;
+-    }
+-
+-    public NotificationBuilderIcs(Context context) {
+-        super(context);
+-    }
+-}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderJellybean.java b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderJellybean.java
+index daeec97..0f184f9 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderJellybean.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderJellybean.java
+@@ -6,7 +6,7 @@ import android.content.Context;
+ import android.os.Build;
+ 
+ @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+-class NotificationBuilderJellybean extends NotificationBuilderIcs {
++class NotificationBuilderJellybean extends NotificationBuilderHoneycomb {
+ 
+     @Override
+     public NotificationBuilder addAction(int iconId, int stringId, PendingIntent pendingIntent) {
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderO.java b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderO.java
+new file mode 100644
+index 0000000..e0d34e2
+--- /dev/null
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationBuilderO.java
+@@ -0,0 +1,28 @@
++package com.github.yeriomin.smsscheduler.notification;
++
++import android.annotation.TargetApi;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.content.Context;
++import android.os.Build;
++
++import com.github.yeriomin.smsscheduler.BuildConfig;
++import com.github.yeriomin.smsscheduler.R;
++
++@TargetApi(Build.VERSION_CODES.O)
++class NotificationBuilderO extends NotificationBuilderJellybean {
++    
++    public NotificationBuilderO(Context context) {
++        super(context);
++        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
++        NotificationChannel channel = manager.getNotificationChannel(BuildConfig.APPLICATION_ID);
++        if (null == channel) {
++            manager.createNotificationChannel(new NotificationChannel(
++                    BuildConfig.APPLICATION_ID,
++                    context.getString(R.string.app_name),
++                    NotificationManager.IMPORTANCE_DEFAULT
++            ));
++        }
++        builder.setChannelId(BuildConfig.APPLICATION_ID);
++    }
++}
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationManagerWrapper.java b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationManagerWrapper.java
+index 4faf116..5172ff3 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationManagerWrapper.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/notification/NotificationManagerWrapper.java
+@@ -7,23 +7,21 @@ import android.os.Build;
+ 
+ public class NotificationManagerWrapper {
+ 
+-    protected Context context;
+-    protected NotificationManager manager;
++    private NotificationManager manager;
+ 
+     static public NotificationBuilder getBuilder(Context context) {
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            return new NotificationBuilderO(context);
++        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+             return new NotificationBuilderJellybean(context);
+         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB) {
+             return new NotificationBuilderHoneycomb(context);
+-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+-            return new NotificationBuilderIcs(context);
+         } else {
+             return new NotificationBuilderLegacy(context);
+         }
+     }
+ 
+     public NotificationManagerWrapper(Context context) {
+-        this.context = context;
+         manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+     }
+ 
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/view/Builder.java b/app/src/main/java/com/github/yeriomin/smsscheduler/view/Builder.java
+index d990086..886c43a 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/view/Builder.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/view/Builder.java
+@@ -2,8 +2,8 @@ package com.github.yeriomin.smsscheduler.view;
+ 
+ import android.view.View;
+ 
+-import com.github.yeriomin.smsscheduler.Activity.AddSmsActivity;
+ import com.github.yeriomin.smsscheduler.SmsModel;
++import com.github.yeriomin.smsscheduler.activity.AddSmsActivity;
+ 
+ public abstract class Builder {
+ 
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/view/BuilderMessage.java b/app/src/main/java/com/github/yeriomin/smsscheduler/view/BuilderMessage.java
+index c4bb6fa..163e878 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/view/BuilderMessage.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/view/BuilderMessage.java
+@@ -17,12 +17,12 @@ public class BuilderMessage extends Builder {
+         getView().addTextChangedListener(new TextWatcher() {
+             @Override
+             public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+-                sms.setMessage(String.valueOf(s));
++
+             }
+ 
+             @Override
+             public void onTextChanged(CharSequence s, int start, int before, int count) {
+-
++                sms.setMessage(String.valueOf(s));
+             }
+ 
+             @Override
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/view/ContactsTask.java b/app/src/main/java/com/github/yeriomin/smsscheduler/view/ContactsTask.java
+index 675f73c..e715287 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/view/ContactsTask.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/view/ContactsTask.java
+@@ -6,8 +6,8 @@ import android.provider.ContactsContract;
+ import android.widget.AutoCompleteTextView;
+ import android.widget.SimpleAdapter;
+ 
+-import com.github.yeriomin.smsscheduler.Activity.AddSmsActivity;
+ import com.github.yeriomin.smsscheduler.R;
++import com.github.yeriomin.smsscheduler.activity.AddSmsActivity;
+ 
+ import java.util.ArrayList;
+ import java.util.HashMap;
+diff --git a/app/src/main/java/com/github/yeriomin/smsscheduler/view/EmptinessTextWatcher.java b/app/src/main/java/com/github/yeriomin/smsscheduler/view/EmptinessTextWatcher.java
+index af82c61..dc8a914 100644
+--- a/app/src/main/java/com/github/yeriomin/smsscheduler/view/EmptinessTextWatcher.java
++++ b/app/src/main/java/com/github/yeriomin/smsscheduler/view/EmptinessTextWatcher.java
+@@ -3,11 +3,10 @@ package com.github.yeriomin.smsscheduler.view;
+ import android.text.Editable;
+ import android.text.TextWatcher;
+ import android.widget.AutoCompleteTextView;
+-import android.widget.Button;
+ import android.widget.EditText;
+ 
+-import com.github.yeriomin.smsscheduler.Activity.AddSmsActivity;
+ import com.github.yeriomin.smsscheduler.R;
++import com.github.yeriomin.smsscheduler.activity.AddSmsActivity;
+ 
+ public class EmptinessTextWatcher implements TextWatcher {
+     private AddSmsActivity addSmsActivity;
+@@ -30,7 +29,6 @@ public class EmptinessTextWatcher implements TextWatcher {
+ 
+     @Override
+     public void afterTextChanged(Editable s) {
+-        final Button button = (Button) addSmsActivity.findViewById(R.id.button_add);
+-        button.setEnabled(formContact.getText().length() > 0 && formMessage.getText().length() > 0);
++        addSmsActivity.findViewById(R.id.button_add).setEnabled(formContact.getText().length() > 0 && formMessage.getText().length() > 0);
+     }
+ }

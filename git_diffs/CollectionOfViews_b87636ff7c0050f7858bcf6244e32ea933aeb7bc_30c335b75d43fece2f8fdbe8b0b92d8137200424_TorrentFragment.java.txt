@@ -1,0 +1,1031 @@
+diff --git a/app/src/main/java/com/gianlu/aria2app/Main/AddDownloadActivity.java b/app/src/main/java/com/gianlu/aria2app/Main/AddDownloadActivity.java
+deleted file mode 100644
+index e6ca9f68..00000000
+--- a/app/src/main/java/com/gianlu/aria2app/Main/AddDownloadActivity.java
++++ /dev/null
+@@ -1,281 +0,0 @@
+-package com.gianlu.aria2app.Main;
+-
+-import android.app.ProgressDialog;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.res.Resources.Theme;
+-import android.graphics.Typeface;
+-import android.os.Bundle;
+-import android.support.v4.app.FragmentTransaction;
+-import android.support.v4.content.ContextCompat;
+-import android.support.v7.app.ActionBar;
+-import android.support.v7.app.AppCompatActivity;
+-import android.support.v7.widget.ThemedSpinnerAdapter;
+-import android.support.v7.widget.Toolbar;
+-import android.util.Base64;
+-import android.view.Menu;
+-import android.view.MenuItem;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.AdapterView;
+-import android.widget.AdapterView.OnItemSelectedListener;
+-import android.widget.ArrayAdapter;
+-import android.widget.Spinner;
+-import android.widget.TextView;
+-
+-import com.gianlu.aria2app.Google.Analytics;
+-import com.gianlu.aria2app.MainActivity;
+-import com.gianlu.aria2app.NetIO.JTA2.IGID;
+-import com.gianlu.aria2app.NetIO.JTA2.JTA2;
+-import com.gianlu.aria2app.R;
+-import com.gianlu.aria2app.Utils;
+-import com.google.android.gms.analytics.HitBuilders;
+-
+-import java.io.ByteArrayOutputStream;
+-import java.io.FileNotFoundException;
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.security.NoSuchAlgorithmException;
+-
+-
+-public class AddDownloadActivity extends AppCompatActivity {
+-    private Spinner spinner;
+-    private URIFragment uriFragment;
+-    private TorrentFragment torrentFragment;
+-
+-    @Override
+-    protected void onCreate(Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        setContentView(R.layout.activity_add_download);
+-
+-        setSupportActionBar((Toolbar) findViewById(R.id.addDownload_toolbar));
+-        ActionBar actionBar = getSupportActionBar();
+-        assert actionBar != null;
+-        actionBar.setDisplayHomeAsUpEnabled(true);
+-        actionBar.setDisplayShowTitleEnabled(false);
+-
+-        spinner = (Spinner) findViewById(R.id.addDownload_spinner);
+-        assert spinner != null;
+-
+-        spinner.setAdapter(new SpinnerAdapter(this, new String[]{getString(R.string.uri), getString(R.string.torrent), getString(R.string.metalink)}));
+-        spinner.setOnItemSelectedListener(new OnItemSelectedListener() {
+-            @Override
+-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+-                FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+-                switch (position) {
+-                    case 0:
+-                        uriFragment = URIFragment.newInstance();
+-                        transaction.replace(R.id.addDownload_container, uriFragment, "URI");
+-                        break;
+-                    case 1:
+-                        torrentFragment = TorrentFragment.newInstance(true);
+-                        transaction.replace(R.id.addDownload_container, torrentFragment, "TORRENT");
+-                        break;
+-                    case 2:
+-                        torrentFragment = TorrentFragment.newInstance(false);
+-                        transaction.replace(R.id.addDownload_container, torrentFragment, "METALINK");
+-                        break;
+-                }
+-
+-                transaction.commit();
+-            }
+-
+-            @Override
+-            public void onNothingSelected(AdapterView<?> parent) {
+-                onBackPressed();
+-            }
+-        });
+-    }
+-
+-
+-    @Override
+-    public boolean onCreateOptionsMenu(Menu menu) {
+-        getMenuInflater().inflate(R.menu.add_download, menu);
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean onOptionsItemSelected(MenuItem item) {
+-        switch (item.getItemId()) {
+-            case android.R.id.home:
+-                onBackPressed();
+-                break;
+-            case R.id.addDownloadMenu_done:
+-                JTA2 jta2;
+-                try {
+-                    jta2 = Utils.readyJTA2(this);
+-                } catch (IOException | NoSuchAlgorithmException ex) {
+-                    Utils.UIToast(this, Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
+-                    return true;
+-                }
+-
+-                final ProgressDialog pd = Utils.fastProgressDialog(this, R.string.gathering_information, true, false);
+-                pd.show();
+-
+-                switch (spinner.getSelectedItemPosition()) {
+-                    case 0:
+-                        if (uriFragment.getUris().size() == 0) break;
+-
+-                        if (Analytics.isTrackingAllowed(this))
+-                            Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
+-                                    .setCategory(Analytics.CATEGORY_USER_INPUT)
+-                                    .setAction(Analytics.ACTION_NEW_URI).build());
+-
+-                        jta2.addUri(uriFragment.getUris(), uriFragment.getPosition(), uriFragment.getOptions(), new IGID() {
+-                            @Override
+-                            public void onGID(String GID) {
+-                                pd.dismiss();
+-                                AddDownloadActivity.this.runOnUiThread(new Runnable() {
+-                                    @Override
+-                                    public void run() {
+-                                        AddDownloadActivity.this.onBackPressed();
+-                                    }
+-                                });
+-                            }
+-
+-                            @Override
+-                            public void onException(Exception ex) {
+-                                pd.dismiss();
+-                                Utils.UIToast(AddDownloadActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
+-                            }
+-                        });
+-                        break;
+-                    case 1:
+-                    case 2:
+-                        if (torrentFragment.getData() == null) break;
+-
+-                        InputStream in;
+-                        try {
+-                            in = getContentResolver().openInputStream(torrentFragment.getData());
+-                        } catch (FileNotFoundException ex) {
+-                            pd.dismiss();
+-                            Utils.UIToast(AddDownloadActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
+-                            break;
+-                        }
+-                        if (in == null) break;
+-
+-                        String base64;
+-                        try {
+-                            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+-                            int nRead;
+-                            byte[] data = new byte[4096];
+-
+-                            while ((nRead = in.read(data, 0, data.length)) != -1) {
+-                                buffer.write(data, 0, nRead);
+-                            }
+-
+-                            buffer.flush();
+-
+-                            base64 = Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP);
+-                        } catch (IOException ex) {
+-                            pd.dismiss();
+-                            Utils.UIToast(AddDownloadActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
+-                            break;
+-                        }
+-
+-                        if (spinner.getSelectedItemPosition() == 1) {
+-                            if (Analytics.isTrackingAllowed(this))
+-                                Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
+-                                        .setCategory(Analytics.CATEGORY_USER_INPUT)
+-                                        .setAction(Analytics.ACTION_NEW_TORRENT).build());
+-
+-                            jta2.addTorrent(base64, torrentFragment.getUris(), torrentFragment.getOptions(), torrentFragment.getPosition(), new IGID() {
+-                                @Override
+-                                public void onGID(String GID) {
+-                                    pd.dismiss();
+-                                    AddDownloadActivity.this.runOnUiThread(new Runnable() {
+-                                        @Override
+-                                        public void run() {
+-                                            AddDownloadActivity.this.onBackPressed();
+-                                        }
+-                                    });
+-                                }
+-
+-                                @Override
+-                                public void onException(Exception ex) {
+-                                    pd.dismiss();
+-                                    Utils.UIToast(AddDownloadActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
+-                                }
+-                            });
+-                        } else {
+-                            if (Analytics.isTrackingAllowed(this))
+-                                Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
+-                                        .setCategory(Analytics.CATEGORY_USER_INPUT)
+-                                        .setAction(Analytics.ACTION_NEW_METALINK).build());
+-
+-                            jta2.addMetalink(base64, torrentFragment.getUris(), torrentFragment.getOptions(), torrentFragment.getPosition(), new IGID() {
+-                                @Override
+-                                public void onGID(String GID) {
+-                                    pd.dismiss();
+-                                    AddDownloadActivity.this.runOnUiThread(new Runnable() {
+-                                        @Override
+-                                        public void run() {
+-                                            AddDownloadActivity.this.onBackPressed();
+-                                        }
+-                                    });
+-                                }
+-
+-                                @Override
+-                                public void onException(Exception ex) {
+-                                    pd.dismiss();
+-                                    Utils.UIToast(AddDownloadActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
+-                                }
+-                            });
+-                        }
+-                        break;
+-                }
+-
+-                pd.dismiss();
+-                break;
+-        }
+-        return super.onOptionsItemSelected(item);
+-    }
+-
+-    @Override
+-    public void onBackPressed() {
+-        super.onBackPressed();
+-        startActivity(new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+-        finishActivity(0);
+-    }
+-
+-    private static class SpinnerAdapter extends ArrayAdapter<String> implements ThemedSpinnerAdapter {
+-        private final ThemedSpinnerAdapter.Helper mDropDownHelper;
+-
+-        public SpinnerAdapter(Context context, String[] objects) {
+-            super(context, android.R.layout.simple_list_item_1, objects);
+-            mDropDownHelper = new ThemedSpinnerAdapter.Helper(context);
+-        }
+-
+-        @Override
+-        public View getDropDownView(int position, View convertView, ViewGroup parent) {
+-            convertView = mDropDownHelper.getDropDownViewInflater().inflate(android.R.layout.simple_list_item_1, parent, false);
+-
+-            TextView text = (TextView) convertView.findViewById(android.R.id.text1);
+-            text.setText(getItem(position));
+-            text.setTextSize(16);
+-
+-            return convertView;
+-        }
+-
+-        @Override
+-        public View getView(int position, View convertView, ViewGroup parent) {
+-            TextView text = (TextView) super.getView(position, convertView, parent);
+-
+-            text.setTextColor(ContextCompat.getColor(getContext(), android.R.color.white));
+-            text.setTextSize(20);
+-            text.setTypeface(null, Typeface.BOLD);
+-
+-            return text;
+-        }
+-
+-        @Override
+-        public Theme getDropDownViewTheme() {
+-            return mDropDownHelper.getDropDownViewTheme();
+-        }
+-
+-        @Override
+-        public void setDropDownViewTheme(Theme theme) {
+-            mDropDownHelper.setDropDownViewTheme(theme);
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/gianlu/aria2app/Main/TorrentFragment.java b/app/src/main/java/com/gianlu/aria2app/Main/AddTorrentActivity.java
+similarity index 54%
+rename from app/src/main/java/com/gianlu/aria2app/Main/TorrentFragment.java
+rename to app/src/main/java/com/gianlu/aria2app/Main/AddTorrentActivity.java
+index 7bdb47bc..02ae38fc 100644
+--- a/app/src/main/java/com/gianlu/aria2app/Main/TorrentFragment.java
++++ b/app/src/main/java/com/gianlu/aria2app/Main/AddTorrentActivity.java
+@@ -1,6 +1,5 @@
+ package com.gianlu.aria2app.Main;
+ 
+-import android.annotation.SuppressLint;
+ import android.app.Activity;
+ import android.app.ProgressDialog;
+ import android.content.DialogInterface;
+@@ -9,13 +8,13 @@ import android.database.Cursor;
+ import android.net.Uri;
+ import android.os.Bundle;
+ import android.provider.MediaStore;
+-import android.support.annotation.Nullable;
+-import android.support.v4.app.Fragment;
+ import android.support.v7.app.AlertDialog;
++import android.support.v7.app.AppCompatActivity;
+ import android.text.InputType;
+-import android.view.LayoutInflater;
++import android.util.Base64;
++import android.view.Menu;
++import android.view.MenuItem;
+ import android.view.View;
+-import android.view.ViewGroup;
+ import android.widget.Button;
+ import android.widget.EditText;
+ import android.widget.ExpandableListView;
+@@ -23,6 +22,9 @@ import android.widget.ImageButton;
+ import android.widget.ListView;
+ import android.widget.TextView;
+ 
++import com.gianlu.aria2app.Google.Analytics;
++import com.gianlu.aria2app.MainActivity;
++import com.gianlu.aria2app.NetIO.JTA2.IGID;
+ import com.gianlu.aria2app.NetIO.JTA2.IOption;
+ import com.gianlu.aria2app.NetIO.JTA2.JTA2;
+ import com.gianlu.aria2app.Options.BooleanOptionChild;
+@@ -36,10 +38,14 @@ import com.gianlu.aria2app.Options.SourceOption;
+ import com.gianlu.aria2app.Options.StringOptionChild;
+ import com.gianlu.aria2app.R;
+ import com.gianlu.aria2app.Utils;
++import com.google.android.gms.analytics.HitBuilders;
+ 
+ import org.json.JSONException;
+ 
++import java.io.ByteArrayOutputStream;
++import java.io.FileNotFoundException;
+ import java.io.IOException;
++import java.io.InputStream;
+ import java.security.NoSuchAlgorithmException;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+@@ -47,49 +53,46 @@ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ 
+-public class TorrentFragment extends Fragment {
++public class AddTorrentActivity extends AppCompatActivity {
+     private List<String> urisList = new ArrayList<>();
+     private EditText position;
+     private TextView path;
+     private Uri data;
+     private ExpandableListView optionsListView;
+ 
+-    public static TorrentFragment newInstance(boolean torrentMode) {
+-        Bundle args = new Bundle();
+-        args.putBoolean("torrentMode", torrentMode);
+-        TorrentFragment fragment = new TorrentFragment();
+-        fragment.setArguments(args);
+-        return fragment;
+-    }
+-
+-    @Nullable
+     @Override
+-    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+-        @SuppressLint("InflateParams") View view = inflater.inflate(R.layout.torrent_fragment, null);
+-
+-        final ListView uris = (ListView) view.findViewById(R.id.torrentFragment_uris);
+-        final Button pick = (Button) view.findViewById(R.id.torrentFragment_pick);
+-        path = (TextView) view.findViewById(R.id.torrentFragment_pickHelp);
+-        ImageButton addUri = (ImageButton) view.findViewById(R.id.torrentFragment_newUri);
+-        position = (EditText) view.findViewById(R.id.torrentFragment_position);
+-        optionsListView = (ExpandableListView) view.findViewById(R.id.torrentFragment_options);
++    protected void onCreate(Bundle savedInstanceState) {
++        setTheme(getIntent().getBooleanExtra("torrentMode", true) ? R.style.AddTorrentTheme : R.style.AddMetalinkTheme);
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_add_torrent);
++        setTitle(getIntent().getBooleanExtra("torrentMode", true) ? R.string.torrent : R.string.metalink);
++
++        final ListView uris = (ListView) findViewById(R.id.addTorrent_uris);
++        assert uris != null;
++        final Button pick = (Button) findViewById(R.id.addTorrent_pick);
++        assert pick != null;
++        path = (TextView) findViewById(R.id.addTorrent_pickHelp);
++        ImageButton addUri = (ImageButton) findViewById(R.id.addTorrent_newUri);
++        assert addUri != null;
++        position = (EditText) findViewById(R.id.addTorrent_position);
++        optionsListView = (ExpandableListView) findViewById(R.id.addTorrent_options);
+ 
+         pick.setOnClickListener(new View.OnClickListener() {
+             @Override
+             public void onClick(View view) {
+                 Intent pickFile = new Intent(Intent.ACTION_GET_CONTENT)
+-                        .setType(getArguments().getBoolean("torrentMode") ? "application/x-bittorrent" : "application/metalink4+xml")
++                        .setType(getIntent().getBooleanExtra("torrentMode", true) ? "application/x-bittorrent" : "application/metalink4+xml")
+                         .addCategory(Intent.CATEGORY_OPENABLE);
+ 
+-                TorrentFragment.this.startActivityForResult(Intent.createChooser(pickFile, getString(getArguments().getBoolean("torrentMode") ? R.string.pickTorrent : R.string.pickMetalink)), 1);
++                AddTorrentActivity.this.startActivityForResult(Intent.createChooser(pickFile, getString(getIntent().getBooleanExtra("torrentMode", true) ? R.string.pickTorrent : R.string.pickMetalink)), 1);
+             }
+         });
+ 
+         addUri.setOnClickListener(new View.OnClickListener() {
+             @Override
+             public void onClick(View view) {
+-                AlertDialog.Builder dialog = new AlertDialog.Builder(getContext());
+-                final EditText uri = new EditText(getContext());
++                AlertDialog.Builder dialog = new AlertDialog.Builder(AddTorrentActivity.this);
++                final EditText uri = new EditText(AddTorrentActivity.this);
+                 uri.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+                 dialog.setView(uri)
+                         .setTitle(R.string.uri)
+@@ -98,7 +101,7 @@ public class TorrentFragment extends Fragment {
+                             public void onClick(DialogInterface dialogInterface, int i) {
+                                 if (uri.getText().toString().trim().isEmpty()) return;
+                                 urisList.add(uri.getText().toString().trim());
+-                                uris.setAdapter(new URIAdapter(getContext(), urisList));
++                                uris.setAdapter(new URIAdapter(AddTorrentActivity.this, urisList));
+                             }
+                         }).create().show();
+             }
+@@ -109,9 +112,9 @@ public class TorrentFragment extends Fragment {
+             final List<OptionHeader> headers = new ArrayList<>();
+             final Map<OptionHeader, OptionChild> children = new HashMap<>();
+ 
+-            JTA2 jta2 = Utils.readyJTA2(getActivity());
++            JTA2 jta2 = Utils.readyJTA2(this);
+ 
+-            final ProgressDialog pd = Utils.fastProgressDialog(getContext(), R.string.gathering_information, true, false);
++            final ProgressDialog pd = Utils.fastProgressDialog(this, R.string.gathering_information, true, false);
+             pd.show();
+ 
+             jta2.getGlobalOption(new IOption() {
+@@ -119,10 +122,10 @@ public class TorrentFragment extends Fragment {
+                 public void onOptions(Map<String, String> options) {
+                     LocalParser localOptions;
+                     try {
+-                        localOptions = new LocalParser(getContext(), false);
++                        localOptions = new LocalParser(AddTorrentActivity.this, false);
+                     } catch (IOException | JSONException ex) {
+                         pd.dismiss();
+-                        Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
++                        Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
+                         return;
+                     }
+ 
+@@ -170,7 +173,7 @@ public class TorrentFragment extends Fragment {
+                             }
+                         } catch (JSONException ex) {
+                             pd.dismiss();
+-                            Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
++                            Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
+                         }
+                     }
+ 
+@@ -180,20 +183,145 @@ public class TorrentFragment extends Fragment {
+                 @Override
+                 public void onException(Exception exception) {
+                     pd.dismiss();
+-                    Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, exception);
++                    Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, exception);
+                 }
+             });
+ 
+-            optionsListView.setAdapter(new OptionAdapter(getContext(), headers, children));
++            optionsListView.setAdapter(new OptionAdapter(this, Utils.colorToHex(this, getIntent().getBooleanExtra("torrentMode", true) ? R.color.colorTorrent_pressed : R.color.colorMetalink_pressed), headers, children));
+         } catch (IOException | NoSuchAlgorithmException ex) {
+-            Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
++            Utils.UIToast(this, Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
++        }
++    }
++
++    @Override
++    public boolean onCreateOptionsMenu(Menu menu) {
++        getMenuInflater().inflate(R.menu.add_download, menu);
++        return true;
++    }
++
++    public Integer getPosition() {
++        try {
++            return Integer.parseInt(position.getText().toString());
++        } catch (NumberFormatException ex) {
++            return null;
++        }
++    }
++
++    public Map<String, String> getOptions() {
++        Map<String, String> map = new HashMap<>();
++
++        for (Map.Entry<OptionHeader, OptionChild> item : ((OptionAdapter) optionsListView.getExpandableListAdapter()).getChildren().entrySet()) {
++            if (!item.getValue().isChanged()) continue;
++            map.put(item.getKey().getOptionName(), item.getValue().getStringValue());
+         }
+ 
+-        return view;
++        return map;
++    }
++
++    @Override
++    public void onBackPressed() {
++        super.onBackPressed();
++        startActivity(new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
++        finishActivity(0);
+     }
+ 
+     @Override
+-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
++    public boolean onOptionsItemSelected(MenuItem item) {
++        switch (item.getItemId()) {
++            case android.R.id.home:
++                onBackPressed();
++                break;
++            case R.id.addDownloadMenu_done:
++                JTA2 jta2;
++                try {
++                    jta2 = Utils.readyJTA2(this);
++                } catch (IOException | NoSuchAlgorithmException ex) {
++                    Utils.UIToast(this, Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
++                    return true;
++                }
++
++                final ProgressDialog pd = Utils.fastProgressDialog(this, R.string.gathering_information, true, false);
++                pd.show();
++
++                if (data == null) break;
++
++                InputStream in;
++                try {
++                    in = getContentResolver().openInputStream(data);
++                } catch (FileNotFoundException ex) {
++                    pd.dismiss();
++                    Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
++                    break;
++                }
++                if (in == null) break;
++
++                String base64;
++                try {
++                    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
++                    int nRead;
++                    byte[] data = new byte[4096];
++
++                    while ((nRead = in.read(data, 0, data.length)) != -1) {
++                        buffer.write(data, 0, nRead);
++                    }
++
++                    buffer.flush();
++
++                    base64 = Base64.encodeToString(buffer.toByteArray(), Base64.NO_WRAP);
++                } catch (IOException ex) {
++                    pd.dismiss();
++                    Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
++                    break;
++                }
++
++                if (getIntent().getBooleanExtra("torrentMode", true)) {
++                    if (Analytics.isTrackingAllowed(this))
++                        Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
++                                .setCategory(Analytics.CATEGORY_USER_INPUT)
++                                .setAction(Analytics.ACTION_NEW_TORRENT).build());
++
++                    jta2.addTorrent(base64, urisList, getOptions(), getPosition(), new IGID() {
++                        @Override
++                        public void onGID(String GID) {
++                            pd.dismiss();
++                            onBackPressed();
++                        }
++
++                        @Override
++                        public void onException(Exception ex) {
++                            pd.dismiss();
++                            Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
++                        }
++                    });
++                } else {
++                    if (Analytics.isTrackingAllowed(this))
++                        Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
++                                .setCategory(Analytics.CATEGORY_USER_INPUT)
++                                .setAction(Analytics.ACTION_NEW_METALINK).build());
++
++                    jta2.addMetalink(base64, urisList, getOptions(), getPosition(), new IGID() {
++                        @Override
++                        public void onGID(String GID) {
++                            pd.dismiss();
++                            onBackPressed();
++                        }
++
++                        @Override
++                        public void onException(Exception ex) {
++                            pd.dismiss();
++                            Utils.UIToast(AddTorrentActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
++                        }
++                    });
++                }
++
++                pd.dismiss();
++                break;
++        }
++        return true;
++    }
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+         switch (requestCode) {
+             case 1:
+                 if (resultCode == Activity.RESULT_OK) {
+@@ -205,7 +333,7 @@ public class TorrentFragment extends Fragment {
+                         fileName = data.getData().getLastPathSegment();
+                     } else if (scheme.equals("content")) {
+                         String[] proj = {MediaStore.Images.Media.DISPLAY_NAME};
+-                        Cursor cursor = getContext().getContentResolver().query(data.getData(), proj, null, null, null);
++                        Cursor cursor = this.getContentResolver().query(data.getData(), proj, null, null, null);
+                         if (cursor != null && cursor.getCount() != 0) {
+                             int columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME);
+                             cursor.moveToFirst();
+@@ -222,32 +350,4 @@ public class TorrentFragment extends Fragment {
+         }
+         super.onActivityResult(requestCode, resultCode, data);
+     }
+-
+-    public Uri getData() {
+-        return data;
+-    }
+-
+-    public List<String> getUris() {
+-        if (urisList.size() == 0) return null;
+-        return urisList;
+-    }
+-
+-    public Integer getPosition() {
+-        try {
+-            return Integer.parseInt(position.getText().toString());
+-        } catch (NumberFormatException ex) {
+-            return null;
+-        }
+-    }
+-
+-    public Map<String, String> getOptions() {
+-        Map<String, String> map = new HashMap<>();
+-
+-        for (Map.Entry<OptionHeader, OptionChild> item : ((OptionAdapter) optionsListView.getExpandableListAdapter()).getChildren().entrySet()) {
+-            if (!item.getValue().isChanged()) continue;
+-            map.put(item.getKey().getOptionName(), item.getValue().getStringValue());
+-        }
+-
+-        return map;
+-    }
+ }
+diff --git a/app/src/main/java/com/gianlu/aria2app/Main/URIFragment.java b/app/src/main/java/com/gianlu/aria2app/Main/AddURIActivity.java
+similarity index 64%
+rename from app/src/main/java/com/gianlu/aria2app/Main/URIFragment.java
+rename to app/src/main/java/com/gianlu/aria2app/Main/AddURIActivity.java
+index c87caa7a..1f134a02 100644
+--- a/app/src/main/java/com/gianlu/aria2app/Main/URIFragment.java
++++ b/app/src/main/java/com/gianlu/aria2app/Main/AddURIActivity.java
+@@ -2,19 +2,22 @@ package com.gianlu.aria2app.Main;
+ 
+ import android.app.ProgressDialog;
+ import android.content.DialogInterface;
++import android.content.Intent;
+ import android.os.Bundle;
+-import android.support.annotation.Nullable;
+-import android.support.v4.app.Fragment;
+ import android.support.v7.app.AlertDialog;
++import android.support.v7.app.AppCompatActivity;
+ import android.text.InputType;
+-import android.view.LayoutInflater;
++import android.view.Menu;
++import android.view.MenuItem;
+ import android.view.View;
+-import android.view.ViewGroup;
+ import android.widget.EditText;
+ import android.widget.ExpandableListView;
+ import android.widget.ImageButton;
+ import android.widget.ListView;
+ 
++import com.gianlu.aria2app.Google.Analytics;
++import com.gianlu.aria2app.MainActivity;
++import com.gianlu.aria2app.NetIO.JTA2.IGID;
+ import com.gianlu.aria2app.NetIO.JTA2.IOption;
+ import com.gianlu.aria2app.NetIO.JTA2.JTA2;
+ import com.gianlu.aria2app.Options.BooleanOptionChild;
+@@ -28,6 +31,7 @@ import com.gianlu.aria2app.Options.SourceOption;
+ import com.gianlu.aria2app.Options.StringOptionChild;
+ import com.gianlu.aria2app.R;
+ import com.gianlu.aria2app.Utils;
++import com.google.android.gms.analytics.HitBuilders;
+ 
+ import org.json.JSONException;
+ 
+@@ -39,30 +43,29 @@ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ 
+-public class URIFragment extends Fragment {
++public class AddURIActivity extends AppCompatActivity {
+     private List<String> urisList = new ArrayList<>();
+     private EditText position;
+     private ExpandableListView optionsListView;
+ 
+-    public static URIFragment newInstance() {
+-        return new URIFragment();
+-    }
+-
+-    @Nullable
+     @Override
+-    public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+-        View view = inflater.inflate(R.layout.uri_fragment, container, false);
+-
+-        final ListView uris = (ListView) view.findViewById(R.id.uriFragment_uris);
+-        ImageButton addUri = (ImageButton) view.findViewById(R.id.uriFragment_newUri);
+-        position = (EditText) view.findViewById(R.id.uriFragment_position);
+-        optionsListView = (ExpandableListView) view.findViewById(R.id.uriFragment_options);
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_add_uri);
++        setTitle(R.string.uri);
++
++        final ListView uris = (ListView) findViewById(R.id.addURI_uris);
++        assert uris != null;
++        ImageButton addUri = (ImageButton) findViewById(R.id.addURI_newUri);
++        assert addUri != null;
++        position = (EditText) findViewById(R.id.addURI_position);
++        optionsListView = (ExpandableListView) findViewById(R.id.addURI_options);
+ 
+         addUri.setOnClickListener(new View.OnClickListener() {
+             @Override
+             public void onClick(View view) {
+-                AlertDialog.Builder dialog = new AlertDialog.Builder(getContext());
+-                final EditText uri = new EditText(getContext());
++                AlertDialog.Builder dialog = new AlertDialog.Builder(AddURIActivity.this);
++                final EditText uri = new EditText(AddURIActivity.this);
+                 uri.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
+                 dialog.setView(uri)
+                         .setTitle(R.string.uri)
+@@ -71,7 +74,7 @@ public class URIFragment extends Fragment {
+                             public void onClick(DialogInterface dialogInterface, int i) {
+                                 if (uri.getText().toString().trim().isEmpty()) return;
+                                 urisList.add(uri.getText().toString().trim());
+-                                uris.setAdapter(new URIAdapter(getContext(), urisList));
++                                uris.setAdapter(new URIAdapter(AddURIActivity.this, urisList));
+                             }
+                         }).create().show();
+             }
+@@ -81,9 +84,9 @@ public class URIFragment extends Fragment {
+             final List<OptionHeader> headers = new ArrayList<>();
+             final Map<OptionHeader, OptionChild> children = new HashMap<>();
+ 
+-            JTA2 jta2 = Utils.readyJTA2(getActivity());
++            JTA2 jta2 = Utils.readyJTA2(this);
+ 
+-            final ProgressDialog pd = Utils.fastProgressDialog(getContext(), R.string.gathering_information, true, false);
++            final ProgressDialog pd = Utils.fastProgressDialog(this, R.string.gathering_information, true, false);
+             pd.show();
+ 
+             jta2.getGlobalOption(new IOption() {
+@@ -91,10 +94,10 @@ public class URIFragment extends Fragment {
+                 public void onOptions(Map<String, String> options) {
+                     LocalParser localOptions;
+                     try {
+-                        localOptions = new LocalParser(getContext(), false);
++                        localOptions = new LocalParser(AddURIActivity.this, false);
+                     } catch (IOException | JSONException ex) {
+                         pd.dismiss();
+-                        Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
++                        Utils.UIToast(AddURIActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
+                         return;
+                     }
+ 
+@@ -142,7 +145,7 @@ public class URIFragment extends Fragment {
+                             }
+                         } catch (JSONException ex) {
+                             pd.dismiss();
+-                            Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
++                            Utils.UIToast(AddURIActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, ex);
+                         }
+                     }
+ 
+@@ -152,25 +155,22 @@ public class URIFragment extends Fragment {
+                 @Override
+                 public void onException(Exception exception) {
+                     pd.dismiss();
+-                    Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, exception);
++                    Utils.UIToast(AddURIActivity.this, Utils.TOAST_MESSAGES.FAILED_GATHERING_INFORMATION, exception);
+                 }
+             });
+ 
+-            optionsListView.setAdapter(new OptionAdapter(getContext(), headers, children));
++            optionsListView.setAdapter(new OptionAdapter(this, headers, children));
+         } catch (IOException | NoSuchAlgorithmException ex) {
+-            Utils.UIToast(getActivity(), Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
++            Utils.UIToast(this, Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
+         }
+ 
+-        return view;
++        addUri.performClick();
+     }
+ 
+     @Override
+-    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+-        view.findViewById(R.id.uriFragment_newUri).performClick();
+-    }
+-
+-    public List<String> getUris() {
+-        return urisList;
++    public boolean onCreateOptionsMenu(Menu menu) {
++        getMenuInflater().inflate(R.menu.add_download, menu);
++        return true;
+     }
+ 
+     public Integer getPosition() {
+@@ -191,4 +191,56 @@ public class URIFragment extends Fragment {
+ 
+         return map;
+     }
++
++    @Override
++    public void onBackPressed() {
++        super.onBackPressed();
++        startActivity(new Intent(this, MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
++        finishActivity(0);
++    }
++
++    @Override
++    public boolean onOptionsItemSelected(MenuItem item) {
++
++
++        switch (item.getItemId()) {
++            case android.R.id.home:
++                onBackPressed();
++                break;
++            case R.id.addDownloadMenu_done:
++                JTA2 jta2;
++                try {
++                    jta2 = Utils.readyJTA2(this);
++                } catch (IOException | NoSuchAlgorithmException ex) {
++                    Utils.UIToast(this, Utils.TOAST_MESSAGES.WS_EXCEPTION, ex);
++                    return true;
++                }
++
++                final ProgressDialog pd = Utils.fastProgressDialog(this, R.string.gathering_information, true, false);
++
++                if (urisList.size() == 0) break;
++                pd.show();
++
++                if (Analytics.isTrackingAllowed(this))
++                    Analytics.getDefaultTracker(this.getApplication()).send(new HitBuilders.EventBuilder()
++                            .setCategory(Analytics.CATEGORY_USER_INPUT)
++                            .setAction(Analytics.ACTION_NEW_URI).build());
++
++                jta2.addUri(urisList, getPosition(), getOptions(), new IGID() {
++                    @Override
++                    public void onGID(String GID) {
++                        pd.dismiss();
++                        onBackPressed();
++                    }
++
++                    @Override
++                    public void onException(Exception ex) {
++                        pd.dismiss();
++                        Utils.UIToast(AddURIActivity.this, Utils.TOAST_MESSAGES.FAILED_ADD_DOWNLOAD, ex);
++                    }
++                });
++        }
++
++        return true;
++    }
+ }
+diff --git a/app/src/main/java/com/gianlu/aria2app/MainActivity.java b/app/src/main/java/com/gianlu/aria2app/MainActivity.java
+index 091bbc01..4f0d51c5 100644
+--- a/app/src/main/java/com/gianlu/aria2app/MainActivity.java
++++ b/app/src/main/java/com/gianlu/aria2app/MainActivity.java
+@@ -21,6 +21,7 @@ import android.widget.ArrayAdapter;
+ import android.widget.ExpandableListView;
+ import android.widget.ListView;
+ 
++import com.getbase.floatingactionbutton.FloatingActionButton;
+ import com.gianlu.aria2app.DownloadsListing.Charting;
+ import com.gianlu.aria2app.DownloadsListing.DownloadItem;
+ import com.gianlu.aria2app.DownloadsListing.DownloadItemAdapter;
+@@ -28,7 +29,8 @@ import com.gianlu.aria2app.DownloadsListing.ILoadDownloads;
+ import com.gianlu.aria2app.DownloadsListing.LoadDownloads;
+ import com.gianlu.aria2app.Google.Analytics;
+ import com.gianlu.aria2app.Google.UncaughtExceptionHandler;
+-import com.gianlu.aria2app.Main.AddDownloadActivity;
++import com.gianlu.aria2app.Main.AddTorrentActivity;
++import com.gianlu.aria2app.Main.AddURIActivity;
+ import com.gianlu.aria2app.Main.IThread;
+ import com.gianlu.aria2app.Main.UpdateUI;
+ import com.gianlu.aria2app.NetIO.JTA2.Download;
+@@ -112,13 +114,38 @@ public class MainActivity extends AppCompatActivity {
+         Integer autoReloadDownloadsListRate = Integer.parseInt(sharedPreferences.getString("a2_downloadListRate", "0")) * 1000;
+         boolean enableNotifications = sharedPreferences.getBoolean("a2_enableNotifications", true);
+ 
++        // Start WebSocketing and enabling event manager
+         try {
+-            // Start WebSocketing and enabling event manager
+             WebSocketing.enableEventManager(this);
+         } catch (IOException | NoSuchAlgorithmException e) {
+             e.printStackTrace();
+         }
+ 
++        FloatingActionButton fabAddURI = (FloatingActionButton) findViewById(R.id.mainFAB_addURI);
++        assert fabAddURI != null;
++        fabAddURI.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View view) {
++                startActivity(new Intent(MainActivity.this, AddURIActivity.class));
++            }
++        });
++        FloatingActionButton fabAddTorrent = (FloatingActionButton) findViewById(R.id.mainFAB_addTorrent);
++        assert fabAddTorrent != null;
++        fabAddTorrent.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View view) {
++                startActivity(new Intent(MainActivity.this, AddTorrentActivity.class).putExtra("torrentMode", true));
++            }
++        });
++        FloatingActionButton fabAddMetalink = (FloatingActionButton) findViewById(R.id.mainFAB_addMetalink);
++        assert fabAddMetalink != null;
++        fabAddMetalink.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View view) {
++                startActivity(new Intent(MainActivity.this, AddTorrentActivity.class).putExtra("torrentMode", false));
++            }
++        });
++
+         downloadsListView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+             @Override
+             public void onItemClick(AdapterView<?> adapterView, View view, int i, long l) {
+@@ -488,9 +515,6 @@ public class MainActivity extends AppCompatActivity {
+             case R.id.a2menu_refreshPage:
+                 reloadPage();
+                 break;
+-            case R.id.a2menu_addDownload:
+-                startActivity(new Intent(this, AddDownloadActivity.class));
+-                break;
+             case R.id.a2menu_globalOptions:
+                 showOptionsDialog();
+                 break;
+diff --git a/app/src/main/java/com/gianlu/aria2app/MoreAboutDownloadActivity.java b/app/src/main/java/com/gianlu/aria2app/MoreAboutDownloadActivity.java
+index 565a7044..8c0c9ee0 100644
+--- a/app/src/main/java/com/gianlu/aria2app/MoreAboutDownloadActivity.java
++++ b/app/src/main/java/com/gianlu/aria2app/MoreAboutDownloadActivity.java
+@@ -132,7 +132,7 @@ public class MoreAboutDownloadActivity extends AppCompatActivity {
+             case android.R.id.home:
+                 onBackPressed();
+                 break;
+-            // TODO: Show peers
++            // TODO: THIS ONE - Show peers
+         }
+ 
+         return super.onOptionsItemSelected(item);
+diff --git a/app/src/main/java/com/gianlu/aria2app/Options/OptionAdapter.java b/app/src/main/java/com/gianlu/aria2app/Options/OptionAdapter.java
+index 5cff2acc..2e66986a 100644
+--- a/app/src/main/java/com/gianlu/aria2app/Options/OptionAdapter.java
++++ b/app/src/main/java/com/gianlu/aria2app/Options/OptionAdapter.java
+@@ -20,6 +20,7 @@ import android.widget.TextView;
+ import android.widget.ToggleButton;
+ 
+ import com.gianlu.aria2app.R;
++import com.gianlu.aria2app.Utils;
+ 
+ import java.util.List;
+ import java.util.Map;
+@@ -28,13 +29,23 @@ public class OptionAdapter extends BaseExpandableListAdapter {
+     private Context context;
+     private List<OptionHeader> headers;
+     private Map<OptionHeader, OptionChild> children;
++    private String colorAccent;
+ 
+-    public OptionAdapter(Context context, List<OptionHeader> headers, Map<OptionHeader, OptionChild> children) {
++    public OptionAdapter(Context context, String hexColorAccent, List<OptionHeader> headers, Map<OptionHeader, OptionChild> children) {
+         this.context = context;
++        this.colorAccent = hexColorAccent;
++        if (this.colorAccent.length() == 8) this.colorAccent = this.colorAccent.substring(2);
+         this.headers = headers;
+         this.children = children;
+     }
+ 
++    public OptionAdapter(Context context, List<OptionHeader> headers, Map<OptionHeader, OptionChild> children) {
++        this.context = context;
++        this.children = children;
++        this.headers = headers;
++        this.colorAccent = Utils.colorToHex(context, R.color.colorAccent);
++    }
++
+     @Override
+     public boolean isChildSelectable(int i, int i1) {
+         return true;
+@@ -184,7 +195,9 @@ public class OptionAdapter extends BaseExpandableListAdapter {
+                 break;
+         }
+ 
+-        ((TextView) convertView.findViewById(R.id.moreAboutDownload_option_optionDesc)).setText(Html.fromHtml(item.getDescription().replaceAll("``(\\S*)``", "<b>$1</b>").replaceAll(":option:`(\\S*)`", "<font color='#ff5722'>$1</font>")));
++        // TODO: Parse ::code-block (--header)
++        System.out.println(colorAccent);
++        ((TextView) convertView.findViewById(R.id.moreAboutDownload_option_optionDesc)).setText(Html.fromHtml(item.getDescription().replaceAll("``(\\S*)``", "<b>$1</b>").replaceAll(":option:`(\\S*)`", "<font color='#" + colorAccent + "'>$1</font>")));
+ 
+         return convertView;
+     }
+diff --git a/app/src/main/java/com/gianlu/aria2app/Utils.java b/app/src/main/java/com/gianlu/aria2app/Utils.java
+index 2147724a..1277029b 100644
+--- a/app/src/main/java/com/gianlu/aria2app/Utils.java
++++ b/app/src/main/java/com/gianlu/aria2app/Utils.java
+@@ -5,8 +5,10 @@ import android.app.ProgressDialog;
+ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.preference.PreferenceManager;
++import android.support.annotation.ColorRes;
+ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
++import android.support.v4.content.ContextCompat;
+ import android.util.Base64;
+ import android.widget.Toast;
+ 
+@@ -100,6 +102,12 @@ public class Utils {
+         }
+     }
+ 
++    public static String colorToHex(Context context, @ColorRes int colorRes) {
++        String hex = Integer.toHexString(ContextCompat.getColor(context, colorRes));
++        if (hex.length() == 8) return hex.substring(2);
++        return hex;
++    }
++
+     public static WebSocket readyWebSocket(boolean isSSL, String url, @NonNull String username, @NonNull String password) throws IOException, NoSuchAlgorithmException {
+         if (isSSL) {
+             WebSocketFactory factory = new WebSocketFactory();

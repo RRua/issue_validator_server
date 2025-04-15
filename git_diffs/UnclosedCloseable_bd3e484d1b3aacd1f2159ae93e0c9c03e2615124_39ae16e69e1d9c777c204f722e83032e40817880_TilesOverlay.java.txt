@@ -1,0 +1,5115 @@
+diff --git a/app/src/main/java/ch/bailu/aat/services/cache/BitmapTileObject.java b/app/src/main/java/ch/bailu/aat/services/cache/BitmapTileObject.java
+index ea4928c2..0e2b838e 100644
+--- a/app/src/main/java/ch/bailu/aat/services/cache/BitmapTileObject.java
++++ b/app/src/main/java/ch/bailu/aat/services/cache/BitmapTileObject.java
+@@ -3,7 +3,6 @@ package ch.bailu.aat.services.cache;
+ import android.content.Context;
+ import android.graphics.Bitmap;
+ 
+-import org.osmdroid.ResourceProxy;
+ import org.osmdroid.tileprovider.MapTile;
+ import org.osmdroid.tileprovider.tilesource.XYTileSource;
+ 
+@@ -149,7 +148,7 @@ public class BitmapTileObject extends TileObject {
+         
+         
+         public Source (String sourceName, TileBitmapFilter f, int minZ, int maxZ, final String... url) {
+-            osmdroidSource = new XYTileSource(sourceName, ResourceProxy.string.mapnik, minZ, maxZ, 256, ".png", url);
++            osmdroidSource = new XYTileSource(sourceName, minZ, maxZ, 256, ".png", url);
+             filter = f;
+         }
+         
+diff --git a/app/src/main/java/ch/bailu/aat/views/map/AbsOsmView.java b/app/src/main/java/ch/bailu/aat/views/map/AbsOsmView.java
+index 9a9db190..947dc431 100644
+--- a/app/src/main/java/ch/bailu/aat/views/map/AbsOsmView.java
++++ b/app/src/main/java/ch/bailu/aat/views/map/AbsOsmView.java
+@@ -2,7 +2,6 @@ package ch.bailu.aat.views.map;
+ 
+ import android.content.Context;
+ 
+-import org.osmdroid.DefaultResourceProxyImpl;
+ import org.osmdroid.util.BoundingBoxE6;
+ import org.osmdroid.views.MapView;
+ 
+@@ -36,12 +35,7 @@ public abstract class AbsOsmView extends TrackDescriptionView {
+     
+     
+     private MapView createMapView(AbsTileProvider provider, int tileSize) {
+-        MapView map = new MapView(
+-                getContext(),
+-                tileSize, 
+-                new DefaultResourceProxyImpl(getContext()),
+-                provider
+-                );
++        MapView map = new MapView(getContext(), tileSize, provider);
+         map.getOverlays().add(overlayList);
+         return map;
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/views/map/overlay/MapProjection.java b/app/src/main/java/ch/bailu/aat/views/map/overlay/MapProjection.java
+index 7c6c323e..6a3a9943 100644
+--- a/app/src/main/java/ch/bailu/aat/views/map/overlay/MapProjection.java
++++ b/app/src/main/java/ch/bailu/aat/views/map/overlay/MapProjection.java
+@@ -7,7 +7,6 @@ import org.osmdroid.api.IGeoPoint;
+ import org.osmdroid.util.BoundingBoxE6;
+ import org.osmdroid.util.GeoPoint;
+ import org.osmdroid.views.MapView;
+-import org.osmdroid.views.MapView.Projection;
+ 
+ import ch.bailu.aat.coordinates.BoundingBox;
+ import ch.bailu.aat.gpx.interfaces.GpxPointInterface;
+@@ -20,7 +19,7 @@ public class MapProjection {
+     private final Rect cachedRect=new Rect();
+     private final GeoPoint cachedPoint = new GeoPoint(0,0);
+     
+-    private Projection projection;
++    private MapView.Projection projection;
+     private BoundingBox bounding;
+ 
+     private float pixels_per_meter;
+@@ -92,7 +91,7 @@ public class MapProjection {
+     }
+ 
+ 
+-    public Point toMapPixels(GeoPoint center) {
++    public Point toMapPixels(IGeoPoint center) {
+         return projection.toMapPixels(center, cachedPixel);
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/views/map/overlay/OsmOverlay.java b/app/src/main/java/ch/bailu/aat/views/map/overlay/OsmOverlay.java
+index cdfc0fb4..411165f2 100644
+--- a/app/src/main/java/ch/bailu/aat/views/map/overlay/OsmOverlay.java
++++ b/app/src/main/java/ch/bailu/aat/views/map/overlay/OsmOverlay.java
+@@ -16,16 +16,14 @@ public abstract class OsmOverlay extends Overlay implements OnContentUpdatedInte
+ 
+     
+     public OsmOverlay(AbsOsmView absOsmView) {
+-        super(absOsmView.getContext());
+         painter = new MapPainter(absOsmView.getContext());
+         osm = absOsmView;
+     }
+ 
+ 
+     @Override
+-    public void draw(Canvas c, MapView m, boolean shadow) {
+-        
+-        if (!shadow && !m.isAnimating()) {
++    public void draw(Canvas c, MapView m) {
++        if (!m.isAnimating()) {
+             osm.mapIconCache.newPass();
+             painter.init(c,m);
+             draw(painter);
+diff --git a/app/src/main/java/org/osmdroid/DefaultResourceProxyImpl.java b/app/src/main/java/org/osmdroid/DefaultResourceProxyImpl.java
+deleted file mode 100644
+index 929490b8..00000000
+--- a/app/src/main/java/org/osmdroid/DefaultResourceProxyImpl.java
++++ /dev/null
+@@ -1,161 +0,0 @@
+-package org.osmdroid;
+-
+-import android.content.Context;
+-import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+-import android.graphics.drawable.BitmapDrawable;
+-import android.graphics.drawable.Drawable;
+-import android.util.DisplayMetrics;
+-
+-import org.osmdroid.views.util.constants.MapViewConstants;
+-
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.lang.reflect.Field;
+-
+-public class DefaultResourceProxyImpl implements ResourceProxy, MapViewConstants {
+-
+-	private static final ch.bailu.aat.helpers.Logger logger = ch.bailu.aat.helpers.LoggerFactory.getLogger(DefaultResourceProxyImpl.class);
+-
+-	private DisplayMetrics mDisplayMetrics;
+-
+-	/**
+-	 * Constructor.
+-	 *
+-	 * @param pContext
+-	 *            Used to get the display metrics that are used for scaling the bitmaps returned by
+-	 *            {@link getBitmap}. Can be null, in which case the bitmaps are not scaled.
+-	 */
+-	public DefaultResourceProxyImpl(final Context pContext) {
+-		if (pContext != null) {
+-			mDisplayMetrics = pContext.getResources().getDisplayMetrics();
+-			if (DEBUGMODE) {
+-				logger.debug("mDisplayMetrics=" + mDisplayMetrics);
+-			}
+-		}
+-	}
+-
+-	@Override
+-	public String getString(final string pResId) {
+-		switch (pResId) {
+-		case osmarender:
+-			return "Osmarender";
+-		case mapnik:
+-			return "Mapnik";
+-		case cyclemap:
+-			return "Cycle Map";
+-		case public_transport:
+-			return "Public transport";
+-		case base:
+-			return "OSM base layer";
+-		case topo:
+-			return "Topographic";
+-		case hills:
+-			return "Hills";
+-		case cloudmade_standard:
+-			return "CloudMade (Standard tiles)";
+-		case cloudmade_small:
+-			return "CloudMade (small tiles)";
+-		case mapquest_osm:
+-			return "Mapquest";
+-		case bing:
+-			return "Bing";
+-		case fiets_nl:
+-			return "OpenFietsKaart overlay";
+-		case base_nl:
+-			return "Netherlands base overlay";
+-		case roads_nl:
+-			return "Netherlands roads overlay";
+-		case unknown:
+-			return "Unknown";
+-		case format_distance_meters:
+-			return "%s m";
+-		case format_distance_kilometers:
+-			return "%s km";
+-		case format_distance_miles:
+-			return "%s mi";
+-		case format_distance_nautical_miles:
+-			return "%s nm";
+-		case format_distance_feet:
+-			return "%s ft";
+-		case online_mode:
+-			return "Online mode";
+-		case offline_mode:
+-			return "Offline mode";
+-		case my_location:
+-			return "My location";
+-		case compass:
+-			return "Compass";
+-		case map_mode:
+-			return "Map mode";
+-		default:
+-			throw new IllegalArgumentException();
+-		}
+-	}
+-
+-	@Override
+-	public String getString(final string pResId, final Object... formatArgs) {
+-		return String.format(getString(pResId), formatArgs);
+-	}
+-
+-	@Override
+-	public Bitmap getBitmap(final bitmap pResId) {
+-		InputStream is = null;
+-		try {
+-			final String resName = pResId.name() + ".png";
+-			is = getClass().getResourceAsStream(resName);
+-			if (is == null) {
+-				throw new IllegalArgumentException("Resource not found: " + resName);
+-			}
+-			BitmapFactory.Options options = null;
+-			if (mDisplayMetrics != null) {
+-				options = getBitmapOptions();
+-			}
+-			return BitmapFactory.decodeStream(is, null, options);
+-		} catch (final OutOfMemoryError e) {
+-			logger.error("OutOfMemoryError getting bitmap resource: " + pResId);
+-			System.gc();
+-			// there's not much we can do here
+-			// - when we load a bitmap from resources we expect it to be found
+-			throw e;
+-		} finally {
+-			if (is != null) {
+-				try {
+-					is.close();
+-				} catch (final IOException ignore) {
+-				}
+-			}
+-		}
+-	}
+-
+-	private BitmapFactory.Options getBitmapOptions() {
+-		try {
+-			final Field density = DisplayMetrics.class.getDeclaredField("DENSITY_DEFAULT");
+-			final Field inDensity = BitmapFactory.Options.class.getDeclaredField("inDensity");
+-			final Field inTargetDensity = BitmapFactory.Options.class
+-					.getDeclaredField("inTargetDensity");
+-			final Field targetDensity = DisplayMetrics.class.getDeclaredField("densityDpi");
+-			final BitmapFactory.Options options = new BitmapFactory.Options();
+-			inDensity.setInt(options, density.getInt(null));
+-			inTargetDensity.setInt(options, targetDensity.getInt(mDisplayMetrics));
+-			return options;
+-		} catch (final IllegalAccessException ex) {
+-			// ignore
+-		} catch (final NoSuchFieldException ex) {
+-			// ignore
+-		}
+-		return null;
+-	}
+-
+-	@Override
+-	public Drawable getDrawable(final bitmap pResId) {
+-		return new BitmapDrawable(getBitmap(pResId));
+-	}
+-
+-	@Override
+-	public float getDisplayMetricsDensity() {
+-		// TODO Auto-generated method stub
+-		return mDisplayMetrics.density;
+-	}
+-
+-}
+diff --git a/app/src/main/java/org/osmdroid/LocationListenerProxy.java b/app/src/main/java/org/osmdroid/LocationListenerProxy.java
+deleted file mode 100644
+index adc9e0ea..00000000
+--- a/app/src/main/java/org/osmdroid/LocationListenerProxy.java
++++ /dev/null
+@@ -1,63 +0,0 @@
+-package org.osmdroid;
+-
+-import android.location.Location;
+-import android.location.LocationListener;
+-import android.location.LocationManager;
+-import android.os.Bundle;
+-
+-public class LocationListenerProxy implements LocationListener {
+-	private final LocationManager mLocationManager;
+-	private LocationListener mListener = null;
+-
+-	public LocationListenerProxy(final LocationManager pLocationManager) {
+-		mLocationManager = pLocationManager;
+-	}
+-
+-	public boolean startListening(final LocationListener pListener, final long pUpdateTime,
+-			final float pUpdateDistance) {
+-		boolean result = false;
+-		mListener = pListener;
+-		for (final String provider : mLocationManager.getProviders(true)) {
+-			if (LocationManager.GPS_PROVIDER.equals(provider)
+-					|| LocationManager.NETWORK_PROVIDER.equals(provider)) {
+-				result = true;
+-				mLocationManager.requestLocationUpdates(provider, pUpdateTime, pUpdateDistance,
+-						this);
+-			}
+-		}
+-		return result;
+-	}
+-
+-	public void stopListening() {
+-		mListener = null;
+-		mLocationManager.removeUpdates(this);
+-	}
+-
+-	@Override
+-	public void onLocationChanged(final Location arg0) {
+-		if (mListener != null) {
+-			mListener.onLocationChanged(arg0);
+-		}
+-	}
+-
+-	@Override
+-	public void onProviderDisabled(final String arg0) {
+-		if (mListener != null) {
+-			mListener.onProviderDisabled(arg0);
+-		}
+-	}
+-
+-	@Override
+-	public void onProviderEnabled(final String arg0) {
+-		if (mListener != null) {
+-			mListener.onProviderEnabled(arg0);
+-		}
+-	}
+-
+-	@Override
+-	public void onStatusChanged(final String arg0, final int arg1, final Bundle arg2) {
+-		if (mListener != null) {
+-			mListener.onStatusChanged(arg0, arg1, arg2);
+-		}
+-	}
+-}
+diff --git a/app/src/main/java/org/osmdroid/ResourceProxy.java b/app/src/main/java/org/osmdroid/ResourceProxy.java
+deleted file mode 100644
+index 7850e92f..00000000
+--- a/app/src/main/java/org/osmdroid/ResourceProxy.java
++++ /dev/null
+@@ -1,63 +0,0 @@
+-package org.osmdroid;
+-
+-import android.graphics.Bitmap;
+-import android.graphics.drawable.Drawable;
+-
+-public interface ResourceProxy {
+-
+-	public static enum string {
+-
+-		// tile sources
+-		osmarender, mapnik, cyclemap, public_transport, base, topo, hills, cloudmade_small, cloudmade_standard, mapquest_osm, bing,
+-
+-		// overlays
+-		fiets_nl, base_nl, roads_nl,
+-
+-		// other stuff
+-		unknown, format_distance_meters, format_distance_kilometers, format_distance_miles, format_distance_nautical_miles, format_distance_feet, online_mode, offline_mode, my_location, compass, map_mode,
+-
+-	}
+-
+-	public static enum bitmap {
+-
+-		/**
+-		 * For testing - the image doesn't exist.
+-		 */
+-		unknown,
+-
+-		center, direction_arrow, marker_default, marker_default_focused_base, navto_small, next, previous, person,
+-
+-		/**
+-		 * Menu icons
+-		 */
+-		ic_menu_offline, ic_menu_mylocation, ic_menu_compass, ic_menu_mapmode
+-	}
+-
+-	String getString(string pResId);
+-
+-	/**
+-	 * Use a string resource as a format definition, and format using the supplied format arguments.
+-	 *
+-	 * @param pResId
+-	 * @param formatArgs
+-	 * @return
+-	 */
+-	String getString(string pResId, Object... formatArgs);
+-
+-	Bitmap getBitmap(bitmap pResId);
+-
+-	/**
+-	 * Get a bitmap as a {@link Drawable}
+-	 *
+-	 * @param pResId
+-	 * @return
+-	 */
+-	Drawable getDrawable(bitmap pResId);
+-
+-	/**
+-	 * Gets the density from the current screen's DisplayMetrics
+-	 *
+-	 * @return the screen's density
+-	 */
+-	float getDisplayMetricsDensity();
+-}
+diff --git a/app/src/main/java/org/osmdroid/SensorEventListenerProxy.java b/app/src/main/java/org/osmdroid/SensorEventListenerProxy.java
+deleted file mode 100644
+index 6938d25c..00000000
+--- a/app/src/main/java/org/osmdroid/SensorEventListenerProxy.java
++++ /dev/null
+@@ -1,44 +0,0 @@
+-package org.osmdroid;
+-
+-import android.hardware.Sensor;
+-import android.hardware.SensorEvent;
+-import android.hardware.SensorEventListener;
+-import android.hardware.SensorManager;
+-
+-public class SensorEventListenerProxy implements SensorEventListener {
+-	private final SensorManager mSensorManager;
+-	private SensorEventListener mListener = null;
+-
+-	public SensorEventListenerProxy(final SensorManager pSensorManager) {
+-		mSensorManager = pSensorManager;
+-	}
+-
+-	public boolean startListening(final SensorEventListener pListener, final int pSensorType,
+-			final int pRate) {
+-		final Sensor sensor = mSensorManager.getDefaultSensor(pSensorType);
+-		if (sensor == null)
+-			return false;
+-		mListener = pListener;
+-		return mSensorManager.registerListener(this, sensor, pRate);
+-	}
+-
+-	public void stopListening() {
+-		mListener = null;
+-		mSensorManager.unregisterListener(this);
+-	}
+-
+-	@Override
+-	public void onAccuracyChanged(final Sensor pSensor, final int pAccuracy) {
+-		if (mListener != null) {
+-			mListener.onAccuracyChanged(pSensor, pAccuracy);
+-		}
+-	}
+-
+-	@Override
+-	public void onSensorChanged(final SensorEvent pEvent) {
+-		if (mListener != null) {
+-			mListener.onSensorChanged(pEvent);
+-		}
+-	}
+-
+-}
+diff --git a/app/src/main/java/org/osmdroid/api/IMapController.java b/app/src/main/java/org/osmdroid/api/IMapController.java
+index 7cc49dbc..5905a57f 100644
+--- a/app/src/main/java/org/osmdroid/api/IMapController.java
++++ b/app/src/main/java/org/osmdroid/api/IMapController.java
+@@ -1,5 +1,6 @@
+ package org.osmdroid.api;
+ 
++import org.osmdroid.util.BoundingBoxE6;
+ import org.osmdroid.views.MapController;
+ 
+ /**
+@@ -11,13 +12,10 @@ import org.osmdroid.views.MapController;
+  */
+ public interface IMapController {
+ 
+-	void animateTo(IGeoPoint geoPoint);
+ 	void setCenter(IGeoPoint point);
+ 	int setZoom(int zoomLevel);
+ 	boolean zoomIn();
+-	boolean zoomInFixing(int xPixel, int yPixel);
+ 	boolean zoomOut();
+-	boolean zoomOutFixing(int xPixel, int yPixel);
+ 	void zoomToSpan(int latSpanE6, int lonSpanE6);
+-
++	void zoomToSpan(BoundingBoxE6 bounding);
+ }
+diff --git a/app/src/main/java/org/osmdroid/api/IProjection.java b/app/src/main/java/org/osmdroid/api/IProjection.java
+index 2216ad0e..ecdc7688 100644
+--- a/app/src/main/java/org/osmdroid/api/IProjection.java
++++ b/app/src/main/java/org/osmdroid/api/IProjection.java
+@@ -2,7 +2,6 @@ package org.osmdroid.api;
+ 
+ import android.graphics.Point;
+ 
+-import org.osmdroid.views.MapView.Projection;
+ 
+ /**
+  * An interface that resembles the Google Maps API Projection interface and is implemented by the
+diff --git a/app/src/main/java/org/osmdroid/contributor/util/constants/OpenStreetMapContributorConstants.java b/app/src/main/java/org/osmdroid/contributor/util/constants/OpenStreetMapContributorConstants.java
+deleted file mode 100644
+index e3c26032..00000000
+--- a/app/src/main/java/org/osmdroid/contributor/util/constants/OpenStreetMapContributorConstants.java
++++ /dev/null
+@@ -1,30 +0,0 @@
+-// Created by plusminus on 14:11:09 - 21.09.2008
+-package org.osmdroid.contributor.util.constants;
+-
+-/**
+- * 
+- * This class contains constants used by the contributor package.
+- * 
+- * @author Nicolas Gramlich
+- * 
+- */
+-public interface OpenStreetMapContributorConstants {
+-
+-	// ===========================================================
+-	// Final Fields
+-	// ===========================================================
+-
+-	public static final int NOT_SET = Integer.MIN_VALUE;
+-
+-	public static final String OSM_USERNAME = "PUT_YOUR_USERNAME_HERE";
+-	public static final String OSM_PASSWORD = "PUT_YOUR_PASSWORD_HERE";
+-
+-	public static final int MINGEOPOINTS_FOR_OSM_CONTRIBUTION = 100;
+-	public static final int MINDIAGONALMETERS_FOR_OSM_CONTRIBUTION = 300;
+-
+-	public static final String OSM_CREATOR_INFO = "AndNav - http://www.andnav.org - Android Navigation System";
+-
+-	// ===========================================================
+-	// Methods
+-	// ===========================================================
+-}
+diff --git a/app/src/main/java/org/osmdroid/events/DelayedMapListener.java b/app/src/main/java/org/osmdroid/events/DelayedMapListener.java
+deleted file mode 100644
+index 93a187a1..00000000
+--- a/app/src/main/java/org/osmdroid/events/DelayedMapListener.java
++++ /dev/null
+@@ -1,101 +0,0 @@
+-package org.osmdroid.events;
+-
+-import android.os.Handler;
+-
+-import ch.bailu.aat.helpers.Logger;
+-import ch.bailu.aat.helpers.LoggerFactory;
+-
+-
+-/*
+- * A MapListener that aggregates multiple events called in quick succession.
+- * After an event arrives, if another event arrives within <code>delay</code> milliseconds,
+- * the original event is discarded.  Otherwise, the event is propagated to the wrapped
+- * MapListener.  Note: This class is not thread-safe.
+- *
+- * @author Theodore Hong
+- */
+-public class DelayedMapListener implements MapListener {
+-
+-	private static final Logger logger = LoggerFactory.getLogger(DelayedMapListener.class);
+-
+-	/** Default listening delay */
+-	protected static final int DEFAULT_DELAY = 100;
+-
+-	/** The wrapped MapListener */
+-	MapListener wrappedListener;
+-
+-	/** Listening delay, in milliseconds */
+-	protected long delay;
+-
+-	protected Handler handler;
+-	protected CallbackTask callback;
+-
+-	/*
+-	 * @param wrappedListener The wrapped MapListener
+-	 * 
+-	 * @param delay Listening delay, in milliseconds
+-	 */
+-	public DelayedMapListener(final MapListener wrappedListener, final long delay) {
+-		this.wrappedListener = wrappedListener;
+-		this.delay = delay;
+-		this.handler = new Handler();
+-		this.callback = null;
+-	}
+-
+-	/*
+-	 * Constructor with default delay.
+-	 * 
+-	 * @param wrappedListener The wrapped MapListener
+-	 */
+-	public DelayedMapListener(final MapListener wrappedListener) {
+-		this(wrappedListener, DEFAULT_DELAY);
+-	}
+-
+-	@Override
+-	public boolean onScroll(final ScrollEvent event) {
+-		dispatch(event);
+-		return true;
+-	}
+-
+-	@Override
+-	public boolean onZoom(final ZoomEvent event) {
+-		dispatch(event);
+-		return true;
+-	}
+-
+-	/*
+-	 * Process an incoming MapEvent.
+-	 */
+-	protected void dispatch(final MapEvent event) {
+-		// cancel any pending callback
+-		if (callback != null) {
+-			handler.removeCallbacks(callback);
+-		}
+-		callback = new CallbackTask(event);
+-
+-		// set timer
+-		handler.postDelayed(callback, delay);
+-	}
+-
+-	// Callback tasks
+-	private class CallbackTask implements Runnable {
+-		private final MapEvent event;
+-
+-		public CallbackTask(final MapEvent event) {
+-			this.event = event;
+-		}
+-
+-		@Override
+-		public void run() {
+-			// do the callback
+-			if (event instanceof ScrollEvent) {
+-				wrappedListener.onScroll((ScrollEvent) event);
+-			} else if (event instanceof ZoomEvent) {
+-				wrappedListener.onZoom((ZoomEvent) event);
+-			} else {
+-				// unknown event; discard
+-				logger.debug("Unknown event received: " + event);
+-			}
+-		}
+-	}
+-}
+diff --git a/app/src/main/java/org/osmdroid/events/MapAdapter.java b/app/src/main/java/org/osmdroid/events/MapAdapter.java
+deleted file mode 100644
+index 17307c08..00000000
+--- a/app/src/main/java/org/osmdroid/events/MapAdapter.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package org.osmdroid.events;
+-
+-/*
+- * An abstract adapter class for receiving map events. The methods in this class are empty.
+- * This class exists as convenience for creating listener objects.
+- *
+- * @author Theodore Hong
+- */
+-public abstract class MapAdapter implements MapListener {
+-	@Override
+-	public boolean onScroll(final ScrollEvent event) {
+-		// do nothing
+-		return false;
+-	}
+-
+-	@Override
+-	public boolean onZoom(final ZoomEvent event) {
+-		// do nothing
+-		return false;
+-	}
+-}
+diff --git a/app/src/main/java/org/osmdroid/events/MapEvent.java b/app/src/main/java/org/osmdroid/events/MapEvent.java
+deleted file mode 100644
+index 536d2d80..00000000
+--- a/app/src/main/java/org/osmdroid/events/MapEvent.java
++++ /dev/null
+@@ -1,10 +0,0 @@
+-package org.osmdroid.events;
+-
+-/*
+- * Tagging interface for map events
+- *
+- * @author Theodore Hong
+- */
+-public interface MapEvent {
+-
+-}
+diff --git a/app/src/main/java/org/osmdroid/events/ScrollEvent.java b/app/src/main/java/org/osmdroid/events/ScrollEvent.java
+index f8d60d32..d0ddd481 100644
+--- a/app/src/main/java/org/osmdroid/events/ScrollEvent.java
++++ b/app/src/main/java/org/osmdroid/events/ScrollEvent.java
+@@ -7,7 +7,7 @@ import org.osmdroid.views.MapView;
+  *
+  * @author Theodore Hong
+  */
+-public class ScrollEvent implements MapEvent {
++public class ScrollEvent {
+ 	protected MapView source;
+ 	protected int x;
+ 	protected int y;
+diff --git a/app/src/main/java/org/osmdroid/events/ZoomEvent.java b/app/src/main/java/org/osmdroid/events/ZoomEvent.java
+index d8957fe9..8a31df96 100644
+--- a/app/src/main/java/org/osmdroid/events/ZoomEvent.java
++++ b/app/src/main/java/org/osmdroid/events/ZoomEvent.java
+@@ -7,7 +7,7 @@ import org.osmdroid.views.MapView;
+  *
+  * @author Theodore Hong
+  */
+-public class ZoomEvent implements MapEvent {
++public class ZoomEvent  {
+ 	protected MapView source;
+ 	protected int zoomLevel;
+ 
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/constants/OpenStreetMapTileProviderConstants.java b/app/src/main/java/org/osmdroid/tileprovider/constants/OpenStreetMapTileProviderConstants.java
+index 3be9f02f..a59865c8 100644
+--- a/app/src/main/java/org/osmdroid/tileprovider/constants/OpenStreetMapTileProviderConstants.java
++++ b/app/src/main/java/org/osmdroid/tileprovider/constants/OpenStreetMapTileProviderConstants.java
+@@ -13,7 +13,6 @@ import java.io.File;
+  */
+ public interface OpenStreetMapTileProviderConstants {
+ 
+-	public static final boolean DEBUGMODE = false;
+ 
+ 	/** Minimum Zoom Level */
+ 	public static final int MINIMUM_ZOOMLEVEL = 0;
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/BitmapTileSourceBase.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/BitmapTileSourceBase.java
+index 89a8a7d2..811825f1 100644
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/BitmapTileSourceBase.java
++++ b/app/src/main/java/org/osmdroid/tileprovider/tilesource/BitmapTileSourceBase.java
+@@ -5,8 +5,6 @@ import android.graphics.BitmapFactory;
+ import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.Drawable;
+ 
+-import org.osmdroid.ResourceProxy;
+-import org.osmdroid.ResourceProxy.string;
+ import org.osmdroid.tileprovider.MapTile;
+ import org.osmdroid.tileprovider.constants.OpenStreetMapTileProviderConstants;
+ 
+@@ -34,12 +32,10 @@ public abstract class BitmapTileSourceBase implements ITileSource,
+ 
+ 	private final int mTileSizePixels;
+ 
+-	private final string mResourceId;
+ 
+-	public BitmapTileSourceBase(final String aName, final string aResourceId,
++	public BitmapTileSourceBase(final String aName,
+ 			final int aZoomMinLevel, final int aZoomMaxLevel, final int aTileSizePixels,
+ 			final String aImageFilenameEnding) {
+-		mResourceId = aResourceId;
+ 		mOrdinal = globalOrdinal++;
+ 		mName = aName;
+ 		mMinimumZoomLevel = aZoomMinLevel;
+@@ -81,10 +77,6 @@ public abstract class BitmapTileSourceBase implements ITileSource,
+ 		return mTileSizePixels;
+ 	}
+ 
+-	@Override
+-	public String localizedName(final ResourceProxy proxy) {
+-		return proxy.getString(mResourceId);
+-	}
+ 
+ 	@Override
+ 	public Drawable getDrawable(final String aFilePath) {
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/IStyledTileSource.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/IStyledTileSource.java
+deleted file mode 100644
+index d1941a55..00000000
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/IStyledTileSource.java
++++ /dev/null
+@@ -1,15 +0,0 @@
+-package org.osmdroid.tileprovider.tilesource;
+-
+-/**
+- * Tile sources that have a settable "style" attibute can implement this. After setting this on a
+- * tile provider, you may need to call clearTileCache() or call setTileSource() again on the tile
+- * provider to clear the current tiles on the screen that are still in the old style.
+- */
+-public interface IStyledTileSource<T> {
+-
+-	public void setStyle(T style);
+-
+-	public void setStyle(String style);
+-
+-	public T getStyle();
+-}
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/ITileSource.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/ITileSource.java
+index 6d44075d..ea9c7bce 100644
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/ITileSource.java
++++ b/app/src/main/java/org/osmdroid/tileprovider/tilesource/ITileSource.java
+@@ -2,7 +2,6 @@ package org.osmdroid.tileprovider.tilesource;
+ 
+ import android.graphics.drawable.Drawable;
+ 
+-import org.osmdroid.ResourceProxy;
+ import org.osmdroid.tileprovider.MapTile;
+ import org.osmdroid.tileprovider.tilesource.BitmapTileSourceBase.LowMemoryException;
+ 
+@@ -24,14 +23,6 @@ public interface ITileSource {
+ 	 */
+ 	String name();
+ 
+-	/**
+-	 * A localized human-friendly name for this tile source
+-	 * 
+-	 * @param proxy
+-	 *            a resource proxy
+-	 * @return the localized tile source name
+-	 */
+-	String localizedName(ResourceProxy proxy);
+ 
+ 	/**
+ 	 * Get a unique file path for the tile. This file path may be used to store the tile on a file
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/OnlineTileSourceBase.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/OnlineTileSourceBase.java
+index 0576904e..24e8cca0 100644
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/OnlineTileSourceBase.java
++++ b/app/src/main/java/org/osmdroid/tileprovider/tilesource/OnlineTileSourceBase.java
+@@ -1,16 +1,15 @@
+ package org.osmdroid.tileprovider.tilesource;
+ 
+-import org.osmdroid.ResourceProxy.string;
+ import org.osmdroid.tileprovider.MapTile;
+ 
+ public abstract class OnlineTileSourceBase extends BitmapTileSourceBase {
+ 
+ 	private final String mBaseUrls[];
+ 
+-	public OnlineTileSourceBase(final String aName, final string aResourceId,
++	public OnlineTileSourceBase(final String aName,
+ 			final int aZoomMinLevel, final int aZoomMaxLevel, final int aTileSizePixels,
+ 			final String aImageFilenameEnding, final String... aBaseUrl) {
+-		super(aName, aResourceId, aZoomMinLevel, aZoomMaxLevel, aTileSizePixels,
++		super(aName, aZoomMinLevel, aZoomMaxLevel, aTileSizePixels,
+ 				aImageFilenameEnding);
+ 		mBaseUrls = aBaseUrl;
+ 	}
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/QuadTreeTileSource.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/QuadTreeTileSource.java
+deleted file mode 100644
+index 04c2f450..00000000
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/QuadTreeTileSource.java
++++ /dev/null
+@@ -1,42 +0,0 @@
+-package org.osmdroid.tileprovider.tilesource;
+-
+-import org.osmdroid.ResourceProxy.string;
+-import org.osmdroid.tileprovider.MapTile;
+-
+-public class QuadTreeTileSource extends OnlineTileSourceBase {
+-
+-	public QuadTreeTileSource(final String aName, final string aResourceId,
+-			final int aZoomMinLevel, final int aZoomMaxLevel, final int aTileSizePixels,
+-			final String aImageFilenameEnding, final String... aBaseUrl) {
+-		super(aName, aResourceId, aZoomMinLevel, aZoomMaxLevel, aTileSizePixels,
+-				aImageFilenameEnding, aBaseUrl);
+-	}
+-
+-	@Override
+-	public String getTileURLString(final MapTile aTile) {
+-		return getBaseUrl() + quadTree(aTile) + mImageFilenameEnding;
+-	}
+-
+-	/**
+-	 * Converts TMS tile coordinates to QuadTree
+-	 * 
+-	 * @param aTile
+-	 *            The tile coordinates to convert
+-	 * @return The QuadTree as String.
+-	 */
+-	protected String quadTree(final MapTile aTile) {
+-		final StringBuilder quadKey = new StringBuilder();
+-		for (int i = aTile.getZoomLevel(); i > 0; i--) {
+-			int digit = 0;
+-			final int mask = 1 << (i - 1);
+-			if ((aTile.getX() & mask) != 0)
+-				digit += 1;
+-			if ((aTile.getY() & mask) != 0)
+-				digit += 2;
+-			quadKey.append("" + digit);
+-		}
+-
+-		return quadKey.toString();
+-	}
+-
+-}
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/TileSourceFactory.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/TileSourceFactory.java
+deleted file mode 100644
+index 3e281b4c..00000000
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/TileSourceFactory.java
++++ /dev/null
+@@ -1,118 +0,0 @@
+-package org.osmdroid.tileprovider.tilesource;
+-
+-import org.osmdroid.ResourceProxy;
+-
+-import java.util.ArrayList;
+-
+-public class TileSourceFactory {
+-
+-	// private static final Logger logger = LoggerFactory.getLogger(TileSourceFactory.class);
+-
+-	/**
+-	 * Get the tile source with the specified name.
+-	 *
+-	 * @param aName
+-	 *            the tile source name
+-	 * @return the tile source
+-	 * @throws IllegalArgumentException
+-	 *             if tile source not found
+-	 */
+-	public static ITileSource getTileSource(final String aName) throws IllegalArgumentException {
+-		for (final ITileSource tileSource : mTileSources) {
+-			// TODO perhaps we should ignore case and white space
+-			if (tileSource.name().equals(aName)) {
+-				return tileSource;
+-			}
+-		}
+-		throw new IllegalArgumentException("No such tile source: " + aName);
+-	}
+-
+-	/**
+-	 * Get the tile source at the specified position.
+-	 *
+-	 * @param aOrdinal
+-	 * @return the tile source
+-	 * @throws IllegalArgumentException
+-	 *             if tile source not found
+-	 */
+-	public static ITileSource getTileSource(final int aOrdinal) throws IllegalArgumentException {
+-		for (final ITileSource tileSource : mTileSources) {
+-			if (tileSource.ordinal() == aOrdinal) {
+-				return tileSource;
+-			}
+-		}
+-		throw new IllegalArgumentException("No tile source at position: " + aOrdinal);
+-	}
+-
+-	public static ArrayList<ITileSource> getTileSources() {
+-		return mTileSources;
+-	}
+-
+-	public static void addTileSource(final ITileSource mTileSource) {
+-		mTileSources.add(mTileSource);
+-	}
+-
+-	public static final OnlineTileSourceBase OSMARENDER = new XYTileSource("Osmarender",
+-			ResourceProxy.string.osmarender, 0, 17, 256, ".png",
+-			"http://tah.openstreetmap.org/Tiles/tile/");
+-
+-	public static final OnlineTileSourceBase MAPNIK = new XYTileSource("Mapnik",
+-			ResourceProxy.string.mapnik, 0, 18, 256, ".png", "http://tile.openstreetmap.org/");
+-
+-	public static final OnlineTileSourceBase CYCLEMAP = new XYTileSource("CycleMap",
+-			ResourceProxy.string.cyclemap, 0, 17, 256, ".png",
+-			"http://a.andy.sandbox.cloudmade.com/tiles/cycle/",
+-			"http://b.andy.sandbox.cloudmade.com/tiles/cycle/",
+-			"http://c.andy.sandbox.cloudmade.com/tiles/cycle/");
+-
+-	public static final OnlineTileSourceBase PUBLIC_TRANSPORT = new XYTileSource(
+-			"OSMPublicTransport", ResourceProxy.string.public_transport, 0, 17, 256, ".png",
+-			"http://tile.xn--pnvkarte-m4a.de/tilegen/");
+-
+-	public static final OnlineTileSourceBase BASE = new XYTileSource("Base",
+-			ResourceProxy.string.base, 4, 17, 256, ".png", "http://topo.openstreetmap.de/base/");
+-
+-	public static final OnlineTileSourceBase TOPO = new XYTileSource("Topo",
+-			ResourceProxy.string.topo, 4, 17, 256, ".png", "http://topo.openstreetmap.de/topo/");
+-
+-	public static final OnlineTileSourceBase HILLS = new XYTileSource("Hills",
+-			ResourceProxy.string.hills, 8, 17, 256, ".png", "http://topo.geofabrik.de/hills/");
+-
+-
+-	public static final OnlineTileSourceBase MAPQUESTOSM =
+-		new XYTileSource("MapquestOSM", ResourceProxy.string.mapquest_osm, 0, 18, 256, ".png",
+-				"http://otile1.mqcdn.com/tiles/1.0.0/osm/",
+-				"http://otile2.mqcdn.com/tiles/1.0.0/osm/",
+-				"http://otile3.mqcdn.com/tiles/1.0.0/osm/",
+-				"http://otile4.mqcdn.com/tiles/1.0.0/osm/");
+-
+-	public static final OnlineTileSourceBase DEFAULT_TILE_SOURCE = MAPNIK;
+-
+-	// The following tile sources are overlays, not standalone map views.
+-	// They are therefore not in mTileSources.
+-
+-	public static final OnlineTileSourceBase FIETS_OVERLAY_NL = new XYTileSource("Fiets",
+-			ResourceProxy.string.fiets_nl, 3, 18, 256, ".png",
+-			"http://overlay.openstreetmap.nl/openfietskaart-overlay/");
+-
+-	public static final OnlineTileSourceBase BASE_OVERLAY_NL = new XYTileSource("BaseNL",
+-			ResourceProxy.string.base_nl, 0, 18, 256, ".png",
+-			"http://overlay.openstreetmap.nl/basemap/");
+-
+-	public static final OnlineTileSourceBase ROADS_OVERLAY_NL = new XYTileSource("RoadsNL",
+-			ResourceProxy.string.roads_nl, 0, 18, 256, ".png",
+-			"http://overlay.openstreetmap.nl/roads/");
+-
+-	private static ArrayList<ITileSource> mTileSources;
+-	static {
+-		mTileSources = new ArrayList<>();
+-		mTileSources.add(OSMARENDER);
+-		mTileSources.add(MAPNIK);
+-		mTileSources.add(CYCLEMAP);
+-		mTileSources.add(PUBLIC_TRANSPORT);
+-		mTileSources.add(BASE);
+-		mTileSources.add(TOPO);
+-		mTileSources.add(HILLS);
+-		mTileSources.add(MAPQUESTOSM);
+-	}
+-}
+diff --git a/app/src/main/java/org/osmdroid/tileprovider/tilesource/XYTileSource.java b/app/src/main/java/org/osmdroid/tileprovider/tilesource/XYTileSource.java
+index d68b059c..8070b84f 100644
+--- a/app/src/main/java/org/osmdroid/tileprovider/tilesource/XYTileSource.java
++++ b/app/src/main/java/org/osmdroid/tileprovider/tilesource/XYTileSource.java
+@@ -1,14 +1,13 @@
+ package org.osmdroid.tileprovider.tilesource;
+ 
+-import org.osmdroid.ResourceProxy.string;
+ import org.osmdroid.tileprovider.MapTile;
+ 
+ public class XYTileSource extends OnlineTileSourceBase {
+ 
+-	public XYTileSource(final String aName, final string aResourceId, final int aZoomMinLevel,
++	public XYTileSource(final String aName, final int aZoomMinLevel,
+ 			final int aZoomMaxLevel, final int aTileSizePixels, final String aImageFilenameEnding,
+ 			final String... aBaseUrl) {
+-		super(aName, aResourceId, aZoomMinLevel, aZoomMaxLevel, aTileSizePixels,
++		super(aName, aZoomMinLevel, aZoomMaxLevel, aTileSizePixels,
+ 				aImageFilenameEnding, aBaseUrl);
+ 	}
+ 
+diff --git a/app/src/main/java/org/osmdroid/util/LocationUtils.java b/app/src/main/java/org/osmdroid/util/LocationUtils.java
+deleted file mode 100644
+index 5093145d..00000000
+--- a/app/src/main/java/org/osmdroid/util/LocationUtils.java
++++ /dev/null
+@@ -1,43 +0,0 @@
+-package org.osmdroid.util;
+-
+-import android.location.Location;
+-import android.location.LocationManager;
+-
+-import org.osmdroid.util.constants.UtilConstants;
+-
+-public class LocationUtils implements UtilConstants {
+-
+-	/**
+-	 * This is a utility class with only static members.
+-	 */
+-	private LocationUtils() {
+-	}
+-
+-	/**
+-	 * Get the most recent location from the GPS or Network provider.
+-	 * @param pLocationManager
+-	 * @return return the most recent location, or null if there's no known location
+-	 */
+-	public static Location getLastKnownLocation(final LocationManager pLocationManager) {
+-		if (pLocationManager == null) {
+-			return null;
+-		}
+-		final Location gpsLocation =
+-			pLocationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+-		final Location networkLocation =
+-			pLocationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+-		if (gpsLocation == null) {
+-			return networkLocation;
+-		} else if (networkLocation == null) {
+-			return gpsLocation;
+-		} else {
+-			// both are non-null - use the most recent
+-			if (networkLocation.getTime() > gpsLocation.getTime() + GPS_WAIT_TIME) {
+-				return networkLocation;
+-			} else {
+-				return gpsLocation;
+-			}
+-		}
+-	}
+-
+-}
+diff --git a/app/src/main/java/org/osmdroid/util/NetworkLocationIgnorer.java b/app/src/main/java/org/osmdroid/util/NetworkLocationIgnorer.java
+deleted file mode 100644
+index fc95d423..00000000
+--- a/app/src/main/java/org/osmdroid/util/NetworkLocationIgnorer.java
++++ /dev/null
+@@ -1,42 +0,0 @@
+-package org.osmdroid.util;
+-
+-import android.location.LocationManager;
+-
+-import org.osmdroid.util.constants.UtilConstants;
+-
+-/**
+- *
+- * A class to check whether we want to use a location. If there are multiple location providers,
+- * i.e. network and GPS, then you want to ignore network locations shortly after a GPS location
+- * because you will get another GPS location soon.
+- *
+- * @author Neil Boyd
+- *
+- */
+-public class NetworkLocationIgnorer implements UtilConstants {
+-
+-	/** last time we got a location from the gps provider */
+-	private long mLastGps = 0;
+-
+-	/**
+-	 * Whether we should ignore this location.
+-	 *
+-	 * @param pProvider
+-	 *            the provider that provided the location
+-	 * @param pTime
+-	 *            the time of the location
+-	 * @return true if we should ignore this location, false if not
+-	 */
+-	public boolean shouldIgnore(final String pProvider, final long pTime) {
+-
+-		if (LocationManager.GPS_PROVIDER.equals(pProvider)) {
+-			mLastGps = pTime;
+-		} else {
+-			if (pTime < mLastGps + GPS_WAIT_TIME) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-}
+diff --git a/app/src/main/java/org/osmdroid/views/MapController.java b/app/src/main/java/org/osmdroid/views/MapController.java
+index 3f7a52ac..95a297e3 100644
+--- a/app/src/main/java/org/osmdroid/views/MapController.java
++++ b/app/src/main/java/org/osmdroid/views/MapController.java
+@@ -6,10 +6,8 @@ import android.graphics.Point;
+ import org.osmdroid.api.IGeoPoint;
+ import org.osmdroid.api.IMapController;
+ import org.osmdroid.util.BoundingBoxE6;
+-import org.osmdroid.util.GeoPoint;
+ import org.osmdroid.views.util.MyMath;
+ import org.osmdroid.views.util.constants.MapViewConstants;
+-import org.osmdroid.views.util.constants.MathConstants;
+ 
+ /**
+  *
+@@ -17,650 +15,118 @@ import org.osmdroid.views.util.constants.MathConstants;
+  */
+ public class MapController implements IMapController, MapViewConstants {
+ 
+-	// ===========================================================
+-	// Constants
+-	// ===========================================================
+-
+-	// ===========================================================
+-	// Fields
+-	// ===========================================================
+-
+-	private final MapView mOsmv;
+-	private AbstractAnimationRunner mCurrentAnimationRunner;
+-
+-	// ===========================================================
+-	// Constructors
+-	// ===========================================================
+-
+-	public MapController(final MapView osmv) {
+-		this.mOsmv = osmv;
+-	}
+-
+-	// ===========================================================
+-	// Getter & Setter
+-	// ===========================================================
+-
+-	// ===========================================================
+-	// Methods from SuperClass/Interfaces
+-	// ===========================================================
+-
+-	// ===========================================================
+-	// Methods
+-	// ===========================================================
+-
+-	public void zoomToSpan(final BoundingBoxE6 bb) {
+-		zoomToSpan(bb.getLatitudeSpanE6(), bb.getLongitudeSpanE6());
+-	}
+-
+-	// TODO rework zoomToSpan
+-	@Override
+-	public void zoomToSpan(final int reqLatSpan, final int reqLonSpan) {
+-		if (reqLatSpan <= 0 || reqLonSpan <= 0) {
+-			return;
+-		}
+-
+-		final BoundingBoxE6 bb = this.mOsmv.getBoundingBox();
+-		final int curZoomLevel = this.mOsmv.getZoomLevel();
+-
+-		final int curLatSpan = bb.getLatitudeSpanE6();
+-		final int curLonSpan = bb.getLongitudeSpanE6();
+-
+-		final float diffNeededLat = (float) reqLatSpan / curLatSpan; // i.e. 600/500 = 1,2
+-		final float diffNeededLon = (float) reqLonSpan / curLonSpan; // i.e. 300/400 = 0,75
+-
+-		final float diffNeeded = Math.max(diffNeededLat, diffNeededLon); // i.e. 1,2
+-
+-		if (diffNeeded > 1) { // Zoom Out
+-			this.mOsmv.setZoomLevel(curZoomLevel - MyMath.getNextSquareNumberAbove(diffNeeded));
+-		} else if (diffNeeded < 0.5) { // Can Zoom in
+-			this.mOsmv.setZoomLevel(curZoomLevel + MyMath.getNextSquareNumberAbove(1 / diffNeeded)
+-					- 1);
+-		}
+-	}
+-
+-	/**
+-	 * Start animating the map towards the given point.
+-	 */
+-	@Override
+-	public void animateTo(final IGeoPoint point) {
+-		final int x = mOsmv.getScrollX();
+-		final int y = mOsmv.getScrollY();
+-		final Point p = mOsmv.tileSystem.LatLongToPixelXY(point.getLatitudeE6() / 1E6,
+-				point.getLongitudeE6() / 1E6, this.mOsmv.getZoomLevel(), null);
+-		final int worldSize_2 = mOsmv.tileSystem.MapSize(this.mOsmv.getZoomLevel()) / 2;
+-		mOsmv.getScroller().startScroll(x, y, p.x - worldSize_2 - x, p.y - worldSize_2 - y,
+-				ANIMATION_DURATION_DEFAULT);
+-		mOsmv.postInvalidate();
+-	}
+-
+-	/**
+-	 * Animates the underlying {@link MapView} that it centers the passed {@link GeoPoint} in the
+-	 * end. Uses: {@link MapController.ANIMATION_SMOOTHNESS_DEFAULT} and
+-	 * {@link MapController.ANIMATION_DURATION_DEFAULT}.
+-	 *
+-	 * @param gp
+-	 */
+-	public void animateTo(final GeoPoint gp, final AnimationType aAnimationType) {
+-		animateTo(gp.getLatitudeE6(), gp.getLongitudeE6(), aAnimationType,
+-				ANIMATION_DURATION_DEFAULT, ANIMATION_SMOOTHNESS_DEFAULT);
+-	}
+-
+-	/**
+-	 * Animates the underlying {@link MapView} that it centers the passed {@link GeoPoint} in the
+-	 * end.
+-	 *
+-	 * @param gp
+-	 *            GeoPoint to be centered in the end.
+-	 * @param aSmoothness
+-	 *            steps made during animation. I.e.: {@link MapController.ANIMATION_SMOOTHNESS_LOW},
+-	 *            {@link MapController.ANIMATION_SMOOTHNESS_DEFAULT},
+-	 *            {@link MapController.ANIMATION_SMOOTHNESS_HIGH}
+-	 * @param aDuration
+-	 *            in Milliseconds. I.e.: {@link MapController.ANIMATION_DURATION_SHORT},
+-	 *            {@link MapController.ANIMATION_DURATION_DEFAULT},
+-	 *            {@link MapController.ANIMATION_DURATION_LONG}
+-	 */
+-	public void animateTo(final GeoPoint gp, final AnimationType aAnimationType,
+-			final int aSmoothness, final int aDuration) {
+-		animateTo(gp.getLatitudeE6(), gp.getLongitudeE6(), aAnimationType, aSmoothness, aDuration);
+-	}
+-
+-	/**
+-	 * Animates the underlying {@link MapView} that it centers the passed coordinates in the end.
+-	 * Uses: {@link MapController.ANIMATION_SMOOTHNESS_DEFAULT} and
+-	 * {@link MapController.ANIMATION_DURATION_DEFAULT}.
+-	 *
+-	 * @param aLatitudeE6
+-	 * @param aLongitudeE6
+-	 */
+-	public void animateTo(final int aLatitudeE6, final int aLongitudeE6,
+-			final AnimationType aAnimationType) {
+-		animateTo(aLatitudeE6, aLongitudeE6, aAnimationType, ANIMATION_SMOOTHNESS_DEFAULT,
+-				ANIMATION_DURATION_DEFAULT);
+-	}
+-
+-	/**
+-	 * Animates the underlying {@link MapView} that it centers the passed coordinates in the end.
+-	 *
+-	 * @param aLatitudeE6
+-	 * @param aLongitudeE6
+-	 * @param aSmoothness
+-	 *            steps made during animation. I.e.: {@link MapController.ANIMATION_SMOOTHNESS_LOW},
+-	 *            {@link MapController.ANIMATION_SMOOTHNESS_DEFAULT},
+-	 *            {@link MapController.ANIMATION_SMOOTHNESS_HIGH}
+-	 * @param aDuration
+-	 *            in Milliseconds. I.e.: {@link MapController.ANIMATION_DURATION_SHORT},
+-	 *            {@link MapController.ANIMATION_DURATION_DEFAULT},
+-	 *            {@link MapController.ANIMATION_DURATION_LONG}
+-	 */
+-	public void animateTo(final int aLatitudeE6, final int aLongitudeE6,
+-			final AnimationType aAnimationType, final int aSmoothness, final int aDuration) {
+-		this.stopAnimation(false);
+-
+-		switch (aAnimationType) {
+-		case LINEAR:
+-			this.mCurrentAnimationRunner = new LinearAnimationRunner(aLatitudeE6, aLongitudeE6,
+-					aSmoothness, aDuration);
+-			break;
+-		case EXPONENTIALDECELERATING:
+-			this.mCurrentAnimationRunner = new ExponentialDeceleratingAnimationRunner(aLatitudeE6,
+-					aLongitudeE6, aSmoothness, aDuration);
+-			break;
+-		case QUARTERCOSINUSALDECELERATING:
+-			this.mCurrentAnimationRunner = new QuarterCosinusalDeceleratingAnimationRunner(
+-					aLatitudeE6, aLongitudeE6, aSmoothness, aDuration);
+-			break;
+-		case HALFCOSINUSALDECELERATING:
+-			this.mCurrentAnimationRunner = new HalfCosinusalDeceleratingAnimationRunner(
+-					aLatitudeE6, aLongitudeE6, aSmoothness, aDuration);
+-			break;
+-		case MIDDLEPEAKSPEED:
+-			this.mCurrentAnimationRunner = new MiddlePeakSpeedAnimationRunner(aLatitudeE6,
+-					aLongitudeE6, aSmoothness, aDuration);
+-			break;
+-		}
+-
+-		this.mCurrentAnimationRunner.start();
+-	}
+-
+-	public void scrollBy(final int x, final int y) {
+-		this.mOsmv.scrollBy(x, y);
+-	}
+-
+-	/**
+-	 * Set the map view to the given center. There will be no animation.
+-	 */
+-	@Override
+-	public void setCenter(final IGeoPoint point) {
+-		final Point p = mOsmv.tileSystem.LatLongToPixelXY(point.getLatitudeE6() / 1E6,
+-				point.getLongitudeE6() / 1E6, this.mOsmv.getZoomLevel(), null);
+-		final int worldSize_2 = mOsmv.tileSystem.MapSize(this.mOsmv.getZoomLevel()) / 2;
+-		this.mOsmv.scrollTo(p.x - worldSize_2, p.y - worldSize_2);
+-	}
+-
+-	/**
+-	 * Stops a running animation.
+-	 *
+-	 * @param jumpToTarget
+-	 */
+-	public void stopAnimation(final boolean jumpToTarget) {
+-		final AbstractAnimationRunner currentAnimationRunner = this.mCurrentAnimationRunner;
+-
+-		if (currentAnimationRunner != null && !currentAnimationRunner.isDone()) {
+-			currentAnimationRunner.interrupt();
+-			if (jumpToTarget) {
+-				setCenter(new GeoPoint(currentAnimationRunner.mTargetLatitudeE6,
+-						currentAnimationRunner.mTargetLongitudeE6));
+-			}
+-		}
+-	}
+-
+-	@Override
+-	public int setZoom(final int zoomlevel) {
+-		return mOsmv.setZoomLevel(zoomlevel);
+-	}
+-
+-	/**
+-	 * Zoom in by one zoom level.
+-	 */
+-	@Override
+-	public boolean zoomIn() {
+-		return mOsmv.zoomIn();
+-	}
+-
+-	public boolean zoomInFixing(final GeoPoint point) {
+-		return mOsmv.zoomInFixing(point);
+-	}
+-
+-	@Override
+-	public boolean zoomInFixing(final int xPixel, final int yPixel) {
+-		return mOsmv.zoomInFixing(xPixel, yPixel);
+-	}
+-
+-	/**
+-	 * Zoom out by one zoom level.
+-	 */
+-	@Override
+-	public boolean zoomOut() {
+-		return mOsmv.zoomOut();
+-	}
+-
+-	public boolean zoomOutFixing(final GeoPoint point) {
+-		return mOsmv.zoomOutFixing(point);
+-	}
+-
+-	@Override
+-	public boolean zoomOutFixing(final int xPixel, final int yPixel) {
+-		return mOsmv.zoomOutFixing(xPixel, yPixel);
+-	}
+-
+-	// ===========================================================
+-	// Inner and Anonymous Classes
+-	// ===========================================================
+-
+-	/**
+-	 * Choose on of the Styles of approacing the target Coordinates.
+-	 * <ul>
+-	 * <li><code>LINEAR</code>
+-	 * <ul>
+-	 * <li>Uses ses linear interpolation</li>
+-	 * <li>Values produced: 10%, 20%, 30%, 40%, 50%, ...</li>
+-	 * <li>Style: Always average speed.</li>
+-	 * </ul>
+-	 * </li>
+-	 * <li><code>EXPONENTIALDECELERATING</code>
+-	 * <ul>
+-	 * <li>Uses a exponential interpolation/li>
+-	 * <li>Values produced: 50%, 75%, 87.5%, 93.5%, ...</li>
+-	 * <li>Style: Starts very fast, really slow in the end.</li>
+-	 * </ul>
+-	 * </li>
+-	 * <li><code>QUARTERCOSINUSALDECELERATING</code>
+-	 * <ul>
+-	 * <li>Uses the first quarter of the cos curve (from zero to PI/2) for interpolation.</li>
+-	 * <li>Values produced: See cos curve :)</li>
+-	 * <li>Style: Average speed, slows out medium.</li>
+-	 * </ul>
+-	 * </li>
+-	 * <li><code>HALFCOSINUSALDECELERATING</code>
+-	 * <ul>
+-	 * <li>Uses the first half of the cos curve (from zero to PI) for interpolation</li>
+-	 * <li>Values produced: See cos curve :)</li>
+-	 * <li>Style: Average speed, slows out smoothly.</li>
+-	 * </ul>
+-	 * </li>
+-	 * <li><code>MIDDLEPEAKSPEED</code>
+-	 * <ul>
+-	 * <li>Uses the values of cos around the 0 (from -PI/2 to +PI/2) for interpolation</li>
+-	 * <li>Values produced: See cos curve :)</li>
+-	 * <li>Style: Starts medium, speeds high in middle, slows out medium.</li>
+-	 * </ul>
+-	 * </li>
+-	 * </ul>
+-	 */
+-	public static enum AnimationType {
+-		/**
+-		 * <ul>
+-		 * <li><code>LINEAR</code>
+-		 * <ul>
+-		 * <li>Uses ses linear interpolation</li>
+-		 * <li>Values produced: 10%, 20%, 30%, 40%, 50%, ...</li>
+-		 * <li>Style: Always average speed.</li>
+-		 * </ul>
+-		 * </li>
+-		 * </ul>
+-		 */
+-		LINEAR,
+-		/**
+-		 * <ul>
+-		 * <li><code>EXPONENTIALDECELERATING</code>
+-		 * <ul>
+-		 * <li>Uses a exponential interpolation/li>
+-		 * <li>Values produced: 50%, 75%, 87.5%, 93.5%, ...</li>
+-		 * <li>Style: Starts very fast, really slow in the end.</li>
+-		 * </ul>
+-		 * </li>
+-		 * </ul>
+-		 */
+-		EXPONENTIALDECELERATING,
+-		/**
+-		 * <ul>
+-		 * <li><code>QUARTERCOSINUSALDECELERATING</code>
+-		 * <ul>
+-		 * <li>Uses the first quarter of the cos curve (from zero to PI/2) for interpolation.</li>
+-		 * <li>Values produced: See cos curve :)</li>
+-		 * <li>Style: Average speed, slows out medium.</li>
+-		 * </ul>
+-		 * </li>
+-		 * </ul>
+-		 */
+-		QUARTERCOSINUSALDECELERATING,
+-		/**
+-		 * <ul>
+-		 * <li><code>HALFCOSINUSALDECELERATING</code>
+-		 * <ul>
+-		 * <li>Uses the first half of the cos curve (from zero to PI) for interpolation</li>
+-		 * <li>Values produced: See cos curve :)</li>
+-		 * <li>Style: Average speed, slows out smoothly.</li>
+-		 * </ul>
+-		 * </li>
+-		 * </ul>
+-		 */
+-		HALFCOSINUSALDECELERATING,
+-		/**
+-		 * <ul>
+-		 * <li><code>MIDDLEPEAKSPEED</code>
+-		 * <ul>
+-		 * <li>Uses the values of cos around the 0 (from -PI/2 to +PI/2) for interpolation</li>
+-		 * <li>Values produced: See cos curve :)</li>
+-		 * <li>Style: Starts medium, speeds high in middle, slows out medium.</li>
+-		 * </ul>
+-		 * </li>
+-		 * </ul>
+-		 */
+-		MIDDLEPEAKSPEED
+-	}
+-
+-	private abstract class AbstractAnimationRunner extends Thread {
+-
+-		// ===========================================================
+-		// Fields
+-		// ===========================================================
+-
+-		protected final int mSmoothness;
+-		protected final int mTargetLatitudeE6, mTargetLongitudeE6;
+-		protected boolean mDone = false;
+-
+-		protected final int mStepDuration;
+-
+-		protected final int mPanTotalLatitudeE6, mPanTotalLongitudeE6;
+-
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		@SuppressWarnings("unused")
+-		public AbstractAnimationRunner(final MapController mapViewController,
+-				final int aTargetLatitudeE6, final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6,
+-					MapViewConstants.ANIMATION_SMOOTHNESS_DEFAULT,
+-					MapViewConstants.ANIMATION_DURATION_DEFAULT);
+-		}
+-
+-		public AbstractAnimationRunner(final int aTargetLatitudeE6, final int aTargetLongitudeE6,
+-				final int aSmoothness, final int aDuration) {
+-			this.mTargetLatitudeE6 = aTargetLatitudeE6;
+-			this.mTargetLongitudeE6 = aTargetLongitudeE6;
+-			this.mSmoothness = aSmoothness;
+-			this.mStepDuration = aDuration / aSmoothness;
++    private final MapView mOsmv;
++    private AbstractAnimationRunner mCurrentAnimationRunner;
++
++
++    public MapController(final MapView osmv) {
++        this.mOsmv = osmv;
++    }
++
++
++    public void zoomToSpan(final BoundingBoxE6 bb) {
++        zoomToSpan(bb.getLatitudeSpanE6(), bb.getLongitudeSpanE6());
++    }
++
++    // TODO rework zoomToSpan
++    @Override
++    public void zoomToSpan(final int reqLatSpan, final int reqLonSpan) {
++        if (reqLatSpan <= 0 || reqLonSpan <= 0) {
++            return;
++        }
++
++        final BoundingBoxE6 bb = this.mOsmv.getBoundingBox();
++        final int curZoomLevel = this.mOsmv.getZoomLevel();
++
++        final int curLatSpan = bb.getLatitudeSpanE6();
++        final int curLonSpan = bb.getLongitudeSpanE6();
++
++        final float diffNeededLat = (float) reqLatSpan / curLatSpan; // i.e. 600/500 = 1,2
++        final float diffNeededLon = (float) reqLonSpan / curLonSpan; // i.e. 300/400 = 0,75
++
++        final float diffNeeded = Math.max(diffNeededLat, diffNeededLon); // i.e. 1,2
++
++        if (diffNeeded > 1) { // Zoom Out
++            this.mOsmv.setZoomLevel(curZoomLevel - MyMath.getNextSquareNumberAbove(diffNeeded));
++        } else if (diffNeeded < 0.5) { // Can Zoom in
++            this.mOsmv.setZoomLevel(curZoomLevel + MyMath.getNextSquareNumberAbove(1 / diffNeeded)
++                    - 1);
++        }
++    }
+ 
+-			/* Get the current mapview-center. */
+-			final MapView mapview = MapController.this.mOsmv;
+-			final IGeoPoint mapCenter = mapview.getMapCenter();
+ 
+-			this.mPanTotalLatitudeE6 = mapCenter.getLatitudeE6() - aTargetLatitudeE6;
+-			this.mPanTotalLongitudeE6 = mapCenter.getLongitudeE6() - aTargetLongitudeE6;
+-		}
+ 
+-		@Override
+-		public void run() {
+-			onRunAnimation();
+-			this.mDone = true;
+-		}
++    /**
++     * Set the map view to the given center. There will be no animation.
++     */
++    @Override
++    public void setCenter(final IGeoPoint point) {
++        final int zoom  = this.mOsmv.getCurrentZoomLevel();
+ 
+-		public boolean isDone() {
+-			return this.mDone;
+-		}
++        final Point p = mOsmv.tileSystem.LatLongToPixelXY(point.getLatitudeE6() / 1E6,
++                point.getLongitudeE6() / 1E6, zoom, null);
++        final int worldSize_2 = mOsmv.tileSystem.MapSize(zoom) / 2;
++        this.mOsmv.scrollTo(p.x - worldSize_2, p.y - worldSize_2);
++    }
+ 
+-		public abstract void onRunAnimation();
+-	}
+ 
+-	private class LinearAnimationRunner extends AbstractAnimationRunner {
++    @Override
++    public int setZoom(final int zoomlevel) {
++        return mOsmv.setZoomLevel(zoomlevel);
++    }
+ 
+-		// ===========================================================
+-		// Fields
+-		// ===========================================================
++    @Override
++    public boolean zoomIn() {
++        return mOsmv.zoomIn();
++    }
+ 
+-		protected final int mPanPerStepLatitudeE6, mPanPerStepLongitudeE6;
++    @Override
++    public boolean zoomOut() {
++        return mOsmv.zoomOut();
++    }
+ 
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+ 
+-		@SuppressWarnings("unused")
+-		public LinearAnimationRunner(final int aTargetLatitudeE6, final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT);
+-		}
++    private abstract class AbstractAnimationRunner extends Thread {
+ 
+-		public LinearAnimationRunner(final int aTargetLatitudeE6, final int aTargetLongitudeE6,
+-				final int aSmoothness, final int aDuration) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration);
++        // ===========================================================
++        // Fields
++        // ===========================================================
++
++        protected final int mSmoothness;
++        protected final int mTargetLatitudeE6, mTargetLongitudeE6;
++        protected boolean mDone = false;
++
++        protected final int mStepDuration;
++
++        protected final int mPanTotalLatitudeE6, mPanTotalLongitudeE6;
++
++        // ===========================================================
++        // Constructors
++        // ===========================================================
++
++
++        public AbstractAnimationRunner(final int aTargetLatitudeE6, final int aTargetLongitudeE6,
++                                       final int aSmoothness, final int aDuration) {
++            this.mTargetLatitudeE6 = aTargetLatitudeE6;
++            this.mTargetLongitudeE6 = aTargetLongitudeE6;
++            this.mSmoothness = aSmoothness;
++            this.mStepDuration = aDuration / aSmoothness;
+ 
+ 			/* Get the current mapview-center. */
+-			final MapView mapview = MapController.this.mOsmv;
+-			final IGeoPoint mapCenter = mapview.getMapCenter();
+-
+-			this.mPanPerStepLatitudeE6 = (mapCenter.getLatitudeE6() - aTargetLatitudeE6)
+-					/ aSmoothness;
+-			this.mPanPerStepLongitudeE6 = (mapCenter.getLongitudeE6() - aTargetLongitudeE6)
+-					/ aSmoothness;
+-
+-			this.setName("LinearAnimationRunner");
+-		}
+-
+-		// ===========================================================
+-		// Methods from SuperClass/Interfaces
+-		// ===========================================================
+-
+-		@Override
+-		public void onRunAnimation() {
+-			final MapView mapview = MapController.this.mOsmv;
+-			final IGeoPoint mapCenter = mapview.getMapCenter();
+-			final int panPerStepLatitudeE6 = this.mPanPerStepLatitudeE6;
+-			final int panPerStepLongitudeE6 = this.mPanPerStepLongitudeE6;
+-			final int stepDuration = this.mStepDuration;
+-			try {
+-				int newMapCenterLatE6;
+-				int newMapCenterLonE6;
+-
+-				for (int i = this.mSmoothness; i > 0; i--) {
+-
+-					newMapCenterLatE6 = mapCenter.getLatitudeE6() - panPerStepLatitudeE6;
+-					newMapCenterLonE6 = mapCenter.getLongitudeE6() - panPerStepLongitudeE6;
+-					mapview.setMapCenter(newMapCenterLatE6, newMapCenterLonE6);
+-
+-					Thread.sleep(stepDuration);
+-				}
+-			} catch (final Exception e) {
+-				this.interrupt();
+-			}
+-		}
+-	}
+-
+-	private class ExponentialDeceleratingAnimationRunner extends AbstractAnimationRunner {
+-
+-		// ===========================================================
+-		// Fields
+-		// ===========================================================
+-
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		@SuppressWarnings("unused")
+-		public ExponentialDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT);
+-		}
+-
+-		public ExponentialDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final int aSmoothness, final int aDuration) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration);
+-
+-			this.setName("ExponentialDeceleratingAnimationRunner");
+-		}
+-
+-		// ===========================================================
+-		// Methods from SuperClass/Interfaces
+-		// ===========================================================
+-
+-		@Override
+-		public void onRunAnimation() {
+-			final MapView mapview = MapController.this.mOsmv;
+-			final IGeoPoint mapCenter = mapview.getMapCenter();
+-			final int stepDuration = this.mStepDuration;
+-			try {
+-				int newMapCenterLatE6;
+-				int newMapCenterLonE6;
+-
+-				for (int i = 0; i < this.mSmoothness; i++) {
+-
+-					final double delta = Math.pow(0.5, i + 1);
+-					final int deltaLatitudeE6 = (int) (this.mPanTotalLatitudeE6 * delta);
+-					final int detlaLongitudeE6 = (int) (this.mPanTotalLongitudeE6 * delta);
+-
+-					newMapCenterLatE6 = mapCenter.getLatitudeE6() - deltaLatitudeE6;
+-					newMapCenterLonE6 = mapCenter.getLongitudeE6() - detlaLongitudeE6;
+-					mapview.setMapCenter(newMapCenterLatE6, newMapCenterLonE6);
+-
+-					Thread.sleep(stepDuration);
+-				}
+-				mapview.setMapCenter(super.mTargetLatitudeE6, super.mTargetLongitudeE6);
+-			} catch (final Exception e) {
+-				this.interrupt();
+-			}
+-		}
+-	}
+-
+-	private class CosinusalBasedAnimationRunner extends AbstractAnimationRunner implements
+-			MathConstants {
+-		// ===========================================================
+-		// Fields
+-		// ===========================================================
+-
+-		protected final float mStepIncrement, mAmountStretch;
+-		protected final float mYOffset, mStart;
+-
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		@SuppressWarnings("unused")
+-		public CosinusalBasedAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final float aStart, final float aRange,
+-				final float aYOffset) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT, aStart, aRange, aYOffset);
+-		}
+-
+-		public CosinusalBasedAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final int aSmoothness, final int aDuration,
+-				final float aStart, final float aRange, final float aYOffset) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration);
+-			this.mYOffset = aYOffset;
+-			this.mStart = aStart;
+-
+-			this.mStepIncrement = aRange / aSmoothness;
+-
+-			/* We need to normalize the amount in the end, so wee need the the: sum^(-1) . */
+-			float amountSum = 0;
+-			for (int i = 0; i < aSmoothness; i++) {
+-				amountSum += aYOffset + Math.cos(this.mStepIncrement * i + aStart);
+-			}
+-
+-			this.mAmountStretch = 1 / amountSum;
+-
+-			this.setName("QuarterCosinusalDeceleratingAnimationRunner");
+-		}
+-
+-		// ===========================================================
+-		// Methods from SuperClass/Interfaces
+-		// ===========================================================
+-
+-		@Override
+-		public void onRunAnimation() {
+-			final MapView mapview = MapController.this.mOsmv;
+-			final IGeoPoint mapCenter = mapview.getMapCenter();
+-			final int stepDuration = this.mStepDuration;
+-			final float amountStretch = this.mAmountStretch;
+-			try {
+-				int newMapCenterLatE6;
+-				int newMapCenterLonE6;
+-
+-				for (int i = 0; i < this.mSmoothness; i++) {
+-
+-					final double delta = (this.mYOffset + Math.cos(this.mStepIncrement * i
+-							+ this.mStart))
+-							* amountStretch;
+-					final int deltaLatitudeE6 = (int) (this.mPanTotalLatitudeE6 * delta);
+-					final int deltaLongitudeE6 = (int) (this.mPanTotalLongitudeE6 * delta);
+-
+-					newMapCenterLatE6 = mapCenter.getLatitudeE6() - deltaLatitudeE6;
+-					newMapCenterLonE6 = mapCenter.getLongitudeE6() - deltaLongitudeE6;
+-					mapview.setMapCenter(newMapCenterLatE6, newMapCenterLonE6);
+-
+-					Thread.sleep(stepDuration);
+-				}
+-				mapview.setMapCenter(super.mTargetLatitudeE6, super.mTargetLongitudeE6);
+-			} catch (final Exception e) {
+-				this.interrupt();
+-			}
+-		}
+-	}
+-
+-	protected class QuarterCosinusalDeceleratingAnimationRunner extends
+-			CosinusalBasedAnimationRunner implements MathConstants {
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		protected QuarterCosinusalDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT);
+-		}
+-
+-		protected QuarterCosinusalDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final int aSmoothness, final int aDuration) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration, 0, PI_2, 0);
+-		}
+-	}
+-
+-	protected class HalfCosinusalDeceleratingAnimationRunner extends CosinusalBasedAnimationRunner
+-			implements MathConstants {
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		protected HalfCosinusalDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT);
+-		}
+-
+-		protected HalfCosinusalDeceleratingAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final int aSmoothness, final int aDuration) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration, 0, PI, 1);
+-		}
+-	}
+-
+-	protected class MiddlePeakSpeedAnimationRunner extends CosinusalBasedAnimationRunner implements
+-			MathConstants {
+-		// ===========================================================
+-		// Constructors
+-		// ===========================================================
+-
+-		protected MiddlePeakSpeedAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6) {
+-			this(aTargetLatitudeE6, aTargetLongitudeE6, ANIMATION_SMOOTHNESS_DEFAULT,
+-					ANIMATION_DURATION_DEFAULT);
+-		}
+-
+-		protected MiddlePeakSpeedAnimationRunner(final int aTargetLatitudeE6,
+-				final int aTargetLongitudeE6, final int aSmoothness, final int aDuration) {
+-			super(aTargetLatitudeE6, aTargetLongitudeE6, aSmoothness, aDuration, -PI_2, PI, 0);
+-		}
+-	}
++            final MapView mapview = MapController.this.mOsmv;
++            final IGeoPoint mapCenter = mapview.getMapCenter();
++
++            this.mPanTotalLatitudeE6 = mapCenter.getLatitudeE6() - aTargetLatitudeE6;
++            this.mPanTotalLongitudeE6 = mapCenter.getLongitudeE6() - aTargetLongitudeE6;
++        }
++
++        @Override
++        public void run() {
++            onRunAnimation();
++            this.mDone = true;
++        }
++
++
++        public abstract void onRunAnimation();
++    }
+ }
+diff --git a/app/src/main/java/org/osmdroid/views/MapView.java b/app/src/main/java/org/osmdroid/views/MapView.java
+index 2015b3fe..8d177d9c 100644
+--- a/app/src/main/java/org/osmdroid/views/MapView.java
++++ b/app/src/main/java/org/osmdroid/views/MapView.java
+@@ -11,26 +11,20 @@ import android.os.Handler;
+ import android.util.AttributeSet;
+ import android.view.GestureDetector;
+ import android.view.GestureDetector.OnGestureListener;
+-import android.view.KeyEvent;
+ import android.view.MotionEvent;
+-import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.animation.Animation;
+ import android.view.animation.ScaleAnimation;
+ import android.widget.Scroller;
+ 
+-import org.osmdroid.DefaultResourceProxyImpl;
+-import org.osmdroid.ResourceProxy;
+ import org.osmdroid.api.IGeoPoint;
+ import org.osmdroid.api.IMapView;
+ import org.osmdroid.api.IProjection;
+ import org.osmdroid.events.MapListener;
+ import org.osmdroid.events.ScrollEvent;
+ import org.osmdroid.events.ZoomEvent;
+-import org.osmdroid.tileprovider.tilesource.ITileSource;
+ import org.osmdroid.tileprovider.util.SimpleInvalidationHandler;
+ import org.osmdroid.util.BoundingBoxE6;
+-import org.osmdroid.util.GeoPoint;
+ import org.osmdroid.util.constants.GeoConstants;
+ import org.osmdroid.views.overlay.Overlay;
+ import org.osmdroid.views.overlay.OverlayManager;
+@@ -41,1373 +35,780 @@ import java.util.List;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-import ch.bailu.aat.helpers.Logger;
+-import ch.bailu.aat.helpers.LoggerFactory;
+ import ch.bailu.aat.views.map.AbsTileProvider;
+ import microsoft.mappoint.TileSystem;
+ 
+ public class MapView extends ViewGroup implements IMapView, MapViewConstants {
+ 
+-	// ===========================================================
+-	// Constants
+-	// ===========================================================
++    private int mZoomLevel = 0;
+ 
+-	private static final Logger logger = LoggerFactory.getLogger(MapView.class);
++    private final OverlayManager mOverlayManager;
+ 
+-//	private static final double ZOOM_SENSITIVITY = 1.3;
+-//	private static final double ZOOM_LOG_BASE_INV = 1.0 / Math.log(2.0 / ZOOM_SENSITIVITY);
++    private Projection mProjection;
+ 
+-	// ===========================================================
+-	// Fields
+-	// ===========================================================
++    private final TilesOverlay mMapOverlay;
+ 
+-	/** Current zoom level for map tiles. */
+-	private int mZoomLevel = 0;
++    private final GestureDetector mGestureDetector;
+ 
+-	private final OverlayManager mOverlayManager;
++    /** Handles map scrolling */
++    private final Scroller mScroller;
++    private final AtomicInteger mTargetZoomLevel = new AtomicInteger();
++    private final AtomicBoolean mIsAnimating = new AtomicBoolean(false);
+ 
+-	private Projection mProjection;
++    private final ScaleAnimation mZoomInAnimation;
++    private final ScaleAnimation mZoomOutAnimation;
+ 
+-	private final TilesOverlay mMapOverlay;
++    private final MapController mController;
+ 
+-	private final GestureDetector mGestureDetector;
+ 
+-	/** Handles map scrolling */
+-	private final Scroller mScroller;
+-	private final AtomicInteger mTargetZoomLevel = new AtomicInteger();
+-	private final AtomicBoolean mIsAnimating = new AtomicBoolean(false);
++    private float mMultiTouchScale = 1.0f;
+ 
+-	private final ScaleAnimation mZoomInAnimation;
+-	private final ScaleAnimation mZoomOutAnimation;
+-
+-	private final MapController mController;
++    protected MapListener mListener;
++
++    // for speed (avoiding allocations)
++    private final Matrix mMatrix = new Matrix();
++    private final AbsTileProvider mTileProvider;
++
++    private final Handler mTileRequestCompleteHandler;
++
++    /* a point that will be reused to design added views */
++    private final Point mPoint = new Point();
++
++
++    public final TileSystem tileSystem = new TileSystem();
++
++
++    private MapView(final Context context, final int tileSizePixels,
++                    AbsTileProvider tileProvider,
++                    final Handler tileRequestCompleteHandler, final AttributeSet attrs) {
++        super(context, attrs);
++        this.mController = new MapController(this);
++        this.mScroller = new Scroller(context);
++        tileSystem.setTileSize(tileSizePixels);
++
++        mTileRequestCompleteHandler = tileRequestCompleteHandler == null ? new SimpleInvalidationHandler(
++                this) : tileRequestCompleteHandler;
++        mTileProvider = tileProvider;
++        mTileProvider.setTileRequestCompleteHandler(mTileRequestCompleteHandler);
++
++        this.mMapOverlay = new TilesOverlay(context, mTileProvider);
++        mOverlayManager = new OverlayManager(mMapOverlay);
++
++
++        mZoomInAnimation = new ScaleAnimation(1, 2, 1, 2, Animation.RELATIVE_TO_SELF, 0.5f,
++                Animation.RELATIVE_TO_SELF, 0.5f);
++        mZoomOutAnimation = new ScaleAnimation(1, 0.5f, 1, 0.5f, Animation.RELATIVE_TO_SELF, 0.5f,
++                Animation.RELATIVE_TO_SELF, 0.5f);
++        mZoomInAnimation.setDuration(ANIMATION_DURATION_SHORT);
++        mZoomOutAnimation.setDuration(ANIMATION_DURATION_SHORT);
++
++        mGestureDetector = new GestureDetector(context, new MapViewGestureDetectorListener());
++        mGestureDetector.setOnDoubleTapListener(new MapViewDoubleClickListener());
++    }
++
++    /**
++     * Constructor used by XML layout resource (uses default tile source).
++     */
++    public MapView(final Context context, final AttributeSet attrs) {
++        this(context, 256, null, null, attrs);
++    }
++
++    /**
++     * Standard Constructor.
++     */
++
++
++    public MapView(final Context context, final int tileSizePixels,
++                   final AbsTileProvider aTileProvider) {
++        this(context, tileSizePixels, aTileProvider, null);
++    }
++
++    public MapView(final Context context, final int tileSizePixels,
++                   final AbsTileProvider aTileProvider,
++                   final Handler tileRequestCompleteHandler) {
++        this(context, tileSizePixels, aTileProvider, tileRequestCompleteHandler,
++                null);
++    }
++
++    // ===========================================================
++    // Getter & Setter
++    // ===========================================================
+ 
+-	// XXX we can use android.widget.ZoomButtonsController if we upgrade the
+-	// dependency to Android 1.6
+-	//private final ZoomButtonsController mZoomController;
+-//	private boolean mEnableZoomController = false;
+-
+-	private final ResourceProxy mResourceProxy;
+-
+-	private float mMultiTouchScale = 1.0f;
+-
+-	protected MapListener mListener;
+-
+-	// for speed (avoiding allocations)
+-	private final Matrix mMatrix = new Matrix();
+-	private final AbsTileProvider mTileProvider;
+-
+-	private final Handler mTileRequestCompleteHandler;
+-
+-	/* a point that will be reused to design added views */
+-	private final Point mPoint = new Point();
+-
+-	
+-	public final TileSystem tileSystem = new TileSystem();
+-	
+-	// ===========================================================
+-	// Constructors
+-	// ===========================================================
+-
+-	private MapView(final Context context, final int tileSizePixels,
+-			final ResourceProxy resourceProxy, AbsTileProvider tileProvider,
+-			final Handler tileRequestCompleteHandler, final AttributeSet attrs) {
+-		super(context, attrs);
+-		mResourceProxy = resourceProxy;
+-		this.mController = new MapController(this);
+-		this.mScroller = new Scroller(context);
+-		tileSystem.setTileSize(tileSizePixels);
+-
+-		/*
+-		if (tileProvider == null) {
+-			final ITileSource tileSource = getTileSourceFromAttributes(attrs);
+-			tileProvider = new MapTileProviderBasic(context, tileSource, new TileProviderConfig());
+-		}
+-*/
+-		mTileRequestCompleteHandler = tileRequestCompleteHandler == null ? new SimpleInvalidationHandler(
+-				this) : tileRequestCompleteHandler;
+-		mTileProvider = tileProvider;
+-		mTileProvider.setTileRequestCompleteHandler(mTileRequestCompleteHandler);
+-
+-		this.mMapOverlay = new TilesOverlay(mTileProvider, mResourceProxy);
+-		mOverlayManager = new OverlayManager(mMapOverlay);
+-
+-//		this.mZoomController = new ZoomButtonsController(this);
+-//		this.mZoomController.setOnZoomListener(new MapViewZoomListener());
+-
+-		mZoomInAnimation = new ScaleAnimation(1, 2, 1, 2, Animation.RELATIVE_TO_SELF, 0.5f,
+-				Animation.RELATIVE_TO_SELF, 0.5f);
+-		mZoomOutAnimation = new ScaleAnimation(1, 0.5f, 1, 0.5f, Animation.RELATIVE_TO_SELF, 0.5f,
+-				Animation.RELATIVE_TO_SELF, 0.5f);
+-		mZoomInAnimation.setDuration(ANIMATION_DURATION_SHORT);
+-		mZoomOutAnimation.setDuration(ANIMATION_DURATION_SHORT);
+-
+-		mGestureDetector = new GestureDetector(context, new MapViewGestureDetectorListener());
+-		mGestureDetector.setOnDoubleTapListener(new MapViewDoubleClickListener());
+-	}
+-
+-	/**
+-	 * Constructor used by XML layout resource (uses default tile source).
+-	 */
+-	public MapView(final Context context, final AttributeSet attrs) {
+-		this(context, 256, new DefaultResourceProxyImpl(context), null, null, attrs);
+-	}
+-
+-	/**
+-	 * Standard Constructor.
+-	 */
+-	public MapView(final Context context, final int tileSizePixels) {
+-		this(context, tileSizePixels, new DefaultResourceProxyImpl(context));
+-	}
+-
+-	public MapView(final Context context, final int tileSizePixels,
+-			final ResourceProxy resourceProxy) {
+-		this(context, tileSizePixels, resourceProxy, null);
+-	}
+-
+-	public MapView(final Context context, final int tileSizePixels,
+-			final ResourceProxy resourceProxy, final AbsTileProvider aTileProvider) {
+-		this(context, tileSizePixels, resourceProxy, aTileProvider, null);
+-	}
+-
+-	public MapView(final Context context, final int tileSizePixels,
+-			final ResourceProxy resourceProxy, final AbsTileProvider aTileProvider,
+-			final Handler tileRequestCompleteHandler) {
+-		this(context, tileSizePixels, resourceProxy, aTileProvider, tileRequestCompleteHandler,
+-				null);
+-	}
+-
+-	// ===========================================================
+-	// Getter & Setter
+-	// ===========================================================
+-
+-	@Override
+-	public MapController getController() {
+-		return this.mController;
+-	}
+-
+-	/**
+-	 * You can add/remove/reorder your Overlays using the List of {@link Overlay}. The first (index
+-	 * 0) Overlay gets drawn first, the one with the highest as the last one.
+-	 */
+-	public List<Overlay> getOverlays() {
+-		return mOverlayManager;
+-	}
+-
+-	public OverlayManager getOverlayManager() {
+-		return mOverlayManager;
+-	}
+-
+-	public AbsTileProvider getTileProvider() {
+-		return mTileProvider;
+-	}
+-
+-	public Scroller getScroller() {
+-		return mScroller;
+-	}
+-
+-	public Handler getTileRequestCompleteHandler() {
+-		return mTileRequestCompleteHandler;
+-	}
+-
+-	@Override
+-	public int getLatitudeSpan() {
+-		return this.getBoundingBox().getLatitudeSpanE6();
+-	}
+-
+-	@Override
+-	public int getLongitudeSpan() {
+-		return this.getBoundingBox().getLongitudeSpanE6();
+-	}
+-
+-	public BoundingBoxE6 getBoundingBox() {
+-		return getBoundingBox(getWidth(), getHeight());
+-	}
+-
+-	public BoundingBoxE6 getBoundingBox(final int pViewWidth, final int pViewHeight) {
+-
+-		final int world_2 = tileSystem.MapSize(mZoomLevel) / 2;
+-		final Rect screenRect = getScreenRect(null);
+-		screenRect.offset(world_2, world_2);
+-
+-		final IGeoPoint neGeoPoint = tileSystem.PixelXYToLatLong(screenRect.right, screenRect.top,
+-				mZoomLevel, null);
+-		final IGeoPoint swGeoPoint = tileSystem.PixelXYToLatLong(screenRect.left, screenRect.bottom,
+-				mZoomLevel, null);
+-
+-		return new BoundingBoxE6(neGeoPoint.getLatitudeE6(), neGeoPoint.getLongitudeE6(),
+-				swGeoPoint.getLatitudeE6(), swGeoPoint.getLongitudeE6());
+-	}
+-
+-	/**
+-	 * Gets the current bounds of the screen in <I>screen coordinates</I>.
+-	 */
+-	public Rect getScreenRect(final Rect reuse) {
+-		final Rect out = reuse == null ? new Rect() : reuse;
+-		
+-		final int w = getWidth();
+-		final int h = getHeight();
+-		
+-		out.set(getScrollX() - w / 2, getScrollY() - h / 2, getScrollX()
+-				+ w / 2, getScrollY() + h / 2);
+-		return out;
+-	}
+-
+-	/**
+-	 * Get a projection for converting between screen-pixel coordinates and latitude/longitude
+-	 * coordinates. You should not hold on to this object for more than one draw, since the
+-	 * projection of the map could change.
+-	 *
+-	 * @return The Projection of the map in its current state. You should not hold on to this object
+-	 *         for more than one draw, since the projection of the map could change.
+-	 */
+-	@Override
+-	public Projection getProjection() {
+-		if (mProjection == null) {
+-			mProjection = new Projection();
+-		}
+-		return mProjection;
+-	}
+-
+-	void setMapCenter(final IGeoPoint aCenter) {
+-		this.setMapCenter(aCenter.getLatitudeE6(), aCenter.getLongitudeE6());
+-	}
+-
+-	void setMapCenter(final int aLatitudeE6, final int aLongitudeE6) {
+-		final Point coords = tileSystem.LatLongToPixelXY(aLatitudeE6 / 1E6, aLongitudeE6 / 1E6,
+-				getZoomLevel(), null);
+-		final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
+-		if (getAnimation() == null || getAnimation().hasEnded()) {
+-			mScroller.startScroll(getScrollX(), getScrollY(),
+-					coords.x - worldSize_2 - getScrollX(), coords.y - worldSize_2 - getScrollY(),
+-					500);
+-			postInvalidate();
+-		}
+-	}
+-
+-	public void setTileSource(final ITileSource aTileSource) {
+-		mTileProvider.setTileSource(aTileSource);
+-		tileSystem.setTileSize(aTileSource.getTileSizePixels());
+-		this.checkZoomButtons();
+-		this.setZoomLevel(mZoomLevel); // revalidate zoom level
+-		postInvalidate();
+-	}
+-
+-	/**
+-	 * @param aZoomLevel
+-	 *            the zoom level bound by the tile source
+-	 */
+-	int setZoomLevel(final int aZoomLevel) {
+-		final int minZoomLevel = getMinZoomLevel();
+-		final int maxZoomLevel = getMaxZoomLevel();
+-
+-		final int newZoomLevel = Math.max(minZoomLevel, Math.min(maxZoomLevel, aZoomLevel));
+-		final int curZoomLevel = this.mZoomLevel;
+-
+-		this.mZoomLevel = newZoomLevel;
+-		this.checkZoomButtons();
+-
+-		if (newZoomLevel > curZoomLevel) {
+-			// We are going from a lower-resolution plane to a higher-resolution plane, so we have
+-			// to do it the hard way.
+-			final int worldSize_current_2 = tileSystem.MapSize(curZoomLevel) / 2;
+-			final int worldSize_new_2 = tileSystem.MapSize(newZoomLevel) / 2;
+-			final IGeoPoint centerGeoPoint = tileSystem.PixelXYToLatLong(getScrollX()
+-					+ worldSize_current_2, getScrollY() + worldSize_current_2, curZoomLevel, null);
+-			final Point centerPoint = tileSystem.LatLongToPixelXY(centerGeoPoint.getLatitudeE6() / 1E6,
+-					centerGeoPoint.getLongitudeE6() / 1E6, newZoomLevel, null);
+-			scrollTo(centerPoint.x - worldSize_new_2, centerPoint.y - worldSize_new_2);
+-		} else if (newZoomLevel < curZoomLevel) {
+-			// We are going from a higher-resolution plane to a lower-resolution plane, so we can do
+-			// it the easy way.
+-			scrollTo(getScrollX() >> curZoomLevel - newZoomLevel, getScrollY() >> curZoomLevel
+-					- newZoomLevel);
+-		}
+-
+-		// snap for all snappables
+-		final Point snapPoint = new Point();
+-		// XXX why do we need a new projection here?
+-		mProjection = new Projection();
+-		if (mOverlayManager.onSnapToItem(getScrollX(), getScrollY(), snapPoint, this)) {
+-			scrollTo(snapPoint.x, snapPoint.y);
+-		}
+-
+-		// do callback on listener
+-		if (newZoomLevel != curZoomLevel && mListener != null) {
+-			final ZoomEvent event = new ZoomEvent(this, newZoomLevel);
+-			mListener.onZoom(event);
+-		}
+-		return this.mZoomLevel;
+-	}
+-
+-	/**
+-	 * Get the current ZoomLevel for the map tiles.
+-	 *
+-	 * @return the current ZoomLevel between 0 (equator) and 18/19(closest), depending on the tile
+-	 *         source chosen.
+-	 */
+-	@Override
+-	public int getZoomLevel() {
+-		return getZoomLevel(true);
+-	}
+-
+-	/**
+-	 * Get the current ZoomLevel for the map tiles.
+-	 *
+-	 * @param aPending
+-	 *            if true and we're animating then return the zoom level that we're animating
+-	 *            towards, otherwise return the current zoom level
+-	 * @return the zoom level
+-	 */
+-	public int getZoomLevel(final boolean aPending) {
+-		if (aPending && isAnimating()) {
+-			return mTargetZoomLevel.get();
+-		} else {
+-			return mZoomLevel;
+-		}
+-	}
+-
+-	/**
+-	 * Returns the minimum zoom level for the point currently at the center.
+-	 *
+-	 * @return The minimum zoom level for the map's current center.
+-	 */
+-	public int getMinZoomLevel() {
+-		return mMapOverlay.getMinimumZoomLevel();
+-	}
+-
+-	/**
+-	 * Returns the maximum zoom level for the point currently at the center.
+-	 *
+-	 * @return The maximum zoom level for the map's current center.
+-	 */
+-	@Override
+-	public int getMaxZoomLevel() {
+-		return mMapOverlay.getMaximumZoomLevel();
+-	}
+-
+-	public boolean canZoomIn() {
+-		final int maxZoomLevel = getMaxZoomLevel();
+-		if (mZoomLevel >= maxZoomLevel) {
+-			return false;
+-		}
+-		if (isAnimating() & mTargetZoomLevel.get() >= maxZoomLevel) {
+-			return false;
+-		}
+-		return true;
+-	}
+-
+-	public boolean canZoomOut() {
+-		final int minZoomLevel = getMinZoomLevel();
+-		if (mZoomLevel <= minZoomLevel) {
+-			return false;
+-		}
+-		if (isAnimating() && mTargetZoomLevel.get() <= minZoomLevel) {
+-			return false;
+-		}
+-		return true;
+-	}
+-
+-	/**
+-	 * Zoom in by one zoom level.
+-	 */
+-	boolean zoomIn() {
+-
+-		if (canZoomIn()) {
+-			if (isAnimating()) {
+-				// TODO extend zoom (and return true)
+-				return false;
+-			} else {
+-				mTargetZoomLevel.set(mZoomLevel + 1);
+-				startAnimation(mZoomInAnimation);
+-				return true;
+-			}
+-		} else {
+-			return false;
+-		}
+-	}
+-
+-	boolean zoomInFixing(final IGeoPoint point) {
+-		setMapCenter(point); // TODO should fix on point, not center on it
+-		return zoomIn();
+-	}
+-
+-	boolean zoomInFixing(final int xPixel, final int yPixel) {
+-		setMapCenter(xPixel, yPixel); // TODO should fix on point, not center on it
+-		return zoomIn();
+-	}
+-
+-	/**
+-	 * Zoom out by one zoom level.
+-	 */
+-	boolean zoomOut() {
+-
+-		if (canZoomOut()) {
+-			if (isAnimating()) {
+-				// TODO extend zoom (and return true)
+-				return false;
+-			} else {
+-				mTargetZoomLevel.set(mZoomLevel - 1);
+-				startAnimation(mZoomOutAnimation);
+-				return true;
+-			}
+-		} else {
+-			return false;
+-		}
+-	}
+-
+-	boolean zoomOutFixing(final IGeoPoint point) {
+-		setMapCenter(point); // TODO should fix on point, not center on it
+-		return zoomOut();
+-	}
+-
+-	boolean zoomOutFixing(final int xPixel, final int yPixel) {
+-		setMapCenter(xPixel, yPixel); // TODO should fix on point, not center on it
+-		return zoomOut();
+-	}
+-
+-	/**
+-	 * Returns the current center-point position of the map, as a GeoPoint (latitude and longitude).
+-	 *
+-	 * @return A GeoPoint of the map's center-point.
+-	 */
+-	@Override
+-	public IGeoPoint getMapCenter() {
+-		final int world_2 = tileSystem.MapSize(mZoomLevel) / 2;
+-		final Rect screenRect = getScreenRect(null);
+-		screenRect.offset(world_2, world_2);
+-		return tileSystem.PixelXYToLatLong(screenRect.centerX(), screenRect.centerY(), mZoomLevel,
+-				null);
+-	}
+-
+-	public ResourceProxy getResourceProxy() {
+-		return mResourceProxy;
+-	}
+-
+-	/**
+-	 * Whether to use the network connection if it's available.
+-	 */
+-	public boolean useDataConnection() {
+-		return mMapOverlay.useDataConnection();
+-	}
+-
+-	/**
+-	 * Set whether to use the network connection if it's available.
+-	 *
+-	 * @param aMode
+-	 *            if true use the network connection if it's available. if false don't use the
+-	 *            network connection even if it's available.
+-	 */
+-	public void setUseDataConnection(final boolean aMode) {
+-		mMapOverlay.setUseDataConnection(aMode);
+-	}
+-
+-	// ===========================================================
+-	// Methods from SuperClass/Interfaces
+-	// ===========================================================
+-
+-	/**
+-	 * Returns a set of layout parameters with a width of
+-	 * {@link android.view.ViewGroup.LayoutParams#WRAP_CONTENT}, a height of
+-	 * {@link android.view.ViewGroup.LayoutParams#WRAP_CONTENT} at the {@link GeoPoint} (0, 0) align
+-	 * with {@link MapView.LayoutParams#BOTTOM_CENTER}.
+-	 */
+-	@Override
+-	protected ViewGroup.LayoutParams generateDefaultLayoutParams() {
+-		return new MapView.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+-				ViewGroup.LayoutParams.WRAP_CONTENT, null, MapView.LayoutParams.BOTTOM_CENTER, 0, 0);
+-	}
+-
+-	@Override
+-	public ViewGroup.LayoutParams generateLayoutParams(final AttributeSet attrs) {
+-		return new MapView.LayoutParams(getContext(), attrs);
+-	}
+-
+-	// Override to allow type-checking of LayoutParams.
+-	@Override
+-	protected boolean checkLayoutParams(final ViewGroup.LayoutParams p) {
+-		return p instanceof MapView.LayoutParams;
+-	}
+-
+-	@Override
+-	protected ViewGroup.LayoutParams generateLayoutParams(final ViewGroup.LayoutParams p) {
+-		return new MapView.LayoutParams(p);
+-	}
+-
+-	@Override
+-	protected void onMeasure(final int widthMeasureSpec, final int heightMeasureSpec) {
+-
+-		final int count = getChildCount();
+-
+-		int maxHeight = 0;
+-		int maxWidth = 0;
+-
+-		// Find out how big everyone wants to be
+-		measureChildren(widthMeasureSpec, heightMeasureSpec);
+-
+-		// Find rightmost and bottom-most child
+-		for (int i = 0; i < count; i++) {
+-			final View child = getChildAt(i);
+-			if (child.getVisibility() != GONE) {
+-    final MapView.LayoutParams lp = (MapView.LayoutParams) child.getLayoutParams();
+-				final int childHeight = child.getMeasuredHeight();
+-				final int childWidth = child.getMeasuredWidth();
+-				getProjection().toMapPixels(lp.geoPoint, mPoint);
+-				final int x = mPoint.x + getWidth() / 2;
+-				final int y = mPoint.y + getHeight() / 2;
+-				int childRight = x;
+-				int childBottom = y;
+-				switch (lp.alignment) {
+-				case MapView.LayoutParams.TOP_LEFT:
+-					childRight = x + childWidth;
+-					childBottom = y;
+-					break;
+-				case MapView.LayoutParams.TOP_CENTER:
+-					childRight = x + childWidth / 2;
+-					childBottom = y;
+-					break;
+-				case MapView.LayoutParams.TOP_RIGHT:
+-					childRight = x;
+-					childBottom = y;
+-					break;
+-				case MapView.LayoutParams.CENTER_LEFT:
+-					childRight = x + childWidth;
+-					childBottom = y + childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.CENTER:
+-					childRight = x + childWidth / 2;
+-					childBottom = y + childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.CENTER_RIGHT:
+-					childRight = x;
+-					childBottom = y + childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_LEFT:
+-					childRight = x + childWidth;
+-					childBottom = y + childHeight;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_CENTER:
+-					childRight = x + childWidth / 2;
+-					childBottom = y + childHeight;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_RIGHT:
+-					childRight = x;
+-					childBottom = y + childHeight;
+-					break;
+-				}
+-				childRight += lp.offsetX;
+-				childBottom += lp.offsetY;
+-
+-				maxWidth = Math.max(maxWidth, childRight);
+-				maxHeight = Math.max(maxHeight, childBottom);
+-			}
+-		}
+-
+-		// Account for padding too
+-		maxWidth += getPaddingLeft() + getPaddingRight();
+-		maxHeight += getPaddingTop() + getPaddingBottom();
+-
+-		// Check against minimum height and width
+-		maxHeight = Math.max(maxHeight, getSuggestedMinimumHeight());
+-		maxWidth = Math.max(maxWidth, getSuggestedMinimumWidth());
+-
+-		setMeasuredDimension(resolveSize(maxWidth, widthMeasureSpec),
+-				resolveSize(maxHeight, heightMeasureSpec));
+-	}
+-
+-	@Override
+-	protected void onLayout(final boolean changed, final int l, final int t, final int r, final int b) {
+-
+-		final int count = getChildCount();
+-
+-		for (int i = 0; i < count; i++) {
+-			final View child = getChildAt(i);
+-			if (child.getVisibility() != GONE) {
+-
+-				final MapView.LayoutParams lp = (MapView.LayoutParams) child.getLayoutParams();
+-				final int childHeight = child.getMeasuredHeight();
+-				final int childWidth = child.getMeasuredWidth();
+-				getProjection().toMapPixels(lp.geoPoint, mPoint);
+-				final int x = mPoint.x + getWidth() / 2;
+-				final int y = mPoint.y + getHeight() / 2;
+-				int childLeft = x;
+-				int childTop = y;
+-				switch (lp.alignment) {
+-				case MapView.LayoutParams.TOP_LEFT:
+-					childLeft = getPaddingLeft() + x;
+-					childTop = getPaddingTop() + y;
+-					break;
+-				case MapView.LayoutParams.TOP_CENTER:
+-					childLeft = getPaddingLeft() + x - childWidth / 2;
+-					childTop = getPaddingTop() + y;
+-					break;
+-				case MapView.LayoutParams.TOP_RIGHT:
+-					childLeft = getPaddingLeft() + x - childWidth;
+-					childTop = getPaddingTop() + y;
+-					break;
+-				case MapView.LayoutParams.CENTER_LEFT:
+-					childLeft = getPaddingLeft() + x;
+-					childTop = getPaddingTop() + y - childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.CENTER:
+-					childLeft = getPaddingLeft() + x - childWidth / 2;
+-					childTop = getPaddingTop() + y - childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.CENTER_RIGHT:
+-					childLeft = getPaddingLeft() + x - childWidth;
+-					childTop = getPaddingTop() + y - childHeight / 2;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_LEFT:
+-					childLeft = getPaddingLeft() + x;
+-					childTop = getPaddingTop() + y - childHeight;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_CENTER:
+-					childLeft = getPaddingLeft() + x - childWidth / 2;
+-					childTop = getPaddingTop() + y - childHeight;
+-					break;
+-				case MapView.LayoutParams.BOTTOM_RIGHT:
+-					childLeft = getPaddingLeft() + x - childWidth;
+-					childTop = getPaddingTop() + y - childHeight;
+-					break;
+-				}
+-				childLeft += lp.offsetX;
+-				childTop += lp.offsetY;
+-				child.layout(childLeft, childTop, childLeft + childWidth, childTop + childHeight);
+-			}
+-		}
+-	}
+-
+-	public void onDetach() {
+-		mOverlayManager.onDetach(this);
+-	}
+-
+-	@Override
+-	public boolean onKeyDown(final int keyCode, final KeyEvent event) {
+-		final boolean result = mOverlayManager.onKeyDown(keyCode, event, this);
+-
+-		return result || super.onKeyDown(keyCode, event);
+-	}
+-
+-	@Override
+-	public boolean onKeyUp(final int keyCode, final KeyEvent event) {
+-		final boolean result = mOverlayManager.onKeyUp(keyCode, event, this);
+-
+-		return result || super.onKeyUp(keyCode, event);
+-	}
+-
+-	@Override
+-	public boolean onTrackballEvent(final MotionEvent event) {
+-
+-		if (mOverlayManager.onTrackballEvent(event, this)) {
+-			return true;
+-		}
+-
+-		scrollBy((int) (event.getX() * 25), (int) (event.getY() * 25));
+-
+-		return super.onTrackballEvent(event);
+-	}
+-
+-	@Override
+-	public boolean dispatchTouchEvent(final MotionEvent event) {
+-
+-		if (DEBUGMODE) {
+-			logger.debug("dispatchTouchEvent(" + event + ")");
+-		}
+-
+-/*		if (mZoomController.isVisible() && mZoomController.onTouch(this, event)) {
+-			return true;
+-		}
+-*/
+-		if (mOverlayManager.onTouchEvent(event, this)) {
+-			return true;
+-		}
+-
+-/*		if (mMultiTouchController != null && mMultiTouchController.onTouchEvent(event)) {
+-			if (DEBUGMODE) {
+-				logger.debug("mMultiTouchController handled onTouchEvent");
+-			}
+-			return true;
+-		}
+-*/
+-		final boolean r = super.dispatchTouchEvent(event);
+-
+-		if (mGestureDetector.onTouchEvent(event)) {
+-			if (DEBUGMODE) {
+-				logger.debug("mGestureDetector handled onTouchEvent");
+-			}
+-			return true;
+-		}
+-
+-		if (r) {
+-			if (DEBUGMODE) {
+-				logger.debug("super handled onTouchEvent");
+-			}
+-		} else {
+-			if (DEBUGMODE) {
+-				logger.debug("no-one handled onTouchEvent");
+-			}
+-		}
+-		return r;
+-	}
+-
+-	@Override
+-	public void computeScroll() {
+-		if (mScroller.computeScrollOffset()) {
+-			if (mScroller.isFinished()) {
+-				// This will facilitate snapping-to any Snappable points.
+-				setZoomLevel(mZoomLevel);
+-			} else {
+-				scrollTo(mScroller.getCurrX(), mScroller.getCurrY());
+-			}
+-			postInvalidate(); // Keep on drawing until the animation has
+-			// finished.
+-		}
+-	}
+-
+-	@Override
+-	public void scrollTo(int x, int y) {
+-		final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
+-		while (x < -worldSize_2) {
+-			x += (worldSize_2 * 2);
+-		}
+-		while (x > worldSize_2) {
+-			x -= (worldSize_2 * 2);
+-		}
+-		while (y < -worldSize_2) {
+-			y += (worldSize_2 * 2);
+-		}
+-		while (y > worldSize_2) {
+-			y -= (worldSize_2 * 2);
+-		}
+-		super.scrollTo(x, y);
+-
+-		// do callback on listener
+-		if (mListener != null) {
+-			final ScrollEvent event = new ScrollEvent(this, x, y);
+-			mListener.onScroll(event);
+-		}
+-	}
+-
+-	@Override
+-	public void setBackgroundColor(final int pColor) {
+-		mMapOverlay.setLoadingBackgroundColor(pColor);
+-		invalidate();
+-	}
+-
+-	@SuppressLint("WrongCall")
+     @Override
+-	protected void dispatchDraw(final Canvas c) {
+-		final long startMs = System.currentTimeMillis();
++    public MapController getController() {
++        return this.mController;
++    }
++
++    /**
++     * You can add/remove/reorder your Overlays using the List of {@link Overlay}. The first (index
++     * 0) Overlay gets drawn first, the one with the highest as the last one.
++     */
++    public List<Overlay> getOverlays() {
++        return mOverlayManager;
++    }
++
++    public OverlayManager getOverlayManager() {
++        return mOverlayManager;
++    }
++
++    public AbsTileProvider getTileProvider() {
++        return mTileProvider;
++    }
++
++    public Scroller getScroller() {
++        return mScroller;
++    }
++
++    public Handler getTileRequestCompleteHandler() {
++        return mTileRequestCompleteHandler;
++    }
+ 
+-		mProjection = new Projection();
++    @Override
++    public int getLatitudeSpan() {
++        return this.getBoundingBox().getLatitudeSpanE6();
++    }
++
++    @Override
++    public int getLongitudeSpan() {
++        return this.getBoundingBox().getLongitudeSpanE6();
++    }
++
++    public BoundingBoxE6 getBoundingBox() {
++        return getBoundingBox(getWidth(), getHeight());
++    }
++
++    public BoundingBoxE6 getBoundingBox(final int pViewWidth, final int pViewHeight) {
++
++        final int world_2 = tileSystem.MapSize(mZoomLevel) / 2;
++        final Rect screenRect = getScreenRect(null);
++        screenRect.offset(world_2, world_2);
++
++        final IGeoPoint neGeoPoint = tileSystem.PixelXYToLatLong(screenRect.right, screenRect.top,
++                mZoomLevel, null);
++        final IGeoPoint swGeoPoint = tileSystem.PixelXYToLatLong(screenRect.left, screenRect.bottom,
++                mZoomLevel, null);
++
++        return new BoundingBoxE6(neGeoPoint.getLatitudeE6(), neGeoPoint.getLongitudeE6(),
++                swGeoPoint.getLatitudeE6(), swGeoPoint.getLongitudeE6());
++    }
++
++    /**
++     * Gets the current bounds of the screen in <I>screen coordinates</I>.
++     */
++    public Rect getScreenRect(final Rect reuse) {
++        final Rect out = reuse == null ? new Rect() : reuse;
++
++        final int w = getWidth();
++        final int h = getHeight();
++
++        out.set(getScrollX() - w / 2, getScrollY() - h / 2, getScrollX()
++                + w / 2, getScrollY() + h / 2);
++        return out;
++    }
++
++    /**
++     * Get a projection for converting between screen-pixel coordinates and latitude/longitude
++     * coordinates. You should not hold on to this object for more than one draw, since the
++     * projection of the map could change.
++     *
++     * @return The Projection of the map in its current state. You should not hold on to this object
++     *         for more than one draw, since the projection of the map could change.
++     */
++    @Override
++    public Projection getProjection() {
++        if (mProjection == null) {
++            mProjection = new Projection();
++        }
++        return mProjection;
++    }
++
++    void setMapCenter(final IGeoPoint aCenter) {
++        this.setMapCenter(aCenter.getLatitudeE6(), aCenter.getLongitudeE6());
++    }
++
++    void setMapCenter(final int aLatitudeE6, final int aLongitudeE6) {
++        final Point coords = tileSystem.LatLongToPixelXY(aLatitudeE6 / 1E6, aLongitudeE6 / 1E6,
++                getZoomLevel(), null);
++        final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
++        if (getAnimation() == null || getAnimation().hasEnded()) {
++            mScroller.startScroll(getScrollX(), getScrollY(),
++                    coords.x - worldSize_2 - getScrollX(), coords.y - worldSize_2 - getScrollY(),
++                    500);
++            postInvalidate();
++        }
++    }
++
++
++
++    /**
++     * @param aZoomLevel
++     *            the zoom level bound by the tile source
++     */
++    int setZoomLevel(final int aZoomLevel) {
++        final int minZoomLevel = getMinZoomLevel();
++        final int maxZoomLevel = getMaxZoomLevel();
++
++        final int newZoomLevel = Math.max(minZoomLevel, Math.min(maxZoomLevel, aZoomLevel));
++        final int curZoomLevel = this.mZoomLevel;
++
++        this.mZoomLevel = newZoomLevel;
++
++        if (newZoomLevel > curZoomLevel) {
++            // We are going from a lower-resolution plane to a higher-resolution plane, so we have
++            // to do it the hard way.
++            final int worldSize_current_2 = tileSystem.MapSize(curZoomLevel) / 2;
++            final int worldSize_new_2 = tileSystem.MapSize(newZoomLevel) / 2;
++            final IGeoPoint centerGeoPoint = tileSystem.PixelXYToLatLong(getScrollX()
++                    + worldSize_current_2, getScrollY() + worldSize_current_2, curZoomLevel, null);
++            final Point centerPoint = tileSystem.LatLongToPixelXY(centerGeoPoint.getLatitudeE6() / 1E6,
++                    centerGeoPoint.getLongitudeE6() / 1E6, newZoomLevel, null);
++            scrollTo(centerPoint.x - worldSize_new_2, centerPoint.y - worldSize_new_2);
++        } else if (newZoomLevel < curZoomLevel) {
++            // We are going from a higher-resolution plane to a lower-resolution plane, so we can do
++            // it the easy way.
++            scrollTo(getScrollX() >> curZoomLevel - newZoomLevel, getScrollY() >> curZoomLevel
++                    - newZoomLevel);
++        }
++
++        mProjection = new Projection();
++
++        // do callback on listener
++        if (newZoomLevel != curZoomLevel && mListener != null) {
++            final ZoomEvent event = new ZoomEvent(this, newZoomLevel);
++            mListener.onZoom(event);
++        }
++        return this.mZoomLevel;
++    }
++
++    /**
++     * Get the current ZoomLevel for the map tiles.
++     *
++     * @return the current ZoomLevel between 0 (equator) and 18/19(closest), depending on the tile
++     *         source chosen.
++     */
++    @Override
++    public int getZoomLevel() {
++        return getPendingZoomLevel();
++    }
++
++
++    public int getCurrentZoomLevel() {
++        return mZoomLevel;
++    }
++
++
++    public int getPendingZoomLevel() {
++        if (isAnimating()) {
++            return mTargetZoomLevel.get();
++        }
++        return getCurrentZoomLevel();
++    }
+ 
+-		// Save the current canvas matrix
+-		c.save();
+ 
+-		if (mMultiTouchScale == 1.0f) {
+-			c.translate(getWidth() / 2, getHeight() / 2);
+-		} else {
+-			c.getMatrix(mMatrix);
+-			mMatrix.postTranslate(getWidth() / 2, getHeight() / 2);
+-			mMatrix.preScale(mMultiTouchScale, mMultiTouchScale, getScrollX(), getScrollY());
+-			c.setMatrix(mMatrix);
+-		}
+ 
+-		/* Draw background */
+-		// c.drawColor(mBackgroundColor);
++    /**
++     * Returns the minimum zoom level for the point currently at the center.
++     *
++     * @return The minimum zoom level for the map's current center.
++     */
++    public int getMinZoomLevel() {
++        return mMapOverlay.getMinimumZoomLevel();
++    }
++
++    /**
++     * Returns the maximum zoom level for the point currently at the center.
++     *
++     * @return The maximum zoom level for the map's current center.
++     */
++    @Override
++    public int getMaxZoomLevel() {
++        return mMapOverlay.getMaximumZoomLevel();
++    }
++
++    public boolean canZoomIn() {
++        final int maxZoomLevel = getMaxZoomLevel();
++        if (mZoomLevel >= maxZoomLevel) {
++            return false;
++        }
++        if (isAnimating() & mTargetZoomLevel.get() >= maxZoomLevel) {
++            return false;
++        }
++        return true;
++    }
++
++    public boolean canZoomOut() {
++        final int minZoomLevel = getMinZoomLevel();
++        if (mZoomLevel <= minZoomLevel) {
++            return false;
++        }
++        if (isAnimating() && mTargetZoomLevel.get() <= minZoomLevel) {
++            return false;
++        }
++        return true;
++    }
++
++    /**
++     * Zoom in by one zoom level.
++     */
++    boolean zoomIn() {
++
++        if (canZoomIn()) {
++            if (isAnimating()) {
++                // TODO extend zoom (and return true)
++                return false;
++            } else {
++                mTargetZoomLevel.set(mZoomLevel + 1);
++                startAnimation(mZoomInAnimation);
++                return true;
++            }
++        } else {
++            return false;
++        }
++    }
++
++    boolean zoomInFixing(final IGeoPoint point) {
++        setMapCenter(point); // TODO should fix on point, not center on it
++        return zoomIn();
++    }
++
++    boolean zoomInFixing(final int xPixel, final int yPixel) {
++        setMapCenter(xPixel, yPixel); // TODO should fix on point, not center on it
++        return zoomIn();
++    }
++
++    /**
++     * Zoom out by one zoom level.
++     */
++    boolean zoomOut() {
++
++        if (canZoomOut()) {
++            if (isAnimating()) {
++                // TODO extend zoom (and return true)
++                return false;
++            } else {
++                mTargetZoomLevel.set(mZoomLevel - 1);
++                startAnimation(mZoomOutAnimation);
++                return true;
++            }
++        } else {
++            return false;
++        }
++    }
++
++
++    /**
++     * Returns the current center-point position of the map, as a GeoPoint (latitude and longitude).
++     *
++     * @return A GeoPoint of the map's center-point.
++     */
++    @Override
++    public IGeoPoint getMapCenter() {
++        final int world_2 = tileSystem.MapSize(mZoomLevel) / 2;
++        final Rect screenRect = getScreenRect(null);
++        screenRect.offset(world_2, world_2);
++        return tileSystem.PixelXYToLatLong(screenRect.centerX(), screenRect.centerY(), mZoomLevel,
++                null);
++    }
++
++
++    public void onDetach() {
++        mOverlayManager.onDetach(this);
++    }
++
++
++    @Override
++    public boolean onTrackballEvent(final MotionEvent event) {
++
++        if (mOverlayManager.onTrackballEvent(event, this)) {
++            return true;
++        }
++
++        scrollBy((int) (event.getX() * 25), (int) (event.getY() * 25));
++
++        return super.onTrackballEvent(event);
++    }
++
++    @Override
++    public boolean dispatchTouchEvent(final MotionEvent event) {
++
++        if (mOverlayManager.onTouchEvent(event, this)) {
++            return true;
++        }
++
++        final boolean r = super.dispatchTouchEvent(event);
++
++        if (mGestureDetector.onTouchEvent(event)) {
++            return true;
++        }
++
++        return r;
++    }
++
++    @Override
++    public void computeScroll() {
++        if (mScroller.computeScrollOffset()) {
++            if (mScroller.isFinished()) {
++                // This will facilitate snapping-to any Snappable points.
++                setZoomLevel(mZoomLevel);
++            } else {
++                scrollTo(mScroller.getCurrX(), mScroller.getCurrY());
++            }
++            postInvalidate(); // Keep on drawing until the animation has
++            // finished.
++        }
++    }
++
++    @Override
++    public void scrollTo(int x, int y) {
++        final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
++        while (x < -worldSize_2) {
++            x += (worldSize_2 * 2);
++        }
++        while (x > worldSize_2) {
++            x -= (worldSize_2 * 2);
++        }
++        while (y < -worldSize_2) {
++            y += (worldSize_2 * 2);
++        }
++        while (y > worldSize_2) {
++            y -= (worldSize_2 * 2);
++        }
++        super.scrollTo(x, y);
++
++        // do callback on listener
++        if (mListener != null) {
++            final ScrollEvent event = new ScrollEvent(this, x, y);
++            mListener.onScroll(event);
++        }
++    }
++
++    @Override
++    public void setBackgroundColor(final int pColor) {
++        mMapOverlay.setLoadingBackgroundColor(pColor);
++        invalidate();
++    }
++
++    @SuppressLint("WrongCall")
++    @Override
++    protected void dispatchDraw(final Canvas c) {
++        final long startMs = System.currentTimeMillis();
++
++        mProjection = new Projection();
++
++        // Save the current canvas matrix
++        c.save();
++
++        if (mMultiTouchScale == 1.0f) {
++            c.translate(getWidth() / 2, getHeight() / 2);
++        } else {
++            c.getMatrix(mMatrix);
++            mMatrix.postTranslate(getWidth() / 2, getHeight() / 2);
++            mMatrix.preScale(mMultiTouchScale, mMultiTouchScale, getScrollX(), getScrollY());
++            c.setMatrix(mMatrix);
++        }
++
+ 
+ 		/* Draw all Overlays. */
+-		mOverlayManager.onDraw(c, this);
+-
+-		// Restore the canvas matrix
+-		c.restore();
+-
+-		super.dispatchDraw(c);
+-
+-		final long endMs = System.currentTimeMillis();
+-		if (DEBUGMODE) {
+-			logger.debug("Rendering overall: " + (endMs - startMs) + "ms");
+-		}
+-	}
+-
+-	@Override
+-	protected void onDetachedFromWindow() {
+-	//	this.mZoomController.setVisible(false);
+-		this.onDetach();
+-		super.onDetachedFromWindow();
+-	}
+-
+-	// ===========================================================
+-	// Animation
+-	// ===========================================================
+-
+-	@Override
+-	protected void onAnimationStart() {
+-		mIsAnimating.set(true);
+-		super.onAnimationStart();
+-	}
+-
+-	@Override
+-	protected void onAnimationEnd() {
+-		mIsAnimating.set(false);
+-		clearAnimation();
+-		setZoomLevel(mTargetZoomLevel.get());
+-		this.isAnimating();
+-		super.onAnimationEnd();
+-	}
+-
+-	/**
+-	 * Check mAnimationListener.isAnimating() to determine if view is animating. Useful for overlays
+-	 * to avoid recalculating during an animation sequence.
+-	 *
+-	 * @return boolean indicating whether view is animating.
+-	 */
+-	public boolean isAnimating() {
+-		return mIsAnimating.get();
+-	}
+-
+-	// ===========================================================
+-	// Implementation of MultiTouchObjectCanvas
+-	// ===========================================================
+-/*
+-	@Override
+-	public Object getDraggableObjectAtPoint(final PointInfo pt) {
+-		return this;
+-	}
+-
+-	@Override
+-	public void getPositionAndScale(final Object obj, final PositionAndScale objPosAndScaleOut) {
+-		objPosAndScaleOut.set(0, 0, true, mMultiTouchScale, false, 0, 0, false, 0);
+-	}*/
+-/*
+-	@Override
+-	public void selectObject(final Object obj, final PointInfo pt) {
+-		// if obj is null it means we released the pointers
+-		// if scale is not 1 it means we pinched
+-		if (obj == null && mMultiTouchScale != 1.0f) {
+-			final float scaleDiffFloat = (float) (Math.log(mMultiTouchScale) * ZOOM_LOG_BASE_INV);
+-			final int scaleDiffInt = Math.round(scaleDiffFloat);
+-			setZoomLevel(mZoomLevel + scaleDiffInt);
+-			// XXX maybe zoom in/out instead of zooming direct to zoom level
+-			// - probably not a good idea because you'll repeat the animation
+-		}
+-
+-		// clear_all scale
+-		mMultiTouchScale = 1.0f;
+-	}*/
+-/*
+-	@Override
+-	public boolean setPositionAndScale(final Object obj, final PositionAndScale aNewObjPosAndScale,
+-			final PointInfo aTouchPoint) {
+-		float multiTouchScale = aNewObjPosAndScale.getScale();
+-		// If we are at the first or last zoom level, prevent pinching/expanding
+-		if ((multiTouchScale > 1) && !canZoomIn()) {
+-			multiTouchScale = 1;
+-		}
+-		if ((multiTouchScale < 1) && !canZoomOut()) {
+-			multiTouchScale = 1;
+-		}
+-		mMultiTouchScale = multiTouchScale;
+-		invalidate(); // redraw
+-		return true;
+-	}
+-*/
+-	/*
+-	 * Set the MapListener for this view
+-	 */
+-	public void setMapListener(final MapListener ml) {
+-		mListener = ml;
+-	}
+-
+-	// ===========================================================
+-	// Methods
+-	// ===========================================================
+-
+-	private void checkZoomButtons() {
+-//		this.mZoomController.setZoomInEnabled(canZoomIn());
+-//		this.mZoomController.setZoomOutEnabled(canZoomOut());
+-	}
+-
+-	public void setBuiltInZoomControls(final boolean on) {
+-		//this.mEnableZoomController = on;
+-		//this.checkZoomButtons();
+-	}
+-/*
+-	public void setMultiTouchControls(final boolean on) {
+-		mMultiTouchController = on ? new MultiTouchController<Object>(this, false) : null;
+-	}
+-*/
+-
+-	// ===========================================================
+-	// Inner and Anonymous Classes
+-	// ===========================================================
+-
+-	/**
+-	 * A Projection serves to translate between the coordinate system of x/y on-screen pixel
+-	 * coordinates and that of latitude/longitude points on the surface of the earth. You obtain a
+-	 * Projection from MapView.getProjection(). You should not hold on to this object for more than
+-	 * one draw, since the projection of the map could change. <br />
+-	 * <br />
+-	 * <I>Screen coordinates</I> are in the coordinate system of the screen's Canvas. The origin is
+-	 * in the center of the plane. <I>Screen coordinates</I> are appropriate for using to draw to
+-	 * the screen.<br />
+-	 * <br />
+-	 * <I>Map coordinates</I> are in the coordinate system of the standard Mercator projection. The
+-	 * origin is in the upper-left corner of the plane. <I>Map coordinates</I> are appropriate for
+-	 * use in the TileSystem class.<br />
+-	 * <br />
+-	 * <I>Intermediate coordinates</I> are used to cache the computationally heavy part of the
+-	 * projection. They aren't suitable for use until translated into <I>screen coordinates</I> or
+-	 * <I>map coordinates</I>.
+-	 *
+-	 * @author Nicolas Gramlich
+-	 * @author Manuel Stahl
+-	 */
+-	public class Projection implements IProjection, GeoConstants {
+-
+-		private final int viewWidth_2 = getWidth() / 2;
+-		private final int viewHeight_2 = getHeight() / 2;
+-		private final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
+-		private final int offsetX = -worldSize_2;
+-		private final int offsetY = -worldSize_2;
+-
+-		private final BoundingBoxE6 mBoundingBoxProjection;
+-		private final int mZoomLevelProjection;
+-		private final Rect mScreenRectProjection;
+-
+-		private Projection() {
++        mOverlayManager.onDraw(c, this);
++
++        // Restore the canvas matrix
++        c.restore();
++
++        super.dispatchDraw(c);
++
++        final long endMs = System.currentTimeMillis();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        //	this.mZoomController.setVisible(false);
++        this.onDetach();
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    protected void onLayout(boolean changed, int l, int t, int r, int b) {
++
++    }
++
++    // ===========================================================
++    // Animation
++    // ===========================================================
++
++    @Override
++    protected void onAnimationStart() {
++        mIsAnimating.set(true);
++        super.onAnimationStart();
++    }
++
++    @Override
++    protected void onAnimationEnd() {
++        mIsAnimating.set(false);
++        clearAnimation();
++        setZoomLevel(mTargetZoomLevel.get());
++        this.isAnimating();
++        super.onAnimationEnd();
++    }
++
++    /**
++     * Check mAnimationListener.isAnimating() to determine if view is animating. Useful for overlays
++     * to avoid recalculating during an animation sequence.
++     *
++     * @return boolean indicating whether view is animating.
++     */
++    public boolean isAnimating() {
++        return mIsAnimating.get();
++    }
++
++    /*
++     * Set the MapListener for this view
++     */
++    public void setMapListener(final MapListener ml) {
++        mListener = ml;
++    }
++
++
++
++
++
++    // ===========================================================
++    // Inner and Anonymous Classes
++    // ===========================================================
++
++    /**
++     * A Projection serves to translate between the coordinate system of x/y on-screen pixel
++     * coordinates and that of latitude/longitude points on the surface of the earth. You obtain a
++     * Projection from MapView.getProjection(). You should not hold on to this object for more than
++     * one draw, since the projection of the map could change. <br />
++     * <br />
++     * <I>Screen coordinates</I> are in the coordinate system of the screen's Canvas. The origin is
++     * in the center of the plane. <I>Screen coordinates</I> are appropriate for using to draw to
++     * the screen.<br />
++     * <br />
++     * <I>Map coordinates</I> are in the coordinate system of the standard Mercator projection. The
++     * origin is in the upper-left corner of the plane. <I>Map coordinates</I> are appropriate for
++     * use in the TileSystem class.<br />
++     * <br />
++     * <I>Intermediate coordinates</I> are used to cache the computationally heavy part of the
++     * projection. They aren't suitable for use until translated into <I>screen coordinates</I> or
++     * <I>map coordinates</I>.
++     *
++     * @author Nicolas Gramlich
++     * @author Manuel Stahl
++     */
++    public class Projection implements IProjection, GeoConstants {
++
++        private final int viewWidth_2 = getWidth() / 2;
++        private final int viewHeight_2 = getHeight() / 2;
++        private final int worldSize_2 = tileSystem.MapSize(mZoomLevel) / 2;
++        private final int offsetX = -worldSize_2;
++        private final int offsetY = -worldSize_2;
++
++        private final BoundingBoxE6 mBoundingBoxProjection;
++        private final int mZoomLevelProjection;
++        private final Rect mScreenRectProjection;
++
++        private Projection() {
+ 
+ 			/*
+ 			 * Do some calculations and drag attributes to local variables to save some performance.
+ 			 */
+-			mZoomLevelProjection = MapView.this.mZoomLevel;
+-			mBoundingBoxProjection = MapView.this.getBoundingBox();
+-			mScreenRectProjection = MapView.this.getScreenRect(null);
+-		}
+-
+-		public int getZoomLevel() {
+-			return mZoomLevelProjection;
+-		}
+-
+-		public BoundingBoxE6 getBoundingBox() {
+-			return mBoundingBoxProjection;
+-		}
+-
+-		public Rect getScreenRect() {
+-			return mScreenRectProjection;
+-		}
+-
+-		/**
+-		 * @deprecated Use TileSystem.getTileSize() instead.
+-		 */
+-		@Deprecated
+-		public int getTileSizePixels() {
+-			return tileSystem.getTileSize();
+-		}
+-
+-		/**
+-		 * @deprecated Use
+-		 *             <code>Point out = TileSystem.PixelXYToTileXY(screenRect.centerX(), screenRect.centerY(), null);</code>
+-		 *             instead.
+-		 */
+-		@Deprecated
+-		public Point getCenterMapTileCoords() {
+-			final Rect rect = getScreenRect();
+-			return tileSystem.PixelXYToTileXY(rect.centerX(), rect.centerY(), null);
+-		}
+-
+-		/**
+-		 * @deprecated Use
+-		 *             <code>final Point out = TileSystem.TileXYToPixelXY(centerMapTileCoords.x, centerMapTileCoords.y, null);</code>
+-		 *             instead.
+-		 */
+-		@Deprecated
+-		public Point getUpperLeftCornerOfCenterMapTile() {
+-			final Point centerMapTileCoords = getCenterMapTileCoords();
+-			return tileSystem.TileXYToPixelXY(centerMapTileCoords.x, centerMapTileCoords.y, null);
+-		}
+-
+-		/**
+-		 * Converts <I>screen coordinates</I> to the underlying GeoPoint.
+-		 *
+-		 * @param x
+-		 * @param y
+-		 * @return GeoPoint under x/y.
+-		 */
+-		public IGeoPoint fromPixels(final float x, final float y) {
+-			final Rect screenRect = getScreenRect();
+-			return tileSystem.PixelXYToLatLong(screenRect.left + (int) x + worldSize_2,
+-					screenRect.top + (int) y + worldSize_2, mZoomLevelProjection, null);
+-		}
+-
+-		public Point fromMapPixels(final int x, final int y, final Point reuse) {
+-			final Point out = reuse != null ? reuse : new Point();
+-			out.set(x - viewWidth_2, y - viewHeight_2);
+-			out.offset(getScrollX(), getScrollY());
+-			return out;
+-		}
+-
+-		/**
+-		 * Converts a GeoPoint to its <I>screen coordinates</I>.
+-		 *
+-		 * @param in
+-		 *            the GeoPoint you want the <I>screen coordinates</I> of
+-		 * @param reuse
+-		 *            just pass null if you do not have a Point to be 'recycled'.
+-		 * @return the Point containing the <I>screen coordinates</I> of the GeoPoint passed.
+-		 */
+-		public Point toMapPixels(final IGeoPoint in, final Point reuse) {
+-			final Point out = reuse != null ? reuse : new Point();
+-
+-			final Point coords = tileSystem.LatLongToPixelXY(in.getLatitudeE6() / 1E6,
+-					in.getLongitudeE6() / 1E6, getZoomLevel(), null);
+-			out.set(coords.x, coords.y);
+-			out.offset(offsetX, offsetY);
+-			return out;
+-		}
+-
+-		/**
+-		 * Performs only the first computationally heavy part of the projection. Call
+-		 * toMapPixelsTranslated to get the final position.
+-		 *
+-		 * @param latituteE6
+-		 *            the latitute of the point
+-		 * @param longitudeE6
+-		 *            the longitude of the point
+-		 * @param reuse
+-		 *            just pass null if you do not have a Point to be 'recycled'.
+-		 * @return intermediate value to be stored and passed to toMapPixelsTranslated.
+-		 */
+-		public Point toMapPixelsProjected(final int latituteE6, final int longitudeE6,
+-				final Point reuse) {
+-			final Point out = reuse != null ? reuse : new Point();
+-
+-			tileSystem
+-					.LatLongToPixelXY(latituteE6 / 1E6, longitudeE6 / 1E6, MAXIMUM_ZOOMLEVEL, out);
+-			return out;
+-		}
+-
+-		/**
+-		 * Performs the second computationally light part of the projection. Returns results in
+-		 * <I>screen coordinates</I>.
+-		 *
+-		 * @param in
+-		 *            the Point calculated by the toMapPixelsProjected
+-		 * @param reuse
+-		 *            just pass null if you do not have a Point to be 'recycled'.
+-		 * @return the Point containing the <I>Screen coordinates</I> of the initial GeoPoint passed
+-		 *         to the toMapPixelsProjected.
+-		 */
+-		public Point toMapPixelsTranslated(final Point in, final Point reuse) {
+-			final Point out = reuse != null ? reuse : new Point();
+-
+-			final int zoomDifference = MAXIMUM_ZOOMLEVEL - getZoomLevel();
+-			out.set((in.x >> zoomDifference) + offsetX, (in.y >> zoomDifference) + offsetY);
+-			return out;
+-		}
+-
+-		/**
+-		 * Translates a rectangle from <I>screen coordinates</I> to <I>intermediate coordinates</I>.
+-		 *
+-		 * @param in
+-		 *            the rectangle in <I>screen coordinates</I>
+-		 * @return a rectangle in </I>intermediate coordindates</I>.
+-		 */
+-		public Rect fromPixelsToProjected(final Rect in) {
+-			final Rect result = new Rect();
+-
+-			final int zoomDifference = MAXIMUM_ZOOMLEVEL - getZoomLevel();
+-
+-			final int x0 = in.left - offsetX << zoomDifference;
+-			final int x1 = in.right - offsetX << zoomDifference;
+-			final int y0 = in.bottom - offsetY << zoomDifference;
+-			final int y1 = in.top - offsetY << zoomDifference;
+-
+-			result.set(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1));
+-			return result;
+-		}
+-
+-		/**
+-		 * @deprecated Use TileSystem.TileXYToPixelXY
+-		 */
+-		@Deprecated
+-		public Point toPixels(final Point tileCoords, final Point reuse) {
+-			return toPixels(tileCoords.x, tileCoords.y, reuse);
+-		}
+-
+-		/**
+-		 * @deprecated Use TileSystem.TileXYToPixelXY
+-		 */
+-		@Deprecated
+-		public Point toPixels(final int tileX, final int tileY, final Point reuse) {
+-			return tileSystem.TileXYToPixelXY(tileX, tileY, reuse);
+-		}
+-
+-		// not presently used
+-		public Rect toPixels(final BoundingBoxE6 pBoundingBoxE6) {
+-			final Rect rect = new Rect();
+-
+-			final Point reuse = new Point();
+-
+-			toMapPixels(
+-					new GeoPoint(pBoundingBoxE6.getLatNorthE6(), pBoundingBoxE6.getLonWestE6()),
+-					reuse);
+-			rect.left = reuse.x;
+-			rect.top = reuse.y;
+-
+-			toMapPixels(
+-					new GeoPoint(pBoundingBoxE6.getLatSouthE6(), pBoundingBoxE6.getLonEastE6()),
+-					reuse);
+-			rect.right = reuse.x;
+-			rect.bottom = reuse.y;
+-
+-			return rect;
+-		}
+-
+-		@Override
+-		public float metersToEquatorPixels(final float meters) {
+-			return meters / (float) tileSystem.GroundResolution(0, mZoomLevelProjection);
+-		}
+-
+-		@Override
+-		public Point toPixels(final IGeoPoint in, final Point out) {
+-			return toMapPixels(in, out);
+-		}
+-
+-		@Override
+-		public IGeoPoint fromPixels(final int x, final int y) {
+-			return fromPixels((float) x, (float) y);
+-		}
+-	}
+-
+-	private class MapViewGestureDetectorListener implements OnGestureListener {
+-
+-		@Override
+-		public boolean onDown(final MotionEvent e) {
+-			if (MapView.this.mOverlayManager.onDown(e, MapView.this)) {
+-				return true;
+-			}
+-
+-			//mZoomController.setVisible(mEnableZoomController);
+-			return true;
+-		}
+-
+-		@Override
+-		public boolean onFling(final MotionEvent e1, final MotionEvent e2, final float velocityX,
+-				final float velocityY) {
+-			if (MapView.this.mOverlayManager.onFling(e1, e2, velocityX, velocityY, MapView.this)) {
+-				return true;
+-			}
+-			return false;
+-			/*
+-			final int worldSize = TileSystem.MapSize(mZoomLevel);
+-			mScroller.fling(getScrollX(), getScrollY(), (int) -velocityX, (int) -velocityY,
+-					-worldSize, worldSize, -worldSize, worldSize);
+-			return true;*/
+-		}
+-
+-		@Override
+-		public void onLongPress(final MotionEvent e) {
+-			MapView.this.mOverlayManager.onLongPress(e, MapView.this);
+-		}
+-
+-		@Override
+-		public boolean onScroll(final MotionEvent e1, final MotionEvent e2, final float distanceX,
+-				final float distanceY) {
+-			
+-			if (MapView.this.mOverlayManager.onScroll(e1, e2, distanceX, distanceY, MapView.this)) {
+-				return true;
+-			}
+-
+-			scrollBy((int) distanceX, (int) distanceY);
+-			return true;
+-		}
+-
+-		@Override
+-		public void onShowPress(final MotionEvent e) {
+-			MapView.this.mOverlayManager.onShowPress(e, MapView.this);
+-		}
+-
+-		@Override
+-		public boolean onSingleTapUp(final MotionEvent e) {
+-			if (MapView.this.mOverlayManager.onSingleTapUp(e, MapView.this)) {
+-				return true;
+-			}
+-
+-			return false;
+-		}
+-
+-	}
+-
+-	private class MapViewDoubleClickListener implements GestureDetector.OnDoubleTapListener {
+-		@Override
+-		public boolean onDoubleTap(final MotionEvent e) {
+-			if (mOverlayManager.onDoubleTap(e, MapView.this)) {
+-				return true;
+-			}
+-			final IGeoPoint center = getProjection().fromPixels(e.getX(), e.getY());
+-			return zoomInFixing(center);
+-		}
+-
+-		@Override
+-		public boolean onDoubleTapEvent(final MotionEvent e) {
+-			if (mOverlayManager.onDoubleTapEvent(e, MapView.this)) {
+-				return true;
+-			}
+-
+-			return false;
+-		}
+-
+-		@Override
+-		public boolean onSingleTapConfirmed(final MotionEvent e) {
+-			if (mOverlayManager.onSingleTapConfirmed(e, MapView.this)) {
+-				return true;
+-			}
+-
+-			return false;
+-		}
+-	}
+-
+-	/*
+-	private class MapViewZoomListener implements OnZoomListener {
+-		@Override
+-		public void onZoom(final boolean zoomIn) {
+-			if (zoomIn) {
+-				getController().zoomIn();
+-			} else {
+-				getController().zoomOut();
+-			}
+-		}
+-
+-		@Override
+-		public void onVisibilityChanged(final boolean visible) {
+-		}
+-	}*/
+-
+-	// ===========================================================
+-	// Public Classes
+-	// ===========================================================
+-
+-	/**
+-	 * Per-child layout information associated with OpenStreetMapView.
+-	 */
+-	public static class LayoutParams extends ViewGroup.LayoutParams {
+-
+-		/**
+-		 * Special value for the alignment requested by a View. TOP_LEFT means that the location
+-		 * will at the top left the View.
+-		 */
+-		public static final int TOP_LEFT = 1;
+-		/**
+-		 * Special value for the alignment requested by a View. TOP_RIGHT means that the location
+-		 * will be centered at the top of the View.
+-		 */
+-		public static final int TOP_CENTER = 2;
+-		/**
+-		 * Special value for the alignment requested by a View. TOP_RIGHT means that the location
+-		 * will at the top right the View.
+-		 */
+-		public static final int TOP_RIGHT = 3;
+-		/**
+-		 * Special value for the alignment requested by a View. CENTER_LEFT means that the location
+-		 * will at the center left the View.
+-		 */
+-		public static final int CENTER_LEFT = 4;
+-		/**
+-		 * Special value for the alignment requested by a View. CENTER means that the location will
+-		 * be centered at the center of the View.
+-		 */
+-		public static final int CENTER = 5;
+-		/**
+-		 * Special value for the alignment requested by a View. CENTER_RIGHT means that the location
+-		 * will at the center right the View.
+-		 */
+-		public static final int CENTER_RIGHT = 6;
+-		/**
+-		 * Special value for the alignment requested by a View. BOTTOM_LEFT means that the location
+-		 * will be at the bottom left of the View.
+-		 */
+-		public static final int BOTTOM_LEFT = 7;
+-		/**
+-		 * Special value for the alignment requested by a View. BOTTOM_CENTER means that the
+-		 * location will be centered at the bottom of the view.
+-		 */
+-		public static final int BOTTOM_CENTER = 8;
+-		/**
+-		 * Special value for the alignment requested by a View. BOTTOM_RIGHT means that the location
+-		 * will be at the bottom right of the View.
+-		 */
+-		public static final int BOTTOM_RIGHT = 9;
+-		/**
+-		 * The location of the child within the map view.
+-		 */
+-		public GeoPoint geoPoint;
+-
+-		/**
+-		 * The alignment the alignment of the view compared to the location.
+-		 */
+-		public int alignment;
+-
+-		public int offsetX;
+-		public int offsetY;
+-
+-		/**
+-		 * Creates a new set of layout parameters with the specified width, height and location.
+-		 *
+-		 * @param width
+-		 *            the width, either {@link #FILL_PARENT}, {@link #WRAP_CONTENT} or a fixed size
+-		 *            in pixels
+-		 * @param height
+-		 *            the height, either {@link #FILL_PARENT}, {@link #WRAP_CONTENT} or a fixed size
+-		 *            in pixels
+-		 * @param geoPoint
+-		 *            the location of the child within the map view
+-		 * @param alignment
+-		 *            the alignment of the view compared to the location {@link #BOTTOM_CENTER},
+-		 *            {@link #BOTTOM_LEFT}, {@link #BOTTOM_RIGHT} {@link #TOP_CENTER},
+-		 *            {@link #TOP_LEFT}, {@link #TOP_RIGHT}
+-		 * @param offsetX
+-		 *            the additional X offset from the alignment location to draw the child within
+-		 *            the map view
+-		 * @param offsetY
+-		 *            the additional Y offset from the alignment location to draw the child within
+-		 *            the map view
+-		 */
+-		public LayoutParams(final int width, final int height, final GeoPoint geoPoint, final int alignment, final int offsetX,
+-				final int offsetY) {
+-			super(width, height);
+-			if (geoPoint != null) {
+-				this.geoPoint = geoPoint;
+-			} else {
+-				this.geoPoint = new GeoPoint(0, 0);
+-			}
+-			this.alignment = alignment;
+-			this.offsetX = offsetX;
+-			this.offsetY = offsetY;
+-		}
+-
+-		/**
+-		 * Since we cannot use XML files in this project this constructor is useless. Creates a new
+-		 * set of layout parameters. The values are extracted from the supplied attributes set and
+-		 * context.
+-		 *
+-		 * @param c
+-		 *            the application environment
+-		 * @param attrs
+-		 *            the set of attributes fom which to extract the layout parameters values
+-		 */
+-		public LayoutParams(final Context c, final AttributeSet attrs) {
+-			super(c, attrs);
+-			this.geoPoint = new GeoPoint(0, 0);
+-			this.alignment = BOTTOM_CENTER;
+-		}
+-
+-		/**
+-		 * {@inheritDoc}
+-		 */
+-		public LayoutParams(final ViewGroup.LayoutParams source) {
+-			super(source);
+-		}
+-	}
++            mZoomLevelProjection = MapView.this.mZoomLevel;
++            mBoundingBoxProjection = MapView.this.getBoundingBox();
++            mScreenRectProjection = MapView.this.getScreenRect(null);
++        }
++
++        public int getZoomLevel() {
++            return mZoomLevelProjection;
++        }
++
++        public BoundingBoxE6 getBoundingBox() {
++            return mBoundingBoxProjection;
++        }
++
++        public Rect getScreenRect() {
++            return mScreenRectProjection;
++        }
++
++        /**
++         * @deprecated Use TileSystem.getTileSize() instead.
++         */
++        @Deprecated
++        public int getTileSizePixels() {
++            return tileSystem.getTileSize();
++        }
++
++        /**
++         * @deprecated Use
++         *             <code>Point out = TileSystem.PixelXYToTileXY(screenRect.centerX(), screenRect.centerY(), null);</code>
++         *             instead.
++         */
++        @Deprecated
++        public Point getCenterMapTileCoords() {
++            final Rect rect = getScreenRect();
++            return tileSystem.PixelXYToTileXY(rect.centerX(), rect.centerY(), null);
++        }
++
++
++        /**
++         * Converts <I>screen coordinates</I> to the underlying GeoPoint.
++         *
++         * @param x
++         * @param y
++         * @return GeoPoint under x/y.
++         */
++        public IGeoPoint fromPixels(final float x, final float y) {
++            final Rect screenRect = getScreenRect();
++            return tileSystem.PixelXYToLatLong(screenRect.left + (int) x + worldSize_2,
++                    screenRect.top + (int) y + worldSize_2, mZoomLevelProjection, null);
++        }
++
++        public Point fromMapPixels(final int x, final int y, final Point reuse) {
++            final Point out = reuse != null ? reuse : new Point();
++            out.set(x - viewWidth_2, y - viewHeight_2);
++            out.offset(getScrollX(), getScrollY());
++            return out;
++        }
++
++        /**
++         * Converts a GeoPoint to its <I>screen coordinates</I>.
++         *
++         * @param in
++         *            the GeoPoint you want the <I>screen coordinates</I> of
++         * @param reuse
++         *            just pass null if you do not have a Point to be 'recycled'.
++         * @return the Point containing the <I>screen coordinates</I> of the GeoPoint passed.
++         */
++        public Point toMapPixels(final IGeoPoint in, final Point reuse) {
++            final Point out = reuse != null ? reuse : new Point();
++
++            final Point coords = tileSystem.LatLongToPixelXY(in.getLatitudeE6() / 1E6,
++                    in.getLongitudeE6() / 1E6, getZoomLevel(), null);
++            out.set(coords.x, coords.y);
++            out.offset(offsetX, offsetY);
++            return out;
++        }
++
++        /**
++         * Performs only the first computationally heavy part of the projection. Call
++         * toMapPixelsTranslated to get the final position.
++         *
++         * @param latituteE6
++         *            the latitute of the point
++         * @param longitudeE6
++         *            the longitude of the point
++         * @param reuse
++         *            just pass null if you do not have a Point to be 'recycled'.
++         * @return intermediate value to be stored and passed to toMapPixelsTranslated.
++         */
++        public Point toMapPixelsProjected(final int latituteE6, final int longitudeE6,
++                                          final Point reuse) {
++            final Point out = reuse != null ? reuse : new Point();
++
++            tileSystem
++                    .LatLongToPixelXY(latituteE6 / 1E6, longitudeE6 / 1E6, MAXIMUM_ZOOMLEVEL, out);
++            return out;
++        }
++
++
++        @Override
++        public float metersToEquatorPixels(final float meters) {
++            return meters / (float) tileSystem.GroundResolution(0, mZoomLevelProjection);
++        }
++
++        @Override
++        public Point toPixels(final IGeoPoint in, final Point out) {
++            return toMapPixels(in, out);
++        }
++
++        @Override
++        public IGeoPoint fromPixels(final int x, final int y) {
++            return fromPixels((float) x, (float) y);
++        }
++    }
++
++    private class MapViewGestureDetectorListener implements OnGestureListener {
++
++        @Override
++        public boolean onDown(final MotionEvent e) {
++            if (MapView.this.mOverlayManager.onDown(e, MapView.this)) {
++                return true;
++            }
++
++            //mZoomController.setVisible(mEnableZoomController);
++            return true;
++        }
++
++        @Override
++        public boolean onFling(final MotionEvent e1, final MotionEvent e2, final float velocityX,
++                               final float velocityY) {
++            if (MapView.this.mOverlayManager.onFling(e1, e2, velocityX, velocityY, MapView.this)) {
++                return true;
++            }
++            return false;
++        }
++
++        @Override
++        public void onLongPress(final MotionEvent e) {
++            MapView.this.mOverlayManager.onLongPress(e, MapView.this);
++        }
++
++        @Override
++        public boolean onScroll(final MotionEvent e1, final MotionEvent e2, final float distanceX,
++                                final float distanceY) {
++
++            if (MapView.this.mOverlayManager.onScroll(e1, e2, distanceX, distanceY, MapView.this)) {
++                return true;
++            }
++
++            scrollBy((int) distanceX, (int) distanceY);
++            return true;
++        }
++
++        @Override
++        public void onShowPress(final MotionEvent e) {
++            MapView.this.mOverlayManager.onShowPress(e, MapView.this);
++        }
++
++        @Override
++        public boolean onSingleTapUp(final MotionEvent e) {
++            if (MapView.this.mOverlayManager.onSingleTapUp(e, MapView.this)) {
++                return true;
++            }
++
++            return false;
++        }
++
++    }
++
++    private class MapViewDoubleClickListener implements GestureDetector.OnDoubleTapListener {
++        @Override
++        public boolean onDoubleTap(final MotionEvent e) {
++            if (mOverlayManager.onDoubleTap(e, MapView.this)) {
++                return true;
++            }
++            final IGeoPoint center = getProjection().fromPixels(e.getX(), e.getY());
++            return zoomInFixing(center);
++        }
++
++        @Override
++        public boolean onDoubleTapEvent(final MotionEvent e) {
++            if (mOverlayManager.onDoubleTapEvent(e, MapView.this)) {
++                return true;
++            }
++
++            return false;
++        }
++
++        @Override
++        public boolean onSingleTapConfirmed(final MotionEvent e) {
++            if (mOverlayManager.onSingleTapConfirmed(e, MapView.this)) {
++                return true;
++            }
++
++            return false;
++        }
++    }
++
+ 
+ }
+diff --git a/app/src/main/java/org/osmdroid/views/overlay/IOverlayMenuProvider.java b/app/src/main/java/org/osmdroid/views/overlay/IOverlayMenuProvider.java
+deleted file mode 100644
+index fcb673ae..00000000
+--- a/app/src/main/java/org/osmdroid/views/overlay/IOverlayMenuProvider.java
++++ /dev/null
+@@ -1,26 +0,0 @@
+-package org.osmdroid.views.overlay;
+-
+-import android.view.Menu;
+-import android.view.MenuItem;
+-
+-import org.osmdroid.views.MapView;
+-
+-public interface IOverlayMenuProvider {
+-	public boolean onCreateOptionsMenu(final Menu pMenu, final int pMenuIdOffset,
+-			final MapView pMapView);
+-
+-	public boolean onPrepareOptionsMenu(final Menu pMenu, final int pMenuIdOffset,
+-			final MapView pMapView);
+-
+-	public boolean onOptionsItemSelected(final MenuItem pItem, final int pMenuIdOffset,
+-			final MapView pMapView);
+-
+-	/**
+-	 * Can be used to signal to external callers that this Overlay should not be used for providing
+-	 * option menu items.
+-	 * 
+-	 */
+-	public boolean isOptionsMenuEnabled();
+-
+-	public void setOptionsMenuEnabled(final boolean pOptionsMenuEnabled);
+-}
+diff --git a/app/src/main/java/org/osmdroid/views/overlay/Overlay.java b/app/src/main/java/org/osmdroid/views/overlay/Overlay.java
+index 9c14a72d..69a6a75a 100644
+--- a/app/src/main/java/org/osmdroid/views/overlay/Overlay.java
++++ b/app/src/main/java/org/osmdroid/views/overlay/Overlay.java
+@@ -1,21 +1,13 @@
+ // Created by plusminus on 20:32:01 - 27.09.2008
+ package org.osmdroid.views.overlay;
+ 
+-import android.content.Context;
+ import android.graphics.Canvas;
+-import android.graphics.Point;
+-import android.graphics.Rect;
+ import android.view.GestureDetector;
+-import android.view.KeyEvent;
+ import android.view.MotionEvent;
+ 
+-import org.osmdroid.DefaultResourceProxyImpl;
+-import org.osmdroid.ResourceProxy;
+ import org.osmdroid.views.MapView;
+ import org.osmdroid.views.util.constants.OverlayConstants;
+ 
+-import java.util.concurrent.atomic.AtomicInteger;
+-
+ /**
+  * Base class representing an overlay which may be displayed on top of a {@link MapView}. To add an
+  * overlay, subclass this class, create an instance, and add it to the list obtained from
+@@ -30,122 +22,16 @@ import java.util.concurrent.atomic.AtomicInteger;
+  */
+ public abstract class Overlay implements OverlayConstants {
+ 
+-	// ===========================================================
+-	// Constants
+-	// ===========================================================
+-
+-	private static AtomicInteger sOrdinal = new AtomicInteger();
+-
+-	// From Google Maps API
+-	protected static final float SHADOW_X_SKEW = -0.8999999761581421f;
+-	protected static final float SHADOW_Y_SCALE = 0.5f;
+-
+-	// ===========================================================
+-	// Fields
+-	// ===========================================================
+-
+-	protected final ResourceProxy mResourceProxy;
+-	protected final float mScale;
+-	private static final Rect mRect = new Rect();
+-	private boolean mEnabled = true;
+-
+-	// ===========================================================
+-	// Constructors
+-	// ===========================================================
+-
+-	public Overlay(final Context ctx) {
+-		mResourceProxy = new DefaultResourceProxyImpl(ctx);
+-		mScale = ctx.getResources().getDisplayMetrics().density;
+-	}
+-
+-	public Overlay(final ResourceProxy pResourceProxy) {
+-		mResourceProxy = pResourceProxy;
+-		mScale = mResourceProxy.getDisplayMetricsDensity();
+-	}
+-
+-	// ===========================================================
+-	// Getter & Setter
+-	// ===========================================================
+-
+-	/**
+-	 * Sets whether the Overlay is marked to be enabled. This setting does nothing by default, but
+-	 * should be checked before calling draw().
+-	 */
+-	public void setEnabled(final boolean pEnabled) {
+-		this.mEnabled = pEnabled;
+-	}
+-
+-	/**
+-	 * Specifies if the Overlay is marked to be enabled. This should be checked before calling
+-	 * draw().
+-	 * 
+-	 * @return true if the Overlay is marked enabled, false otherwise
+-	 */
+-	public boolean isEnabled() {
+-		return this.mEnabled;
+-	}
+-
+-	/**
+-	 * Since the menu-chain will pass through several independent Overlays, menu IDs cannot be fixed
+-	 * at compile time. Overlays should use this method to obtain and store a menu id for each menu
+-	 * item at construction time. This will ensure that two overlays don't use the same id.
+-	 * 
+-	 * @return an integer suitable to be used as a menu identifier
+-	 */
+-	protected final static int getSafeMenuId() {
+-		return sOrdinal.getAndIncrement();
+-	}
+-
+-	/**
+-	 * Similar to <see cref="getSafeMenuId" />, except this reserves a sequence of IDs of length
+-	 * <param name="count" />. The returned number is the starting index of that sequential list.
+-	 * 
+-	 * @return an integer suitable to be used as a menu identifier
+-	 */
+-	protected final static int getSafeMenuIdSequence(final int count) {
+-		return sOrdinal.getAndAdd(count);
+-	}
+-
+-	// ===========================================================
+-	// Methods for SuperClass/Interfaces
+-	// ===========================================================
+ 
+-	/**
+-	 * Draw the overlay over the map. This will be called on all active overlays with shadow=true,
+-	 * to lay down the shadow layer, and then again on all overlays with shadow=false. Callers
+-	 * should check isEnabled() before calling draw(). By default, draws nothing.
+-	 */
+-	protected abstract void draw(final Canvas c, final MapView osmv, final boolean shadow);
++	protected abstract void draw(final Canvas c, final MapView osmv);
+ 
+ 	// ===========================================================
+ 	// Methods
+ 	// ===========================================================
+ 
+-	/**
+-	 * Override to perform clean up of resources before shutdown. By default does nothing.
+-	 */
+ 	public void onDetach(final MapView mapView) {
+ 	}
+ 
+-	/**
+-	 * By default does nothing (<code>return false</code>). If you handled the Event, return
+-	 * <code>true</code>, otherwise return <code>false</code>. If you returned <code>true</code>
+-	 * none of the following Overlays or the underlying {@link MapView} has the chance to handle
+-	 * this event.
+-	 */
+-	public boolean onKeyDown(final int keyCode, final KeyEvent event, final MapView mapView) {
+-		return false;
+-	}
+-
+-	/**
+-	 * By default does nothing (<code>return false</code>). If you handled the Event, return
+-	 * <code>true</code>, otherwise return <code>false</code>. If you returned <code>true</code>
+-	 * none of the following Overlays or the underlying {@link MapView} has the chance to handle
+-	 * this event.
+-	 */
+-	public boolean onKeyUp(final int keyCode, final KeyEvent event, final MapView mapView) {
+-		return false;
+-	}
+ 
+ 	/**
+ 	 * <b>You can prevent all(!) other Touch-related events from happening!</b><br />
+@@ -258,50 +144,5 @@ public abstract class Overlay implements OverlayConstants {
+ 		return false;
+ 	}
+ 
+-	/**
+-	 * Convenience method to draw a Drawable at an offset. x and y are pixel coordinates. You can
+-	 * find appropriate coordinates from latitude/longitude using the MapView.getProjection() method
+-	 * on the MapView passed to you in draw(Canvas, MapView, boolean).
+-	 * 
+-	 * @param shadow
+-	 *            If true, draw only the drawable's shadow. Otherwise, draw the drawable itself.
+-	 */
+-	protected synchronized static void drawAt(android.graphics.Canvas canvas,
+-			android.graphics.drawable.Drawable drawable, int x, int y, boolean shadow) {
+-		drawable.copyBounds(mRect);
+-		drawable.setBounds(mRect.left + x, mRect.top + y, mRect.right + x, mRect.bottom + y);
+-		drawable.draw(canvas);
+-		drawable.setBounds(mRect);
+-	}
+-
+-	// ===========================================================
+-	// Inner and Anonymous Classes
+-	// ===========================================================
+-
+-	/**
+-	 * Interface definition for overlays that contain items that can be snapped to (for example,
+-	 * when the user invokes a zoom, this could be called allowing the user to snap the zoom to an
+-	 * interesting point.)
+-	 */
+-	public interface Snappable {
+-
+-		/**
+-		 * Checks to see if the given x and y are close enough to an item resulting in snapping the
+-		 * current action (e.g. zoom) to the item.
+-		 * 
+-		 * @param x
+-		 *            The x in screen coordinates.
+-		 * @param y
+-		 *            The y in screen coordinates.
+-		 * @param snapPoint
+-		 *            To be filled with the the interesting point (in screen coordinates) that is
+-		 *            closest to the given x and y. Can be untouched if not snapping.
+-		 * @param mapView
+-		 *            The {@link MapView} that is requesting the snap. Use MapView.getProjection()
+-		 *            to convert between on-screen pixels and latitude/longitude pairs.
+-		 * @return Whether or not to snap to the interesting point.
+-		 */
+-		boolean onSnapToItem(int x, int y, Point snapPoint, MapView mapView);
+-	}
+ 
+ }
+diff --git a/app/src/main/java/org/osmdroid/views/overlay/OverlayManager.java b/app/src/main/java/org/osmdroid/views/overlay/OverlayManager.java
+index 4bd2e19f..9ec22053 100644
+--- a/app/src/main/java/org/osmdroid/views/overlay/OverlayManager.java
++++ b/app/src/main/java/org/osmdroid/views/overlay/OverlayManager.java
+@@ -1,14 +1,9 @@
+ package org.osmdroid.views.overlay;
+ 
+ import android.graphics.Canvas;
+-import android.graphics.Point;
+-import android.view.KeyEvent;
+-import android.view.Menu;
+-import android.view.MenuItem;
+ import android.view.MotionEvent;
+ 
+ import org.osmdroid.views.MapView;
+-import org.osmdroid.views.overlay.Overlay.Snappable;
+ 
+ import java.util.AbstractList;
+ import java.util.Iterator;
+@@ -17,326 +12,207 @@ import java.util.concurrent.CopyOnWriteArrayList;
+ 
+ public class OverlayManager extends AbstractList<Overlay> {
+ 
+-	private TilesOverlay mTilesOverlay;
+-
+-	private final CopyOnWriteArrayList<Overlay> mOverlayList;
+-
+-	public OverlayManager(final TilesOverlay tilesOverlay) {
+-		setTilesOverlay(tilesOverlay);
+-		mOverlayList = new CopyOnWriteArrayList<>();
+-	}
+-
+-	@Override
+-	public Overlay get(final int pIndex) {
+-		return mOverlayList.get(pIndex);
+-	}
+-
+-	@Override
+-	public int size() {
+-		return mOverlayList.size();
+-	}
+-
+-	@Override
+-	public void add(final int pIndex, final Overlay pElement) {
+-		mOverlayList.add(pIndex, pElement);
+-	}
+-
+-	@Override
+-	public Overlay remove(final int pIndex) {
+-		return mOverlayList.remove(pIndex);
+-	}
+-
+-	@Override
+-	public Overlay set(final int pIndex, final Overlay pElement) {
+-		return mOverlayList.set(pIndex, pElement);
+-	}
+-
+-	/**
+-	 * Gets the optional TilesOverlay class.
+-	 * 
+-	 * @return the tilesOverlay
+-	 */
+-	public TilesOverlay getTilesOverlay() {
+-		return mTilesOverlay;
+-	}
+-
+-	/**
+-	 * Sets the optional TilesOverlay class. If set, this overlay will be drawn before all other
+-	 * overlays and will not be included in the editable list of overlays and can't be cleared
+-	 * except by a subsequent call to setTilesOverlay().
+-	 * 
+-	 * @param tilesOverlay
+-	 *            the tilesOverlay to set
+-	 */
+-	public void setTilesOverlay(final TilesOverlay tilesOverlay) {
+-		mTilesOverlay = tilesOverlay;
+-	}
+-
+-	public Iterable<Overlay> overlaysReversed() {
+-		return new Iterable<Overlay>() {
+-			@Override
+-			public Iterator<Overlay> iterator() {
+-				final ListIterator<Overlay> i = mOverlayList.listIterator(mOverlayList.size());
+-
+-				return new Iterator<Overlay>() {
+-					@Override
+-					public boolean hasNext() {
+-						return i.hasPrevious();
+-					}
+-
+-					@Override
+-					public Overlay next() {
+-						return i.previous();
+-					}
+-
+-					@Override
+-					public void remove() {
+-						i.remove();
+-					}
+-				};
+-			}
+-		};
+-	}
+-
+-	public void onDraw(final Canvas c, final MapView pMapView) {
+-		if ((mTilesOverlay != null) && mTilesOverlay.isEnabled()) {
+-			mTilesOverlay.draw(c, pMapView, true);
+-		}
+-
+-		for (final Overlay overlay : mOverlayList) {
+-			if (overlay.isEnabled())
+-				overlay.draw(c, pMapView, true);
+-		}
+-
+-		if ((mTilesOverlay != null) && mTilesOverlay.isEnabled()) {
+-			mTilesOverlay.draw(c, pMapView, false);
+-		}
+-
+-		for (final Overlay overlay : mOverlayList) {
+-			if (overlay.isEnabled())
+-				overlay.draw(c, pMapView, false);
+-		}
+-
+-	}
+-
+-	public void onDetach(final MapView pMapView) {
+-		if (mTilesOverlay != null) {
+-			mTilesOverlay.onDetach(pMapView);
+-		}
+-
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			overlay.onDetach(pMapView);
+-		}
+-	}
+-
+-	public boolean onKeyDown(final int keyCode, final KeyEvent event, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onKeyDown(keyCode, event, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onKeyUp(final int keyCode, final KeyEvent event, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onKeyUp(keyCode, event, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onTouchEvent(final MotionEvent event, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onTouchEvent(event, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onTrackballEvent(final MotionEvent event, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onTrackballEvent(event, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onSnapToItem(final int x, final int y, final Point snapPoint,
+-			final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay instanceof Snappable) {
+-				if (((Snappable) overlay).onSnapToItem(x, y, snapPoint, pMapView)) {
+-					return true;
+-				}
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	/** GestureDetector.OnDoubleTapListener **/
+-
+-	public boolean onDoubleTap(final MotionEvent e, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onDoubleTap(e, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onDoubleTapEvent(final MotionEvent e, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onDoubleTapEvent(e, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onSingleTapConfirmed(final MotionEvent e, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onSingleTapConfirmed(e, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	/** OnGestureListener **/
+-
+-	public boolean onDown(final MotionEvent pEvent, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onDown(pEvent, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onFling(final MotionEvent pEvent1, final MotionEvent pEvent2,
+-			final float pVelocityX, final float pVelocityY, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onFling(pEvent1, pEvent2, pVelocityX, pVelocityY, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onLongPress(final MotionEvent pEvent, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onLongPress(pEvent, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public boolean onScroll(final MotionEvent pEvent1, final MotionEvent pEvent2,
+-			final float pDistanceX, final float pDistanceY, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onScroll(pEvent1, pEvent2, pDistanceX, pDistanceY, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	public void onShowPress(final MotionEvent pEvent, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			overlay.onShowPress(pEvent, pMapView);
+-		}
+-	}
+-
+-	public boolean onSingleTapUp(final MotionEvent pEvent, final MapView pMapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if (overlay.onSingleTapUp(pEvent, pMapView)) {
+-				return true;
+-			}
+-		}
+-
+-		return false;
+-	}
+-
+-	// ** Options Menu **//
+-
+-	public void setOptionsMenusEnabled(final boolean pEnabled) {
+-		for (final Overlay overlay : mOverlayList) {
+-			if ((overlay instanceof IOverlayMenuProvider)
+-					&& ((IOverlayMenuProvider) overlay).isOptionsMenuEnabled())
+-				((IOverlayMenuProvider) overlay).setOptionsMenuEnabled(pEnabled);
+-		}
+-	}
+-
+-	public boolean onCreateOptionsMenu(final Menu pMenu, final int menuIdOffset,
+-			final MapView mapView) {
+-		boolean result = true;
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if ((overlay instanceof IOverlayMenuProvider)
+-					&& ((IOverlayMenuProvider) overlay).isOptionsMenuEnabled())
+-				result &= ((IOverlayMenuProvider) overlay).onCreateOptionsMenu(pMenu, menuIdOffset,
+-						mapView);
+-		}
+-
+-		if ((mTilesOverlay != null) && (mTilesOverlay instanceof IOverlayMenuProvider)
+-				&& ((IOverlayMenuProvider) mTilesOverlay).isOptionsMenuEnabled()) {
+-			result &= mTilesOverlay.onCreateOptionsMenu(pMenu, menuIdOffset, mapView);
+-		}
+-
+-		return result;
+-	}
+-
+-	public boolean onPrepareOptionsMenu(final Menu pMenu, final int menuIdOffset,
+-			final MapView mapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if ((overlay instanceof IOverlayMenuProvider)
+-					&& ((IOverlayMenuProvider) overlay).isOptionsMenuEnabled())
+-				((IOverlayMenuProvider) overlay).onPrepareOptionsMenu(pMenu, menuIdOffset, mapView);
+-		}
+-
+-		if ((mTilesOverlay != null) && (mTilesOverlay instanceof IOverlayMenuProvider)
+-				&& ((IOverlayMenuProvider) mTilesOverlay).isOptionsMenuEnabled()) {
+-			mTilesOverlay.onPrepareOptionsMenu(pMenu, menuIdOffset, mapView);
+-		}
+-
+-		return true;
+-	}
+-
+-	public boolean onOptionsItemSelected(final MenuItem item, final int menuIdOffset,
+-			final MapView mapView) {
+-		for (final Overlay overlay : this.overlaysReversed()) {
+-			if ((overlay instanceof IOverlayMenuProvider)
+-					&& ((IOverlayMenuProvider) overlay).isOptionsMenuEnabled()
+-					&& ((IOverlayMenuProvider) overlay).onOptionsItemSelected(item, menuIdOffset,
+-							mapView)) {
+-				return true;
+-			}
+-		}
+-
+-		if ((mTilesOverlay != null)
+-				&& (mTilesOverlay instanceof IOverlayMenuProvider)
+-				&& ((IOverlayMenuProvider) mTilesOverlay).isOptionsMenuEnabled()
+-				&& ((IOverlayMenuProvider) mTilesOverlay).onOptionsItemSelected(item, menuIdOffset,
+-						mapView)) {
+-			return true;
+-		}
+-
+-		return false;
+-	}
++    private TilesOverlay mTilesOverlay;
++
++    private final CopyOnWriteArrayList<Overlay> mOverlayList;
++
++    public OverlayManager(final TilesOverlay tilesOverlay) {
++        setTilesOverlay(tilesOverlay);
++        mOverlayList = new CopyOnWriteArrayList<>();
++    }
++
++    @Override
++    public Overlay get(final int pIndex) {
++        return mOverlayList.get(pIndex);
++    }
++
++    @Override
++    public int size() {
++        return mOverlayList.size();
++    }
++
++    @Override
++    public void add(final int pIndex, final Overlay pElement) {
++        mOverlayList.add(pIndex, pElement);
++    }
++
++    @Override
++    public Overlay remove(final int pIndex) {
++        return mOverlayList.remove(pIndex);
++    }
++
++    @Override
++    public Overlay set(final int pIndex, final Overlay pElement) {
++        return mOverlayList.set(pIndex, pElement);
++    }
++
++
++
++    public void setTilesOverlay(final TilesOverlay tilesOverlay) {
++        mTilesOverlay = tilesOverlay;
++    }
++
++
++    public Iterable<Overlay> overlaysReversed() {
++        return new Iterable<Overlay>() {
++            @Override
++            public Iterator<Overlay> iterator() {
++                final ListIterator<Overlay> i = mOverlayList.listIterator(mOverlayList.size());
++
++                return new Iterator<Overlay>() {
++                    @Override
++                    public boolean hasNext() {
++                        return i.hasPrevious();
++                    }
++
++                    @Override
++                    public Overlay next() {
++                        return i.previous();
++                    }
++
++                    @Override
++                    public void remove() {
++                        i.remove();
++                    }
++                };
++            }
++        };
++    }
++
++    public void onDraw(final Canvas c, final MapView pMapView) {
++        if ((mTilesOverlay != null)) {
++            mTilesOverlay.draw(c, pMapView);
++        }
++
++        for (final Overlay overlay : mOverlayList) {
++            overlay.draw(c, pMapView);
++        }
++    }
++
++
++
++    public void onDetach(final MapView pMapView) {
++        if (mTilesOverlay != null) {
++            mTilesOverlay.onDetach(pMapView);
++        }
++
++        for (final Overlay overlay : this.overlaysReversed()) {
++            overlay.onDetach(pMapView);
++        }
++    }
++
++
++    public boolean onTouchEvent(final MotionEvent event, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onTouchEvent(event, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onTrackballEvent(final MotionEvent event, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onTrackballEvent(event, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++
++    /** GestureDetector.OnDoubleTapListener **/
++
++    public boolean onDoubleTap(final MotionEvent e, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onDoubleTap(e, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onDoubleTapEvent(final MotionEvent e, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onDoubleTapEvent(e, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onSingleTapConfirmed(final MotionEvent e, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onSingleTapConfirmed(e, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    /** OnGestureListener **/
++
++    public boolean onDown(final MotionEvent pEvent, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onDown(pEvent, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onFling(final MotionEvent pEvent1, final MotionEvent pEvent2,
++                           final float pVelocityX, final float pVelocityY, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onFling(pEvent1, pEvent2, pVelocityX, pVelocityY, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onLongPress(final MotionEvent pEvent, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onLongPress(pEvent, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public boolean onScroll(final MotionEvent pEvent1, final MotionEvent pEvent2,
++                            final float pDistanceX, final float pDistanceY, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onScroll(pEvent1, pEvent2, pDistanceX, pDistanceY, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
++    public void onShowPress(final MotionEvent pEvent, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            overlay.onShowPress(pEvent, pMapView);
++        }
++    }
++
++    public boolean onSingleTapUp(final MotionEvent pEvent, final MapView pMapView) {
++        for (final Overlay overlay : this.overlaysReversed()) {
++            if (overlay.onSingleTapUp(pEvent, pMapView)) {
++                return true;
++            }
++        }
++
++        return false;
++    }
++
+ }
+diff --git a/app/src/main/java/org/osmdroid/views/overlay/TilesOverlay.java b/app/src/main/java/org/osmdroid/views/overlay/TilesOverlay.java
+index 754b18b6..a75ba662 100644
+--- a/app/src/main/java/org/osmdroid/views/overlay/TilesOverlay.java
++++ b/app/src/main/java/org/osmdroid/views/overlay/TilesOverlay.java
+@@ -9,39 +9,18 @@ import android.graphics.Point;
+ import android.graphics.Rect;
+ import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.Drawable;
+-import android.view.Menu;
+-import android.view.MenuItem;
+-import android.view.SubMenu;
+ 
+-import org.osmdroid.DefaultResourceProxyImpl;
+-import org.osmdroid.ResourceProxy;
+ import org.osmdroid.tileprovider.MapTile;
+-import org.osmdroid.tileprovider.tilesource.ITileSource;
+-import org.osmdroid.tileprovider.tilesource.TileSourceFactory;
+ import org.osmdroid.util.MyMath;
+ import org.osmdroid.views.MapView;
+-import org.osmdroid.views.MapView.Projection;
+ 
+-import ch.bailu.aat.helpers.Logger;
+-import ch.bailu.aat.helpers.LoggerFactory;
++import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.views.map.AbsTileProvider;
+ import microsoft.mappoint.TileSystem;
+ 
+-/**
+- * These objects are the principle consumer of map tiles.
+- * 
+- * see {@link MapTile} for an overview of how tiles are acquired by this overlay.
+- * 
+- */
+ 
+-public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
++public class TilesOverlay extends Overlay  {
+ 
+-	private static final Logger logger = LoggerFactory.getLogger(TilesOverlay.class);
+-
+-	public static final int MENU_MAP_MODE = getSafeMenuId();
+-	public static final int MENU_TILE_SOURCE_STARTING_ID = getSafeMenuIdSequence(TileSourceFactory
+-			.getTileSources().size());
+-	public static final int MENU_OFFLINE = getSafeMenuId();
+ 
+ 	/** Current tile source */
+ 	protected final AbsTileProvider mTileProvider;
+@@ -51,8 +30,6 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 	private final Rect mTileRect = new Rect();
+ 	private final Rect mViewPort = new Rect();
+ 
+-	private boolean mOptionsMenuEnabled = true;
+-
+ 	private int mWorldSize_2;
+ 
+ 	/** A drawable loading tile **/
+@@ -60,17 +37,9 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 	private int mLoadingBackgroundColor = Color.rgb(216, 208, 208);
+ 	private int mLoadingLineColor = Color.rgb(200, 192, 192);
+ 
+-	public TilesOverlay(final AbsTileProvider aTileProvider, final Context aContext) {
+-		this(aTileProvider, new DefaultResourceProxyImpl(aContext));
+-	}
+ 
+-	public TilesOverlay(final AbsTileProvider aTileProvider, final ResourceProxy pResourceProxy) {
+-		super(pResourceProxy);
+-		if (aTileProvider == null) {
+-			throw new IllegalArgumentException(
+-					"You must pass a valid tile provider to the tiles overlay.");
+-		}
+-		this.mTileProvider = aTileProvider;
++	public TilesOverlay(Context c, final AbsTileProvider aTileProvider) {
++		mTileProvider = aTileProvider;
+ 	}
+ 
+ 	@Override
+@@ -78,50 +47,21 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 		this.mTileProvider.detach();
+ 	}
+ 
+-	public void setAlpha(final int a) {
+-		this.mPaint.setAlpha(a);
+-	}
+ 
+ 	public int getMinimumZoomLevel() {
+ 		return mTileProvider.getMinimumZoomLevel();
+ 	}
+-
+ 	public int getMaximumZoomLevel() {
+ 		return mTileProvider.getMaximumZoomLevel();
+ 	}
+ 
+-	/**
+-	 * Whether to use the network connection if it's available.
+-	 */
+-	public boolean useDataConnection() {
+-		return true;
+-	}
+-
+-	/**
+-	 * Set whether to use the network connection if it's available.
+-	 * 
+-	 * @param aMode
+-	 *            if true use the network connection if it's available. if false don't use the
+-	 *            network connection even if it's available.
+-	 */
+-	public void setUseDataConnection(final boolean aMode) {
+-		//mTileProvider.setUseDataConnection(aMode);
+-	}
+ 
+ 	@Override
+-	protected void draw(final Canvas c, final MapView osmv, final boolean shadow) {
++	protected void draw(final Canvas c, final MapView osmv) {
+ 		
+-		if (DEBUGMODE) {
+-			logger.trace("onDraw(" + shadow + ")");
+-		}
+-
+-		if (shadow) {
+-			return;
+-		}
+-
+ 		mTileProvider.setStartTime();
+ 		// Calculate the half-world size
+-		final Projection pj = osmv.getProjection();
++		final MapView.Projection pj = osmv.getProjection();
+ 		final int zoomLevel = pj.getZoomLevel();
+ 		mWorldSize_2 = osmv.tileSystem.MapSize(zoomLevel) / 2;
+ 
+@@ -132,7 +72,7 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 		mViewPort.offset(mWorldSize_2, mWorldSize_2);
+ 
+ 		// Draw the tiles!
+-		drawTiles(c, pj.getZoomLevel(), osmv.tileSystem, mViewPort);
++		drawTiles(c, pj.getZoomLevel(), osmv.tileSystem, mViewPort, osmv.getContext());
+ 	}
+ 
+ 	/**
+@@ -141,7 +81,7 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 	 * than the upper-left corner).
+ 	 */
+ 	public void drawTiles(final Canvas c, final int zoomLevel, final TileSystem tileSystem,
+-			final Rect viewPort) {
++			final Rect viewPort, final Context context) {
+ 
+ 	    final int tileSizePx = tileSystem.getTileSize();
+ 		
+@@ -167,7 +107,7 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 
+ 				Drawable currentMapTile = mTileProvider.getMapTile(tile);
+ 				if (currentMapTile == null) {
+-					currentMapTile = getLoadingTile();
++					currentMapTile = getLoadingTile(context);
+ 				}
+ 
+ 				if (currentMapTile != null) {
+@@ -176,28 +116,9 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 					onTileReadyToDraw(c, currentMapTile, mTileRect);
+ 				}
+ 
+-				if (DEBUGMODE) {
+-					mTileRect.set(x * tileSizePx, y * tileSizePx, x * tileSizePx + tileSizePx, y
+-							* tileSizePx + tileSizePx);
+-					c.drawText(tile.toString(), mTileRect.left + 1,
+-							mTileRect.top + mPaint.getTextSize(), mPaint);
+-					c.drawLine(mTileRect.left, mTileRect.top, mTileRect.right, mTileRect.top,
+-							mPaint);
+-					c.drawLine(mTileRect.left, mTileRect.top, mTileRect.left, mTileRect.bottom,
+-							mPaint);
+-				}
+ 			}
+ 		}
+ 
+-		// draw a cross at center in debug mode
+-		if (DEBUGMODE) {
+-			// final GeoPoint center = osmv.getMapCenter();
+-			final Point centerPoint = new Point(viewPort.centerX() - mWorldSize_2,
+-					viewPort.centerY() - mWorldSize_2);
+-			c.drawLine(centerPoint.x, centerPoint.y - 9, centerPoint.x, centerPoint.y + 9, mPaint);
+-			c.drawLine(centerPoint.x - 9, centerPoint.y, centerPoint.x + 9, centerPoint.y, mPaint);
+-		}
+-
+ 	}
+ 
+ 	protected void onTileReadyToDraw(final Canvas c, final Drawable currentMapTile,
+@@ -207,80 +128,6 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 		currentMapTile.draw(c);
+ 	}
+ 
+-	@Override
+-	public void setOptionsMenuEnabled(final boolean pOptionsMenuEnabled) {
+-		this.mOptionsMenuEnabled = pOptionsMenuEnabled;
+-	}
+-
+-	@Override
+-	public boolean isOptionsMenuEnabled() {
+-		return this.mOptionsMenuEnabled;
+-	}
+-
+-	@Override
+-	public boolean onCreateOptionsMenu(final Menu pMenu, final int pMenuIdOffset,
+-			final MapView pMapView) {
+-		final SubMenu mapMenu = pMenu.addSubMenu(0, MENU_MAP_MODE + pMenuIdOffset, Menu.NONE,
+-				mResourceProxy.getString(ResourceProxy.string.map_mode)).setIcon(
+-				mResourceProxy.getDrawable(ResourceProxy.bitmap.ic_menu_mapmode));
+-
+-		for (int a = 0; a < TileSourceFactory.getTileSources().size(); a++) {
+-			final ITileSource tileSource = TileSourceFactory.getTileSources().get(a);
+-			mapMenu.add(MENU_MAP_MODE + pMenuIdOffset, MENU_TILE_SOURCE_STARTING_ID + a
+-					+ pMenuIdOffset, Menu.NONE, tileSource.localizedName(mResourceProxy));
+-		}
+-		mapMenu.setGroupCheckable(MENU_MAP_MODE + pMenuIdOffset, true, true);
+-
+-		final String title = pMapView.getResourceProxy().getString(
+-				pMapView.useDataConnection() ? ResourceProxy.string.offline_mode
+-						: ResourceProxy.string.online_mode);
+-		final Drawable icon = pMapView.getResourceProxy().getDrawable(
+-				ResourceProxy.bitmap.ic_menu_offline);
+-		pMenu.add(0, MENU_OFFLINE + pMenuIdOffset, Menu.NONE, title).setIcon(icon);
+-
+-		return true;
+-	}
+-
+-	@Override
+-	public boolean onPrepareOptionsMenu(final Menu pMenu, final int pMenuIdOffset,
+-			final MapView pMapView) {
+-		final int index = TileSourceFactory.getTileSources().indexOf(
+-				pMapView.getTileProvider().getTileSource());
+-		if (index >= 0) {
+-			pMenu.findItem(MENU_TILE_SOURCE_STARTING_ID + index + pMenuIdOffset).setChecked(true);
+-		}
+-
+-		pMenu.findItem(MENU_OFFLINE + pMenuIdOffset).setTitle(
+-				pMapView.getResourceProxy().getString(
+-						pMapView.useDataConnection() ? ResourceProxy.string.offline_mode
+-								: ResourceProxy.string.online_mode));
+-
+-		return true;
+-	}
+-
+-	@Override
+-	public boolean onOptionsItemSelected(final MenuItem pItem, final int pMenuIdOffset,
+-			final MapView pMapView) {
+-
+-		final int menuId = pItem.getItemId() - pMenuIdOffset;
+-		if ((menuId >= MENU_TILE_SOURCE_STARTING_ID)
+-				&& (menuId < MENU_TILE_SOURCE_STARTING_ID
+-						+ TileSourceFactory.getTileSources().size())) {
+-			pMapView.setTileSource(TileSourceFactory.getTileSources().get(
+-					menuId - MENU_TILE_SOURCE_STARTING_ID));
+-			return true;
+-		} else if (menuId == MENU_OFFLINE) {
+-			final boolean useDataConnection = !pMapView.useDataConnection();
+-			pMapView.setUseDataConnection(useDataConnection);
+-			return true;
+-		} else {
+-			return false;
+-		}
+-	}
+-
+-	public int getLoadingBackgroundColor() {
+-		return mLoadingBackgroundColor;
+-	}
+ 
+ 	/**
+ 	 * Set the color to use to draw the background while we're waiting for the tile to load.
+@@ -296,18 +143,8 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 		}
+ 	}
+ 
+-	public int getLoadingLineColor() {
+-		return mLoadingLineColor;
+-	}
+-
+-	public void setLoadingLineColor(final int pLoadingLineColor) {
+-		if (mLoadingLineColor != pLoadingLineColor) {
+-			mLoadingLineColor = pLoadingLineColor;
+-			clearLoadingTile();
+-		}
+-	}
+ 
+-	private Drawable getLoadingTile() {
++	private Drawable getLoadingTile(Context context) {
+ 		if (mLoadingTile == null && mLoadingBackgroundColor != Color.TRANSPARENT) {
+ 			try {
+ 				final int tileSize = mTileProvider.getTileSource() != null ? mTileProvider
+@@ -324,9 +161,9 @@ public class TilesOverlay extends Overlay implements IOverlayMenuProvider {
+ 					canvas.drawLine(0, a, tileSize, a, paint);
+ 					canvas.drawLine(a, 0, a, tileSize, paint);
+ 				}
+-				mLoadingTile = new BitmapDrawable(bitmap);
++				mLoadingTile = new BitmapDrawable(context.getResources(), bitmap);
+ 			} catch (final OutOfMemoryError e) {
+-				logger.error("OutOfMemoryError getting loading tile");
++				AppLog.e(context, e);
+ 				System.gc();
+ 			}
+ 		}

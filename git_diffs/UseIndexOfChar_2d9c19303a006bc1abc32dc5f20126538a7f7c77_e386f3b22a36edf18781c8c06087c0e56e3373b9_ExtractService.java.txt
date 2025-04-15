@@ -1,0 +1,2031 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
+index b38d63880..343fe61be 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/CompressedExplorerAdapter.java
+@@ -22,7 +22,7 @@ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+ import com.amaze.filemanager.adapters.holders.CompressedItemViewHolder;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+-import com.amaze.filemanager.filesystem.compressed.CompressedInterface;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+ import com.amaze.filemanager.fragments.CompressedExplorerFragment;
+ import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.ui.views.CircleGradientDrawable;
+@@ -48,7 +48,7 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<CompressedIt
+     private Drawable folder;
+     private ArrayList<CompressedObjectParcelable> items;
+     private CompressedExplorerFragment compressedExplorerFragment;
+-    private CompressedInterface compressedInterface;
++    private Decompressor decompressor;
+     private LayoutInflater mInflater;
+     private boolean[] itemsChecked;
+     private int offset = 0;
+@@ -56,12 +56,12 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<CompressedIt
+     public CompressedExplorerAdapter(Context c, UtilitiesProviderInterface utilsProvider,
+                                      ArrayList<CompressedObjectParcelable> items,
+                                      CompressedExplorerFragment compressedExplorerFragment,
+-                                     CompressedInterface compressedInterface) {
++                                     Decompressor decompressor) {
+         setHasStableIds(true);
+ 
+         this.utilsProvider = utilsProvider;
+         this.items = items;
+-        this.compressedInterface = compressedInterface;
++        this.decompressor = decompressor;
+ 
+         itemsChecked = new boolean[items.size()];
+ 
+@@ -285,7 +285,7 @@ public class CompressedExplorerAdapter extends RecyclerView.Adapter<CompressedIt
+                         Toast.makeText(compressedExplorerFragment.getContext(),
+                                 compressedExplorerFragment.getContext().getResources().getString(R.string.please_wait),
+                                 Toast.LENGTH_SHORT).show();
+-                        compressedInterface.decompress(compressedExplorerFragment.getActivity().getExternalCacheDir().getPath(),
++                        decompressor.decompress(compressedExplorerFragment.getActivity().getExternalCacheDir().getPath(),
+                                 new String[]{rowItem.name});
+                     }
+                 }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java
+new file mode 100644
+index 000000000..f177e950d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java
+@@ -0,0 +1,49 @@
++package com.amaze.filemanager.asynchronous.asynctasks.compress;
++
++import android.os.AsyncTask;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++import java.util.ArrayList;
++import java.util.Collections;
++
++/**
++ *
++ *
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 2/12/2017, at 02:08.
++ */
++
++public abstract class CompressedHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObjectParcelable>> {
++
++    private boolean createBackItem;
++    private OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish;
++
++    CompressedHelperTask(boolean goBack,
++                         OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> l) {
++        createBackItem = goBack;
++        onFinish = l;
++    }
++
++    @Override
++    protected final ArrayList<CompressedObjectParcelable> doInBackground(Void... voids) {
++        ArrayList<CompressedObjectParcelable> elements = new ArrayList<>();
++        if (createBackItem) elements.add(0, new CompressedObjectParcelable());
++
++        addElements(elements);
++
++        Collections.sort(elements, new CompressedObjectParcelable.Sorter());
++
++        return elements;
++    }
++
++    @Override
++    protected final void onPostExecute(ArrayList<CompressedObjectParcelable> zipEntries) {
++        super.onPostExecute(zipEntries);
++        onFinish.onAsyncTaskFinished(zipEntries);
++    }
++
++    abstract void addElements(ArrayList<CompressedObjectParcelable> elements);
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java
+new file mode 100644
+index 000000000..e5c8f43a3
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java
+@@ -0,0 +1,56 @@
++package com.amaze.filemanager.asynchronous.asynctasks.compress;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
++import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
++
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.zip.GZIPInputStream;
++
++public class GzipHelperTask extends CompressedHelperTask {
++
++    private static final String SEPARATOR = "/";
++
++    private String filePath, relativePath;
++
++    public GzipHelperTask(String filePath, String relativePath, boolean goBack,
++                         OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> l) {
++        super(goBack, l);
++        this.filePath = filePath;
++        this.relativePath = relativePath;
++    }
++
++    @Override
++    void addElements(ArrayList<CompressedObjectParcelable> elements) {
++        TarArchiveInputStream tarInputStream = null;
++        try {
++            tarInputStream = new TarArchiveInputStream(
++                    new GzipCompressorInputStream(new FileInputStream(filePath)));
++
++            TarArchiveEntry entry;
++            while ((entry = tarInputStream.getNextTarEntry()) != null) {
++                String name = entry.getName();
++                if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
++
++                boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
++                boolean isInRelativeDir = name.contains(SEPARATOR)
++                        && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
++
++                if (isInBaseDir || isInRelativeDir) {
++                    elements.add(new CompressedObjectParcelable(entry.getName(),
++                            entry.getLastModifiedDate().getTime(), entry.getSize(), entry.isDirectory()));
++                }
++            }
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
++
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/RarHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java
+similarity index 62%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/RarHelperTask.java
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java
+index c3a68e4c3..12e7be1f4 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/RarHelperTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java
+@@ -1,9 +1,7 @@
+-package com.amaze.filemanager.asynchronous.asynctasks;
++package com.amaze.filemanager.asynchronous.asynctasks.compress;
+ 
+-import android.os.AsyncTask;
+-
+-import com.amaze.filemanager.filesystem.compressed.RarHelper;
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.RarDecompressor;
+ import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+ import com.github.junrar.Archive;
+ import com.github.junrar.exception.RarException;
+@@ -12,17 +10,14 @@ import com.github.junrar.rarfile.FileHeader;
+ import java.io.File;
+ import java.io.IOException;
+ import java.util.ArrayList;
+-import java.util.Collections;
+ 
+ /**
+  * Created by Arpit on 25-01-2015 edited by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+  */
+-public class RarHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObjectParcelable>> {
++public class RarHelperTask extends CompressedHelperTask {
+ 
+     private String fileLocation;
+     private String relativeDirectory;
+-    private boolean createBackItem;
+-    private OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish;
+ 
+     /**
+      * AsyncTask to load RAR file items.
+@@ -31,21 +26,14 @@ public class RarHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObj
+      */
+     public RarHelperTask(String realFileDirectory, String dir, boolean goBack,
+                          OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> l) {
++        super(goBack, l);
+         fileLocation = realFileDirectory;
+         relativeDirectory = dir;
+-        createBackItem = goBack;
+-        onFinish = l;
+     }
+ 
+     @Override
+-    protected ArrayList<CompressedObjectParcelable> doInBackground(Void... params) {
+-        ArrayList<CompressedObjectParcelable> elements = new ArrayList<>();
+-
++    void addElements(ArrayList<CompressedObjectParcelable> elements) {
+         try {
+-            if (createBackItem) {
+-                elements.add(0, new CompressedObjectParcelable());
+-            }
+-
+             Archive zipfile = new Archive(new File(fileLocation));
+             String relativeDirDiffSeparator = relativeDirectory.replace("/", "\\");
+ 
+@@ -56,21 +44,12 @@ public class RarHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObj
+                         && name.substring(0, name.lastIndexOf("\\")).equals(relativeDirDiffSeparator);
+ 
+                 if (isInBaseDir || isInRelativeDir) {
+-                    elements.add(new CompressedObjectParcelable(RarHelper.convertName(header), 0, header.getDataSize(), header.isDirectory()));
++                    elements.add(new CompressedObjectParcelable(RarDecompressor.convertName(header), 0, header.getDataSize(), header.isDirectory()));
+                 }
+             }
+-            Collections.sort(elements, new CompressedObjectParcelable.Sorter());
+         } catch (RarException | IOException e) {
+             e.printStackTrace();
+         }
+-
+-        return elements;
+-    }
+-
+-    @Override
+-    protected void onPostExecute(ArrayList<CompressedObjectParcelable> zipEntries) {
+-        super.onPostExecute(zipEntries);
+-        onFinish.onAsyncTaskFinished(zipEntries);
+     }
+ 
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java
+new file mode 100644
+index 000000000..d66dba265
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java
+@@ -0,0 +1,58 @@
++package com.amaze.filemanager.asynchronous.asynctasks.compress;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
++
++import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
++
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 2/12/2017, at 00:40.
++ */
++
++public class TarHelperTask extends CompressedHelperTask {
++
++    private static final String SEPARATOR = "/";
++
++    private String filePath, relativePath;
++
++    public TarHelperTask(String filePath, String relativePath, boolean goBack,
++                         OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> l) {
++        super(goBack, l);
++        this.filePath = filePath;
++        this.relativePath = relativePath;
++    }
++
++    @Override
++    void addElements(ArrayList<CompressedObjectParcelable> elements) {
++        TarArchiveInputStream tarInputStream = null;
++        try {
++            tarInputStream = new TarArchiveInputStream(new FileInputStream(filePath));
++
++            TarArchiveEntry entry;
++            while ((entry = tarInputStream.getNextTarEntry()) != null) {
++                String name = entry.getName();
++                if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
++
++                boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
++                boolean isInRelativeDir = name.contains(SEPARATOR)
++                        && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
++
++                if (isInBaseDir || isInRelativeDir) {
++                    elements.add(new CompressedObjectParcelable(entry.getName(),
++                            entry.getLastModifiedDate().getTime(), entry.getSize(), entry.isDirectory()));
++                }
++            }
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
++
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ZipHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java
+similarity index 83%
+rename from app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ZipHelperTask.java
+rename to app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java
+index 9c71d2a4b..0d339d206 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/ZipHelperTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java
+@@ -1,8 +1,7 @@
+-package com.amaze.filemanager.asynchronous.asynctasks;
++package com.amaze.filemanager.asynchronous.asynctasks.compress;
+ 
+ import android.content.Context;
+ import android.net.Uri;
+-import android.os.AsyncTask;
+ 
+ import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+ import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+@@ -11,7 +10,6 @@ import java.io.File;
+ import java.io.IOException;
+ import java.lang.ref.WeakReference;
+ import java.util.ArrayList;
+-import java.util.Collections;
+ import java.util.Enumeration;
+ import java.util.zip.ZipEntry;
+ import java.util.zip.ZipFile;
+@@ -20,13 +18,11 @@ import java.util.zip.ZipInputStream;
+ /**
+  * Created by Vishal on 11/23/2014 edited by Emmanuel Messulam<emmanuelbendavid@gmail.com>
+  */
+-public class ZipHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObjectParcelable>> {
++public class ZipHelperTask extends CompressedHelperTask {
+ 
+     private WeakReference<Context> context;
+     private Uri fileLocation;
+     private String relativeDirectory;
+-    private boolean createBackItem;
+-    private OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish;
+ 
+     /**
+      * AsyncTask to load ZIP file items.
+@@ -35,21 +31,14 @@ public class ZipHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObj
+      */
+     public ZipHelperTask(Context c, String realFileDirectory, String dir, boolean goback,
+                          OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> l) {
++        super(goback, l);
+         context = new WeakReference<>(c);
+         fileLocation = Uri.parse(realFileDirectory);
+         relativeDirectory = dir;
+-        createBackItem = goback;
+-        onFinish = l;
+     }
+ 
+     @Override
+-    protected ArrayList<CompressedObjectParcelable> doInBackground(Void... params) {
+-        ArrayList<CompressedObjectParcelable> elements = new ArrayList<>();
+-
+-        if (createBackItem) {
+-            elements.add(0, new CompressedObjectParcelable());
+-        }
+-
++    void addElements(ArrayList<CompressedObjectParcelable> elements) {
+         try {
+             ArrayList<CompressedObjectParcelable> wholelist = new ArrayList<>();
+             if (new File(fileLocation.getPath()).canRead()) {
+@@ -112,19 +101,9 @@ public class ZipHelperTask extends AsyncTask<Void, Void, ArrayList<CompressedObj
+ 
+                 }
+             }
+-
+-            Collections.sort(elements, new CompressedObjectParcelable.Sorter());
+         } catch (IOException e) {
+             e.printStackTrace();
+         }
+-
+-        return elements;
+-    }
+-
+-    @Override
+-    protected void onPostExecute(ArrayList<CompressedObjectParcelable> zipEntries) {
+-        super.onPostExecute(zipEntries);
+-        onFinish.onAsyncTaskFinished(zipEntries);
+     }
+ 
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ExtractService.java b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ExtractService.java
+index b9ddad198..26f2e602e 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ExtractService.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ExtractService.java
+@@ -36,6 +36,8 @@ import android.util.Log;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.filesystem.FileUtil;
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+ import com.amaze.filemanager.ui.notifications.NotificationConstants;
+ import com.amaze.filemanager.utils.DatapointParcelable;
+ import com.amaze.filemanager.utils.ObtainableServiceBinder;
+@@ -57,7 +59,9 @@ import java.io.FileInputStream;
+ import java.io.IOException;
+ import java.lang.ref.WeakReference;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Enumeration;
++import java.util.List;
+ import java.util.zip.GZIPInputStream;
+ import java.util.zip.ZipEntry;
+ import java.util.zip.ZipFile;
+@@ -158,12 +162,10 @@ public class ExtractService extends ProgressiveService {
+     }
+ 
+     public static class DoWork extends AsyncTask<Void, Void, Void> {
+-
+         private WeakReference<ExtractService> extractService;
+         private String[] entriesToExtract;
+         private String extractionPath, compressedPath;
+         private ProgressHandler progressHandler;
+-        private long totalBytes = 0L;
+         private ServiceWatcherUtil watcherUtil;
+ 
+ 
+@@ -182,341 +184,67 @@ public class ExtractService extends ProgressiveService {
+             if(extractService == null) return null;
+ 
+             File f = new File(compressedPath);
++            String extractDirName = CompressedHelper.getFileName(f.getName());
+ 
+             if (!compressedPath.equals(extractionPath)) {// custom extraction path not set, extract at default path
+-                extractionPath = f.getParent() + "/" + f.getName().substring(0, f.getName().lastIndexOf("."));
++                extractionPath = f.getParent() + "/" + extractDirName;
+             } else if (extractionPath.endsWith("/")) {
+-                extractionPath = extractionPath + f.getName().substring(0, f.getName().lastIndexOf("."));
++                extractionPath = extractionPath + extractDirName;
+             }
+ 
+             try {
+-                String path = f.getPath().toLowerCase();
+-                boolean isZip = path.endsWith(".zip") || path.endsWith(".jar") || path.endsWith(".apk");
+-                boolean isTar = path.endsWith(".tar") || path.endsWith(".tar.gz");
+-                boolean isRar = path.endsWith(".rar");
+-
+-                if (entriesToExtract != null && entriesToExtract.length != 0) {
+-                    if (isZip) extract(extractService, f, extractionPath, entriesToExtract);
+-                    else if (isRar) extractRar(extractService, f, extractionPath, entriesToExtract);
++                if(entriesToExtract.length == 0) entriesToExtract = null;
++
++                Extractor extractor =
++                        CompressedHelper.getExtractorInstance(extractService.getApplicationContext(),
++                                f, extractionPath, new Extractor.OnUpdate() {
++                                    private int sourceFilesProcessed = 0;
++
++                                    @Override
++                                    public void onStart(long totalBytes, String firstEntryName) {
++                                        // setting total bytes calculated from zip entries
++                                        progressHandler.setTotalSize(totalBytes);
++
++                                        extractService.addFirstDatapoint(firstEntryName,
++                                                1, totalBytes, false);
++
++                                        watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
++                                        watcherUtil.watch();
++                                    }
++
++                                    @Override
++                                    public void onUpdate(String entryPath) {
++                                        progressHandler.setFileName(entryPath);
++                                        if (entriesToExtract != null) {
++                                            progressHandler.setSourceFilesProcessed(sourceFilesProcessed++);
++                                        }
++                                    }
++
++                                    @Override
++                                    public void onFinish() {
++                                        if (entriesToExtract == null){
++                                            progressHandler.setSourceFilesProcessed(1);
++                                        }
++                                    }
++
++                                    @Override
++                                    public boolean isCancelled() {
++                                        return progressHandler.getCancelled();
++                                    }
++                                });
++
++                if (entriesToExtract != null) {
++                    extractor.extractFiles(entriesToExtract);
+                 } else {
+-                    if (isZip) extract(extractService, f, extractionPath);
+-                    else if (isRar) extractRar(extractService, f, extractionPath);
+-                    else if (isTar) extractTar(extractService, f, extractionPath);
++                    extractor.extractEverything();
+                 }
+-            } catch (IOException | RarException e) {
++            } catch (IOException e) {
+                 Log.e("amaze", "Error while extracting file " + compressedPath, e);
+                 AppConfig.toast(extractService, extractService.getString(R.string.error));
+             }
+             return null;
+         }
+ 
+-        /**
+-         * Method extracts {@link ZipEntry} from {@link ZipFile}
+-         *
+-         * @param zipFile   zip file from which entriesToExtract are to be extracted
+-         * @param entry     zip entry that is to be extracted
+-         * @param outputDir output directory
+-         */
+-        private void unzipEntry(@NonNull final Context context, ZipFile zipFile, ZipEntry entry, String outputDir)
+-                throws IOException {
+-
+-            if (entry.isDirectory()) {
+-                // zip entry is a directory, return after creating new directory
+-                FileUtil.mkdir(new File(outputDir, entry.getName()), context);
+-                return;
+-            }
+-
+-            final File outputFile = new File(outputDir, entry.getName());
+-
+-            if (!outputFile.getParentFile().exists()) {
+-                // creating directory if not already exists
+-
+-                FileUtil.mkdir(outputFile.getParentFile(), context);
+-            }
+-
+-            BufferedInputStream inputStream = new BufferedInputStream(
+-                    zipFile.getInputStream(entry));
+-            BufferedOutputStream outputStream = new BufferedOutputStream(
+-                    FileUtil.getOutputStream(outputFile, context));
+-            try {
+-                int len;
+-                byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-                while ((len = inputStream.read(buf)) > 0) {
+-
+-                    outputStream.write(buf, 0, len);
+-                    ServiceWatcherUtil.POSITION += len;
+-                }
+-            } finally {
+-                outputStream.close();
+-                inputStream.close();
+-            }
+-        }
+-
+-        private void unzipRAREntry(@NonNull final Context context, Archive zipFile, FileHeader entry, String outputDir)
+-                throws RarException, IOException {
+-            String name = entry.getFileNameString();
+-            name = name.replaceAll("\\\\", "/");
+-            if (entry.isDirectory()) {
+-                FileUtil.mkdir(new File(outputDir, name), context);
+-                return;
+-            }
+-            File outputFile = new File(outputDir, name);
+-            if (!outputFile.getParentFile().exists()) {
+-                FileUtil.mkdir(outputFile.getParentFile(), context);
+-            }
+-            //	Log.i("Amaze", "Extracting: " + entry);
+-            BufferedInputStream inputStream = new BufferedInputStream(
+-                    zipFile.getInputStream(entry));
+-            BufferedOutputStream outputStream = new BufferedOutputStream(
+-                    FileUtil.getOutputStream(outputFile, context));
+-            try {
+-                int len;
+-                byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-                while ((len = inputStream.read(buf)) > 0) {
+-
+-                    outputStream.write(buf, 0, len);
+-                    ServiceWatcherUtil.POSITION += len;
+-                }
+-            } finally {
+-                outputStream.close();
+-                inputStream.close();
+-            }
+-        }
+-
+-        private void unzipTAREntry(@NonNull final Context context, TarArchiveInputStream zipFileStream, TarArchiveEntry entry,
+-                                   String outputDir) throws IOException {
+-            String name = entry.getName();
+-            if (entry.isDirectory()) {
+-                FileUtil.mkdir(new File(outputDir, name), context);
+-                return;
+-            }
+-            File outputFile = new File(outputDir, name);
+-            if (!outputFile.getParentFile().exists()) {
+-                FileUtil.mkdir(outputFile.getParentFile(), context);
+-            }
+-
+-            BufferedOutputStream outputStream = new BufferedOutputStream(
+-                    FileUtil.getOutputStream(outputFile, context));
+-            try {
+-                int len;
+-                byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-                while ((len = zipFileStream.read(buf)) > 0) {
+-
+-                    outputStream.write(buf, 0, len);
+-                    ServiceWatcherUtil.POSITION += len;
+-                }
+-            } finally {
+-                outputStream.close();
+-            }
+-        }
+-
+-        /**
+-         * Helper method to initiate extraction of zip/jar files.
+-         *
+-         * @param archive         the file pointing to archive
+-         * @param destinationPath the where to extract
+-         * @param entryNamesList  names of files to be extracted from the archive
+-         */
+-        private void extract(@NonNull final ExtractService extractService, File archive, String destinationPath,
+-                                String[] entryNamesList) throws IOException {
+-
+-            ArrayList<ZipEntry> entry1 = new ArrayList<>();
+-            ZipFile zipfile = new ZipFile(archive);
+-
+-            // iterating archive elements to find file names that are to be extracted
+-            for (Enumeration e = zipfile.entries(); e.hasMoreElements(); ) {
+-
+-                ZipEntry zipEntry = (ZipEntry) e.nextElement();
+-
+-                for (String entry : entryNamesList) {
+-
+-                    if (zipEntry.getName().contains(entry)) {
+-                        // header to be extracted is atleast the entry path (may be more, when it is a directory)
+-                        entry1.add(zipEntry);
+-                    }
+-                }
+-            }
+-
+-            // get the total size of elements to be extracted
+-            for (ZipEntry entry : entry1) {
+-                totalBytes += entry.getSize();
+-            }
+-
+-            // setting total bytes calculated from zip entries
+-            progressHandler.setTotalSize(totalBytes);
+-
+-            extractService.addFirstDatapoint(entry1.get(0).getName(), entryNamesList.length, totalBytes, false);
+-
+-            watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
+-            watcherUtil.watch();
+-
+-            int i = 0;
+-            for (ZipEntry entry : entry1) {
+-                if (!progressHandler.getCancelled()) {
+-
+-                    progressHandler.setFileName(entry.getName());
+-                    unzipEntry(extractService, zipfile, entry, destinationPath);
+-                    progressHandler.setSourceFilesProcessed(++i);
+-                }
+-            }
+-        }
+-
+-        private void extract(@NonNull final ExtractService extractService, File archive, String destinationPath) throws IOException {
+-            ArrayList<ZipEntry> arrayList = new ArrayList<>();
+-            ZipFile zipfile = new ZipFile(archive);
+-            for (Enumeration e = zipfile.entries(); e.hasMoreElements(); ) {
+-
+-                // adding all the elements to be extracted to an array list
+-                ZipEntry entry = (ZipEntry) e.nextElement();
+-                arrayList.add(entry);
+-            }
+-
+-            for (ZipEntry entry : arrayList) {
+-                // calculating size of compressed items
+-                totalBytes += entry.getSize();
+-            }
+-
+-            // setting total bytes calculated from zip entries
+-            progressHandler.setTotalSize(totalBytes);
+-
+-            extractService.addFirstDatapoint(arrayList.get(0).getName(), 1, totalBytes, false);
+-
+-            watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
+-            watcherUtil.watch();
+-
+-            for (ZipEntry entry : arrayList) {
+-                if (!progressHandler.getCancelled()) {
+-
+-                    progressHandler.setFileName(entry.getName());
+-                    unzipEntry(extractService, zipfile, entry, destinationPath);
+-                }
+-            }
+-            progressHandler.setSourceFilesProcessed(1);
+-        }
+-
+-        private void extractTar(@NonNull final ExtractService extractService, File archive, String destinationPath) throws IOException {
+-            ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-
+-            TarArchiveInputStream inputStream = createTarInputStream(archive);
+-
+-            TarArchiveEntry tarArchiveEntry = inputStream.getNextTarEntry();
+-
+-            while (tarArchiveEntry != null) {
+-                archiveEntries.add(tarArchiveEntry);
+-                tarArchiveEntry = inputStream.getNextTarEntry();
+-            }
+-
+-            for (TarArchiveEntry entry : archiveEntries) {
+-                totalBytes += entry.getSize();
+-            }
+-
+-            // setting total bytes calculated from zip entries
+-            progressHandler.setTotalSize(totalBytes);
+-
+-            extractService.addFirstDatapoint(archiveEntries.get(0).getName(), 1, totalBytes, false);
+-
+-            watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
+-            watcherUtil.watch();
+-
+-            inputStream = createTarInputStream(archive);
+-
+-            for (TarArchiveEntry entry : archiveEntries) {
+-
+-                if (!progressHandler.getCancelled()) {
+-
+-                    inputStream.getNextTarEntry();
+-                    progressHandler.setFileName(entry.getName());
+-                    unzipTAREntry(extractService, inputStream, entry, destinationPath);
+-                }
+-            }
+-            progressHandler.setSourceFilesProcessed(1);
+-
+-            // operating finished
+-            inputStream.close();
+-        }
+-
+-        private TarArchiveInputStream createTarInputStream(File archive) throws IOException {
+-            if (archive.getName().endsWith(".tar")) {
+-                return new TarArchiveInputStream(new BufferedInputStream(new FileInputStream(archive)));
+-            } else {
+-                return new TarArchiveInputStream(new GZIPInputStream(new FileInputStream(archive)));
+-            }
+-        }
+-
+-        private void extractRar(@NonNull final ExtractService extractService, File archive, String destinationPath) throws IOException, RarException {
+-            ArrayList<FileHeader> arrayList = new ArrayList<>();
+-            Archive zipFile = new Archive(archive);
+-            FileHeader fh = zipFile.nextFileHeader();
+-
+-            while (fh != null) {
+-                arrayList.add(fh);
+-                fh = zipFile.nextFileHeader();
+-
+-            }
+-
+-            for (FileHeader header : arrayList) {
+-                totalBytes += header.getFullUnpackSize();
+-            }
+-
+-            // setting total bytes calculated from zip entriesToExtract
+-            progressHandler.setTotalSize(totalBytes);
+-
+-            extractService.addFirstDatapoint(arrayList.get(0).getFileNameString(), 1, totalBytes, false);
+-
+-            watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
+-            watcherUtil.watch();
+-
+-            for (FileHeader header : arrayList) {
+-
+-                if (!progressHandler.getCancelled()) {
+-
+-                    progressHandler.setFileName(header.getFileNameString());
+-                    unzipRAREntry(extractService, zipFile, header, destinationPath);
+-                }
+-            }
+-            progressHandler.setSourceFilesProcessed(1);
+-        }
+-
+-        private void extractRar(@NonNull final ExtractService extractService, File archive, String destinationPath,
+-                                String[] entriesToExtract) throws IOException, RarException {
+-            Archive rarFile = new Archive(archive);
+-            ArrayList<FileHeader> arrayList = new ArrayList<>();
+-
+-            // iterating archive elements to find file names that are to be extracted
+-            for (FileHeader header : rarFile.getFileHeaders()) {
+-                for (String entry : entriesToExtract) {
+-
+-                    if (header.getFileNameString().contains(entry)) {
+-                        // header to be extracted is atleast the entry path (may be more, when it is a directory)
+-                        arrayList.add(header);
+-                    }
+-                }
+-            }
+-
+-            // get the total size of elements to be extracted
+-            for (FileHeader entry : arrayList) {
+-                totalBytes += entry.getFullUnpackSize();
+-            }
+-
+-            // setting total bytes calculated from zip entries
+-            progressHandler.setTotalSize(totalBytes);
+-
+-            extractService.addFirstDatapoint(arrayList.get(0).getFileNameString(), arrayList.size(), totalBytes, false);
+-
+-            watcherUtil = new ServiceWatcherUtil(progressHandler, totalBytes);
+-            watcherUtil.watch();
+-
+-            int i = 0;
+-            for (FileHeader entry : arrayList) {
+-                if (!progressHandler.getCancelled()) {
+-
+-                    progressHandler.setFileName(entry.getFileNameString());
+-                    unzipRAREntry(extractService, rarFile, entry, destinationPath);
+-                    progressHandler.setSourceFilesProcessed(++i);
+-                }
+-            }
+-        }
+-
+         @Override
+         public void onPostExecute(Void b) {
+             final ExtractService extractService = this.extractService.get();
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedHelper.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedHelper.java
+index 2f4cb109a..c6202db18 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedHelper.java
+@@ -2,6 +2,18 @@ package com.amaze.filemanager.filesystem.compressed;
+ 
+ import android.content.Context;
+ 
++import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.GzipExtractor;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.RarExtractor;
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.GzipDecompressor;
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.RarDecompressor;
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.ZipDecompressor;
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.TarDecompressor;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.TarExtractor;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.ZipExtractor;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
++import com.amaze.filemanager.utils.Utils;
++
+ import java.io.File;
+ 
+ /**
+@@ -11,27 +23,100 @@ import java.io.File;
+ 
+ public class CompressedHelper {
+ 
++    public static final String fileExtensionZip = "zip", fileExtensinJar = "jar", fileExtensionApk = "apk";
++    public static final String fileExtensionTar = "tar";
++    public static final String fileExtensionGzipTar = "tar.gz";
++    public static final String fileExtensionRar = "rar";
++
++    /**
++     * To add compatibility with other compressed file types edit this method
++     */
++    public static Extractor getExtractorInstance(Context context, File file, String outputPath,
++                                                 Extractor.OnUpdate listener) {
++        Extractor extractor;
++        String type = getExtension(file.getPath());
++
++        if (isZip(type)) {
++            extractor = new ZipExtractor(context, file.getPath(), outputPath, listener);
++        } else if (isRar(type)) {
++            extractor = new RarExtractor(context, file.getPath(), outputPath, listener);
++        } else if(isTar(type)) {
++            extractor = new TarExtractor(context, file.getPath(), outputPath, listener);
++        } else if(isGzippedTar(type)) {
++            extractor = new GzipExtractor(context, file.getPath(), outputPath, listener);
++        } else {
++            return null;
++        }
++
++        return extractor;
++    }
++
+     /**
+      * To add compatibility with other compressed file types edit this method
+      */
+-    public static CompressedInterface getCompressedInterfaceInstance(Context context, File file) {
+-        CompressedInterface compressedInterface;
+-
+-        String path = file.getPath().toLowerCase();
+-        boolean isZip = path.endsWith(".zip") || path.endsWith(".jar") || path.endsWith(".apk");
+-        boolean isTar = path.endsWith(".tar") || path.endsWith(".tar.gz");
+-        boolean isRar = path.endsWith(".rar");
+-
+-        if (isZip || isTar) {
+-            compressedInterface = new ZipHelper(context);
+-        } else if (isRar) {
+-            compressedInterface = new RarHelper(context);
++    public static Decompressor getCompressorInstance(Context context, File file) {
++        Decompressor decompressor;
++        String type = getExtension(file.getPath());
++
++        if (isZip(type)) {
++            decompressor = new ZipDecompressor(context);
++        } else if (isRar(type)) {
++            decompressor = new RarDecompressor(context);
++        } else if(isTar(type)) {
++            decompressor = new TarDecompressor(context);
++        } else if(isGzippedTar(type)) {
++            decompressor = new GzipDecompressor(context);
+         } else {
+             return null;
+         }
+ 
+-        compressedInterface.setFilePath(file.getPath());
+-        return compressedInterface;
++        decompressor.setFilePath(file.getPath());
++        return decompressor;
++    }
++
++    public static boolean isFileExtractable(String path) {
++        String type = getExtension(path);
++
++        return isZip(type) || isTar(type) || isRar(type) || isGzippedTar(type);
++    }
++
++    /**
++     * Gets the name of the file without compression extention.
++     * For example:
++     * "s.tar.gz" to "s"
++     * "s.tar" to "s"
++     */
++    public static String getFileName(String compressedName) {
++        compressedName = compressedName.toLowerCase();
++        if(isZip(compressedName) || isTar(compressedName) || isRar(compressedName)) {
++            return compressedName.substring(0, compressedName.lastIndexOf("."));
++        } else if (isGzippedTar(compressedName)) {
++            return compressedName.substring(0,
++                    Utils.nthToLastCharIndex(2, compressedName, '.'));
++        } else {
++            return compressedName;
++        }
++    }
++
++    private static boolean isZip(String type) {
++        return type.endsWith(fileExtensionZip) || type.endsWith(fileExtensinJar)
++                || type.endsWith(fileExtensionApk);
++    }
++
++    private static boolean isTar(String type) {
++         return type.endsWith(fileExtensionTar);
++    }
++
++    private static boolean isGzippedTar(String type) {
++         return type.endsWith(fileExtensionGzipTar);
++    }
++
++    private static boolean isRar(String type) {
++        return type.endsWith(fileExtensionRar);
++    }
++
++    private static String getExtension(String path) {
++        return path.substring(path.indexOf('.')+1, path.length()).toLowerCase();
+     }
+ 
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedInterface.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedInterface.java
+deleted file mode 100644
+index e61f967b0..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/CompressedInterface.java
++++ /dev/null
+@@ -1,32 +0,0 @@
+-package com.amaze.filemanager.filesystem.compressed;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import java.util.ArrayList;
+-
+-/**
+- * @author Emmanuel
+- *         on 20/11/2017, at 17:14.
+- */
+-
+-public interface CompressedInterface {
+-    void setFilePath(String path);
+-
+-    /**
+-     * Separator must be "/"
+-     * @param path end with "/" if it is a directory, does not if it's a file
+-     */
+-    void changePath(String path, boolean addGoBackItem,
+-                    OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish);
+-    /**
+-     * Decompress a file somewhere
+-     */
+-    void decompress(String whereToDecompress);
+-
+-    /**
+-     * Decompress files or dirs inside the compressed file.
+-     * @param subDirectories separator is "/", ended with "/" if it is a directory, does not if it's a file
+-     */
+-    void decompress(String whereToDecompress, String[] subDirectories);
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/RarHelper.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/RarHelper.java
+deleted file mode 100644
+index b46ae39f4..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/RarHelper.java
++++ /dev/null
+@@ -1,74 +0,0 @@
+-package com.amaze.filemanager.filesystem.compressed;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-
+-import com.amaze.filemanager.asynchronous.asynctasks.RarHelperTask;
+-import com.amaze.filemanager.asynchronous.services.ExtractService;
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-import com.amaze.filemanager.utils.ServiceWatcherUtil;
+-import com.github.junrar.rarfile.FileHeader;
+-
+-import java.util.ArrayList;
+-
+-/**
+- * @author Emmanuel
+- *         on 20/11/2017, at 17:23.
+- */
+-
+-public class RarHelper implements CompressedInterface {
+-    private Context context;
+-    private String filePath;
+-
+-    public RarHelper(Context context) {
+-        this.context = context;
+-    }
+-
+-    @Override
+-    public void setFilePath(String path) {
+-        filePath = path;
+-    }
+-
+-    @Override
+-    public void changePath(String path, boolean addGoBackItem,
+-                           OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
+-        new RarHelperTask(filePath, path, addGoBackItem, onFinish).execute();
+-    }
+-
+-    @Override
+-    public void decompress(String whereToDecompress) {
+-        Intent intent = new Intent(context, ExtractService.class);
+-        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, new String[0]);
+-        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-        ServiceWatcherUtil.runService(context, intent);
+-    }
+-
+-    @Override
+-    public void decompress(String whereToDecompress, String[] subDirectories) {
+-        for (int i = 0; i < subDirectories.length; i++) {
+-            subDirectories[i] = deconvertName(subDirectories[i]);
+-        }
+-
+-        Intent intent = new Intent(context, ExtractService.class);
+-        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, subDirectories);
+-        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-        ServiceWatcherUtil.runService(context, intent);
+-    }
+-
+-
+-    public static String convertName(FileHeader file) {
+-        String name = file.getFileNameString().replace('\\', '/');
+-
+-        if(file.isDirectory()) return name + "/";
+-        else return name;
+-    }
+-
+-    public static String deconvertName(String dir) {
+-        if(dir.endsWith("/")) dir = dir.substring(0, dir.length()-1);
+-        return dir.replace('/', '\\');
+-    }
+-
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/ZipHelper.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/ZipHelper.java
+deleted file mode 100644
+index ebdcec101..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/ZipHelper.java
++++ /dev/null
+@@ -1,56 +0,0 @@
+-package com.amaze.filemanager.filesystem.compressed;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-
+-import com.amaze.filemanager.asynchronous.asynctasks.ZipHelperTask;
+-import com.amaze.filemanager.asynchronous.services.ExtractService;
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-import com.amaze.filemanager.utils.ServiceWatcherUtil;
+-
+-import java.util.ArrayList;
+-
+-/**
+- * @author Emmanuel
+- *         on 20/11/2017, at 17:19.
+- */
+-
+-public class ZipHelper implements CompressedInterface {
+-    private String filePath;
+-    private Context context;
+-
+-    public ZipHelper(Context context) {
+-        this.context = context;
+-    }
+-
+-    @Override
+-    public void setFilePath(String path) {
+-        filePath = path;
+-    }
+-
+-    @Override
+-    public void changePath(String path, boolean addGoBackItem,
+-                           OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
+-        new ZipHelperTask(context, filePath, path, addGoBackItem, onFinish).execute();
+-    }
+-
+-    @Override
+-    public void decompress(String whereToDecompress) {
+-        Intent intent = new Intent(context, ExtractService.class);
+-        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, new String[0]);
+-        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-        ServiceWatcherUtil.runService(context, intent);
+-    }
+-
+-    @Override
+-    public void decompress(String whereToDecompress, String[] subDirectories) {
+-        Intent intent = new Intent(context, ExtractService.class);
+-        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, subDirectories);
+-        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-        ServiceWatcherUtil.runService(context, intent);
+-    }
+-
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/Extractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/Extractor.java
+new file mode 100644
+index 000000000..eab80ce82
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/Extractor.java
+@@ -0,0 +1,66 @@
++package com.amaze.filemanager.filesystem.compressed.extractcontents;
++
++import android.content.Context;
++import android.support.annotation.NonNull;
++
++import com.amaze.filemanager.filesystem.compressed.extractcontents.helpers.TarExtractor;
++
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.util.Collection;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.HashSet;
++
++public abstract class Extractor {
++
++    protected Context context;
++    protected String filePath, outputPath;
++    protected OnUpdate listener;
++
++    public Extractor(Context context, String filePath, String outputPath,
++                     Extractor.OnUpdate listener) {
++        this.context = context;
++        this.filePath = filePath;
++        this.outputPath = outputPath;
++        this.listener = listener;
++    }
++
++    public void extractFiles(String[] files) throws IOException {
++        HashSet<String> filesToExtract = new HashSet<>(files.length);
++        Collections.addAll(filesToExtract, files);
++
++        extractWithFilter((relativePath, isDir) -> {
++            if(filesToExtract.contains(relativePath)) {
++                if(!isDir) filesToExtract.remove(relativePath);
++                return true;
++            } else {// header to be extracted is atleast the entry path (may be more, when it is a directory)
++                for (String path : filesToExtract) {
++                    if(relativePath.startsWith(path)) {
++                        return true;
++                    }
++                }
++
++                return false;
++            }
++        });
++    }
++
++    public void extractEverything() throws IOException {
++        extractWithFilter((relativePath, isDir) -> true);
++    }
++
++    protected abstract void extractWithFilter(@NonNull Filter filter) throws IOException;
++
++    protected interface Filter {
++        public boolean shouldExtract(String relativePath, boolean isDirectory);
++    }
++
++    public interface OnUpdate {
++        public void onStart(long totalBytes, String firstEntryName);
++        public void onUpdate(String entryPath);
++        public void onFinish();
++        public boolean isCancelled();
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java
+new file mode 100644
+index 000000000..f289311c7
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java
+@@ -0,0 +1,87 @@
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
++
++import android.content.Context;
++import android.support.annotation.NonNull;
++
++import com.amaze.filemanager.filesystem.FileUtil;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
++import com.amaze.filemanager.utils.files.GenericCopyUtil;
++
++import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
++import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
++
++import java.io.BufferedOutputStream;
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++
++public class GzipExtractor extends Extractor {
++
++    public GzipExtractor(Context context, String filePath, String outputPath, OnUpdate listener) {
++        super(context, filePath, outputPath, listener);
++    }
++
++    @Override
++    protected void extractWithFilter(@NonNull Filter filter) throws IOException {
++        long totalBytes = 0;
++        ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
++        TarArchiveInputStream inputStream = new TarArchiveInputStream(
++                new GzipCompressorInputStream(new FileInputStream(filePath)));
++
++        TarArchiveEntry tarArchiveEntry;
++
++        while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
++            if(filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
++                archiveEntries.add(tarArchiveEntry);
++                totalBytes += tarArchiveEntry.getSize();
++            }
++        }
++
++        listener.onStart(totalBytes, archiveEntries.get(0).getName());
++
++        inputStream.close();
++        inputStream = new TarArchiveInputStream(new GzipCompressorInputStream(new FileInputStream(filePath)));
++
++        for (TarArchiveEntry entry : archiveEntries) {
++            if (!listener.isCancelled()) {
++                listener.onUpdate(entry.getName());
++                //TAR is sequential, you need to walk all the way to the file you want
++                while (entry.hashCode() != inputStream.getNextTarEntry().hashCode());
++                unzipTAREntry(context, inputStream, entry, outputPath);
++            }
++        }
++        inputStream.close();
++
++        listener.onFinish();
++    }
++
++    private void unzipTAREntry(@NonNull final Context context, TarArchiveInputStream inputStream,
++                               TarArchiveEntry entry, String outputDir) throws IOException {
++        if (entry.isDirectory()) {
++            FileUtil.mkdir(new File(outputDir, entry.getName()), context);
++            return;
++        }
++
++        File outputFile = new File(outputDir, entry.getName());
++        if (!outputFile.getParentFile().exists()) {
++            FileUtil.mkdir(outputFile.getParentFile(), context);
++        }
++
++        BufferedOutputStream outputStream = new BufferedOutputStream(
++                FileUtil.getOutputStream(outputFile, context));
++        try {
++            int len;
++            byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
++            while ((len = inputStream.read(buf)) != -1) {
++                outputStream.write(buf, 0, len);
++                ServiceWatcherUtil.POSITION += len;
++            }
++        } finally {
++            outputStream.close();
++        }
++    }
++
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/RarExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/RarExtractor.java
+new file mode 100644
+index 000000000..e6610d2e2
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/RarExtractor.java
+@@ -0,0 +1,87 @@
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
++
++import android.content.Context;
++import android.support.annotation.NonNull;
++
++import com.amaze.filemanager.filesystem.FileUtil;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
++import com.amaze.filemanager.utils.files.GenericCopyUtil;
++import com.github.junrar.Archive;
++import com.github.junrar.exception.RarException;
++import com.github.junrar.rarfile.FileHeader;
++
++import java.io.BufferedInputStream;
++import java.io.BufferedOutputStream;
++import java.io.File;
++import java.io.IOException;
++import java.util.ArrayList;
++
++public class RarExtractor extends Extractor {
++
++    public RarExtractor(Context context, String filePath, String outputPath, OnUpdate listener) {
++        super(context, filePath, outputPath, listener);
++    }
++
++    @Override
++    protected void extractWithFilter(@NonNull Filter filter) throws IOException {
++        try {
++            long totalBytes = 0;
++            Archive rarFile = new Archive(new File(filePath));
++            ArrayList<FileHeader> arrayList = new ArrayList<>();
++
++            // iterating archive elements to find file names that are to be extracted
++            for (FileHeader header : rarFile.getFileHeaders()) {
++                if (filter.shouldExtract(header.getFileNameString(), header.isDirectory())) {
++                    // header to be extracted is atleast the entry path (may be more, when it is a directory)
++                    arrayList.add(header);
++                    totalBytes += header.getFullUnpackSize();
++                }
++            }
++
++            listener.onStart(totalBytes, arrayList.get(0).getFileNameString());
++
++            for (FileHeader entry : arrayList) {
++                if (!listener.isCancelled()) {
++                    listener.onUpdate(entry.getFileNameString());
++                    unzipRAREntry(context, rarFile, entry, outputPath);
++                }
++            }
++            listener.onFinish();
++        } catch (RarException e) {
++            throw new IOException(e);
++        }
++    }
++
++    private void unzipRAREntry(@NonNull final Context context, Archive zipFile, FileHeader entry, String outputDir)
++            throws RarException, IOException {
++        String name = entry.getFileNameString();
++        name = name.replaceAll("\\\\", "/");
++        if (entry.isDirectory()) {
++            FileUtil.mkdir(new File(outputDir, name), context);
++            return;
++        }
++        File outputFile = new File(outputDir, name);
++        if (!outputFile.getParentFile().exists()) {
++            FileUtil.mkdir(outputFile.getParentFile(), context);
++        }
++        //	Log.i("Amaze", "Extracting: " + entry);
++        BufferedInputStream inputStream = new BufferedInputStream(
++                zipFile.getInputStream(entry));
++        BufferedOutputStream outputStream = new BufferedOutputStream(
++                FileUtil.getOutputStream(outputFile, context));
++        try {
++            int len;
++            byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
++            while ((len = inputStream.read(buf)) != -1) {
++
++                outputStream.write(buf, 0, len);
++                ServiceWatcherUtil.POSITION += len;
++            }
++        } finally {
++            outputStream.close();
++            inputStream.close();
++        }
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java
+new file mode 100644
+index 000000000..c4c976a93
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java
+@@ -0,0 +1,85 @@
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
++
++import android.content.Context;
++import android.support.annotation.NonNull;
++
++import com.amaze.filemanager.filesystem.FileUtil;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
++import com.amaze.filemanager.utils.files.GenericCopyUtil;
++
++import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
++
++import java.io.BufferedOutputStream;
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.IOException;
++import java.util.ArrayList;
++
++public class TarExtractor extends Extractor {
++
++    public TarExtractor(Context context, String filePath, String outputPath, Extractor.OnUpdate listener) {
++        super(context, filePath, outputPath, listener);
++    }
++
++    @Override
++    protected void extractWithFilter(@NonNull Filter filter) throws IOException {
++        long totalBytes = 0;
++        ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
++        TarArchiveInputStream inputStream = new TarArchiveInputStream(new FileInputStream(filePath));
++
++        TarArchiveEntry tarArchiveEntry;
++
++        while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
++            if(filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
++                archiveEntries.add(tarArchiveEntry);
++                totalBytes += tarArchiveEntry.getSize();
++            }
++        }
++
++        listener.onStart(totalBytes, archiveEntries.get(0).getName());
++
++        inputStream.close();
++        inputStream = new TarArchiveInputStream(new FileInputStream(filePath));
++
++        for (TarArchiveEntry entry : archiveEntries) {
++            if (!listener.isCancelled()) {
++                listener.onUpdate(entry.getName());
++                //TAR is sequential, you need to walk all the way to the file you want
++                while (entry.hashCode() != inputStream.getNextTarEntry().hashCode());
++                unzipTAREntry(context, inputStream, entry, outputPath);
++            }
++        }
++        inputStream.close();
++
++        listener.onFinish();
++    }
++
++    private void unzipTAREntry(@NonNull final Context context, TarArchiveInputStream inputStream,
++                               TarArchiveEntry entry, String outputDir) throws IOException {
++        if (entry.isDirectory()) {
++            FileUtil.mkdir(new File(outputDir, entry.getName()), context);
++            return;
++        }
++
++        File outputFile = new File(outputDir, entry.getName());
++        if (!outputFile.getParentFile().exists()) {
++            FileUtil.mkdir(outputFile.getParentFile(), context);
++        }
++
++        BufferedOutputStream outputStream = new BufferedOutputStream(
++                FileUtil.getOutputStream(outputFile, context));
++        try {
++            int len;
++            byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
++            while ((len = inputStream.read(buf)) != -1) {
++                outputStream.write(buf, 0, len);
++                ServiceWatcherUtil.POSITION += len;
++            }
++        } finally {
++            outputStream.close();
++        }
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java
+new file mode 100644
+index 000000000..24046d24d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java
+@@ -0,0 +1,91 @@
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
++
++import android.content.Context;
++import android.support.annotation.NonNull;
++
++import com.amaze.filemanager.filesystem.FileUtil;
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
++import com.amaze.filemanager.utils.files.GenericCopyUtil;
++
++import java.io.BufferedInputStream;
++import java.io.BufferedOutputStream;
++import java.io.File;
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.Enumeration;
++import java.util.zip.ZipEntry;
++import java.util.zip.ZipFile;
++
++public class ZipExtractor extends Extractor {
++
++    public ZipExtractor(Context context, String filePath, String outputPath, OnUpdate listener) {
++        super(context, filePath, outputPath, listener);
++    }
++
++    @Override
++    protected void extractWithFilter(@NonNull Filter filter) throws IOException {
++        long totalBytes = 0;
++        ArrayList<ZipEntry> entry1 = new ArrayList<>();
++        ZipFile zipfile = new ZipFile(filePath);
++
++        // iterating archive elements to find file names that are to be extracted
++        for (Enumeration<? extends ZipEntry> e = zipfile.entries(); e.hasMoreElements(); ) {
++            ZipEntry zipEntry = e.nextElement();
++
++            if(filter.shouldExtract(zipEntry.getName(), zipEntry.isDirectory())) {
++                entry1.add(zipEntry);
++                totalBytes += zipEntry.getSize();
++            }
++        }
++
++        listener.onStart(totalBytes, entry1.get(0).getName());
++
++        for (ZipEntry entry : entry1) {
++            if (!listener.isCancelled()) {
++                listener.onUpdate(entry.getName());
++                unzipEntry(context, zipfile, entry, outputPath);
++            }
++        }
++        listener.onFinish();
++    }
++    
++    /**
++     * Method extracts {@link ZipEntry} from {@link ZipFile}
++     *
++     * @param zipFile   zip file from which entriesToExtract are to be extracted
++     * @param entry     zip entry that is to be extracted
++     * @param outputDir output directory
++     */
++    private void unzipEntry(@NonNull final Context context, ZipFile zipFile, ZipEntry entry,
++                            String outputDir) throws IOException {
++        if (entry.isDirectory()) {
++            // zip entry is a directory, return after creating new directory
++            FileUtil.mkdir(new File(outputDir, entry.getName()), context);
++            return;
++        }
++
++        final File outputFile = new File(outputDir, entry.getName());
++        if (!outputFile.getParentFile().exists()) {
++            // creating directory if not already exists
++            FileUtil.mkdir(outputFile.getParentFile(), context);
++        }
++
++        BufferedInputStream inputStream = new BufferedInputStream(
++                zipFile.getInputStream(entry));
++        BufferedOutputStream outputStream = new BufferedOutputStream(
++                FileUtil.getOutputStream(outputFile, context));
++        try {
++            int len;
++            byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
++            while ((len = inputStream.read(buf)) != -1) {
++                outputStream.write(buf, 0, len);
++                ServiceWatcherUtil.POSITION += len;
++            }
++        } finally {
++            outputStream.close();
++            inputStream.close();
++        }
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java
+new file mode 100644
+index 000000000..c3d2f96d1
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java
+@@ -0,0 +1,73 @@
++package com.amaze.filemanager.filesystem.compressed.showcontents;
++
++import android.content.Context;
++import android.content.Intent;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
++import com.amaze.filemanager.asynchronous.services.ExtractService;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
++
++import java.util.ArrayList;
++
++/**
++ * @author Emmanuel
++ *         on 20/11/2017, at 17:14.
++ */
++
++public abstract class Decompressor {
++
++    protected Context context;
++    protected String filePath;
++
++    public Decompressor(Context context) {
++        this.context = context;
++    }
++
++    public void setFilePath(String path) {
++        filePath = path;
++    }
++
++    /**
++     * Separator must be "/"
++     * @param path end with "/" if it is a directory, does not if it's a file
++     */
++    public abstract CompressedHelperTask changePath(String path, boolean addGoBackItem,
++                                                    OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish);
++
++    /**
++     * Decompress a file somewhere
++     */
++    public final void decompress(String whereToDecompress) {
++        Intent intent = new Intent(context, ExtractService.class);
++        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
++        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, new String[0]);
++        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
++        ServiceWatcherUtil.runService(context, intent);
++    }
++
++    /**
++     * Decompress files or dirs inside the compressed file.
++     * @param subDirectories separator is "/", ended with "/" if it is a directory, does not if it's a file
++     */
++    public final void decompress(String whereToDecompress, String[] subDirectories) {
++        for (int i = 0; i < subDirectories.length; i++) {
++            subDirectories[i] = realRelativeDirectory(subDirectories[i]);
++        }
++
++        Intent intent = new Intent(context, ExtractService.class);
++        intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
++        intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, subDirectories);
++        intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
++        ServiceWatcherUtil.runService(context, intent);
++    }
++
++    /**
++     * Get the real relative directory path (useful if you converted the separator or something)
++     */
++    protected String realRelativeDirectory(String dir) {
++        return dir;
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java
+new file mode 100644
+index 000000000..e4e0d037d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java
+@@ -0,0 +1,26 @@
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++
++import android.content.Context;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.GzipHelperTask;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperTask;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++import java.util.ArrayList;
++
++public class GzipDecompressor extends Decompressor {
++
++    public GzipDecompressor(Context context) {
++        super(context);
++    }
++
++    @Override
++    public CompressedHelperTask changePath(String path, boolean addGoBackItem,
++                                           OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
++        return new GzipHelperTask(filePath, path, addGoBackItem, onFinish);
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java
+new file mode 100644
+index 000000000..7ef8f37d4
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java
+@@ -0,0 +1,43 @@
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++
++import android.content.Context;
++
++import com.amaze.filemanager.asynchronous.asynctasks.compress.RarHelperTask;
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++import com.github.junrar.rarfile.FileHeader;
++
++import java.util.ArrayList;
++
++/**
++ * @author Emmanuel
++ *         on 20/11/2017, at 17:23.
++ */
++
++public class RarDecompressor extends Decompressor {
++
++    public RarDecompressor(Context context) {
++        super(context);
++    }
++
++    @Override
++    public RarHelperTask changePath(String path, boolean addGoBackItem,
++                                       OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
++        return new RarHelperTask(filePath, path, addGoBackItem, onFinish);
++    }
++
++    public static String convertName(FileHeader file) {
++        String name = file.getFileNameString().replace('\\', '/');
++
++        if(file.isDirectory()) return name + "/";
++        else return name;
++    }
++
++    @Override
++    protected String realRelativeDirectory(String dir) {
++        if(dir.endsWith("/")) dir = dir.substring(0, dir.length()-1);
++        return dir.replace('/', '\\');
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java
+new file mode 100644
+index 000000000..dd83dc89b
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java
+@@ -0,0 +1,28 @@
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++
++import android.content.Context;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperTask;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++import java.util.ArrayList;
++
++/**
++ * @author Emmanuel Messulam <emmanuelbendavid@gmail.com>
++ *         on 2/12/2017, at 00:36.
++ */
++
++public class TarDecompressor extends Decompressor {
++
++    public TarDecompressor(Context context) {
++        super(context);
++    }
++
++    @Override
++    public TarHelperTask changePath(String path, boolean addGoBackItem, OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
++        return new TarHelperTask(filePath, path, addGoBackItem, onFinish);
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java
+new file mode 100644
+index 000000000..faee917ba
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java
+@@ -0,0 +1,29 @@
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++
++import android.content.Context;
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
++import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperTask;
++import java.util.ArrayList;
++
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
++import com.amaze.filemanager.utils.OnAsyncTaskFinished;
++
++/**
++ * @author Emmanuel
++ *         on 20/11/2017, at 17:19.
++ */
++
++public class ZipDecompressor extends Decompressor {
++
++    public ZipDecompressor(Context context) {
++        super(context);
++    }
++
++    @Override
++    public ZipHelperTask changePath(String path, boolean addGoBackItem,
++                           OnAsyncTaskFinished<ArrayList<CompressedObjectParcelable>> onFinish) {
++        return new ZipHelperTask(context, filePath, path, addGoBackItem, onFinish);
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/fragments/CompressedExplorerFragment.java b/app/src/main/java/com/amaze/filemanager/fragments/CompressedExplorerFragment.java
+index 813b37416..2d64be3ee 100644
+--- a/app/src/main/java/com/amaze/filemanager/fragments/CompressedExplorerFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/fragments/CompressedExplorerFragment.java
+@@ -55,8 +55,7 @@ import com.amaze.filemanager.asynchronous.asynctasks.DeleteTask;
+ import com.amaze.filemanager.asynchronous.services.ExtractService;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.CompressedInterface;
+-import com.amaze.filemanager.fragments.preference_fragments.ColorPref;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+ import com.amaze.filemanager.fragments.preference_fragments.PreferencesConstants;
+ import com.amaze.filemanager.ui.views.DividerItemDecoration;
+ import com.amaze.filemanager.ui.views.FastScroller;
+@@ -106,7 +105,7 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+     public boolean isOpen = false;  // flag states whether to open file after service extracts it
+ 
+     private UtilitiesProviderInterface utilsProvider;
+-    private CompressedInterface compressedInterface;
++    private Decompressor decompressor;
+     private View rootView;
+     private boolean addheader = true;
+     private LinearLayoutManager mLayoutManager;
+@@ -201,7 +200,7 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+             // adding a cache file to delete where any user interaction elements will be cached
+             String fileName = compressedFile.getName().substring(0, compressedFile.getName().lastIndexOf("."));
+             files.add(new HybridFileParcelable(getActivity().getExternalCacheDir().getPath() + "/" + fileName));
+-            compressedInterface = CompressedHelper.getCompressedInterfaceInstance(getContext(), compressedFile);
++            decompressor = CompressedHelper.getCompressorInstance(getContext(), compressedFile);
+ 
+             changePath("");
+         } else {
+@@ -229,7 +228,7 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+         elements = savedInstanceState.getParcelableArrayList(KEY_ELEMENTS);
+         relativeDirectory = savedInstanceState.getString(KEY_PATH, "");
+ 
+-        compressedInterface = CompressedHelper.getCompressedInterfaceInstance(getContext(), compressedFile);
++        decompressor = CompressedHelper.getCompressorInstance(getContext(), compressedFile);
+         createViews(elements, relativeDirectory);
+     }
+ 
+@@ -315,7 +314,7 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+                         dirs[i] = elements.get(compressedExplorerAdapter.getCheckedItemPositions().get(i)).name;
+                     }
+ 
+-                    compressedInterface.decompress(null, dirs);
++                    decompressor.decompress(null, dirs);
+ 
+                     mode.finish();
+                     return true;
+@@ -395,13 +394,13 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+ 
+         boolean addGoBackItem = gobackitem && !isRoot(folder);
+         String finalfolder = folder;
+-        compressedInterface.changePath(folder, addGoBackItem, data -> {
++        decompressor.changePath(folder, addGoBackItem, data -> {
+             elements = data;
+             createViews(elements, finalfolder);
+ 
+             swipeRefreshLayout.setRefreshing(false);
+             updateBottomBar();
+-        });
++        }).execute();
+ 
+         updateBottomBar();
+     }
+@@ -428,7 +427,7 @@ public class CompressedExplorerFragment extends Fragment implements BottomBarBut
+ 
+     private void createViews(ArrayList<CompressedObjectParcelable> items, String dir) {
+         if (compressedExplorerAdapter == null) {
+-            compressedExplorerAdapter = new CompressedExplorerAdapter(getActivity(), utilsProvider, items, this, compressedInterface);
++            compressedExplorerAdapter = new CompressedExplorerAdapter(getActivity(), utilsProvider, items, this, decompressor);
+             listView.setAdapter(compressedExplorerAdapter);
+         } else {
+             compressedExplorerAdapter.generateZip(items);
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+index 57bafba19..f27685d79 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/dialogs/GeneralDialogCreation.java
+@@ -40,6 +40,7 @@ import com.amaze.filemanager.exceptions.ShellNotRunningException;
+ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.RootHelper;
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+ import com.amaze.filemanager.fragments.AppsListFragment;
+ import com.amaze.filemanager.fragments.MainFragment;
+ import com.amaze.filemanager.fragments.preference_fragments.PreferencesConstants;
+@@ -748,8 +749,9 @@ public class GeneralDialogCreation {
+         if (m.getAppTheme().equals(AppTheme.DARK) || m.getAppTheme().equals(AppTheme.BLACK)) mat.theme(Theme.DARK);
+         MaterialDialog b = mat.build();
+ 
+-        if (!f.getName().toLowerCase().endsWith(".rar") && !f.getName().toLowerCase().endsWith(".jar") && !f.getName().toLowerCase().endsWith(".apk") && !f.getName().toLowerCase().endsWith(".zip"))
++        if (!CompressedHelper.isFileExtractable(f.getPath())) {
+             b.getActionButton(DialogAction.NEGATIVE).setEnabled(false);
++        }
+         b.show();
+     }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+index fa2fe7f76..19452d4bd 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/icons/Icons.java
+@@ -22,6 +22,7 @@ package com.amaze.filemanager.ui.icons;
+ import android.support.annotation.DrawableRes;
+ 
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+ import com.amaze.filemanager.utils.files.CryptUtil;
+ 
+ import java.util.HashMap;
+@@ -112,7 +113,7 @@ public class Icons {
+                 "application/x-tar",
+                 "application/x-webarchive",
+                 "application/x-webarchive-xml",
+-                "application/gzip",
++                "application/x-gzip",
+                 "application/x-7z-compressed",
+                 "application/x-deb",
+                 "application/x-rar-compressed"
+@@ -198,6 +199,7 @@ public class Icons {
+ 
+     public static @DrawableRes int loadMimeIcon(String path, boolean isDirectory) {
+         if(path.equals("..")) return R.drawable.ic_arrow_left_white_24dp;
++        if(CompressedHelper.isFileExtractable(path)) return R.drawable.ic_compressed_white_24dp;
+ 
+         int type = getTypeOfFile(path, isDirectory);
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+index 0d0e3a677..09a6a548f 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/MainActivityHelper.java
+@@ -12,7 +12,6 @@ import android.support.annotation.StringRes;
+ import android.support.design.widget.BottomSheetDialogFragment;
+ import android.support.v4.app.Fragment;
+ import android.support.v4.app.FragmentManager;
+-import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.widget.ImageView;
+@@ -34,7 +33,7 @@ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.filesystem.Operations;
+ import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.CompressedInterface;
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+ import com.amaze.filemanager.fragments.CloudSheetFragment;
+ import com.amaze.filemanager.fragments.MainFragment;
+ import com.amaze.filemanager.fragments.SearchWorkerFragment;
+@@ -502,8 +501,8 @@ public class MainActivityHelper {
+             mainActivity.oppathe = (file.getPath());
+             mainActivity.operation = DataUtils.EXTRACT;
+         } else if (mode == 1) {
+-            CompressedInterface compressedInterface = CompressedHelper.getCompressedInterfaceInstance(mainActivity, file);
+-            compressedInterface.decompress(null);
++            Decompressor decompressor = CompressedHelper.getCompressorInstance(mainActivity, file);
++            decompressor.decompress(null);
+         } else Toast.makeText(mainActivity, R.string.not_allowed, Toast.LENGTH_SHORT).show();
+     }
+ 
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/Utils.java b/app/src/main/java/com/amaze/filemanager/utils/Utils.java
+index 9fe230dc6..4fdf223df 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/Utils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/Utils.java
+@@ -214,4 +214,21 @@ public class Utils {
+         }
+     }
+ 
++    /**
++     * Gets position of nth to last char in String.
++     * nthToLastCharIndex(1, "a.tar.gz") = 1
++     * nthToLastCharIndex(0, "a.tar.gz") = 5
++     */
++    public static int nthToLastCharIndex(int elementNumber, String str, char element) {
++        if(elementNumber <= 0) throw new IllegalArgumentException();
++
++        int occurencies = 0;
++        for (int i = str.length()-1; i >= 0; i--) {
++            if(str.charAt(i) == element && ++occurencies == elementNumber) {
++                return i;
++            }
++        }
++        return -1;
++    }
++
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java b/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
+index 2c477952f..36db9a698 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/files/FileUtils.java
+@@ -52,6 +52,8 @@ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.HybridFileParcelable;
+ import com.amaze.filemanager.fragments.preference_fragments.PreferencesConstants;
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
++import com.amaze.filemanager.fragments.preference_fragments.PrefFrag;
+ import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation;
+ import com.amaze.filemanager.ui.icons.Icons;
+ import com.amaze.filemanager.ui.icons.MimeTypes;
+@@ -693,14 +695,10 @@ public class FileUtils {
+         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(m);
+         final Toast[] studioCount = {null};
+ 
+-        if (defaultHandler && f.getName().toLowerCase().endsWith(".zip") ||
+-                f.getName().toLowerCase().endsWith(".jar") ||
+-                f.getName().toLowerCase().endsWith(".rar")||
+-                f.getName().toLowerCase().endsWith(".tar") ||
+-                f.getName().toLowerCase().endsWith(".tar.gz")) {
+-            GeneralDialogCreation.showArchiveDialog(f, m);
+-        } else if(f.getName().toLowerCase().endsWith(".apk")) {
++        if(f.getName().toLowerCase().endsWith(".apk")) {
+             GeneralDialogCreation.showPackageDialog(sharedPrefs, f, m);
++        } else if (defaultHandler && CompressedHelper.isFileExtractable(f.getPath())) {
++            GeneralDialogCreation.showArchiveDialog(f, m);
+         } else if (defaultHandler && f.getName().toLowerCase().endsWith(".db")) {
+             Intent intent = new Intent(m, DatabaseViewerActivity.class);
+             intent.putExtra("path", f.getPath());

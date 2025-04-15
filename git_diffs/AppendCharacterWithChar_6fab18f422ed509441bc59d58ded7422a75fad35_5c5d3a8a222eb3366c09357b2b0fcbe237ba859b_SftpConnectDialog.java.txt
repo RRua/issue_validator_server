@@ -1,0 +1,865 @@
+diff --git a/app/src/fdroid/java/com/amaze/filemanager/activities/MainActivity.java b/app/src/fdroid/java/com/amaze/filemanager/activities/MainActivity.java
+index 1dbfa7222..e999d0509 100644
+--- a/app/src/fdroid/java/com/amaze/filemanager/activities/MainActivity.java
++++ b/app/src/fdroid/java/com/amaze/filemanager/activities/MainActivity.java
+@@ -113,9 +113,7 @@ import com.amaze.filemanager.ui.dialogs.RenameBookmark;
+ import com.amaze.filemanager.ui.dialogs.RenameBookmark.BookmarkCallback;
+ import com.amaze.filemanager.ui.dialogs.SmbConnectDialog;
+ import com.amaze.filemanager.ui.dialogs.SmbConnectDialog.SmbConnectionListener;
+-import com.amaze.filemanager.ui.drawer.EntryItem;
+ import com.amaze.filemanager.ui.drawer.Item;
+-import com.amaze.filemanager.ui.drawer.SectionItem;
+ import com.amaze.filemanager.ui.views.RoundedImageView;
+ import com.amaze.filemanager.ui.views.ScrimInsetsRelativeLayout;
+ import com.amaze.filemanager.ui.views.appbar.AppBar;
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/DrawerAdapter.java b/app/src/main/java/com/amaze/filemanager/adapters/DrawerAdapter.java
+index 1b9fe788a..2bd02a69a 100644
+--- a/app/src/main/java/com/amaze/filemanager/adapters/DrawerAdapter.java
++++ b/app/src/main/java/com/amaze/filemanager/adapters/DrawerAdapter.java
+@@ -20,11 +20,9 @@
+ package com.amaze.filemanager.adapters;
+ 
+ import android.content.Context;
+-import android.content.SharedPreferences;
+ import android.graphics.Color;
+ import android.graphics.drawable.Drawable;
+ import android.support.annotation.NonNull;
+-import android.util.SparseBooleanArray;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -37,13 +35,12 @@ import android.widget.Toast;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.activities.superclasses.ThemedActivity;
++import com.amaze.filemanager.adapters.data.DrawerItem;
+ import com.amaze.filemanager.database.CloudHandler;
+ import com.amaze.filemanager.filesystem.HybridFile;
+ import com.amaze.filemanager.filesystem.Operations;
+ import com.amaze.filemanager.filesystem.RootHelper;
+ import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation;
+-import com.amaze.filemanager.ui.drawer.EntryItem;
+-import com.amaze.filemanager.ui.drawer.Item;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.OpenMode;
+ import com.amaze.filemanager.utils.Utils;
+@@ -55,43 +52,38 @@ import com.amaze.filemanager.utils.theme.AppTheme;
+ import java.io.File;
+ import java.util.ArrayList;
+ 
+-public class DrawerAdapter extends ArrayAdapter<Item> {
++public class DrawerAdapter extends ArrayAdapter<DrawerItem> {
++    public static final int SELECTED_NONE = -1;
++
+     private final Context context;
+     private UtilitiesProviderInterface utilsProvider;
+-    private final ArrayList<Item> values;
++    private final ArrayList<DrawerItem> values;
+     private MainActivity m;
+-    private SparseBooleanArray myChecked = new SparseBooleanArray();
++    private int selectedItem = SELECTED_NONE;
+     private DataUtils dataUtils = DataUtils.getInstance();
+-
+-    public void toggleChecked(int position) {
+-        toggleChecked(false);
+-        myChecked.put(position, true);
+-        notifyDataSetChanged();
+-    }
+-
+-    public void toggleChecked(boolean b) {
+-        for (int i = 0; i < values.size(); i++) {
+-            myChecked.put(i, b);
+-        }
+-        notifyDataSetChanged();
+-    }
+-
+     private LayoutInflater inflater;
+ 
+     public DrawerAdapter(Context context, UtilitiesProviderInterface utilsProvider,
+-                         ArrayList<Item> values, MainActivity m, SharedPreferences Sp) {
++                         ArrayList<DrawerItem> values, MainActivity m) {
+         super(context, R.layout.drawerrow, values);
+         this.utilsProvider = utilsProvider;
+ 
+         this.context = context;
+         this.values = values;
+ 
+-        for (int i = 0; i < values.size(); i++) {
+-            myChecked.put(i, false);
+-        }
++        selectedItem = SELECTED_NONE;
+         this.m = m;
+-        inflater = (LayoutInflater) context
+-                .getSystemService(Context.LAYOUT_INFLATER_SERVICE);
++        inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
++    }
++
++    public void toggleChecked(int position) {
++        selectedItem = position;
++        notifyDataSetChanged();
++    }
++
++    public void deselectEverything() {
++        selectedItem = SELECTED_NONE;
++        notifyDataSetChanged();
+     }
+ 
+     @NonNull
+@@ -123,33 +115,38 @@ public class DrawerAdapter extends ArrayAdapter<Item> {
+                 view.setBackgroundResource(R.drawable.safr_ripple_black);
+             }
+             view.setOnClickListener(p1 -> {
+-                EntryItem item = (EntryItem) getItem(position);
++                if(getItem(position).type == DrawerItem.ITEM_INTENT) {
++                    getItem(position).onClickListener.onClick();
++                } else {
++                    DrawerItem drawerItem = getItem(position);
+ 
+-                if (dataUtils.containsBooks(new String[]{item.getTitle(), item.getPath()}) != -1) {
++                    if (dataUtils.containsBooks(new String[]{drawerItem.title, drawerItem.path}) != -1) {
+ 
+-                    checkForPath(item.getPath());
+-                }
++                        checkForPath(drawerItem.path);
++                    }
+ 
+-                if (dataUtils.getAccounts().size() > 0 && (item.getPath().startsWith(CloudHandler.CLOUD_PREFIX_BOX) ||
+-                                item.getPath().startsWith(CloudHandler.CLOUD_PREFIX_DROPBOX) ||
+-                                item.getPath().startsWith(CloudHandler.CLOUD_PREFIX_ONE_DRIVE) ||
+-                                item.getPath().startsWith(CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE))) {
+-                    // we have cloud accounts, try see if token is expired or not
+-                    CloudUtil.checkToken(item.getPath(), m);
++                    if (dataUtils.getAccounts().size() > 0 && (drawerItem.path.startsWith(CloudHandler.CLOUD_PREFIX_BOX) ||
++                            drawerItem.path.startsWith(CloudHandler.CLOUD_PREFIX_DROPBOX) ||
++                            drawerItem.path.startsWith(CloudHandler.CLOUD_PREFIX_ONE_DRIVE) ||
++                            drawerItem.path.startsWith(CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE))) {
++                        // we have cloud accounts, try see if token is expired or not
++                        CloudUtil.checkToken(drawerItem.path, m);
++                    }
+                 }
++
+                 m.selectItem(position);
+             });
+             view.setOnLongClickListener(v -> {
+                 if (!getItem(position).isSection())
+                     // not to remove the first bookmark (storage) and permanent bookmarks
+                     if (position > m.storage_count && position < values.size() - 7) {
+-                        EntryItem item = (EntryItem) getItem(position);
+-                        String title = item.getTitle();
+-                        String path = (item).getPath();
+-                        if (dataUtils.containsBooks(new String[]{item.getTitle(), path}) != -1) {
+-                            m.renameBookmark((item).getTitle(), path);
++                        DrawerItem drawerItem = getItem(position);
++                        String title = drawerItem.title;
++                        String path = (drawerItem).path;
++                        if (dataUtils.containsBooks(new String[]{drawerItem.title, path}) != -1) {
++                            m.renameBookmark((drawerItem).title, path);
+                         } else if (path.startsWith("smb:/")) {
+-                            m.showSMBDialog(item.getTitle(), path, true);
++                            m.showSMBDialog(drawerItem.title, path, true);
+                         } else if (path.startsWith(CloudHandler.CLOUD_PREFIX_DROPBOX)) {
+ 
+                             GeneralDialogCreation.showCloudDialog(m, utilsProvider.getAppTheme(), OpenMode.DROPBOX);
+@@ -167,7 +164,7 @@ public class DrawerAdapter extends ArrayAdapter<Item> {
+                             GeneralDialogCreation.showCloudDialog(m, utilsProvider.getAppTheme(), OpenMode.ONEDRIVE);
+                         }
+                     } else if (position < m.storage_count) {
+-                        String path = ((EntryItem) getItem(position)).getPath();
++                        String path = getItem(position).path;
+                         if (!path.equals("/"))
+                             GeneralDialogCreation.showPropertiesDialogForStorage(RootHelper.generateBaseFile(new File(path), true), m, utilsProvider.getAppTheme());
+                     }
+@@ -176,11 +173,11 @@ public class DrawerAdapter extends ArrayAdapter<Item> {
+                 return true;
+             });
+ 
+-            txtTitle.setText(((EntryItem) (values.get(position))).getTitle());
++            txtTitle.setText((values.get(position)).title);
+             imageView.setImageDrawable(getDrawable(position));
+             imageView.clearColorFilter();
+ 
+-            if (myChecked.get(position)) {
++            if (selectedItem == position) {
+                 int accentColor = m.getColorPreference().getColor(ColorUsage.ACCENT);
+                 if (utilsProvider.getAppTheme().equals(AppTheme.LIGHT)) {
+                     view.setBackgroundColor(Color.parseColor("#ffeeeeee"));
+@@ -245,6 +242,6 @@ public class DrawerAdapter extends ArrayAdapter<Item> {
+     }
+ 
+     private Drawable getDrawable(int position) {
+-        return ((EntryItem) getItem(position)).getIcon();
++        return getItem(position).icon;
+     }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/amaze/filemanager/adapters/data/DrawerItem.java b/app/src/main/java/com/amaze/filemanager/adapters/data/DrawerItem.java
+new file mode 100644
+index 000000000..d09d3ab31
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/adapters/data/DrawerItem.java
+@@ -0,0 +1,48 @@
++package com.amaze.filemanager.adapters.data;
++
++import android.graphics.drawable.Drawable;
++
++public final class DrawerItem {
++
++	public static final int ITEM_SECTION = 0, ITEM_ENTRY = 1, ITEM_INTENT = 2;
++
++	public final int type;
++	public final String title;
++	public final String path;
++	public final Drawable icon;
++	public final OnClickListener onClickListener;
++
++	public DrawerItem(int type) {
++	    if(type != ITEM_SECTION) throw new IllegalArgumentException("This constructor is for ITEM_SECTION!");
++	    this.type = type;
++        this.title = null;
++        this.path = null;
++        this.icon = null;
++        this.onClickListener = null;
++	}
++
++    public DrawerItem(String title, String path, Drawable icon) {
++        this.type = ITEM_ENTRY;
++        this.title = title;
++        this.path = path;
++        this.icon = icon;
++        this.onClickListener = null;
++    }
++
++    public DrawerItem(String title, Drawable icon, OnClickListener onClickListener) {
++        this.type = ITEM_INTENT;
++        this.title = title;
++        this.icon = icon;
++        this.onClickListener = onClickListener;
++        this.path = null;
++    }
++
++    public boolean isSection() {
++	    return type == ITEM_SECTION;
++    }
++
++    public interface OnClickListener {
++        void onClick();
++    }
++
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/fragments/TabFragment.java b/app/src/main/java/com/amaze/filemanager/fragments/TabFragment.java
+index 53b94808d..3aacdeb90 100644
+--- a/app/src/main/java/com/amaze/filemanager/fragments/TabFragment.java
++++ b/app/src/main/java/com/amaze/filemanager/fragments/TabFragment.java
+@@ -24,7 +24,6 @@ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.database.TabHandler;
+ import com.amaze.filemanager.database.models.Tab;
+ import com.amaze.filemanager.ui.ColorCircleDrawable;
+-import com.amaze.filemanager.ui.drawer.EntryItem;
+ import com.amaze.filemanager.ui.views.DisablableViewPager;
+ import com.amaze.filemanager.ui.views.Indicator;
+ import com.amaze.filemanager.utils.DataUtils;
+@@ -107,14 +106,14 @@ public class TabFragment extends android.support.v4.app.Fragment
+             if (i == 0) {
+                 // creating tabs in db for the first time, probably the first launch of app
+                 if (mainActivity.storage_count > 1)
+-                    addTab(new Tab(1, "", ((EntryItem) dataUtils.getList().get(1)).getPath(), "/"), 1, "");
++                    addTab(new Tab(1, "", dataUtils.getList().get(1).path, "/"), 1, "");
+                 else
+                     addTab(new Tab(1, "", "/", "/"), 1, "");
+                 if (!dataUtils.getList().get(0).isSection()) {
+-                    String pa = ((EntryItem) dataUtils.getList().get(0)).getPath();
++                    String pa = dataUtils.getList().get(0).path;
+                     addTab(new Tab(2, "", pa, pa), 2, "");
+                 } else
+-                    addTab(new Tab(2, "", ((EntryItem) dataUtils.getList().get(1)).getPath(), "/"), 2, "");
++                    addTab(new Tab(2, "", dataUtils.getList().get(1).path, "/"), 2, "");
+             } else {
+                 if (path != null && path.length() != 0) {
+                     if (l == 1)
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/drawer/EntryItem.java b/app/src/main/java/com/amaze/filemanager/ui/drawer/EntryItem.java
+deleted file mode 100644
+index 2d668b363..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/drawer/EntryItem.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package com.amaze.filemanager.ui.drawer;
+-
+-import android.graphics.drawable.Drawable;
+-
+-public class EntryItem implements Item {
+-
+-	private final String title;
+-	private final String subtitle;
+-	private Drawable icon1;
+-
+-	public EntryItem(String title, String path, Drawable icon1) {
+-		this.title = title;
+-		this.subtitle = path;
+-		this.icon1 = icon1;
+-	}
+-
+-	@Override
+-	public boolean isSection() {
+-		return false;
+-	}
+-
+-	public Drawable getIcon() {
+-		return icon1;
+-	}
+-
+-	public String getPath() {
+-		return subtitle;
+-	}
+-
+-	public String getTitle() {
+-		return title;
+-	}
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/drawer/Item.java b/app/src/main/java/com/amaze/filemanager/ui/drawer/Item.java
+deleted file mode 100644
+index d006c736f..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/drawer/Item.java
++++ /dev/null
+@@ -1,7 +0,0 @@
+-package com.amaze.filemanager.ui.drawer;
+-
+-public interface Item {
+-	
+-	boolean isSection();
+-
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/drawer/SectionItem.java b/app/src/main/java/com/amaze/filemanager/ui/drawer/SectionItem.java
+deleted file mode 100644
+index 6c991c169..000000000
+--- a/app/src/main/java/com/amaze/filemanager/ui/drawer/SectionItem.java
++++ /dev/null
+@@ -1,9 +0,0 @@
+-package com.amaze.filemanager.ui.drawer;
+-
+-public class SectionItem implements Item{
+-
+-	@Override
+-	public boolean isSection() {
+-		return true;
+-	}
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java b/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
+index 07811dee0..bc2f76821 100644
+--- a/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/utils/DataUtils.java
+@@ -1,6 +1,6 @@
+ package com.amaze.filemanager.utils;
+ 
+-import com.amaze.filemanager.ui.drawer.Item;
++import com.amaze.filemanager.adapters.data.DrawerItem;
+ import com.amaze.filemanager.utils.application.AppConfig;
+ import com.cloudrail.si.interfaces.CloudStorage;
+ import com.cloudrail.si.services.Box;
+@@ -15,7 +15,6 @@ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.LinkedList;
+ import java.util.List;
+-import java.util.Stack;
+ 
+ /**
+  * Created by arpitkh996 on 20-01-2016.
+@@ -36,7 +35,7 @@ public class DataUtils {
+     private LinkedList<String> history = new LinkedList<>();
+     private ArrayList<String> storages = new ArrayList<>();
+ 
+-    private ArrayList<Item> list = new ArrayList<>();
++    private ArrayList<DrawerItem> list = new ArrayList<>();
+ 
+     private ArrayList<String[]> servers = new ArrayList<>();
+     private ArrayList<String[]> books = new ArrayList<>();
+@@ -372,11 +371,11 @@ public class DataUtils {
+         this.storages = storages;
+     }
+ 
+-    public ArrayList<Item> getList() {
++    public ArrayList<DrawerItem> getList() {
+         return list;
+     }
+ 
+-    public synchronized void setList(ArrayList<Item> list) {
++    public synchronized void setList(ArrayList<DrawerItem> list) {
+         this.list = list;
+     }
+ 
+diff --git a/app/src/play/java/com/amaze/filemanager/activities/MainActivity.java b/app/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+index a9ac34582..71d8dce1a 100644
+--- a/app/src/play/java/com/amaze/filemanager/activities/MainActivity.java
++++ b/app/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+@@ -73,7 +73,6 @@ import android.widget.ImageView;
+ import android.widget.LinearLayout;
+ import android.widget.ListView;
+ import android.widget.RelativeLayout;
+-import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import com.afollestad.materialdialogs.DialogAction;
+@@ -113,9 +112,7 @@ import com.amaze.filemanager.ui.dialogs.RenameBookmark;
+ import com.amaze.filemanager.ui.dialogs.RenameBookmark.BookmarkCallback;
+ import com.amaze.filemanager.ui.dialogs.SmbConnectDialog;
+ import com.amaze.filemanager.ui.dialogs.SmbConnectDialog.SmbConnectionListener;
+-import com.amaze.filemanager.ui.drawer.EntryItem;
+-import com.amaze.filemanager.ui.drawer.Item;
+-import com.amaze.filemanager.ui.drawer.SectionItem;
++import com.amaze.filemanager.adapters.data.DrawerItem;
+ import com.amaze.filemanager.ui.views.ScrimInsetsRelativeLayout;
+ import com.amaze.filemanager.ui.views.appbar.AppBar;
+ import com.amaze.filemanager.utils.BookSorter;
+@@ -240,8 +237,29 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+ 
+     private AppBarLayout appBarLayout;
+ 
+-    //TODO make var names meaningful
+-    private static final int SELECT_MINUS_2 = -2, NO_VALUE = -1, SELECT_0 = 0, SELECT_102 = 102;
++    /**
++     * In drawer nothing is selected.
++     */
++    private static final int DRAWER_SELECTED_NONE = -1;
++    /**
++     * In drawer first storage is selected.
++     */
++    private static final int DRAWER_SELECTED_DEFAULT = 0;
++    /**
++     * In drawer {@link ProcessViewerFragment} is selected (which is a special case
++     * of {@link #DRAWER_SELECTED_NONE} as ProcessViewer has no drawer item). //TODO might be wrong
++     */
++    private static final int DRAWER_SELECTED_PROCESSVIEWER = 102;
++    /**
++     * In drawer FTP or Apps list (also Settings for a brief second) are selected.
++     */
++    private static final int DRAWER_SELECTED_LASTSECTION = -2;
++
++    /**
++     * Which item in nav drawer is selected values go from 0 to the length of the nav drawer list,
++     * special values are {@link #DRAWER_SELECTED_DEFAULT}, {@link #DRAWER_SELECTED_NONE},
++     * {@link #DRAWER_SELECTED_PROCESSVIEWER} and {@link #DRAWER_SELECTED_LASTSECTION}.
++     */
+     private int selectedStorage;
+ 
+     private CoordinatorLayout mScreenLayout;
+@@ -404,7 +422,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+ 
+         if (savedInstanceState != null) {
+ 
+-            selectedStorage = savedInstanceState.getInt("selectitem", SELECT_0);
++            selectedStorage = savedInstanceState.getInt("selectitem", DRAWER_SELECTED_DEFAULT);
+         }
+ 
+         // setting window background color instead of each item, in order to reduce pixel overdraw
+@@ -501,7 +519,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                         FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+                         transaction.replace(R.id.content_frame, new ProcessViewerFragment(), KEY_INTENT_PROCESS_VIEWER);
+                         //transaction.addToBackStack(null);
+-                        selectedStorage = SELECT_102;
++                        selectedStorage = DRAWER_SELECTED_PROCESSVIEWER;
+                         openProcesses = false;
+                         //title.setText(utils.getString(con, R.string.process_viewer));
+                         //Commit the transaction
+@@ -515,8 +533,8 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                         transaction2.replace(R.id.content_frame, new FTPServerFragment());
+                         appBarLayout.animate().translationY(0).setInterpolator(new DecelerateInterpolator(2)).start();
+ 
+-                        selectedStorage = SELECT_MINUS_2;
+-                        adapter.toggleChecked(false);
++                        selectedStorage = DRAWER_SELECTED_LASTSECTION;
++                        adapter.deselectEverything();
+                         transaction2.commit();
+                     } else {
+                         if (path != null && path.length() > 0) {
+@@ -539,7 +557,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                     oppathe1 = savedInstanceState.getString("oppathe1");
+                     oparrayList = savedInstanceState.getParcelableArrayList("oparrayList");
+                     operation = savedInstanceState.getInt("operation");
+-                    selectedStorage = savedInstanceState.getInt("selectitem", SELECT_0);
++                    selectedStorage = savedInstanceState.getInt("selectitem", DRAWER_SELECTED_DEFAULT);
+                     //mainFragment = (Main) savedInstanceState.getParcelable("main_fragment");
+                     adapter.toggleChecked(selectedStorage);
+                 }
+@@ -797,12 +815,12 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                 String path = strings[0];
+                 int k = 0, i = 0;
+                 String entryItemPathOld = "";
+-                for (Item item : dataUtils.getList()) {
+-                    if (!item.isSection()) {
++                for (DrawerItem drawerItem : dataUtils.getList()) {
++                    if (drawerItem.type == DrawerItem.ITEM_ENTRY) {
+ 
+-                        String entryItemPath = ((EntryItem) item).getPath();
++                        String entryItemPath = drawerItem.path;
+ 
+-                        if (path.contains(((EntryItem) item).getPath())) {
++                        if (path.contains(drawerItem.path)) {
+ 
+                             if (entryItemPath.length() > entryItemPathOld.length()) {
+ 
+@@ -842,7 +860,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+         }
+         transaction.replace(R.id.content_frame, tabFragment);
+         // Commit the transaction
+-        selectedStorage = SELECT_0;
++        selectedStorage = DRAWER_SELECTED_DEFAULT;
+         transaction.addToBackStack("tabt" + 1);
+         transaction.commitAllowingStateLoss();
+         appbar.setTitle(null);
+@@ -858,45 +876,52 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+     }
+ 
+     public void selectItem(final int i) {
+-        ArrayList<Item> directoryItems = dataUtils.getList();
+-        if (!directoryItems.get(i).isSection()) {
+-            if ((selectedStorage == NO_VALUE || selectedStorage >= directoryItems.size())) {
+-                TabFragment tabFragment = new TabFragment();
+-                Bundle a = new Bundle();
+-                a.putString("path", ((EntryItem) directoryItems.get(i)).getPath());
+-
+-                tabFragment.setArguments(a);
+-
+-                android.support.v4.app.FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+-                transaction.replace(R.id.content_frame, tabFragment);
++        ArrayList<DrawerItem> directoryDrawerItems = dataUtils.getList();
++        switch (directoryDrawerItems.get(i).type) {
++            case DrawerItem.ITEM_ENTRY:
++                if ((selectedStorage == DRAWER_SELECTED_NONE || selectedStorage >= directoryDrawerItems.size())) {
++                    TabFragment tabFragment = new TabFragment();
++                    Bundle a = new Bundle();
++                    a.putString("path", directoryDrawerItems.get(i).path);
++
++                    tabFragment.setArguments(a);
++
++                    android.support.v4.app.FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
++                    transaction.replace(R.id.content_frame, tabFragment);
++
++                    transaction.addToBackStack("tabt1" + 1);
++                    pending_fragmentTransaction = transaction;
++                    selectedStorage = i;
++                    adapter.toggleChecked(selectedStorage);
++                    if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
++                    else onDrawerClosed();
++                    floatingActionButton.setVisibility(View.VISIBLE);
++                    floatingActionButton.getMenuButton().show();
++                } else {
++                    pendingPath = directoryDrawerItems.get(i).path;
+ 
+-                transaction.addToBackStack("tabt1" + 1);
+-                pending_fragmentTransaction = transaction;
+-                selectedStorage = i;
+-                adapter.toggleChecked(selectedStorage);
+-                if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
+-                else onDrawerClosed();
+-                floatingActionButton.setVisibility(View.VISIBLE);
+-                floatingActionButton.getMenuButton().show();
+-            } else {
+-                pendingPath = ((EntryItem) directoryItems.get(i)).getPath();
++                    selectedStorage = i;
++                    adapter.toggleChecked(selectedStorage);
+ 
++                    if (directoryDrawerItems.get(i).path.contains(OTGUtil.PREFIX_OTG) &&
++                            getPrefs().getString(KEY_PREF_OTG, null).equals(VALUE_PREF_OTG_NULL)) {
++                        // we've not gotten otg path yet
++                        // start system request for storage access framework
++                        Toast.makeText(getApplicationContext(),
++                                getString(R.string.otg_access), Toast.LENGTH_LONG).show();
++                        Intent safIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++                        startActivityForResult(safIntent, REQUEST_CODE_SAF);
++                    } else {
++                        if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
++                        else onDrawerClosed();
++                    }
++                }
++                break;
++            case DrawerItem.ITEM_INTENT:
++                directoryDrawerItems.get(i).onClickListener.onClick();
+                 selectedStorage = i;
+                 adapter.toggleChecked(selectedStorage);
+-
+-                if (((EntryItem) directoryItems.get(i)).getPath().contains(OTGUtil.PREFIX_OTG) &&
+-                        getPrefs().getString(KEY_PREF_OTG, null).equals(VALUE_PREF_OTG_NULL)) {
+-                    // we've not gotten otg path yet
+-                    // start system request for storage access framework
+-                    Toast.makeText(getApplicationContext(),
+-                            getString(R.string.otg_access), Toast.LENGTH_LONG).show();
+-                    Intent safIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+-                    startActivityForResult(safIntent, REQUEST_CODE_SAF);
+-                } else {
+-                    if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
+-                    else onDrawerClosed();
+-                }
+-            }
++                break;
+         }
+     }
+ 
+@@ -1182,7 +1207,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+     @Override
+     protected void onSaveInstanceState(Bundle outState) {
+         super.onSaveInstanceState(outState);
+-        if (selectedStorage != NO_VALUE)
++        if (selectedStorage != DRAWER_SELECTED_NONE)
+             outState.putInt("selectitem", selectedStorage);
+         if(pasteHelper != null) {
+             outState.putParcelable(PASTEHELPER_BUNDLE, pasteHelper);
+@@ -1233,6 +1258,10 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             otgFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
+             registerReceiver(mOtgReceiver, otgFilter);
+         }
++
++        // TODO: 24/12/2017 this is a hack to fix a glitch when rotating the screen 
++        updateViews(new ColorDrawable(MainActivity.currentTab == 1 ?
++                getColorPreference().getColor(ColorUsage.PRIMARY):getColorPreference().getColor(ColorUsage.PRIMARY_TWO)));
+     }
+ 
+     /**
+@@ -1369,7 +1398,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+     
+     public void refreshDrawer() {
+ 
+-        ArrayList<Item> sectionItems = new ArrayList<>();
++        ArrayList<DrawerItem> sectionDrawerItems = new ArrayList<>();
+         ArrayList<String> storageDirectories = getStorageDirectories();
+         storage_count = 0;
+         for (String file : storageDirectories) {
+@@ -1389,21 +1418,21 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             } else name = f.getName();
+             if (!f.isDirectory() || f.canExecute()) {
+                 storage_count++;
+-                sectionItems.add(new EntryItem(name, file, icon1));
++                sectionDrawerItems.add(new DrawerItem(name, file, icon1));
+             }
+         }
+         dataUtils.setStorages(storageDirectories);
+-        sectionItems.add(new SectionItem());
++        sectionDrawerItems.add(new DrawerItem(DrawerItem.ITEM_SECTION));
+ 
+         if (dataUtils.getServers().size() > 0) {
+             Collections.sort(dataUtils.getServers(), new BookSorter());
+             synchronized (dataUtils.getServers()) {
+                 for (String[] file : dataUtils.getServers()) {
+-                    sectionItems.add(new EntryItem(file[0], file[1], ContextCompat.getDrawable(this,
++                    sectionDrawerItems.add(new DrawerItem(file[0], file[1], ContextCompat.getDrawable(this,
+                             R.drawable.ic_settings_remote_white_48dp)));
+                 }
+             }
+-            sectionItems.add(new SectionItem());
++            sectionDrawerItems.add(new DrawerItem(DrawerItem.ITEM_SECTION));
+         }
+ 
+         ArrayList<String[]> accountAuthenticationList = new ArrayList<>();
+@@ -1412,7 +1441,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             for (CloudStorage cloudStorage : dataUtils.getAccounts()) {
+                 if (cloudStorage instanceof Dropbox) {
+ 
+-                    sectionItems.add(new EntryItem(CloudHandler.CLOUD_NAME_DROPBOX,
++                    sectionDrawerItems.add(new DrawerItem(CloudHandler.CLOUD_NAME_DROPBOX,
+                             CloudHandler.CLOUD_PREFIX_DROPBOX + "/",
+                             ContextCompat.getDrawable(this, R.drawable.ic_dropbox_white_24dp)));
+ 
+@@ -1422,7 +1451,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                     });
+                 } else if (cloudStorage instanceof Box) {
+ 
+-                    sectionItems.add(new EntryItem(CloudHandler.CLOUD_NAME_BOX,
++                    sectionDrawerItems.add(new DrawerItem(CloudHandler.CLOUD_NAME_BOX,
+                             CloudHandler.CLOUD_PREFIX_BOX + "/",
+                             ContextCompat.getDrawable(this, R.drawable.ic_box_white_24dp)));
+ 
+@@ -1432,7 +1461,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                     });
+                 } else if (cloudStorage instanceof OneDrive) {
+ 
+-                    sectionItems.add(new EntryItem(CloudHandler.CLOUD_NAME_ONE_DRIVE,
++                    sectionDrawerItems.add(new DrawerItem(CloudHandler.CLOUD_NAME_ONE_DRIVE,
+                             CloudHandler.CLOUD_PREFIX_ONE_DRIVE + "/",
+                             ContextCompat.getDrawable(this, R.drawable.ic_onedrive_white_24dp)));
+ 
+@@ -1442,7 +1471,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                     });
+                 } else if (cloudStorage instanceof GoogleDrive) {
+ 
+-                    sectionItems.add(new EntryItem(CloudHandler.CLOUD_NAME_GOOGLE_DRIVE,
++                    sectionDrawerItems.add(new DrawerItem(CloudHandler.CLOUD_NAME_GOOGLE_DRIVE,
+                             CloudHandler.CLOUD_PREFIX_GOOGLE_DRIVE + "/",
+                             ContextCompat.getDrawable(this, R.drawable.ic_google_drive_white_24dp)));
+ 
+@@ -1455,7 +1484,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             Collections.sort(accountAuthenticationList, new BookSorter());
+ 
+             if (accountAuthenticationList.size() != 0)
+-                sectionItems.add(new SectionItem());
++                sectionDrawerItems.add(new DrawerItem(DrawerItem.ITEM_SECTION));
+         }
+ 
+         if (getPrefs().getBoolean(PREFERENCE_SHOW_SIDEBAR_FOLDERS, true)) {
+@@ -1465,11 +1494,11 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+ 
+                 synchronized (dataUtils.getBooks()) {
+                     for (String[] file : dataUtils.getBooks()) {
+-                        sectionItems.add(new EntryItem(file[0], file[1],
++                        sectionDrawerItems.add(new DrawerItem(file[0], file[1],
+                                 ContextCompat.getDrawable(this, R.drawable.folder_fab)));
+                     }
+                 }
+-                sectionItems.add(new SectionItem());
++                sectionDrawerItems.add(new DrawerItem(DrawerItem.ITEM_SECTION));
+             }
+         }
+ 
+@@ -1478,33 +1507,60 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+ 
+         if (getPrefs().getBoolean(PREFERENCE_SHOW_SIDEBAR_QUICKACCESSES, true)) {
+             if (quickAccessPref[0])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.quick), "5",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.quick), "5",
+                         ContextCompat.getDrawable(this, R.drawable.ic_star_white_18dp)));
+             if (quickAccessPref[1])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.recent), "6",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.recent), "6",
+                         ContextCompat.getDrawable(this, R.drawable.ic_history_white_48dp)));
+             if (quickAccessPref[2])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.images), "0",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.images), "0",
+                         ContextCompat.getDrawable(this, R.drawable.ic_doc_image)));
+             if (quickAccessPref[3])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.videos), "1",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.videos), "1",
+                         ContextCompat.getDrawable(this, R.drawable.ic_doc_video_am)));
+             if (quickAccessPref[4])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.audio), "2",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.audio), "2",
+                         ContextCompat.getDrawable(this, R.drawable.ic_doc_audio_am)));
+             if (quickAccessPref[5])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.documents), "3",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.documents), "3",
+                         ContextCompat.getDrawable(this, R.drawable.ic_doc_doc_am)));
+             if (quickAccessPref[6])
+-                sectionItems.add(new EntryItem(getResources().getString(R.string.apks), "4",
++                sectionDrawerItems.add(new DrawerItem(getResources().getString(R.string.apks), "4",
+                         ContextCompat.getDrawable(this, R.drawable.ic_doc_apk_grid)));
+         } else {
+-            sectionItems.remove(sectionItems.size() - 1); //Deletes last divider
++            sectionDrawerItems.remove(sectionDrawerItems.size() - 1); //Deletes last divider
+         }
+ 
+-        dataUtils.setList(sectionItems);
++        sectionDrawerItems.add(new DrawerItem(DrawerItem.ITEM_SECTION));
+ 
+-        adapter = new DrawerAdapter(this, this, sectionItems, this, getPrefs());
++        sectionDrawerItems.add(new DrawerItem(getString(R.string.ftp),
++                ContextCompat.getDrawable(this, R.drawable.ic_ftp_dark), () -> {
++                    FragmentTransaction transaction2 = getSupportFragmentManager().beginTransaction();
++                    transaction2.replace(R.id.content_frame, new FTPServerFragment());
++                    appBarLayout.animate().translationY(0).setInterpolator(new DecelerateInterpolator(2)).start();
++                    pending_fragmentTransaction = transaction2;
++                    if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
++                    else onDrawerClosed();
++        }));
++        sectionDrawerItems.add(new DrawerItem(getString(R.string.apps),
++                ContextCompat.getDrawable(this, R.drawable.ic_doc_apk_white), () -> {
++                    FragmentTransaction transaction2 = getSupportFragmentManager().beginTransaction();
++                    transaction2.replace(R.id.content_frame, new AppsListFragment());
++                    appBarLayout.animate().translationY(0).setInterpolator(new DecelerateInterpolator(2)).start();
++                    pending_fragmentTransaction = transaction2;
++                    if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
++                    else onDrawerClosed();
++        }));
++        sectionDrawerItems.add(new DrawerItem(getString(R.string.setting),
++                ContextCompat.getDrawable(this, R.drawable.ic_settings_white_48dp), () -> {
++                    Intent in = new Intent(MainActivity.this, PreferencesActivity.class);
++                    startActivity(in);
++                    finish();
++        }));
++
++        dataUtils.setList(sectionDrawerItems);
++
++        adapter = new DrawerAdapter(this, this, sectionDrawerItems, this);
+         mDrawerList.setAdapter(adapter);
+     }
+ 
+@@ -1679,57 +1735,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             if (getAppbar().getSearchView().isEnabled()) getAppbar().getSearchView().hideSearchView();
+         });
+ 
+-        ImageView divider = findViewById(R.id.divider1);
+-        if (getAppTheme().equals(AppTheme.LIGHT))
+-            divider.setImageResource(R.color.divider);
+-        else
+-            divider.setImageResource(R.color.divider_dark);
+-
+         setDrawerHeaderBackground();
+-        View settingsButton = findViewById(R.id.settingsbutton);
+-        if (getAppTheme().equals(AppTheme.DARK) || getAppTheme().equals(AppTheme.BLACK)) {
+-            settingsButton.setBackgroundResource(R.drawable.safr_ripple_black);
+-            ((ImageView) settingsButton.findViewById(R.id.settingicon)).setImageResource(R.drawable.ic_settings_white_48dp);
+-            ((TextView) settingsButton.findViewById(R.id.settingtext)).setTextColor(Utils.getColor(this, android.R.color.white));
+-        }
+-        settingsButton.setOnClickListener(v -> {
+-            Intent in = new Intent(MainActivity.this, PreferencesActivity.class);
+-            startActivity(in);
+-            finish();
+-        });
+-        View appButton = findViewById(R.id.appbutton);
+-        if (getAppTheme().equals(AppTheme.DARK) || getAppTheme().equals(AppTheme.BLACK)) {
+-            appButton.setBackgroundResource(R.drawable.safr_ripple_black);
+-            ((ImageView) appButton.findViewById(R.id.appicon)).setImageResource(R.drawable.ic_doc_apk_white);
+-            ((TextView) appButton.findViewById(R.id.apptext)).setTextColor(Utils.getColor(this, android.R.color.white));
+-        }
+-        appButton.setOnClickListener(v -> {
+-            FragmentTransaction transaction2 = getSupportFragmentManager().beginTransaction();
+-            transaction2.replace(R.id.content_frame, new AppsListFragment());
+-            appBarLayout.animate().translationY(0).setInterpolator(new DecelerateInterpolator(2)).start();
+-            pending_fragmentTransaction = transaction2;
+-            if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
+-            else onDrawerClosed();
+-            selectedStorage = SELECT_MINUS_2;
+-            adapter.toggleChecked(false);
+-        });
+-
+-        View ftpButton = findViewById(R.id.ftpbutton);
+-        if (getAppTheme().equals(AppTheme.DARK) || getAppTheme().equals(AppTheme.BLACK)) {
+-            ftpButton.setBackgroundResource(R.drawable.safr_ripple_black);
+-            ((ImageView) ftpButton.findViewById(R.id.ftpicon)).setImageResource(R.drawable.ic_ftp_dark);
+-            ((TextView) ftpButton.findViewById(R.id.ftptext)).setTextColor(Utils.getColor(this, android.R.color.white));
+-        }
+-        ftpButton.setOnClickListener(v -> {
+-            FragmentTransaction transaction2 = getSupportFragmentManager().beginTransaction();
+-            transaction2.replace(R.id.content_frame, new FTPServerFragment());
+-            appBarLayout.animate().translationY(0).setInterpolator(new DecelerateInterpolator(2)).start();
+-            pending_fragmentTransaction = transaction2;
+-            if (!isDrawerLocked) mDrawerLayout.closeDrawer(mDrawerLinear);
+-            else onDrawerClosed();
+-            selectedStorage = SELECT_MINUS_2;
+-            adapter.toggleChecked(false);
+-        });
+         //getSupportActionBar().setBackgroundDrawable(new ColorDrawable(Color.parseColor((currentTab==1 ? skinTwo : skin))));
+ 
+         // status bar0
+@@ -1917,7 +1923,7 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+             FragmentTransaction transaction = getSupportFragmentManager().beginTransaction();
+             transaction.replace(R.id.content_frame, new ProcessViewerFragment(), KEY_INTENT_PROCESS_VIEWER);
+             //   transaction.addToBackStack(null);
+-            selectedStorage = SELECT_102;
++            selectedStorage = DRAWER_SELECTED_PROCESSVIEWER;
+             openProcesses = false;
+             //title.setText(utils.getString(con, R.string.process_viewer));
+             //Commit the transaction
+@@ -2000,14 +2006,14 @@ public class MainActivity extends ThemedActivity implements OnRequestPermissions
+                 if (b) {
+                     tabHandler.clear();
+                     if (storage_count > 1)
+-                        tabHandler.addTab(new Tab(1, "", ((EntryItem) dataUtils.getList().get(1)).getPath(), "/"));
++                        tabHandler.addTab(new Tab(1, "", dataUtils.getList().get(1).path, "/"));
+                     else
+                         tabHandler.addTab(new Tab(1, "", "/", "/"));
+                     if (!dataUtils.getList().get(0).isSection()) {
+-                        String pa = ((EntryItem) dataUtils.getList().get(0)).getPath();
++                        String pa = dataUtils.getList().get(0).path;
+                         tabHandler.addTab(new Tab(2, "", pa, pa));
+                     } else
+-                        tabHandler.addTab(new Tab(2, "", ((EntryItem) dataUtils.getList().get(1)).getPath(), "/"));
++                        tabHandler.addTab(new Tab(2, "", dataUtils.getList().get(1).path, "/"));
+                     if (tabFragment != null) {
+                         Fragment main = tabFragment.getFragmentAtIndex(0);
+                         if (main != null)

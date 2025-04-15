@@ -1,0 +1,638 @@
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/ClockContainerLayout.java b/app/src/main/java/com/dgmltn/morphclock/app/ClockContainerLayout.java
+index c4f859c..7098fce 100644
+--- a/app/src/main/java/com/dgmltn/morphclock/app/ClockContainerLayout.java
++++ b/app/src/main/java/com/dgmltn/morphclock/app/ClockContainerLayout.java
+@@ -2,9 +2,13 @@ package com.dgmltn.morphclock.app;
+ 
+ import java.text.SimpleDateFormat;
+ 
++import android.animation.AnimatorSet;
++import android.animation.ObjectAnimator;
+ import android.content.Context;
+ import android.graphics.Point;
++import android.text.format.DateUtils;
+ import android.util.AttributeSet;
++import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.widget.LinearLayout;
+@@ -18,6 +22,8 @@ import com.bydavy.morpher.font.DFont;
+  */
+ public class ClockContainerLayout extends LinearLayout implements SystemClockManager.SystemClockListener {
+ 
++	private static final String TAG = ClockContainerLayout.class.getSimpleName();
++
+ 	private static SimpleDateFormat sHoursMinutesFormat = new SimpleDateFormat("H:mm");
+ 	private static SimpleDateFormat sSecondsFormat = new SimpleDateFormat("ss");
+ 	private static SimpleDateFormat sDateFormat = new SimpleDateFormat("c, MMMM d");
+@@ -28,7 +34,8 @@ public class ClockContainerLayout extends LinearLayout implements SystemClockMan
+ 	private SystemClockManager mSystemClockManager;
+ 	private View mClockContainer;
+ 
+-	String mLastTime = "";
++	long mHhmm = 0;
++	long mSs = 0;
+ 
+ 	public ClockContainerLayout(Context context) {
+ 		super(context);
+@@ -53,6 +60,9 @@ public class ClockContainerLayout extends LinearLayout implements SystemClockMan
+ 
+ 		// Setup the clock ticker
+ 		mSystemClockManager = new SystemClockManager(this);
++
++		mRelativePositionX = 0.5f;
++		mRelativePositionY = 0.5f;
+ 	}
+ 
+ 	@Override
+@@ -72,6 +82,45 @@ public class ClockContainerLayout extends LinearLayout implements SystemClockMan
+ 		mSystemClockManager.start();
+ 	}
+ 
++	@Override
++	protected void onSizeChanged(int w, int h, int oldw, int oldh) {
++		super.onSizeChanged(w, h, oldw, oldh);
++
++		Point screen = Util.getScreenSize(getContext());
++		mScreenWidth = screen.x;
++		mScreenHeight = screen.y;
++
++		mWidth = w;
++		mHeight = h;
++
++		adjustRelativePositions();
++	}
++
++	private float mWidth, mHeight, mScreenWidth, mScreenHeight, mRelativePositionX, mRelativePositionY;
++
++	public void setRelativePositionX(float x) {
++		mRelativePositionX = x;
++		adjustRelativePositions();
++	}
++
++	public float getRelativePositionX() {
++		return mRelativePositionX;
++	}
++
++	public void setRelativePositionY(float y) {
++		mRelativePositionY = y;
++		adjustRelativePositions();
++	}
++
++	public float getRelativePositionY() {
++		return mRelativePositionY;
++	}
++
++	private void adjustRelativePositions() {
++		setTranslationX(mRelativePositionX * (mScreenWidth - mWidth));
++		setTranslationY(mRelativePositionY * (mScreenHeight - mHeight));
++	}
++
+ 	@Override
+ 	protected void onDetachedFromWindow() {
+ 		super.onDetachedFromWindow();
+@@ -80,34 +129,30 @@ public class ClockContainerLayout extends LinearLayout implements SystemClockMan
+ 
+ 	@Override
+ 	public void onTimeChanged(long time) {
+-		String thisTime = sHoursMinutesFormat.format(time);
+-
+-		// Hour/minute changed, move the clock around the screen a bit
+-		if (!thisTime.equals(mLastTime) && mClockContainer.getWidth() > 0 && mClockContainer.getHeight() > 0) {
+-			mLastTime = thisTime;
+ 
+-			Point screen = Util.getScreenSize(getContext());
++		// Hour/minute
++		if (time / DateUtils.MINUTE_IN_MILLIS != mHhmm) {
++			AnimatorSet set = new AnimatorSet();
++			set.play(ObjectAnimator.ofFloat(this, "relativePositionX", (float) Math.random()))
++				.with(ObjectAnimator.ofFloat(this, "relativePositionY", (float) Math.random()));
++			set.setDuration(mHoursMinutesView.getMorphingDuration()).start();
+ 
+-			int clockWidth = mClockContainer.getWidth();
+-			int screenWidth = screen.x;
+-			int clockHeight = mClockContainer.getHeight();
+-			int screenHeight = screen.y;
++			// Useful when a long morphing duration is set otherwise we never see the destination number as it's always morphing
++			String hhmm = sHoursMinutesFormat.format(time);
++			mHoursMinutesView.setTime(hhmm, !mHoursMinutesView.isMorphingAnimationRunning());
+ 
+-			double translateX = 0.9f * (Math.random() * (screenWidth - clockWidth) - this.getLeft());
+-			double translateY = 0.9f * (Math.random() * (screenHeight - clockHeight) - this.getTop());
+-
+-			this.animate()
+-				.translationX((float)translateX)
+-				.translationY((float)translateY)
+-				.setDuration(mHoursMinutesView.getMorphingDuration())
+-				.start();
++			mHhmm = time / DateUtils.MINUTE_IN_MILLIS;
+ 		}
+ 
+-		// Useful when a long morphing duration is set otherwise we never see the destination number as it's always morphing
+-		mHoursMinutesView.setTime(thisTime, false /*!mHoursMinutesView.isMorphingAnimationRunning()*/);
++		// Second
++		if (time / DateUtils.SECOND_IN_MILLIS != mSs) {
++			mSs = time / DateUtils.SECOND_IN_MILLIS;
++			String ss = sSecondsFormat.format(time);
+ 
+-		mSecondsView.setTime(sSecondsFormat.format(time), false /*!mSecondsView.isMorphingAnimationRunning()*/);
++			mSecondsView.setTime(ss, !mSecondsView.isMorphingAnimationRunning());
++		}
+ 
++		// Date
+ 		mDateView.setText(sDateFormat.format(time));
+ 	}
+ 
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/LinearGradientDrawable.java b/app/src/main/java/com/dgmltn/morphclock/app/LinearGradientDrawable.java
+new file mode 100644
+index 0000000..3af35e9
+--- /dev/null
++++ b/app/src/main/java/com/dgmltn/morphclock/app/LinearGradientDrawable.java
+@@ -0,0 +1,33 @@
++package com.dgmltn.morphclock.app;
++
++import android.graphics.LinearGradient;
++import android.graphics.Shader;
++import android.graphics.drawable.PaintDrawable;
++import android.graphics.drawable.ShapeDrawable;
++import android.graphics.drawable.shapes.RectShape;
++import android.util.Log;
++
++/**
++ * Created by dmelton on 8/13/14.
++ */
++public class LinearGradientDrawable extends PaintDrawable {
++
++	private int[] mColors;
++	private float[] mPositions;
++
++	ShapeDrawable.ShaderFactory mShaderFactory = new ShapeDrawable.ShaderFactory() {
++		@Override
++		public Shader resize(int width, int height) {
++			return new LinearGradient(0, 0, 0, height,
++				mColors, mPositions, Shader.TileMode.CLAMP);
++		}
++	};
++
++	public LinearGradientDrawable(int[] colors, float[] positions) {
++		mColors = colors;
++		mPositions = positions;
++
++		setShape(new RectShape());
++		setShaderFactory(mShaderFactory);
++	}
++}
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/MainActivity.java b/app/src/main/java/com/dgmltn/morphclock/app/MainActivity.java
+index a1c3d67..f04b4d8 100644
+--- a/app/src/main/java/com/dgmltn/morphclock/app/MainActivity.java
++++ b/app/src/main/java/com/dgmltn/morphclock/app/MainActivity.java
+@@ -55,10 +55,6 @@ public class MainActivity extends Activity {
+ 		final View content = LayoutInflater.from(this).inflate(R.layout.main_activity, null);
+ 		setContentView(content);
+ 
+-		SkyDrawable bg = new SkyDrawable();
+-		ObjectAnimator.ofFloat(bg, "sunAngle", 250f, 300f).setDuration(60000).start();
+-		content.setBackground(bg);
+-
+ 		final View controlsView = findViewById(R.id.fullscreen_content_controls);
+ 		final View contentView = findViewById(R.id.fullscreen_content);
+ 
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/SkyDrawable.java b/app/src/main/java/com/dgmltn/morphclock/app/SkyDrawable.java
+deleted file mode 100644
+index 5cd083c..0000000
+--- a/app/src/main/java/com/dgmltn/morphclock/app/SkyDrawable.java
++++ /dev/null
+@@ -1,184 +0,0 @@
+-package com.dgmltn.morphclock.app;
+-
+-import java.util.ArrayList;
+-
+-import android.graphics.Bitmap;
+-import android.graphics.Canvas;
+-import android.graphics.ColorFilter;
+-import android.graphics.LinearGradient;
+-import android.graphics.Paint;
+-import android.graphics.Shader;
+-import android.graphics.drawable.Drawable;
+-import android.util.Log;
+-
+-/**
+- * Created by dmelton on 8/8/14. Draws a gradient representing the sky at a particular sun
+- * angle.
+- */
+-public class SkyDrawable extends Drawable {
+-
+-	private static class GradientValues {
+-		public int[] colors;
+-		public float[] positions;
+-
+-		public GradientValues(int[] colors, float[] positions) {
+-			this.colors = colors;
+-			this.positions = positions;
+-		}
+-	}
+-
+-	private static class SkyGradient {
+-		public GradientValues values;
+-		public float startAngle;
+-		public float fullAngle;
+-
+-		public SkyGradient(GradientValues values, float startAngle, float fullAngle) {
+-			this.values = values;
+-			this.startAngle = startAngle;
+-			this.fullAngle = fullAngle;
+-		}
+-
+-		private int mHeight;
+-		private LinearGradient mGradient;
+-
+-		public LinearGradient getLinearGradient(int height) {
+-			if (mGradient == null || mHeight != height) {
+-				mHeight = height;
+-				mGradient = new LinearGradient(0, 0, 0, mHeight, values.colors, values.positions, Shader.TileMode.CLAMP);
+-			}
+-			return mGradient;
+-		}
+-	}
+-
+-	private static final GradientValues G_EARLY_SUNRISE = new GradientValues(
+-		new int[] {
+-			0xff091B41, 0xff2D345E, 0xff3C4169, 0xff535479, 0xff666283, 0xff8C7F91, 0xffB39C98,
+-			0xffC6A48C, 0xffD9A96E, 0xffD4844E, 0xff934F44
+-		},
+-		new float[] {
+-			0f, 0.1282f, 0.2478f, 0.3789f, 0.4958f, 0.6184f, 0.7522f, 0.8245f, 0.8887f, 0.9443f, 1f
+-		}
+-	);
+-
+-	private static final GradientValues G_SUNRISE = new GradientValues(
+-		new int[] {
+-			0xff8C9ABD, 0xff9EACCF, 0xffBBC1D9, 0xffC6C8DD, 0xffD1D0DE, 0xffD8D6E1, 0xffDCD3D8,
+-			0xffEDDED9, 0xffF6DFCD, 0xffFFDEBB, 0xffFED9AD, 0xffFFD193, 0xffFFB96B, 0xffFFB55E,
+-			0xffFEAD51, 0xffFE9E48, 0xffFE8043
+-		},
+-		new float[] {
+-			0f, 0.0725f, 0.259f, 0.3315f, 0.3872f, 0.4429f, 0.4985f, 0.5684f, 0.635f, 0.6963f,
+-			0.7522f, 0.8135f, 0.8801f, 0.9109f, 0.9387f, 0.9692f, 1f
+-		}
+-	);
+-
+-	private static final GradientValues G_DAY = new GradientValues(
+-		new int[] {
+-			0xff2E5A89, 0xff37699A, 0xff487CAE, 0xff568ABC, 0xff669CCB, 0xff96B9D9, 0xffA6C5D9
+-		},
+-		new float[] {0f, 0.2478f, 0.4958f, 0.6296f, 0.7522f, 0.8774f, 1f}
+-	);
+-
+-	private static final GradientValues G_EARLY_SUNSET = new GradientValues(
+-		new int[] {
+-			0xff747CC5, 0xff968BC5, 0xffB294B0, 0xffD69076, 0xffFA963E, 0xffE96D31, 0xff6A1C2A
+-		},
+-		new float[] {0f, 0.2478f, 0.4958f, 0.7019f, 0.8022f, 0.8801f, 1f}
+-	);
+-
+-	private static final GradientValues G_DUSK_SUNSET = new GradientValues(
+-		new int[] {
+-			0xff193259, 0xff1C3C66, 0xff1E4471, 0xff21507E, 0xff235987, 0xff25618E, 0xff276693,
+-			0xff29719C, 0xff2B7AA3, 0xff328FB1, 0xff6CACCA, 0xffB0D0E3, 0xffE3EEF5, 0xffECF4F8,
+-			0xffFAF9F2, 0xffF8F4E5, 0xffF1E9CB, 0xffDFCD87, 0xffD5BC60, 0xffBB9250, 0xff8E735F
+-		},
+-		new float[] {
+-			0f, 0.1365f, 0.2478f, 0.3733f, 0.4485f, 0.4958f, 0.5293f, 0.5732f, 0.6045f, 0.6602f,
+-			0.7048f, 0.7522f, 0.8162f, 0.844f, 0.897f, 0.9192f, 0.9414f, 0.9553f, 0.9692f, 0.9888f,
+-			1f
+-		}
+-	);
+-
+-	private static final GradientValues G_DUSK = new GradientValues(
+-		new int[] {0xff0A1C4E, 0xff132660, 0xff4E67C3, 0xff8CAFFF, 0xffBAC0F0, 0xffF4EEF2},
+-		new float[] {0f, .02478f, 0.4958f, 0.7522f, 0.8831f, 1f}
+-	);
+-
+-	private static final GradientValues G_NIGHT = new GradientValues(
+-		new int[] {0xff2a3a54, 0xff32425b, 0xff33435B, 0xff364761, 0xff3D4E68, 0xff42526B},
+-		new float[] {0f, 0.2424f, 0.3704f, 0.4958f, .7522f, 1f}
+-	);
+-
+-	private static ArrayList<SkyGradient> sGradients = new ArrayList<SkyGradient>();
+-
+-	static {
+-		sGradients.add(new SkyGradient(G_NIGHT, 0f, 0f));
+-		sGradients.add(new SkyGradient(G_EARLY_SUNRISE, 72f, 84f));
+-		sGradients.add(new SkyGradient(G_SUNRISE, 78f, 90f));
+-		sGradients.add(new SkyGradient(G_DAY, 84f, 96f));
+-		sGradients.add(new SkyGradient(G_EARLY_SUNSET, 267f, 273f));
+-		sGradients.add(new SkyGradient(G_DUSK_SUNSET, 273f, 279f));
+-		sGradients.add(new SkyGradient(G_DUSK, 279f, 285f));
+-		sGradients.add(new SkyGradient(G_NIGHT, 285f, 291f));
+-	}
+-
+-	private int[] mAlphas = new int[sGradients.size()];
+-	private boolean mAlphasChanged = true;
+-	private Paint mPaint = new Paint();
+-
+-	private float mSunAngle;
+-
+-	/**
+-	 * Set the angle of the sun. Let's define 0 degrees as midnight, 90 as sunrise, 180 as noon,
+-	 * 270 as sunset.
+-	 *
+-	 * @param sunAngle
+-	 */
+-	public void setSunAngle(float sunAngle) {
+-		mSunAngle = sunAngle;
+-
+-		for (int i = 0; i < sGradients.size(); i++) {
+-			SkyGradient gradient = sGradients.get(i);
+-			float alpha = (mSunAngle - gradient.startAngle) / (gradient.fullAngle - gradient.startAngle);
+-			int iAlpha = Math.max(0, Math.min(255, (int) (255 * alpha)));
+-			if (mAlphas[i] != iAlpha) {
+-				mAlphasChanged = true;
+-				mAlphas[i] = iAlpha;
+-			}
+-		}
+-
+-		if (mAlphasChanged) {
+-			invalidateSelf();
+-		}
+-	}
+-
+-	@Override
+-	public void draw(Canvas canvas) {
+-		int w = canvas.getWidth();
+-		int h = canvas.getHeight();
+-		int max = sGradients.size();
+-		for (int i = 0; i < max; i++) {
+-			if (mAlphas[i] > 0 && (i == max - 1 || mAlphas[i + 1] != 255)) {
+-				SkyGradient gradient = sGradients.get(i);
+-				mPaint.setShader(gradient.getLinearGradient(h));
+-				mPaint.setAlpha(mAlphas[i]);
+-				canvas.drawRect(0, 0, w, h, mPaint);
+-			}
+-		}
+-	}
+-
+-	@Override
+-	public void setAlpha(int i) {
+-		//ignore
+-	}
+-
+-	@Override
+-	public void setColorFilter(ColorFilter colorFilter) {
+-		//ignore
+-	}
+-
+-	@Override
+-	public int getOpacity() {
+-		return 0;
+-	}
+-}
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/SkyLayerDrawable.java b/app/src/main/java/com/dgmltn/morphclock/app/SkyLayerDrawable.java
+new file mode 100644
+index 0000000..4856794
+--- /dev/null
++++ b/app/src/main/java/com/dgmltn/morphclock/app/SkyLayerDrawable.java
+@@ -0,0 +1,55 @@
++package com.dgmltn.morphclock.app;
++
++import android.graphics.drawable.Drawable;
++import android.graphics.drawable.LayerDrawable;
++import android.util.Log;
++
++/**
++ * Created by dmelton on 8/8/14. Draws a gradient representing the sky at a particular sun
++ * angle.
++ */
++public class SkyLayerDrawable extends LayerDrawable {
++
++	private static Drawable[] sLayers = {
++		SkyLinearGradientDrawable.POST_MIDNIGHT,
++		SkyLinearGradientDrawable.EARLY_SUNRISE,
++		SkyLinearGradientDrawable.SUNRISE,
++		SkyLinearGradientDrawable.DAY,
++		SkyLinearGradientDrawable.EARLY_SUNSET,
++		SkyLinearGradientDrawable.DUSK_SUNSET,
++		SkyLinearGradientDrawable.DUSK,
++		SkyLinearGradientDrawable.PRE_MIDNIGHT,
++	};
++
++	private int[] mAlphas = new int[sLayers.length];
++
++	public SkyLayerDrawable() {
++		super(sLayers);
++		for (int i = 0; i < mAlphas.length; i++) {
++			mAlphas[i] = 255;
++			getDrawable(i).setAlpha(mAlphas[i]);
++			getDrawable(i).invalidateSelf();
++		}
++	}
++
++	/**
++	 * Set the angle of the sun. Let's define 0 degrees as midnight, 90 as sunrise, 180 as noon,
++	 * 270 as sunset.
++	 *
++	 * @param sunAngle
++	 */
++	public void setSunAngle(float sunAngle) {
++		boolean alphasChanged = false;
++
++		for (int i = 0; i < sLayers.length; i++) {
++			SkyLinearGradientDrawable d = (SkyLinearGradientDrawable) getDrawable(i);
++			if (d.setAngle(sunAngle)) {
++				alphasChanged = true;
++			}
++		}
++
++		if (alphasChanged) {
++			invalidateSelf();
++		}
++	}
++}
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/SkyLinearGradientDrawable.java b/app/src/main/java/com/dgmltn/morphclock/app/SkyLinearGradientDrawable.java
+new file mode 100644
+index 0000000..429062d
+--- /dev/null
++++ b/app/src/main/java/com/dgmltn/morphclock/app/SkyLinearGradientDrawable.java
+@@ -0,0 +1,121 @@
++package com.dgmltn.morphclock.app;
++
++/**
++ * Created by dmelton on 8/13/14.
++ */
++public class SkyLinearGradientDrawable extends LinearGradientDrawable {
++
++	private float mStartAngle;
++	private float mFullAngle;
++	private int mAlpha;
++
++	public SkyLinearGradientDrawable(int[] colors, float[] positions, float angle) {
++		super(colors, positions);
++		mFullAngle = angle;
++		mStartAngle = angle - 12;
++	}
++
++	/**
++	 * Sets the angle above the horizon of the sun. 90 = sunrise, 180 = sunset.
++	 * @param angle
++	 * @return
++	 */
++	public boolean setAngle(float angle) {
++		int alpha = 0;
++		if (angle >= mFullAngle) {
++			alpha = 255;
++		}
++		else if (angle >= mStartAngle) {
++			alpha = (int)((angle - mStartAngle) / (mFullAngle - mStartAngle));
++		}
++
++		if (alpha != mAlpha) {
++			setAlpha(alpha);
++			setVisible(alpha > 0, false);
++			return true;
++		}
++
++		return false;
++	}
++
++	@Override
++	public void setAlpha(int alpha) {
++		super.setAlpha(alpha);
++		mAlpha = alpha;
++	}
++
++	// PREDEFINED SkyLinearGradientDrawable's
++
++	public static final SkyLinearGradientDrawable POST_MIDNIGHT = new SkyLinearGradientDrawable(
++		new int[] {0xff2a3a54, 0xff32425b, 0xff33435B, 0xff364761, 0xff3D4E68, 0xff42526B},
++		new float[] {0f, 0.2424f, 0.3704f, 0.4958f, .7522f, 1f},
++		0f
++	);
++
++	public static final SkyLinearGradientDrawable EARLY_SUNRISE = new SkyLinearGradientDrawable(
++		new int[] {
++			0xff091B41, 0xff2D345E, 0xff3C4169, 0xff535479, 0xff666283, 0xff8C7F91, 0xffB39C98,
++			0xffC6A48C, 0xffD9A96E, 0xffD4844E, 0xff934F44
++		},
++		new float[] {
++			0f, 0.1282f, 0.2478f, 0.3789f, 0.4958f, 0.6184f, 0.7522f, 0.8245f, 0.8887f, 0.9443f, 1f
++		},
++		84f
++	);
++
++	public static final SkyLinearGradientDrawable SUNRISE = new SkyLinearGradientDrawable(
++		new int[] {
++			0xff8C9ABD, 0xff9EACCF, 0xffBBC1D9, 0xffC6C8DD, 0xffD1D0DE, 0xffD8D6E1, 0xffDCD3D8,
++			0xffEDDED9, 0xffF6DFCD, 0xffFFDEBB, 0xffFED9AD, 0xffFFD193, 0xffFFB96B, 0xffFFB55E,
++			0xffFEAD51, 0xffFE9E48, 0xffFE8043
++		},
++		new float[] {
++			0f, 0.0725f, 0.259f, 0.3315f, 0.3872f, 0.4429f, 0.4985f, 0.5684f, 0.635f, 0.6963f,
++			0.7522f, 0.8135f, 0.8801f, 0.9109f, 0.9387f, 0.9692f, 1f
++		},
++		90f
++	);
++
++	public static final SkyLinearGradientDrawable DAY = new SkyLinearGradientDrawable(
++		new int[] {
++			0xff2E5A89, 0xff37699A, 0xff487CAE, 0xff568ABC, 0xff669CCB, 0xff96B9D9, 0xffA6C5D9
++		},
++		new float[] {0f, 0.2478f, 0.4958f, 0.6296f, 0.7522f, 0.8774f, 1f},
++		96f
++	);
++
++	public static final SkyLinearGradientDrawable EARLY_SUNSET = new SkyLinearGradientDrawable(
++		new int[] {
++			0xff747CC5, 0xff968BC5, 0xffB294B0, 0xffD69076, 0xffFA963E, 0xffE96D31, 0xff6A1C2A
++		},
++		new float[] {0f, 0.2478f, 0.4958f, 0.7019f, 0.8022f, 0.8801f, 1f},
++		273f
++	);
++
++	public static final SkyLinearGradientDrawable DUSK_SUNSET = new SkyLinearGradientDrawable(
++		new int[] {
++			0xff193259, 0xff1C3C66, 0xff1E4471, 0xff21507E, 0xff235987, 0xff25618E, 0xff276693,
++			0xff29719C, 0xff2B7AA3, 0xff328FB1, 0xff6CACCA, 0xffB0D0E3, 0xffE3EEF5, 0xffECF4F8,
++			0xffFAF9F2, 0xffF8F4E5, 0xffF1E9CB, 0xffDFCD87, 0xffD5BC60, 0xffBB9250, 0xff8E735F
++		},
++		new float[] {
++			0f, 0.1365f, 0.2478f, 0.3733f, 0.4485f, 0.4958f, 0.5293f, 0.5732f, 0.6045f, 0.6602f,
++			0.7048f, 0.7522f, 0.8162f, 0.844f, 0.897f, 0.9192f, 0.9414f, 0.9553f, 0.9692f, 0.9888f,
++			1f
++		},
++		279f
++	);
++
++	public static final SkyLinearGradientDrawable DUSK = new SkyLinearGradientDrawable(
++		new int[] {0xff0A1C4E, 0xff132660, 0xff4E67C3, 0xff8CAFFF, 0xffBAC0F0, 0xffF4EEF2},
++		new float[] {0f, .02478f, 0.4958f, 0.7522f, 0.8831f, 1f},
++		285f
++	);
++
++	public static final SkyLinearGradientDrawable PRE_MIDNIGHT = new SkyLinearGradientDrawable(
++		new int[] {0xff2a3a54, 0xff32425b, 0xff33435B, 0xff364761, 0xff3D4E68, 0xff42526B},
++		new float[] {0f, 0.2424f, 0.3704f, 0.4958f, .7522f, 1f},
++		291f
++	);
++
++}
+diff --git a/app/src/main/java/com/dgmltn/morphclock/app/SkyView.java b/app/src/main/java/com/dgmltn/morphclock/app/SkyView.java
+index 0941e40..8d94606 100644
+--- a/app/src/main/java/com/dgmltn/morphclock/app/SkyView.java
++++ b/app/src/main/java/com/dgmltn/morphclock/app/SkyView.java
+@@ -1,18 +1,30 @@
+ package com.dgmltn.morphclock.app;
+ 
++import java.util.TimeZone;
++
+ import android.content.Context;
++import android.graphics.Color;
+ import android.text.format.DateUtils;
+ import android.util.AttributeSet;
++import android.util.Log;
+ import android.view.View;
+ 
++import com.luckycatlabs.sunrisesunset.calculator.SolarEventCalculator;
++import com.luckycatlabs.sunrisesunset.dto.Location;
++
+ /**
+  * Created by dmelton on 8/10/14.
+  */
+ public class SkyView extends View implements SystemClockManager.SystemClockListener {
+ 
+-	private SkyDrawable mBackground;
++	private static final String TAG = SkyView.class.getSimpleName();
++
++	private SkyLayerDrawable mBackground;
+ 	private SystemClockManager mSystemClockManager;
+ 
++	// Used for calculating the sun's angle
++	private SolarEventCalculator mCalculator;
++
+ 	public SkyView(Context context) {
+ 		super(context);
+ 		init();
+@@ -29,9 +41,14 @@ public class SkyView extends View implements SystemClockManager.SystemClockListe
+ 	}
+ 
+ 	private void init() {
+-		mBackground = new SkyDrawable();
++		mBackground = new SkyLayerDrawable();
+ 		setBackground(mBackground);
+ 		mSystemClockManager = new SystemClockManager(this, 1);
++
++		Location location = new Location(33, -117);
++		TimeZone timeZone = TimeZone.getDefault();
++		mCalculator = new SolarEventCalculator(location, timeZone);
++		Log.e(TAG, "DOUG: location = " + location + ", timezone = " + timeZone);
+ 	}
+ 
+ 	@Override
+@@ -48,7 +65,7 @@ public class SkyView extends View implements SystemClockManager.SystemClockListe
+ 
+ 	@Override
+ 	public void onTimeChanged(long time) {
+-		long period = DateUtils.MINUTE_IN_MILLIS;
++		long period = DateUtils.DAY_IN_MILLIS;
+ 		long millis = Util.millisSinceMidnight(time);
+ 		float angle = 360f * (millis % period) / period;
+ 		mBackground.setSunAngle(angle);

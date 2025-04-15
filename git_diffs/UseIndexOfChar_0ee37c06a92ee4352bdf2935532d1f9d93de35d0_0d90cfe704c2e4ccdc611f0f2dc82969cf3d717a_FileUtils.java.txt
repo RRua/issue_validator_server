@@ -1,0 +1,587 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+index da2082721..dd334eab4 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/LoadFilesListTask.java
+@@ -55,6 +55,7 @@ import android.net.Uri;
+ import android.os.AsyncTask;
+ import android.provider.MediaStore;
+ import android.text.format.Formatter;
++import android.util.Log;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
+@@ -118,7 +119,9 @@ public class LoadFilesListTask
+         if (hFile == null) {
+           hFile = new HybridFile(OpenMode.SMB, path);
+         }
+-
++        if (!hFile.getPath().endsWith("/")) {
++          hFile.setPath(hFile.getPath() + "/");
++        }
+         try {
+           SmbFile[] smbFile = hFile.getSmbFile(5000).listFiles();
+           list = nullCheckOrInterrupt(mainFragment, this).addToSmb(smbFile, path, showHiddenFiles);
+@@ -127,9 +130,10 @@ public class LoadFilesListTask
+           if (!e.getMessage().toLowerCase().contains("denied")) {
+             nullCheckOrInterrupt(mainFragment, this).reauthenticateSmb();
+           }
++          e.printStackTrace();
+           return null;
+         } catch (SmbException | NullPointerException e) {
+-          e.printStackTrace();
++          Log.w(getClass().getSimpleName(), "Failed to load smb files for path: " + path, e);
+           nullCheckOrInterrupt(mainFragment, this).reauthenticateSmb();
+           return null;
+         }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+index 2c2725ecf..5420569a3 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/HybridFile.java
+@@ -348,6 +348,7 @@ public class HybridFile {
+       smbFile.setConnectTimeout(timeout);
+       return smbFile;
+     } catch (MalformedURLException e) {
++      e.printStackTrace();
+       return null;
+     }
+   }
+@@ -356,6 +357,7 @@ public class HybridFile {
+     try {
+       return SmbUtil.create(path);
+     } catch (MalformedURLException e) {
++      e.printStackTrace();
+       return null;
+     }
+   }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/MediaStoreHack.java b/app/src/main/java/com/amaze/filemanager/filesystem/MediaStoreHack.java
+index a916a4c01..66ef26a0e 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/MediaStoreHack.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/MediaStoreHack.java
+@@ -148,7 +148,7 @@ public class MediaStoreHack {
+       Uri uri =
+           MediaStore.Files.getContentUri("external")
+               .buildUpon()
+-              .appendPath(Integer.toString(imageId))
++              .appendEncodedPath(Integer.toString(imageId))
+               .build();
+       filecursor.close();
+       return uri;
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/files/FileUtils.java b/app/src/main/java/com/amaze/filemanager/filesystem/files/FileUtils.java
+index 2c73e4fe1..f27041aa4 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/files/FileUtils.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/files/FileUtils.java
+@@ -82,7 +82,9 @@ import android.view.View;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
+ import androidx.core.content.FileProvider;
++import androidx.core.util.Pair;
+ import androidx.documentfile.provider.DocumentFile;
+ 
+ import jcifs.smb.SmbFile;
+@@ -573,23 +575,85 @@ public class FileUtils {
+ 
+   public static String[] getFolderNamesInPath(String path) {
+     if (!path.endsWith("/")) path += "/";
++    @Nullable Pair<String, String> splitUri = splitUri(path);
++    if (splitUri != null) {
++      path = splitUri.second;
++    }
+     return ("root" + path).split("/");
+   }
+ 
++  /**
++   * Parse a given path to a string array of the &quot;steps&quot; to target.
++   *
++   * <p>For local paths, output will be like <code>
++   * ["/", "/storage", "/storage/emulated", "/storage/emulated/0", "/storage/emulated/0/Download", "/storage/emulated/0/Download/file.zip"]
++   * </code> For URI paths, output will be like <code>
++   * ["smb://user;workgroup:passw0rd@12.3.4", "smb://user;workgroup:passw0rd@12.3.4/user", "smb://user;workgroup:passw0rd@12.3.4/user/Documents", "smb://user;workgroup:passw0rd@12.3.4/user/Documents/flare.doc"]
++   * </code>
++   *
++   * @param path
++   * @return string array of incremental path segments
++   */
+   public static String[] getPathsInPath(String path) {
+-    if (path.endsWith("/")) path = path.substring(0, path.length() - 1);
++    if (path.endsWith("/")) {
++      path = path.substring(0, path.length() - 1);
++    }
++    path = path.trim();
+ 
+     ArrayList<String> paths = new ArrayList<>();
++    @Nullable String urlPrefix = null;
++    @Nullable Pair<String, String> splitUri = splitUri(path);
++    if (splitUri != null) {
++      urlPrefix = splitUri.first;
++      path = splitUri.second;
++    }
++
++    if (!path.startsWith("/")) {
++      path = "/" + path;
++    }
+ 
+     while (path.length() > 0) {
+-      paths.add(path);
+-      path = path.substring(0, path.lastIndexOf("/"));
++      if (urlPrefix != null) {
++        paths.add(urlPrefix + path);
++      } else {
++        paths.add(path);
++      }
++      if (path.contains("/")) {
++        path = path.substring(0, path.lastIndexOf('/'));
++      } else {
++        break;
++      }
+     }
+ 
+-    paths.add("/");
++    if (urlPrefix != null) {
++      paths.add(urlPrefix);
++    } else {
++      paths.add("/");
++    }
+     Collections.reverse(paths);
+ 
+-    return paths.toArray(new String[paths.size()]);
++    return paths.toArray(new String[0]);
++  }
++
++  /**
++   * Splits a given path to URI prefix (if exists) and path.
++   *
++   * @param path
++   * @return {@link Pair} tuple if given path is URI (scheme is not null). Tuple contains:
++   *     <ul>
++   *       <li>First: URI section of the given path, if given path is an URI
++   *       <li>Second: Path section of the given path. Never null
++   *     </ul>
++   */
++  public static @Nullable Pair<String, String> splitUri(@NonNull final String path) {
++    Uri uri = Uri.parse(path);
++    if (uri.getScheme() != null) {
++      String urlPrefix = uri.getScheme() + "://" + uri.getEncodedAuthority();
++      String retPath = path.substring(urlPrefix.length());
++      return new Pair<>(urlPrefix, retPath);
++    } else {
++      return null;
++    }
+   }
+ 
+   public static boolean canListFiles(File f) {
+diff --git a/app/src/main/java/com/amaze/filemanager/ui/views/appbar/BottomBar.java b/app/src/main/java/com/amaze/filemanager/ui/views/appbar/BottomBar.java
+index e0c108885..0f2906416 100644
+--- a/app/src/main/java/com/amaze/filemanager/ui/views/appbar/BottomBar.java
++++ b/app/src/main/java/com/amaze/filemanager/ui/views/appbar/BottomBar.java
+@@ -157,7 +157,7 @@ public class BottomBar implements View.OnTouchListener {
+                 Fragment fragmentAtFrame = mainActivity.getFragmentAtFrame();
+                 if (fragmentAtFrame instanceof TabFragment) {
+                   MainFragment m = mainActivity.getCurrentMainFragment();
+-                  if (m.openMode == OpenMode.FILE) {
++                  if (OpenMode.CUSTOM != m.openMode) {
+                     FileUtils.crossfade(buttons, pathLayout);
+                     timer.cancel();
+                     timer.start();
+@@ -227,16 +227,9 @@ public class BottomBar implements View.OnTouchListener {
+ 
+       buttonRoot.setImageDrawable(
+           mainActivity.getResources().getDrawable(buttonPathInterface.getRootDrawable()));
+-      buttonRoot.setOnClickListener(
+-          p1 -> {
+-            buttonPathInterface.changePath("/");
+-            timer.cancel();
+-            timer.start();
+-          });
+ 
+       String[] names = FileUtils.getFolderNamesInPath(path);
+       final String[] paths = FileUtils.getPathsInPath(path);
+-
+       View view = new View(mainActivity);
+       LinearLayout.LayoutParams params1 =
+           new LinearLayout.LayoutParams(
+@@ -246,7 +239,15 @@ public class BottomBar implements View.OnTouchListener {
+ 
+       for (int i = 0; i < names.length; i++) {
+         final int k = i;
+-        if (paths[i].equals("/")) {
++        if (i == 0) {
++          buttonRoot.setOnClickListener(
++              p1 -> {
++                if (paths.length != 0) {
++                  buttonPathInterface.changePath(paths[k]);
++                  timer.cancel();
++                  timer.start();
++                }
++              });
+           buttons.addView(buttonRoot);
+         } else if (FileUtils.isStorage(paths[i])) {
+           buttonStorage.setOnClickListener(
+diff --git a/app/src/test/java/com/amaze/filemanager/filesystem/files/FileUtilsTest.kt b/app/src/test/java/com/amaze/filemanager/filesystem/files/FileUtilsTest.kt
+new file mode 100644
+index 000000000..66b9340d9
+--- /dev/null
++++ b/app/src/test/java/com/amaze/filemanager/filesystem/files/FileUtilsTest.kt
+@@ -0,0 +1,361 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.files
++
++import android.os.Build.VERSION_CODES.*
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.amaze.filemanager.filesystem.files.FileUtils.getPathsInPath
++import org.junit.Assert.*
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.LooperMode
++
++@RunWith(AndroidJUnit4::class)
++@LooperMode(LooperMode.Mode.PAUSED)
++@Config(sdk = [JELLY_BEAN, KITKAT, P])
++@Suppress("TooManyFunctions", "StringLiteralDuplication")
++class FileUtilsTest {
++
++    /**
++     * Test FileUtils.getPathsInPath() for directory
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathForFolder() {
++        getPathsInPath("/etc/default/grub/2/conf.d").run {
++            assertEquals(6, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/etc",
++                    "/etc/default",
++                    "/etc/default/grub",
++                    "/etc/default/grub/2",
++                    "/etc/default/grub/2/conf.d"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() for file
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathForFile() {
++        getPathsInPath("/var/log/nginx/access/2021-01-01/error.log").run {
++            assertEquals(7, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/var",
++                    "/var/log",
++                    "/var/log/nginx",
++                    "/var/log/nginx/access",
++                    "/var/log/nginx/access/2021-01-01",
++                    "/var/log/nginx/access/2021-01-01/error.log"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() for directory
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathForFolderWithSlashAtEnd() {
++        getPathsInPath("/system/lib/modules/drivers/net/broadcom/").run {
++            assertEquals(7, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/system",
++                    "/system/lib",
++                    "/system/lib/modules",
++                    "/system/lib/modules/drivers",
++                    "/system/lib/modules/drivers/net",
++                    "/system/lib/modules/drivers/net/broadcom"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with prefixing space in path
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSpacePrefixed() {
++        getPathsInPath("  /some/nasty/path/with/space/prefixed").run {
++            assertEquals(7, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/some",
++                    "/some/nasty",
++                    "/some/nasty/path",
++                    "/some/nasty/path/with",
++                    "/some/nasty/path/with/space",
++                    "/some/nasty/path/with/space/prefixed"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with spaces in path
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSpaceInPath() {
++        getPathsInPath("/some/nasty/path/with/space  /  in/between").run {
++            assertEquals(8, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/some",
++                    "/some/nasty",
++                    "/some/nasty/path",
++                    "/some/nasty/path/with",
++                    "/some/nasty/path/with/space  ",
++                    "/some/nasty/path/with/space  /  in",
++                    "/some/nasty/path/with/space  /  in/between"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with spaces in path
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithNoSlashPrefix() {
++        getPathsInPath("some/nasty/path/without/slash  /as/  prefix").run {
++            assertEquals(8, size)
++            assertArrayEquals(
++                arrayOf(
++                    "/",
++                    "/some",
++                    "/some/nasty",
++                    "/some/nasty/path",
++                    "/some/nasty/path/without",
++                    "/some/nasty/path/without/slash  ",
++                    "/some/nasty/path/without/slash  /as",
++                    "/some/nasty/path/without/slash  /as/  prefix"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with SMB URI
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSmbUri() {
++        getPathsInPath("smb://1.2.3.4/some/folder/on/smb").run {
++            assertEquals(5, size)
++            assertArrayEquals(
++                arrayOf(
++                    "smb://1.2.3.4",
++                    "smb://1.2.3.4/some",
++                    "smb://1.2.3.4/some/folder",
++                    "smb://1.2.3.4/some/folder/on",
++                    "smb://1.2.3.4/some/folder/on/smb"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with SMB URI
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSmbUri2() {
++        getPathsInPath("smb://user@1.2.3.4/some/folder/on/smb").run {
++            assertEquals(5, size)
++            assertArrayEquals(
++                arrayOf(
++                    "smb://user@1.2.3.4",
++                    "smb://user@1.2.3.4/some",
++                    "smb://user@1.2.3.4/some/folder",
++                    "smb://user@1.2.3.4/some/folder/on",
++                    "smb://user@1.2.3.4/some/folder/on/smb"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with SMB URI
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSmbUri3() {
++        getPathsInPath("smb://user:password@1.2.3.4/some/folder/on/smb").run {
++            assertEquals(5, size)
++            assertArrayEquals(
++                arrayOf(
++                    "smb://user:password@1.2.3.4",
++                    "smb://user:password@1.2.3.4/some",
++                    "smb://user:password@1.2.3.4/some/folder",
++                    "smb://user:password@1.2.3.4/some/folder/on",
++                    "smb://user:password@1.2.3.4/some/folder/on/smb"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with SMB URI
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSmbUri4() {
++        getPathsInPath("smb://user;workgroup:password@1.2.3.4/some/folder/on/smb").run {
++            assertEquals(5, size)
++            assertArrayEquals(
++                arrayOf(
++                    "smb://user;workgroup:password@1.2.3.4",
++                    "smb://user;workgroup:password@1.2.3.4/some",
++                    "smb://user;workgroup:password@1.2.3.4/some/folder",
++                    "smb://user;workgroup:password@1.2.3.4/some/folder/on",
++                    "smb://user;workgroup:password@1.2.3.4/some/folder/on/smb"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with SMB URI containing space
++     *
++     * Legit URI should encode the space to %20, but not for our case. This case is
++     * to ensure the space won't get encoded.
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithSmbUriContainingSpace() {
++        getPathsInPath("smb://user;workgroup:password@1.2.3.4/user/My Documents").run {
++            assertEquals(3, size)
++            assertArrayEquals(
++                arrayOf(
++                    "smb://user;workgroup:password@1.2.3.4",
++                    "smb://user;workgroup:password@1.2.3.4/user",
++                    "smb://user;workgroup:password@1.2.3.4/user/My Documents"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with FTP URI having port number too
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithFtpUri() {
++        getPathsInPath("ftp://user:password@1.2.3.4:3721/some/folder/on/ftp").run {
++            assertEquals(5, size)
++            assertArrayEquals(
++                arrayOf(
++                    "ftp://user:password@1.2.3.4:3721",
++                    "ftp://user:password@1.2.3.4:3721/some",
++                    "ftp://user:password@1.2.3.4:3721/some/folder",
++                    "ftp://user:password@1.2.3.4:3721/some/folder/on",
++                    "ftp://user:password@1.2.3.4:3721/some/folder/on/ftp"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test FileUtils.getPathsInPath() with FTP URI with multi-byte characters.
++     *
++     * Legit URI should encode the multi-byte chars, but not for our case. This case is to
++     * ensure the multi-byte chars won't get encoded.
++     *
++     * @see FileUtils.getPathsInPath
++     */
++    @Test
++    fun testGetPathsInPathWithFtpUriWithMultiByteChars() {
++        getPathsInPath("ftp://user:password@1.2.3.4:3721/あ/い/う/え/お").run {
++            assertEquals(6, size)
++            assertArrayEquals(
++                arrayOf(
++                    "ftp://user:password@1.2.3.4:3721",
++                    "ftp://user:password@1.2.3.4:3721/あ",
++                    "ftp://user:password@1.2.3.4:3721/あ/い",
++                    "ftp://user:password@1.2.3.4:3721/あ/い/う",
++                    "ftp://user:password@1.2.3.4:3721/あ/い/う/え",
++                    "ftp://user:password@1.2.3.4:3721/あ/い/う/え/お"
++                ),
++                this
++            )
++        }
++    }
++
++    /**
++     * Test [FileUtils.splitUri]
++     */
++    @Test
++    fun testSplitUri() {
++        assertNull(FileUtils.splitUri("/"))
++        assertNull(FileUtils.splitUri("/system/lib/"))
++        assertNull(FileUtils.splitUri("/storage/emulated/10"))
++
++        FileUtils.splitUri("ftp://user:password@1.2.3.4:3721/あ/い/う/え/お")!!.run {
++            assertEquals("ftp://user:password@1.2.3.4:3721", first)
++            assertEquals("/あ/い/う/え/お", second)
++        }
++
++        FileUtils.splitUri("smb://user;workgroup:password@1.2.3.4/user/My Documents")!!.run {
++            assertEquals("smb://user;workgroup:password@1.2.3.4", first)
++            assertEquals("/user/My Documents", second)
++        }
++    }
++}

@@ -1,0 +1,255 @@
+diff --git a/Apphangar/src/main/java/ca/mimic/apphangar/AppsWidget.java b/Apphangar/src/main/java/ca/mimic/apphangar/AppsWidget.java
+index d3a8a3c..813bb24 100644
+--- a/Apphangar/src/main/java/ca/mimic/apphangar/AppsWidget.java
++++ b/Apphangar/src/main/java/ca/mimic/apphangar/AppsWidget.java
+@@ -36,10 +36,6 @@ import java.util.ArrayList;
+ import ca.mimic.apphangar.Settings.PrefsGet;
+ 
+ public class AppsWidget extends AppWidgetProvider {
+-
+-    protected static Context mContext;
+-    protected static PrefsGet prefs;
+-
+     protected static final int SMALL_ICONS = 0;
+     protected static final int LARGE_ICONS = 2;
+ 
+@@ -53,7 +49,6 @@ public class AppsWidget extends AppWidgetProvider {
+     @Override
+     public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
+         Tools.HangarLog("onUpdate [" + this.getClass().getCanonicalName() + "]");
+-        mContext = context;
+ 
+         // (re?)start service.  This is specifically so if hangar gets updated the service
+         // is restarted
+@@ -64,9 +59,6 @@ public class AppsWidget extends AppWidgetProvider {
+     @Override
+     public void onReceive(Context context, Intent intent) {
+         Tools.HangarLog("onReceive [" + this.getClass().getCanonicalName() + "]");
+-        if (mContext == null)
+-            mContext = context;
+-
+         AppWidgetManager mgr = AppWidgetManager.getInstance(context);
+ 
+         int[] ids = mgr.getAppWidgetIds(new ComponentName(context, AppsWidget.class));
+@@ -76,7 +68,7 @@ public class AppsWidget extends AppWidgetProvider {
+             try {
+                 Bundle options=mgr.getAppWidgetOptions(id);
+                 updateAppWidget(context, mgr, id, options);
+-            } catch (NullPointerException e) {
++            } catch (Exception e) {
+                 e.printStackTrace();
+                 Tools.HangarLog("NPE onReceive");
+             }
+@@ -88,11 +80,11 @@ public class AppsWidget extends AppWidgetProvider {
+         return (int) Math.floor(widgetDimension / itemDimension);
+     }
+ 
+-    static void updateAppWidget(Context context, AppWidgetManager appWidgetManager,
++    void updateAppWidget(Context context, AppWidgetManager appWidgetManager,
+             int appWidgetId, Bundle options) {
+ 
+         Tools.HangarLog("updateAppWidget (AppsWidget)");
+-        prefs = new PrefsGet(context.getSharedPreferences("AppsWidget", Context.MODE_PRIVATE));
++        PrefsGet prefs = new PrefsGet(context.getSharedPreferences("AppsWidget", Context.MODE_PRIVATE));
+ 
+         SharedPreferences mPrefs = prefs.prefsGet();
+ 
+@@ -218,7 +210,7 @@ public class AppsWidget extends AppWidgetProvider {
+         boolean ignorePinned = mPrefs.getBoolean(Settings.IGNORE_PINNED_PREFERENCE,
+                 Settings.IGNORE_PINNED_DEFAULT);
+         if (!ignorePinned) {
+-            ArrayList<Tools.TaskInfo> pinnedList = Tools.buildPinnedList(mContext, db);
++            ArrayList<Tools.TaskInfo> pinnedList = Tools.buildPinnedList(context, db);
+             appList = new Tools().getPinnedTasks(context, pinnedList, appList, numOfIcons, false);
+         }
+ 
+@@ -231,7 +223,7 @@ public class AppsWidget extends AppWidgetProvider {
+         appDrawer.createRow(rowLayout, R.id.viewRow);
+         appDrawer.setImageLayouts(imageButtonLayout, imageContLayout);
+         appDrawer.setPrefs(mPrefs);
+-        appDrawer.setContext(mContext);
++        appDrawer.setContext(context);
+         appDrawer.setRowBackgroundColor(getBackgroundColor, TOP_ROW);
+         appDrawer.setCount(numOfIcons, Settings.TASKLIST_QUEUE_SIZE, true);
+ 
+diff --git a/Apphangar/src/main/java/ca/mimic/apphangar/Settings.java b/Apphangar/src/main/java/ca/mimic/apphangar/Settings.java
+index e230834..1abf3d9 100644
+--- a/Apphangar/src/main/java/ca/mimic/apphangar/Settings.java
++++ b/Apphangar/src/main/java/ca/mimic/apphangar/Settings.java
+@@ -42,6 +42,7 @@ import android.content.SharedPreferences;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.res.Configuration;
++import android.database.sqlite.SQLiteDatabaseLockedException;
+ import android.graphics.Bitmap;
+ import android.graphics.Point;
+ import android.graphics.drawable.BitmapDrawable;
+@@ -134,7 +135,6 @@ public class Settings extends Activity implements ActionBar.TabListener {
+     protected static boolean isBound = false;
+     protected static boolean mLaunchedPaypal = false;
+     protected static Display display;
+-    boolean newStart;
+ 
+     static AppsRowAdapter mAppRowAdapter;
+     protected static boolean completeRedraw;
+@@ -330,14 +330,6 @@ public class Settings extends Activity implements ActionBar.TabListener {
+                             .setText(mSectionsPagerAdapter.getPageTitle(i))
+                             .setTabListener(this));
+         }
+-        db = TasksDataSource.getInstance(this);
+-        db.open();
+-
+-        int allTasksSize = db.getAllTasks().size();
+-        db.close();
+-        if (allTasksSize == 0) {
+-            newStart = true;
+-        }
+         pageChangeListener.onPageSelected(GENERAL_TAB);
+ 
+     }
+@@ -948,8 +940,8 @@ public class Settings extends Activity implements ActionBar.TabListener {
+ 
+                 String iconPackName = Tools.getApplicationName(mContext, prefs2.getString(ICON_PACK_PREFERENCE, null));
+                 icon_pack_preference = findPreference(ICON_PACK_PREFERENCE);
+-                if (iconPackName.isEmpty()) {
+-                    iconPackName = getResources().getResourceName(R.string.title_icon_pack_picker);
++                if (iconPackName.isEmpty() || iconPackName.equals("")) {
++                    iconPackName = getResources().getString(R.string.title_icon_pack_picker);
+                 }
+ 
+                 icon_pack_preference.setSummary(iconPackName);
+@@ -1208,6 +1200,8 @@ public class Settings extends Activity implements ActionBar.TabListener {
+ 
+     public static class AppsFragment extends Fragment implements OnItemClickListener {
+ 
++        static int failCount;
++
+         public static Fragment newInstance() {
+             return new AppsFragment();
+         }
+@@ -1304,12 +1298,32 @@ public class Settings extends Activity implements ActionBar.TabListener {
+             return appsView;
+         }
+ 
++        protected List<AppsRowItem> createAppTasksLoop() {
++            List<AppsRowItem> tmpApps = null;
++
++            try {
++                tmpApps = createAppTasks();
++            } catch (SQLiteDatabaseLockedException e) {
++                if (failCount >= 2) {
++                    e.printStackTrace();
++                    return null;
++                } else {
++                    failCount++;
++                    createAppTasksLoop();
++                }
++            }
++            return tmpApps;
++        }
++
+         @Override
+         public void onActivityCreated(Bundle savedInstanceState) {
+             super.onActivityCreated(savedInstanceState);
+             Tools.HangarLog("onActivityCreated appsFragment");
+ 
+-            List<AppsRowItem> appTasks = createAppTasks();
++            List<AppsRowItem> appTasks = createAppTasksLoop();
++            if (appTasks == null)
++                return;
++
+             mAppRowAdapter = new AppsRowAdapter(mContext, appTasks);
+             lv.setAdapter(mAppRowAdapter);
+             lv.setOnItemClickListener(this);
+diff --git a/Apphangar/src/main/java/ca/mimic/apphangar/StatsWidget.java b/Apphangar/src/main/java/ca/mimic/apphangar/StatsWidget.java
+index adbb1ab..21f286a 100644
+--- a/Apphangar/src/main/java/ca/mimic/apphangar/StatsWidget.java
++++ b/Apphangar/src/main/java/ca/mimic/apphangar/StatsWidget.java
+@@ -43,13 +43,9 @@ import ca.mimic.apphangar.Settings.PrefsGet;
+ 
+ public class StatsWidget extends AppWidgetProvider {
+ 
+-    protected static Context mContext;
+-    protected static PrefsGet prefs;
+-
+     @Override
+     public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
+         Tools.HangarLog("onUpdate [" + this.getClass().getCanonicalName() + "]");
+-        mContext = context;
+ 
+         // (re?)start service.  This is specifically so if hangar gets updated the service
+         // is restarted
+@@ -60,8 +56,6 @@ public class StatsWidget extends AppWidgetProvider {
+     @Override
+     public void onReceive(Context context, Intent intent) {
+         Tools.HangarLog("onReceive [" + this.getClass().getCanonicalName() + "]");
+-        if (mContext == null)
+-            mContext = context;
+ 
+         AppWidgetManager mgr = AppWidgetManager.getInstance(context);
+ 
+@@ -72,7 +66,7 @@ public class StatsWidget extends AppWidgetProvider {
+             try {
+                 Bundle options=mgr.getAppWidgetOptions(id);
+                 updateAppWidget(context, mgr, id, options);
+-            } catch (NullPointerException e) {
++            } catch (Exception e) {
+                 e.printStackTrace();
+                 Tools.HangarLog("NPE onReceive");
+             }
+@@ -80,12 +74,12 @@ public class StatsWidget extends AppWidgetProvider {
+         super.onReceive(context, intent);
+     }
+ 
+-    public static Bitmap drawableToBitmap (Drawable drawable) {
++    public Bitmap drawableToBitmap (Context context, Drawable drawable) {
+         if (drawable instanceof BitmapDrawable) {
+             return ((BitmapDrawable)drawable).getBitmap();
+         }
+ 
+-        Bitmap bitmap = Bitmap.createBitmap(Tools.dpToPx(mContext, 100), Tools.dpToPx(mContext, 5), Bitmap.Config.ARGB_8888);
++        Bitmap bitmap = Bitmap.createBitmap(Tools.dpToPx(context, 100), Tools.dpToPx(context, 5), Bitmap.Config.ARGB_8888);
+         Canvas canvas = new Canvas(bitmap);
+         drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
+         drawable.draw(canvas);
+@@ -93,11 +87,11 @@ public class StatsWidget extends AppWidgetProvider {
+         return bitmap;
+     }
+ 
+-    static void updateAppWidget(Context context, AppWidgetManager appWidgetManager,
++    void updateAppWidget(Context context, AppWidgetManager appWidgetManager,
+             int appWidgetId, Bundle options) {
+ 
+         Tools.HangarLog("updateAppWidget (StatsWidget)");
+-        prefs = new PrefsGet(context.getSharedPreferences("StatsWidget", Context.MODE_PRIVATE));
++        PrefsGet prefs = new PrefsGet(context.getSharedPreferences("StatsWidget", Context.MODE_PRIVATE));
+ 
+         SharedPreferences mPrefs = prefs.prefsGet();
+ 
+@@ -218,9 +212,9 @@ public class StatsWidget extends AppWidgetProvider {
+             } else {
+                 barColor = 0xFFFF4444;
+             }
+-            int[] colors = new int[]{barColor, Tools.dpToPx(context, secondsColor-1), 0x00000000, Tools.dpToPx(mContext, 100-secondsColor)};
++            int[] colors = new int[]{barColor, Tools.dpToPx(context, secondsColor-1), 0x00000000, Tools.dpToPx(context, 100-secondsColor)};
+             Drawable sd = new BarDrawable(colors);
+-            Bitmap bmpIcon2 = drawableToBitmap(sd);
++            Bitmap bmpIcon2 = drawableToBitmap(context, sd);
+             row.setImageViewBitmap(imgID, bmpIcon2);
+ 
+             int[] statsTime = new Settings().splitToComponentTimes(task.getSeconds());
+diff --git a/Apphangar/src/main/java/ca/mimic/apphangar/WatchfulService.java b/Apphangar/src/main/java/ca/mimic/apphangar/WatchfulService.java
+index ca58364..d1f6b33 100644
+--- a/Apphangar/src/main/java/ca/mimic/apphangar/WatchfulService.java
++++ b/Apphangar/src/main/java/ca/mimic/apphangar/WatchfulService.java
+@@ -523,6 +523,10 @@ public class WatchfulService extends Service {
+                 return;
+             }
+             pageList = new Tools().getPinnedTasks(mContext, null, pageList, iconCacheCount, moreApps);
++            if (pageList.size() == 1) {
++                moreAppsPage = 1;
++                return;
++            }
+         }
+ 
+         Tools.HangarLog("taskList.size(): " + taskList.size() + " pageList.size(): " + pageList.size() + " realmaxbuttons: " + numOfApps + " maxbuttons: " + maxButtons + " moreAppsPage: " + moreAppsPage);

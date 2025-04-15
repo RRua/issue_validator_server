@@ -1,0 +1,2738 @@
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+new file mode 100644
+index 0000000..3f549ce
+--- /dev/null
++++ b/app/src/main/java/com/hmdm/launcher/helper/ConfigUpdater.java
+@@ -0,0 +1,944 @@
++package com.hmdm.launcher.helper;
++
++import android.content.BroadcastReceiver;
++import android.content.ComponentName;
++import android.content.Context;
++import android.content.Intent;
++import android.content.IntentFilter;
++import android.content.pm.PackageInstaller;
++import android.net.Uri;
++import android.os.AsyncTask;
++import android.os.Environment;
++import android.os.Handler;
++import android.util.Log;
++
++import androidx.localbroadcastmanager.content.LocalBroadcastManager;
++
++import com.hmdm.launcher.BuildConfig;
++import com.hmdm.launcher.Const;
++import com.hmdm.launcher.db.DatabaseHelper;
++import com.hmdm.launcher.db.RemoteFileTable;
++import com.hmdm.launcher.json.Action;
++import com.hmdm.launcher.json.Application;
++import com.hmdm.launcher.json.DeviceInfo;
++import com.hmdm.launcher.json.RemoteFile;
++import com.hmdm.launcher.json.ServerConfig;
++import com.hmdm.launcher.pro.worker.DetailedInfoWorker;
++import com.hmdm.launcher.server.ServerServiceKeeper;
++import com.hmdm.launcher.task.ConfirmDeviceResetTask;
++import com.hmdm.launcher.task.ConfirmPasswordResetTask;
++import com.hmdm.launcher.task.ConfirmRebootTask;
++import com.hmdm.launcher.task.GetRemoteLogConfigTask;
++import com.hmdm.launcher.task.GetServerConfigTask;
++import com.hmdm.launcher.util.DeviceInfoProvider;
++import com.hmdm.launcher.util.InstallUtils;
++import com.hmdm.launcher.util.PushNotificationMqttWrapper;
++import com.hmdm.launcher.util.RemoteLogger;
++import com.hmdm.launcher.util.Utils;
++
++import org.apache.commons.io.FileUtils;
++
++import java.io.File;
++import java.io.IOException;
++import java.net.URL;
++import java.util.HashMap;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Map;
++
++public class ConfigUpdater {
++
++    public static interface UINotifier {
++        void onConfigUpdateStart();
++        void onConfigUpdateServerError();
++        void onConfigUpdateNetworkError();
++        void onPoliciesUpdated();
++        void onFileDownloading(final RemoteFile remoteFile);
++        void onDownloadProgress(final int progress, final long total, final long current);
++        void onFileDownloadError(final RemoteFile remoteFile);
++        void onAppUpdateStart();
++        void onAppRemoving(final Application application);
++        void onAppDownloading(final Application application);
++        void onAppInstalling(final Application application);
++        void onAppDownloadError(final Application application);
++        void onAppInstallError(final String packageName);
++        void onAppInstallComplete(final String packageName);
++        void onConfigUpdateComplete();
++    };
++
++    private boolean configInitializing;
++    private Context context;
++    private UINotifier uiNotifier;
++    private SettingsHelper settingsHelper;
++    private Handler handler = new Handler();
++    private List<RemoteFile> filesForInstall = new LinkedList();
++    private List< Application > applicationsForInstall = new LinkedList();
++    private List< Application > applicationsForRun = new LinkedList();
++    private Map<String, File> pendingInstallations = new HashMap<String,File>();
++    private BroadcastReceiver appInstallReceiver;
++    private boolean retry = true;
++
++    public List<Application> getApplicationsForRun() {
++        return applicationsForRun;
++    }
++
++    public static void notifyConfigUpdate(final Context context) {
++        if (SettingsHelper.getInstance(context).isMainActivityRunning()) {
++            LocalBroadcastManager.getInstance(context).
++                    sendBroadcast(new Intent(Const.ACTION_UPDATE_CONFIGURATION));
++        } else {
++            new ConfigUpdater().updateConfig(context, null, false);
++        }
++    }
++
++    public void updateConfig(final Context context, final UINotifier uiNotifier, final boolean abortOnError) {
++        if ( configInitializing ) {
++            Log.i(Const.LOG_TAG, "updateConfig(): configInitializing=true, exiting");
++            return;
++        }
++
++        Log.i(Const.LOG_TAG, "updateConfig(): set configInitializing=true");
++        configInitializing = true;
++        DetailedInfoWorker.requestConfigUpdate(context);
++        this.context = context;
++        this.uiNotifier = uiNotifier;
++
++        // Work around a strange bug with stale SettingsHelper instance: re-read its value
++        settingsHelper = SettingsHelper.getInstance(context.getApplicationContext());
++
++        if (settingsHelper.getConfig() != null && settingsHelper.getConfig().getRestrictions() != null) {
++            Utils.releaseUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++            // Explicitly release restrictions of installing/uninstalling apps
++            Utils.releaseUserRestrictions(context, "no_install_apps,no_uninstall_apps");
++        }
++
++        if (uiNotifier != null) {
++            uiNotifier.onConfigUpdateStart();
++        }
++        new GetServerConfigTask( context ) {
++            @Override
++            protected void onPostExecute( Integer result ) {
++                super.onPostExecute( result );
++                configInitializing = false;
++                Log.i(Const.LOG_TAG, "updateConfig(): set configInitializing=false after getting config");
++
++                switch ( result ) {
++                    case Const.TASK_SUCCESS:
++                        RemoteLogger.log(context, Const.LOG_INFO, "Configuration updated");
++                        updateRemoteLogConfig();
++                        break;
++                    case Const.TASK_ERROR:
++                        RemoteLogger.log(context, Const.LOG_WARN, "Failed to update config: server error");
++                        if (uiNotifier != null) {
++                            uiNotifier.onConfigUpdateServerError();
++                        }
++                        break;
++                    case Const.TASK_NETWORK_ERROR:
++                        RemoteLogger.log(context, Const.LOG_WARN, "Failed to update config: network error");
++                        if (retry) {
++                            // Retry the request once because WiFi may not yet be initialized
++                            retry = false;
++                            handler.postDelayed(new Runnable() {
++                                @Override
++                                public void run() {
++                                    updateConfig(context, uiNotifier, abortOnError);
++                                }
++                            }, 15000);
++                        } else {
++                            if (settingsHelper.getConfig() != null && !abortOnError) {
++                                if (uiNotifier != null && settingsHelper.getConfig().isShowWifi()) {
++                                    // Show network error dialog with Wi-Fi settings
++                                    // if it is required by the web panel
++                                    // so the user can set up WiFi even in kiosk mode
++                                    uiNotifier.onConfigUpdateNetworkError();
++                                } else {
++                                    updateRemoteLogConfig();
++                                }
++                            } else {
++                                if (uiNotifier != null) {
++                                    uiNotifier.onConfigUpdateNetworkError();
++                                }
++                            }
++                        }
++                        break;
++                }
++            }
++        }.execute();
++    }
++
++    public void skipConfigLoad() {
++        updateRemoteLogConfig();
++    }
++
++    private void updateRemoteLogConfig() {
++        Log.i(Const.LOG_TAG, "updateRemoteLogConfig(): get logging configuration");
++
++        GetRemoteLogConfigTask task = new GetRemoteLogConfigTask(context) {
++            @Override
++            protected void onPostExecute( Integer result ) {
++                super.onPostExecute( result );
++                Log.i(Const.LOG_TAG, "updateRemoteLogConfig(): result=" + result);
++                RemoteLogger.log(context, Const.LOG_INFO, "Device owner: " + Utils.isDeviceOwner(context));
++                checkServerMigration();
++            }
++        };
++        task.execute();
++    }
++
++    private void checkServerMigration() {
++        if (settingsHelper != null && settingsHelper.getConfig() != null && settingsHelper.getConfig().getNewServerUrl() != null &&
++                !settingsHelper.getConfig().getNewServerUrl().trim().equals("")) {
++            try {
++                final MigrationHelper migrationHelper = new MigrationHelper(settingsHelper.getConfig().getNewServerUrl().trim());
++                if (migrationHelper.needMigrating(context)) {
++                    // Before migration, test that new URL is working well
++                    migrationHelper.tryNewServer(context, new MigrationHelper.CompletionHandler() {
++                        @Override
++                        public void onSuccess() {
++                            // Everything is OK, migrate!
++                            RemoteLogger.log(context, Const.LOG_INFO, "Migrated to " + settingsHelper.getConfig().getNewServerUrl().trim());
++                            settingsHelper.setBaseUrl(migrationHelper.getBaseUrl());
++                            settingsHelper.setSecondaryBaseUrl(migrationHelper.getBaseUrl());
++                            settingsHelper.setServerProject(migrationHelper.getServerProject());
++                            ServerServiceKeeper.resetServices();
++                            configInitializing = false;
++                            updateConfig(context, uiNotifier, false);
++                        }
++
++                        @Override
++                        public void onError(String cause) {
++                            RemoteLogger.log(context, Const.LOG_WARN, "Failed to migrate to " + settingsHelper.getConfig().getNewServerUrl().trim() + ": " + cause);
++                            setupPushService();
++                        }
++                    });
++                    return;
++                }
++            } catch (Exception e) {
++                // Malformed URL
++                RemoteLogger.log(context, Const.LOG_WARN, "Failed to migrate to " + settingsHelper.getConfig().getNewServerUrl().trim() + ": malformed URL");
++            }
++        }
++        setupPushService();
++    }
++
++    private void setupPushService() {
++        String pushOptions = null;
++        int keepaliveTime = Const.DEFAULT_PUSH_ALARM_KEEPALIVE_TIME_SEC;
++        if (settingsHelper != null && settingsHelper.getConfig() != null) {
++            pushOptions = settingsHelper.getConfig().getPushOptions();
++            Integer newKeepaliveTime = settingsHelper.getConfig().getKeepaliveTime();
++            if (newKeepaliveTime != null && newKeepaliveTime >= 30) {
++                keepaliveTime = newKeepaliveTime;
++            }
++        }
++        if (BuildConfig.ENABLE_PUSH && pushOptions != null && (pushOptions.equals(ServerConfig.PUSH_OPTIONS_MQTT_WORKER)
++                || pushOptions.equals(ServerConfig.PUSH_OPTIONS_MQTT_ALARM))) {
++            try {
++                URL url = new URL(settingsHelper.getBaseUrl());
++                Runnable nextRunnable = () -> {
++                    checkFactoryReset();
++                };
++                PushNotificationMqttWrapper.getInstance().connect(context, url.getHost(), BuildConfig.MQTT_PORT,
++                        pushOptions, keepaliveTime, settingsHelper.getDeviceId(), nextRunnable, nextRunnable);
++            } catch (Exception e) {
++                e.printStackTrace();
++                checkFactoryReset();
++            }
++        } else {
++            checkFactoryReset();
++        }
++    }
++
++    private void checkFactoryReset() {
++        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
++        if (config != null && config.getFactoryReset() != null && config.getFactoryReset()) {
++            // We got a factory reset request, let's confirm and erase everything!
++            RemoteLogger.log(context, Const.LOG_INFO, "Device reset by server request");
++            ConfirmDeviceResetTask confirmTask = new ConfirmDeviceResetTask(context) {
++                @Override
++                protected void onPostExecute( Integer result ) {
++                    // Do a factory reset if we can
++                    if (result == null || result != Const.TASK_SUCCESS ) {
++                        RemoteLogger.log(context, Const.LOG_WARN, "Failed to confirm device reset on server");
++                    } else if (Utils.checkAdminMode(context)) {
++                        // no_factory_reset restriction doesn't prevent against admin's reset action
++                        // So we do not need to release this restriction prior to resetting the device
++                        if (!Utils.factoryReset(context)) {
++                            RemoteLogger.log(context, Const.LOG_WARN, "Device reset failed");
++                        }
++                    } else {
++                        RemoteLogger.log(context, Const.LOG_WARN, "Device reset failed: no permissions");
++                    }
++                    // If we can't, proceed the initialization flow
++                    checkRemoteReboot();
++                }
++            };
++
++            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(context, true, true);
++            deviceInfo.setFactoryReset(Utils.checkAdminMode(context));
++            confirmTask.execute(deviceInfo);
++
++        } else {
++            checkRemoteReboot();
++        }
++    }
++
++    private void checkRemoteReboot() {
++        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
++        if (config != null && config.getReboot() != null && config.getReboot()) {
++            // Log and confirm reboot before rebooting
++            RemoteLogger.log(context, Const.LOG_INFO, "Rebooting by server request");
++            ConfirmRebootTask confirmTask = new ConfirmRebootTask(context) {
++                @Override
++                protected void onPostExecute( Integer result ) {
++                    if (result == null || result != Const.TASK_SUCCESS ) {
++                        RemoteLogger.log(context, Const.LOG_WARN, "Failed to confirm reboot on server");
++                    } else if (Utils.checkAdminMode(context)) {
++                        if (!Utils.reboot(context)) {
++                            RemoteLogger.log(context, Const.LOG_WARN, "Reboot failed");
++                        }
++                    } else {
++                        RemoteLogger.log(context, Const.LOG_WARN, "Reboot failed: no permissions");
++                    }
++                    checkPasswordReset();
++                }
++            };
++
++            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(context, true, true);
++            confirmTask.execute(deviceInfo);
++
++        } else {
++            checkPasswordReset();
++        }
++
++    }
++
++    private void checkPasswordReset() {
++        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
++        if (config != null && config.getPasswordReset() != null) {
++            if (Utils.passwordReset(context, config.getPasswordReset())) {
++                RemoteLogger.log(context, Const.LOG_INFO, "Password successfully changed");
++            } else {
++                RemoteLogger.log(context, Const.LOG_WARN, "Failed to reset password");
++            }
++
++            ConfirmPasswordResetTask confirmTask = new ConfirmPasswordResetTask(context) {
++                @Override
++                protected void onPostExecute( Integer result ) {
++                    setDefaultLauncher();
++                }
++            };
++
++            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(context, true, true);
++            confirmTask.execute(deviceInfo);
++
++        } else {
++            setDefaultLauncher();
++        }
++    }
++
++    private void setDefaultLauncher() {
++        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
++        if (Utils.isDeviceOwner(context) && config != null) {
++            // "Run default launcher" means we should not set Headwind MDM as a default launcher
++            // and clear the setting if it has been already set
++            boolean needSetLauncher = (config.getRunDefaultLauncher() == null || !config.getRunDefaultLauncher());
++            String defaultLauncher = Utils.getDefaultLauncher(context);
++
++            // As per the documentation, setting the default preferred activity should not be done on the main thread
++            new AsyncTask<Void, Void, Void>() {
++                @Override
++                protected Void doInBackground(Void... voids) {
++                    if (needSetLauncher && !context.getPackageName().equalsIgnoreCase(defaultLauncher)) {
++                        Utils.setDefaultLauncher(context);
++                    } else if (!needSetLauncher && context.getPackageName().equalsIgnoreCase(defaultLauncher)) {
++                        Utils.clearDefaultLauncher(context);
++                    }
++                    return null;
++                }
++
++                @Override
++                protected void onPostExecute(Void v) {
++                    updateLocationService();
++                }
++            }.execute();
++            return;
++        }
++        updateLocationService();
++    }
++
++    private void updateLocationService() {
++        if (uiNotifier != null) {
++            uiNotifier.onPoliciesUpdated();
++        }
++        // onPoliciesUpdated() method contents
++        // startLocationServiceWithRetry();
++        checkAndUpdateFiles();
++    }
++
++    private void checkAndUpdateFiles() {
++        new AsyncTask<Void, Void, Void>() {
++            @Override
++            protected Void doInBackground(Void... voids) {
++                ServerConfig config = settingsHelper.getConfig();
++                // This may be a long procedure due to checksum calculation so execute it in the background thread
++                InstallUtils.generateFilesForInstallList(context, config.getFiles(), filesForInstall);
++                return null;
++            }
++
++            @Override
++            protected void onPostExecute(Void v) {
++                loadAndInstallFiles();
++            }
++        }.execute();
++    }
++
++    public static class RemoteFileStatus {
++        public RemoteFile remoteFile;
++        public boolean installed;
++    }
++
++    private void loadAndInstallFiles() {
++        if ( filesForInstall.size() > 0 ) {
++            RemoteFile remoteFile = filesForInstall.remove(0);
++
++            new AsyncTask<RemoteFile, Void, RemoteFileStatus>() {
++
++                @Override
++                protected RemoteFileStatus doInBackground(RemoteFile... remoteFiles) {
++                    final RemoteFile remoteFile = remoteFiles[0];
++                    RemoteFileStatus remoteFileStatus = null;
++
++                    if (remoteFile.isRemove()) {
++                        RemoteLogger.log(context, Const.LOG_DEBUG, "Removing file: " + remoteFile.getPath());
++                        File file = new File(Environment.getExternalStorageDirectory(), remoteFile.getPath());
++                        try {
++                            file.delete();
++                            RemoteFileTable.deleteByPath(DatabaseHelper.instance(context).getWritableDatabase(), remoteFile.getPath());
++                        } catch (Exception e) {
++                            RemoteLogger.log(context, Const.LOG_WARN, "Failed to remove file: " +
++                                    remoteFile.getPath() + ": " + e.getMessage());
++                            e.printStackTrace();
++                        }
++
++                    } else if (remoteFile.getUrl() != null) {
++                        if (uiNotifier != null) {
++                            uiNotifier.onFileDownloading(remoteFile);
++                        }
++                        // onFileDownloading() method contents
++                        // updateMessageForFileDownloading(remoteFile.getPath());
++
++                        File file = null;
++                        try {
++                            RemoteLogger.log(context, Const.LOG_DEBUG, "Downloading file: " + remoteFile.getPath());
++                            file = InstallUtils.downloadFile(context, remoteFile.getUrl(),
++                                    new InstallUtils.DownloadProgress() {
++                                        @Override
++                                        public void onDownloadProgress(final int progress, final long total, final long current) {
++                                            if (uiNotifier != null) {
++                                                uiNotifier.onDownloadProgress(progress, total, current);
++                                            }
++                                            // onDownloadProgress() method contents
++                                            /*handler.post(new Runnable() {
++                                                @Override
++                                                public void run() {
++                                                    binding.progress.setMax(100);
++                                                    binding.progress.setProgress(progress);
++
++                                                    binding.setFileLength(total);
++                                                    binding.setDownloadedLength(current);
++                                                }
++                                            });*/
++                                        }
++                                    });
++                        } catch (Exception e) {
++                            RemoteLogger.log(context, Const.LOG_WARN,
++                                    "Failed to download file " + remoteFile.getPath() + ": " + e.getMessage());
++                            e.printStackTrace();
++                        }
++
++                        remoteFileStatus = new RemoteFileStatus();
++                        remoteFileStatus.remoteFile = remoteFile;
++                        if (file != null) {
++                            File finalFile = new File(Environment.getExternalStorageDirectory(), remoteFile.getPath());
++                            try {
++                                if (finalFile.exists()) {
++                                    finalFile.delete();
++                                }
++                                if (!remoteFile.isVarContent()) {
++                                    FileUtils.moveFile(file, finalFile);
++                                } else {
++                                    createFileFromTemplate(file, finalFile, settingsHelper.getDeviceId(), settingsHelper.getConfig());
++                                }
++                                RemoteFileTable.insert(DatabaseHelper.instance(context).getWritableDatabase(), remoteFile);
++                                remoteFileStatus.installed = true;
++                            } catch (Exception e) {
++                                RemoteLogger.log(context, Const.LOG_WARN,
++                                        "Failed to create file " + remoteFile.getPath() + ": " + e.getMessage());
++                                e.printStackTrace();
++                                remoteFileStatus.installed = false;
++                            }
++                        } else {
++                            remoteFileStatus.installed = false;
++                        }
++                    }
++
++                    return remoteFileStatus;
++                }
++
++                @Override
++                protected void onPostExecute(RemoteFileStatus fileStatus) {
++                    if (fileStatus != null) {
++                        if (!fileStatus.installed) {
++                            filesForInstall.add( 0, fileStatus.remoteFile );
++                            if (uiNotifier != null) {
++                                uiNotifier.onFileDownloadError(fileStatus.remoteFile);
++                            }
++                            // onFileDownloadError() method contents
++                            /*
++                            if (!ProUtils.kioskModeRequired(context)) {
++                                // Notify the error dialog that we're downloading a file, not an app
++                                downloadingFile = true;
++                                createAndShowFileNotDownloadedDialog(fileStatus.remoteFile.getUrl());
++                                binding.setDownloading( false );
++                            } else {
++                                // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
++                                // Note: view is not used in this method so just pass null there
++                                confirmDownloadFailureClicked(null);
++                            }
++                             */
++                            return;
++                        }
++                    }
++                    Log.i(Const.LOG_TAG, "loadAndInstallFiles(): proceed to next file");
++                    loadAndInstallFiles();
++                }
++
++            }.execute(remoteFile);
++        } else {
++            Log.i(Const.LOG_TAG, "Proceed to application update");
++            checkAndUpdateApplications();
++        }
++    }
++
++    private void checkAndUpdateApplications() {
++        Log.i(Const.LOG_TAG, "checkAndUpdateApplications(): starting update applications");
++        if (uiNotifier != null) {
++            uiNotifier.onAppUpdateStart();
++        }
++        // onAppUpdateStart() method contents
++        /*
++        binding.setMessage( getString( R.string.main_activity_applications_update ) );
++        configInitialized = true;
++         */
++        configInitializing = false;
++
++        ServerConfig config = settingsHelper.getConfig();
++        InstallUtils.generateApplicationsForInstallList(context, config.getApplications(), applicationsForInstall);
++
++        Log.i(Const.LOG_TAG, "checkAndUpdateApplications(): list size=" + applicationsForInstall.size());
++
++        registerAppInstallReceiver();
++        loadAndInstallApplications();
++    }
++
++    private class ApplicationStatus {
++        public Application application;
++        public boolean installed;
++    }
++
++    // Here we avoid ConcurrentModificationException by executing all operations with applicationForInstall list in a main thread
++    private void loadAndInstallApplications() {
++        if ( applicationsForInstall.size() > 0 ) {
++            Application application = applicationsForInstall.remove(0);
++
++            new AsyncTask<Application, Void, ApplicationStatus>() {
++
++                @Override
++                protected ApplicationStatus doInBackground(Application... applications) {
++                    final Application application = applications[0];
++                    ApplicationStatus applicationStatus = null;
++
++                    if (application.isRemove()) {
++                        // Remove the app
++                        RemoteLogger.log(context, Const.LOG_DEBUG, "Removing app: " + application.getPkg());
++                        if (uiNotifier != null) {
++                            uiNotifier.onAppRemoving(application);
++                        }
++                        // onAppRemoving() method contents
++                        //updateMessageForApplicationRemoving( application.getName() );
++                        uninstallApplication(application.getPkg());
++
++                    } else if ( application.getUrl() != null && !application.getUrl().startsWith("market://details") ) {
++                        if (uiNotifier != null) {
++                            uiNotifier.onAppDownloading(application);
++                        }
++                        // onAppDownloading() method contents
++                        //updateMessageForApplicationDownloading(application.getName());
++
++                        File file = null;
++                        try {
++                            RemoteLogger.log(context, Const.LOG_DEBUG, "Downloading app: " + application.getPkg());
++                            file = InstallUtils.downloadFile(context, application.getUrl(),
++                                    new InstallUtils.DownloadProgress() {
++                                        @Override
++                                        public void onDownloadProgress(final int progress, final long total, final long current) {
++                                            if (uiNotifier != null) {
++                                                uiNotifier.onDownloadProgress(progress, total, current);
++                                            }
++                                            /*
++                                            handler.post(new Runnable() {
++                                                @Override
++                                                public void run() {
++                                                    binding.progress.setMax(100);
++                                                    binding.progress.setProgress(progress);
++
++                                                    binding.setFileLength(total);
++                                                    binding.setDownloadedLength(current);
++                                                }
++                                            });
++                                             */
++                                        }
++                                    });
++                        } catch (Exception e) {
++                            RemoteLogger.log(context, Const.LOG_WARN, "Failed to download app " + application.getPkg() + ": " + e.getMessage());
++                            e.printStackTrace();
++                        }
++
++                        applicationStatus = new ApplicationStatus();
++                        applicationStatus.application = application;
++                        if (file != null) {
++                            if (uiNotifier != null) {
++                                uiNotifier.onAppInstalling(application);
++                            }
++                            // onAppInstalling() method contents
++                            //updateMessageForApplicationInstalling(application.getName());
++                            installApplication(file, application.getPkg(), application.getVersion());
++                            applicationStatus.installed = true;
++                        } else {
++                            applicationStatus.installed = false;
++                        }
++                    } else if (application.getUrl().startsWith("market://details")) {
++                        RemoteLogger.log(context, Const.LOG_INFO, "Installing app " + application.getPkg() + " from Google Play");
++                        installApplicationFromPlayMarket(application.getUrl(), application.getPkg());
++                        applicationStatus = new ApplicationStatus();
++                        applicationStatus.application = application;
++                        applicationStatus.installed = true;
++                    } else {
++                        handler.post( new Runnable() {
++                            @Override
++                            public void run() {
++                                Log.i(Const.LOG_TAG, "loadAndInstallApplications(): proceed to next app");
++                                loadAndInstallApplications();
++                            }
++                        } );
++                    }
++
++                    return applicationStatus;
++                }
++
++                @Override
++                protected void onPostExecute(ApplicationStatus applicationStatus) {
++                    if (applicationStatus != null) {
++                        if (applicationStatus.installed) {
++                            if (applicationStatus.application.isRunAfterInstall()) {
++                                applicationsForRun.add(applicationStatus.application);
++                            }
++                        } else {
++                            applicationsForInstall.add( 0, applicationStatus.application );
++                            if (uiNotifier != null) {
++                                uiNotifier.onAppDownloadError(applicationStatus.application);
++                            }
++                            // onAppDownloadError() method contents
++                            /*
++                            if (!ProUtils.kioskModeRequired(MainActivity.this)) {
++                                // Notify the error dialog that we're downloading an app
++                                downloadingFile = false;
++                                createAndShowFileNotDownloadedDialog(applicationStatus.application.getName());
++                                binding.setDownloading( false );
++                            } else {
++                                // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
++                                // Note: view is not used in this method so just pass null there
++                                confirmDownloadFailureClicked(null);
++                            }
++                             */
++                        }
++                    }
++                }
++
++            }.execute(application);
++        } else {
++            unregisterAppInstallReceiver();
++            lockRestrictions();
++        }
++    }
++
++    private void lockRestrictions() {
++        if (settingsHelper.getConfig() != null && settingsHelper.getConfig().getRestrictions() != null) {
++            Utils.lockUserRestrictions(context, settingsHelper.getConfig().getRestrictions());
++        }
++        setActions();
++    }
++
++    private void setActions() {
++        final ServerConfig config = settingsHelper.getConfig();
++        // As per the documentation, setting the default preferred activity should not be done on the main thread
++        new AsyncTask<Void, Void, Void>() {
++            @Override
++            protected Void doInBackground(Void... voids) {
++                // If kiosk browser is installed, make it a default browser
++                // This is a temporary solution! Perhaps user wants only to open specific hosts / schemes
++                if (Utils.isDeviceOwner(context)) {
++                    if (config.getActions() != null && config.getActions().size() > 0) {
++                        for (Action action : config.getActions()) {
++                            Utils.setAction(context, action);
++                        }
++                    }
++                }
++                return null;
++            }
++
++            @Override
++            protected void onPostExecute(Void v) {
++                if (uiNotifier != null) {
++                    uiNotifier.onConfigUpdateComplete();
++                }
++                // onConfigUpdateComplete() method contents
++                /*
++                Log.i(Const.LOG_TAG, "Showing content from setActions()");
++                showContent(settingsHelper.getConfig());
++                 */
++            }
++        }.execute();
++    }
++
++
++    private void registerAppInstallReceiver() {
++        // Here we handle the completion of the silent app installation in the device owner mode
++        // These intents are not delivered to LocalBroadcastManager
++        if (appInstallReceiver == null) {
++            appInstallReceiver = new BroadcastReceiver() {
++                @Override
++                public void onReceive(Context context, Intent intent) {
++                    if (intent.getAction().equals(Const.ACTION_INSTALL_COMPLETE)) {
++                        int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0);
++                        switch (status) {
++                            case PackageInstaller.STATUS_PENDING_USER_ACTION:
++                                RemoteLogger.log(context, Const.LOG_INFO, "Request user confirmation to install");
++                                Intent confirmationIntent = intent.getParcelableExtra(Intent.EXTRA_INTENT);
++
++                                // Fix the Intent Redirection vulnerability
++                                // https://support.google.com/faqs/answer/9267555
++                                ComponentName name = confirmationIntent.resolveActivity(context.getPackageManager());
++                                int flags = confirmationIntent.getFlags();
++                                if (name != null && !name.getPackageName().equals(context.getPackageName()) &&
++                                        (flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0 &&
++                                        (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) {
++                                    confirmationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++                                    try {
++                                        context.startActivity(confirmationIntent);
++                                    } catch (Exception e) {
++                                    }
++                                } else {
++                                    Log.e(Const.LOG_TAG, "Intent redirection detected, ignoring the fault intent!");
++                                }
++                                break;
++                            case PackageInstaller.STATUS_SUCCESS:
++                                RemoteLogger.log(context, Const.LOG_DEBUG, "App installed successfully");
++                                String packageName = intent.getStringExtra(Const.PACKAGE_NAME);
++                                if (packageName != null) {
++                                    Log.i(Const.LOG_TAG, "Install complete: " + packageName);
++                                    File file = pendingInstallations.get(packageName);
++                                    if (file != null) {
++                                        pendingInstallations.remove(packageName);
++                                        InstallUtils.deleteTempApk(file);
++                                    }
++                                    if (Utils.isDeviceOwner(context)) {
++                                        // Always grant all dangerous rights to the app
++                                        // TODO: in the future, the rights must be configurable on the server
++                                        Utils.autoGrantRequestedPermissions(context, packageName);
++                                    }
++                                    if (uiNotifier != null) {
++                                        uiNotifier.onAppInstallComplete(packageName);
++                                    }
++                                }
++                                break;
++                            default:
++                                // Installation failure
++                                String extraMessage = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
++                                String statusMessage = InstallUtils.getPackageInstallerStatusMessage(status);
++                                String logRecord = "Install failed: " + statusMessage;
++                                if (extraMessage != null && extraMessage.length() > 0) {
++                                    logRecord += ", extra: " + extraMessage;
++                                }
++                                RemoteLogger.log(context, Const.LOG_ERROR, logRecord);
++                                packageName = intent.getStringExtra(Const.PACKAGE_NAME);
++                                if (packageName != null) {
++                                    File file = pendingInstallations.get(packageName);
++                                    if (file != null) {
++                                        pendingInstallations.remove(packageName);
++                                        InstallUtils.deleteTempApk(file);
++                                    }
++                                }
++
++                                break;
++                        }
++                        loadAndInstallApplications();
++                    }
++                }
++            };
++        }
++
++        context.registerReceiver(appInstallReceiver, new IntentFilter(Const.ACTION_INSTALL_COMPLETE));
++    }
++
++    private void unregisterAppInstallReceiver() {
++        if (appInstallReceiver != null) {
++            context.unregisterReceiver(appInstallReceiver);
++            appInstallReceiver = null;
++        }
++    }
++
++    private void installApplicationFromPlayMarket(final String uri, final String packageName) {
++        RemoteLogger.log(context, Const.LOG_DEBUG, "Asking user to install app " + packageName);
++        Intent intent = new Intent(Intent.ACTION_VIEW);
++        intent.setData(Uri.parse(uri));
++        try {
++            context.startActivity(intent);
++        } catch (Exception e) {
++            RemoteLogger.log(context, Const.LOG_DEBUG, "Failed to run app install activity for " + packageName);
++        }
++    }
++
++    // This function is called from a background thread
++    private void installApplication( File file, final String packageName, final String version ) {
++        if (packageName.equals(context.getPackageName()) &&
++                context.getPackageManager().getLaunchIntentForPackage(Const.LAUNCHER_RESTARTER_PACKAGE_ID) != null) {
++            // Restart self in EMUI: there's no auto restart after update in EMUI, we must use a helper app
++            startLauncherRestarter();
++        }
++        pendingInstallations.put(packageName, file);
++        String versionData = version == null || version.equals("0") ? "" : " " + version;
++        if (Utils.isDeviceOwner(context) || BuildConfig.SYSTEM_PRIVILEGES) {
++            RemoteLogger.log(context, Const.LOG_INFO, "Silently installing app " + packageName + versionData);
++            InstallUtils.silentInstallApplication(context, file, packageName, new InstallUtils.InstallErrorHandler() {
++                @Override
++                public void onInstallError() {
++                    Log.i(Const.LOG_TAG, "installApplication(): error installing app " + packageName);
++                    pendingInstallations.remove(packageName);
++                    if (file.exists()) {
++                        file.delete();
++                    }
++                    if (uiNotifier != null) {
++                        uiNotifier.onAppInstallError(packageName);
++                    }
++                    /*
++                    handler.post(new Runnable() {
++                        @Override
++                        public void run() {
++                            new AlertDialog.Builder(MainActivity.this)
++                                    .setMessage(getString(R.string.install_error) + " " + packageName)
++                                    .setPositiveButton(R.string.dialog_administrator_mode_continue, new DialogInterface.OnClickListener() {
++                                        @Override
++                                        public void onClick(DialogInterface dialog, int which) {
++                                            checkAndStartLauncher();
++                                        }
++                                    })
++                                    .create()
++                                    .show();
++                        }
++                    });
++                     */
++                }
++            });
++        } else {
++            RemoteLogger.log(context, Const.LOG_INFO, "Asking user to install app " + packageName + versionData);
++            InstallUtils.requestInstallApplication(context, file, new InstallUtils.InstallErrorHandler() {
++                @Override
++                public void onInstallError() {
++                    pendingInstallations.remove(packageName);
++                    if (file.exists()) {
++                        file.delete();
++                    }
++                    handler.post(new Runnable() {
++                        @Override
++                        public void run() {
++                            loadAndInstallApplications();
++                        }
++                    });
++                }
++            });
++        }
++    }
++
++    private void uninstallApplication(final String packageName) {
++        if (Utils.isDeviceOwner(context) || BuildConfig.SYSTEM_PRIVILEGES) {
++            RemoteLogger.log(context, Const.LOG_INFO, "Silently uninstall app " + packageName);
++            InstallUtils.silentUninstallApplication(context, packageName);
++        } else {
++            RemoteLogger.log(context, Const.LOG_INFO, "Asking user to uninstall app " + packageName);
++            InstallUtils.requestUninstallApplication(context, packageName);
++        }
++    }
++
++    // The following algorithm of launcher restart works in EMUI:
++    // Run EMUI_LAUNCHER_RESTARTER activity once and send the old version number to it.
++    // The restarter application will check the launcher version each second, and restart it
++    // when it is changed.
++    private void startLauncherRestarter() {
++        // Sending an intent before updating, otherwise the launcher may be terminated at any time
++        Intent intent = context.getPackageManager().getLaunchIntentForPackage(Const.LAUNCHER_RESTARTER_PACKAGE_ID);
++        if (intent == null) {
++            Log.i("LauncherRestarter", "No restarter app, please add it in the config!");
++            return;
++        }
++        intent.putExtra(Const.LAUNCHER_RESTARTER_OLD_VERSION, BuildConfig.VERSION_NAME);
++        context.startActivity(intent);
++        Log.i("LauncherRestarter", "Calling launcher restarter from the launcher");
++    }
++
++    // Create a new file from the template file
++    // (replace DEVICE_NUMBER, IMEI, CUSTOM* by their values)
++    private void createFileFromTemplate(File srcFile, File dstFile, String deviceId, ServerConfig config) throws IOException {
++        // We are supposed to process only small text files
++        // So here we are reading the whole file, replacing variables, and save the content
++        // It is not optimal for large files - it would be better to replace in a stream (how?)
++        String content = FileUtils.readFileToString(srcFile);
++        content = content.replace("DEVICE_NUMBER", deviceId)
++                .replace("CUSTOM1", config.getCustom1() != null ? config.getCustom1() : "")
++                .replace("CUSTOM2", config.getCustom2() != null ? config.getCustom2() : "")
++                .replace("CUSTOM3", config.getCustom3() != null ? config.getCustom3() : "");
++        FileUtils.writeStringToFile(dstFile, content);
++    }
++
++    public boolean isPendingAppInstall() {
++        return applicationsForInstall.size() > 0;
++    }
++
++    public void repeatDownloadFiles() {
++        loadAndInstallFiles();
++    }
++
++    public void repeatDownloadApps() {
++        loadAndInstallApplications();
++    }
++
++    public void skipDownloadFiles() {
++        if (filesForInstall.size() > 0) {
++            RemoteFile remoteFile = filesForInstall.remove(0);
++            settingsHelper.removeRemoteFile(remoteFile);
++        }
++        loadAndInstallFiles();
++    }
++
++    public void skipDownloadApps() {
++        if (applicationsForInstall.size() > 0) {
++            Application application = applicationsForInstall.remove(0);
++            // Mark this app not to download any more until the config is refreshed
++            // But we should not remove the app from a list because it may be
++            // already installed!
++            settingsHelper.removeApplicationUrl(application);
++        }
++        loadAndInstallApplications();
++    }
++}
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+index 05b86ab..8d9a16f 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/MigrationHelper.java
+@@ -2,6 +2,7 @@ package com.hmdm.launcher.helper;
+ 
+ import android.content.Context;
+ import android.os.AsyncTask;
++import android.os.Build;
+ 
+ import com.hmdm.launcher.BuildConfig;
+ import com.hmdm.launcher.Const;
+@@ -63,7 +64,7 @@ public class MigrationHelper {
+                 }
+ 
+                 try {
+-                    response = newServer.getServerConfig(serverUrl.serverProject, deviceId, signature).execute();
++                    response = newServer.getServerConfig(serverUrl.serverProject, deviceId, signature, Build.CPU_ABI).execute();
+                 } catch (Exception e) {
+                     e.printStackTrace();
+                 }
+diff --git a/app/src/main/java/com/hmdm/launcher/helper/SettingsHelper.java b/app/src/main/java/com/hmdm/launcher/helper/SettingsHelper.java
+index 0b24982..0861b45 100644
+--- a/app/src/main/java/com/hmdm/launcher/helper/SettingsHelper.java
++++ b/app/src/main/java/com/hmdm/launcher/helper/SettingsHelper.java
+@@ -51,6 +51,7 @@ public class SettingsHelper {
+     private static final String PREF_KEY_IP_ADDRESS = ".helpers.IP_ADDRESS";
+     private static final String PREF_QR_PROVISIONING = ".helpers.QR_PROVISIONING";
+     private static final String PREF_CFG_UPDATE_TIMESTAMP = ".helpers.CFG_UPDATE_TIMESTAMP";
++    private static final String PREF_KEY_ACTIVITY_RUNNING = ".helpers.ACTIVITY_RUNNING";
+     // This prefix is for the compatibility with a legacy package name
+     private static String PACKAGE_NAME;
+ 
+@@ -147,6 +148,14 @@ public class SettingsHelper {
+         return sharedPreferences.edit().putString(PACKAGE_NAME + PREF_KEY_IP_ADDRESS, externalIp ).commit();
+     }
+ 
++    public boolean isMainActivityRunning() {
++        return sharedPreferences.getBoolean(PACKAGE_NAME + PREF_KEY_ACTIVITY_RUNNING, false );
++    }
++
++    public boolean setMainActivityRunning(boolean running) {
++        return sharedPreferences.edit().putBoolean(PACKAGE_NAME + PREF_KEY_ACTIVITY_RUNNING, running ).commit();
++    }
++
+     public long getConfigUpdateTimestamp() {
+         return sharedPreferences.getLong(PACKAGE_NAME + PREF_CFG_UPDATE_TIMESTAMP, 0);
+     }
+diff --git a/app/src/main/java/com/hmdm/launcher/json/ServerConfig.java b/app/src/main/java/com/hmdm/launcher/json/ServerConfig.java
+index 083b337..818aa07 100644
+--- a/app/src/main/java/com/hmdm/launcher/json/ServerConfig.java
++++ b/app/src/main/java/com/hmdm/launcher/json/ServerConfig.java
+@@ -92,6 +92,8 @@ public class ServerConfig {
+     private boolean lockSafeSettings;
+     private boolean disableScreenshots;
+ 
++    private boolean showWifi;
++
+     private List<Application> applications = new LinkedList();
+ 
+     private List<ApplicationSetting> applicationSettings = new LinkedList();
+@@ -515,6 +517,14 @@ public class ServerConfig {
+         this.disableScreenshots = disableScreenshots;
+     }
+ 
++    public boolean isShowWifi() {
++        return showWifi;
++    }
++
++    public void setShowWifi(boolean showWifi) {
++        this.showWifi = showWifi;
++    }
++
+     public String getRestrictions() {
+         return restrictions;
+     }
+diff --git a/app/src/main/java/com/hmdm/launcher/pro/ProUtils.java b/app/src/main/java/com/hmdm/launcher/pro/ProUtils.java
+index 324f9e3..a06275e 100644
+--- a/app/src/main/java/com/hmdm/launcher/pro/ProUtils.java
++++ b/app/src/main/java/com/hmdm/launcher/pro/ProUtils.java
+@@ -85,7 +85,7 @@ public class ProUtils {
+     }
+ 
+     // Start COSU kiosk mode
+-    public static boolean startCosuKioskMode(String kioskApp, Activity activity) {
++    public static boolean startCosuKioskMode(String kioskApp, Activity activity, boolean enableSettings) {
+         // Stub
+         return false;
+     }
+diff --git a/app/src/main/java/com/hmdm/launcher/server/ServerService.java b/app/src/main/java/com/hmdm/launcher/server/ServerService.java
+index efd6d1d..c0426d8 100644
+--- a/app/src/main/java/com/hmdm/launcher/server/ServerService.java
++++ b/app/src/main/java/com/hmdm/launcher/server/ServerService.java
+@@ -43,19 +43,34 @@ import retrofit2.http.Path;
+ 
+ public interface ServerService {
+ 
++    static final String REQUEST_SIGNATURE_HEADER = "X-Request-Signature";
++    static final String CPU_ARCH_HEADER = "X-CPU-Arch";
++
+     @POST("{project}/rest/public/sync/configuration/{number}")
+-    Call<ResponseBody> createAndGetRawServerConfig(@Path("project") String project, @Path("number") String number,
+-            @Header("X-Request-Signature") String signature, @Body DeviceCreateOptions createOptions);
++    Call<ResponseBody> createAndGetRawServerConfig(@Path("project") String project,
++                                                   @Path("number") String number,
++                                                   @Header(REQUEST_SIGNATURE_HEADER) String signature,
++                                                   @Header(CPU_ARCH_HEADER) String cpuArch,
++                                                   @Body DeviceCreateOptions createOptions);
+ 
+     @GET("{project}/rest/public/sync/configuration/{number}")
+-    Call<ResponseBody> getRawServerConfig(@Path("project") String project, @Path("number") String number, @Header("X-Request-Signature") String signature);
++    Call<ResponseBody> getRawServerConfig(@Path("project") String project,
++                                          @Path("number") String number,
++                                          @Header(REQUEST_SIGNATURE_HEADER) String signature,
++                                          @Header(CPU_ARCH_HEADER) String cpuArch);
+ 
+     @POST("{project}/rest/public/sync/configuration/{number}")
+-    Call<ServerConfigResponse> createAndGetServerConfig(@Path("project") String project, @Path("number") String number,
+-            @Header("X-Request-Signature") String signature, @Body DeviceCreateOptions createOptions);
++    Call<ServerConfigResponse> createAndGetServerConfig(@Path("project") String project,
++                                                        @Path("number") String number,
++                                                        @Header(REQUEST_SIGNATURE_HEADER) String signature,
++                                                        @Header(CPU_ARCH_HEADER) String cpuArch,
++                                                        @Body DeviceCreateOptions createOptions);
+ 
+     @GET("{project}/rest/public/sync/configuration/{number}")
+-    Call<ServerConfigResponse> getServerConfig(@Path("project") String project, @Path("number") String number, @Header("X-Request-Signature") String signature);
++    Call<ServerConfigResponse> getServerConfig(@Path("project") String project,
++                                               @Path("number") String number,
++                                               @Header(REQUEST_SIGNATURE_HEADER) String signature,
++                                               @Header(CPU_ARCH_HEADER) String cpuArch);
+ 
+     @POST("{project}/rest/public/sync/info")
+     @Headers("Content-Type: application/json")
+diff --git a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+index acabf4e..5c8faa2 100644
+--- a/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
++++ b/app/src/main/java/com/hmdm/launcher/task/GetServerConfigTask.java
+@@ -138,14 +138,14 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+         Response<ServerConfigResponse> response = null;
+         try {
+             response = serverService.
+-                    getServerConfig(settingsHelper.getServerProject(), deviceId, signature).execute();
++                    getServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI).execute();
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+ 
+         if (response == null) {
+             response = secondaryServerService.
+-                    getServerConfig(settingsHelper.getServerProject(), deviceId, signature).execute();
++                    getServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI).execute();
+         }
+ 
+         if (response.isSuccessful() && Const.STATUS_OK.equals(response.body().getStatus()) && response.body().getData() != null) {
+@@ -162,14 +162,14 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+ 
+         try {
+             response = serverService.
+-                    getRawServerConfig(settingsHelper.getServerProject(), deviceId, signature).execute();
++                    getRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI).execute();
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+ 
+         if (response == null) {
+             response = secondaryServerService.
+-                    getRawServerConfig(settingsHelper.getServerProject(), deviceId, signature).execute();
++                    getRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI).execute();
+         }
+ 
+         if (response.isSuccessful()) {
+@@ -206,14 +206,14 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+         Response<ServerConfigResponse> response = null;
+         try {
+             response = serverService.
+-                    createAndGetServerConfig(settingsHelper.getServerProject(), deviceId, signature, createOptions).execute();
++                    createAndGetServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI, createOptions).execute();
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+ 
+         if (response == null) {
+             response = secondaryServerService.
+-                    createAndGetServerConfig(settingsHelper.getServerProject(), deviceId, signature, createOptions).execute();
++                    createAndGetServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI, createOptions).execute();
+         }
+ 
+         if (response.isSuccessful() && Const.STATUS_OK.equals(response.body().getStatus()) && response.body().getData() != null) {
+@@ -231,14 +231,14 @@ public class GetServerConfigTask extends AsyncTask< Void, Integer, Integer > {
+ 
+         try {
+             response = serverService.
+-                    createAndGetRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, createOptions).execute();
++                    createAndGetRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI, createOptions).execute();
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+ 
+         if (response == null) {
+             response = secondaryServerService.
+-                    createAndGetRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, createOptions).execute();
++                    createAndGetRawServerConfig(settingsHelper.getServerProject(), deviceId, signature, Build.CPU_ABI, createOptions).execute();
+         }
+ 
+         if (response.isSuccessful()) {
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/AppListAdapter.java b/app/src/main/java/com/hmdm/launcher/ui/AppListAdapter.java
+deleted file mode 100644
+index 4d09ff7..0000000
+--- a/app/src/main/java/com/hmdm/launcher/ui/AppListAdapter.java
++++ /dev/null
+@@ -1,354 +0,0 @@
+-/*
+- * Headwind MDM: Open Source Android MDM Software
+- * https://h-mdm.com
+- *
+- * Copyright (C) 2019 Headwind Solutions LLC (http://h-sms.com)
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.hmdm.launcher.ui;
+-
+-import android.content.ActivityNotFoundException;
+-import android.content.ComponentName;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.pm.ApplicationInfo;
+-import android.graphics.Color;
+-import android.graphics.drawable.GradientDrawable;
+-import android.net.Uri;
+-import android.os.Build;
+-import android.view.KeyEvent;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.Toast;
+-
+-import androidx.annotation.NonNull;
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-import com.hmdm.launcher.Const;
+-import com.hmdm.launcher.R;
+-import com.hmdm.launcher.databinding.ItemAppBinding;
+-import com.hmdm.launcher.helper.SettingsHelper;
+-import com.hmdm.launcher.json.Application;
+-import com.hmdm.launcher.json.ServerConfig;
+-import com.hmdm.launcher.util.AppInfo;
+-import com.hmdm.launcher.util.Utils;
+-import com.squareup.picasso.Picasso;
+-
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.Comparator;
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-
+-/**
+- * Created by Ivan Lozenko on 21.02.2017.
+- */
+-
+-public class AppListAdapter extends RecyclerView.Adapter<AppListAdapter.ViewHolder>{
+-
+-    private LayoutInflater layoutInflater;
+-    private List<AppInfo> items;
+-    private Map<Integer, AppInfo> shortcuts;        // Keycode -> Application, filled in getInstalledApps()
+-    private OnAppChooseListener listener;
+-    private Context context;
+-    private SettingsHelper settingsHelper;
+-    private int spanCount;
+-    private int selectedItem = -1;
+-    private RecyclerView.LayoutManager layoutManager;
+-    private GradientDrawable selectedItemBorder;
+-
+-    public AppListAdapter(Context context, OnAppChooseListener listener){
+-        layoutInflater = LayoutInflater.from(context);
+-        items = getInstalledApps(context);
+-
+-        shortcuts = new HashMap<>();
+-        for (AppInfo item : items) {
+-            if (item.keyCode != null) {
+-                shortcuts.put(item.keyCode, item);
+-            }
+-        }
+-
+-        this.listener = listener;
+-        this.context = context;
+-        this.settingsHelper = SettingsHelper.getInstance( context );
+-
+-        boolean isDarkBackground = true;
+-        ServerConfig config = settingsHelper.getConfig();
+-        if (config != null && config.getBackgroundColor() != null) {
+-            try {
+-                isDarkBackground = !Utils.isLightColor(Color.parseColor(config.getBackgroundColor()));
+-            } catch (Exception e) {
+-            }
+-        }
+-        selectedItemBorder = new GradientDrawable();
+-        selectedItemBorder.setColor(0); // transparent background
+-        selectedItemBorder.setStroke(2, isDarkBackground ? 0xa0ffffff : 0xa0000000); // white or black border with some transparency
+-    }
+-
+-    @Override
+-    public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+-        ViewHolder viewHolder = new ViewHolder(layoutInflater.inflate(R.layout.item_app, parent, false));
+-        viewHolder.binding.rootLinearLayout.setOnClickListener(onClickListener);
+-        return viewHolder;
+-    }
+-
+-    @Override
+-    public void onBindViewHolder(ViewHolder holder, int position) {
+-        AppInfo appInfo = items.get(position);
+-        holder.binding.rootLinearLayout.setTag(appInfo);
+-        holder.binding.textView.setText(appInfo.name);
+-
+-        if ( settingsHelper.getConfig().getTextColor() != null ) {
+-            try {
+-                holder.binding.textView.setTextColor(Color.parseColor(settingsHelper.getConfig().getTextColor()));
+-            } catch (Exception e) {
+-                // Invalid color
+-                e.printStackTrace();
+-            }
+-        }
+-
+-        try {
+-            Integer iconScale = settingsHelper.getConfig().getIconSize();
+-            if (iconScale == null) {
+-                iconScale = ServerConfig.DEFAULT_ICON_SIZE;
+-            }
+-            int iconSize = context.getResources().getDimensionPixelOffset(R.dimen.app_icon_size) * iconScale / 100;
+-            holder.binding.imageView.getLayoutParams().width = iconSize;
+-            holder.binding.imageView.getLayoutParams().height = iconSize;
+-            if (appInfo.iconUrl != null) {
+-                // Load the icon
+-                // TODO: for BuildConfig.TRUST_ANY_CERTIFICATE, use custom Picasso builder as in MainActivity.java
+-                Picasso.with(context).load(appInfo.iconUrl).into(holder.binding.imageView);
+-            } else {
+-                switch (appInfo.type) {
+-                    case AppInfo.TYPE_APP:
+-                        holder.binding.imageView.setImageDrawable(context.getPackageManager().getApplicationIcon(appInfo.packageName));
+-                        break;
+-                    case AppInfo.TYPE_WEB:
+-                        holder.binding.imageView.setImageDrawable(context.getResources().getDrawable(R.drawable.weblink));
+-                        break;
+-                }
+-            }
+-
+-            if(Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN) {
+-                holder.itemView.setBackgroundDrawable(position == selectedItem ? selectedItemBorder : null);
+-            } else {
+-                holder.itemView.setBackground(position == selectedItem ? selectedItemBorder : null);
+-            }
+-
+-        } catch (Exception e) {
+-            // Here we handle PackageManager.NameNotFoundException as well as
+-            // DeadObjectException (when a device is being turned off)
+-            e.printStackTrace();
+-            holder.binding.imageView.setImageResource(R.drawable.ic_android_white_50dp);
+-        }
+-    }
+-
+-    @Override
+-    public int getItemCount() {
+-        return items == null ? 0 : items.size();
+-    }
+-
+-    public void setSpanCount(int spanCount) {
+-        this.spanCount = spanCount;
+-    }
+-
+-    public boolean onKey(final int keyCode) {
+-        AppInfo shortcutAppInfo = shortcuts.get(new Integer(keyCode));
+-        if (shortcutAppInfo != null) {
+-            chooseApp(shortcutAppInfo);
+-            return true;
+-        }
+-
+-        switch (keyCode) {
+-            case KeyEvent.KEYCODE_DPAD_RIGHT:
+-                return tryMoveSelection(layoutManager, 1);
+-            case KeyEvent.KEYCODE_DPAD_LEFT:
+-                return tryMoveSelection(layoutManager, -1);
+-            case KeyEvent.KEYCODE_DPAD_DOWN:
+-                return tryMoveSelection(layoutManager, spanCount);
+-            case KeyEvent.KEYCODE_DPAD_UP:
+-                return tryMoveSelection(layoutManager, -spanCount);
+-            case KeyEvent.KEYCODE_DPAD_CENTER:
+-                chooseSelectedItem();
+-                return true;
+-        }
+-        return false;
+-    }
+-
+-    @Override
+-    public void onAttachedToRecyclerView(final RecyclerView recyclerView) {
+-        super.onAttachedToRecyclerView(recyclerView);
+-        layoutManager = recyclerView.getLayoutManager();
+-    }
+-
+-    private boolean tryMoveSelection(RecyclerView.LayoutManager lm, int offset) {
+-        int trySelectedItem = selectedItem + offset;
+-
+-        if (trySelectedItem < 0) {
+-            trySelectedItem = 0;
+-        }
+-        if (trySelectedItem >= getItemCount()) {
+-            trySelectedItem = getItemCount() - 1;
+-        }
+-
+-        if (trySelectedItem != selectedItem) {
+-            selectedItem = trySelectedItem;
+-            notifyDataSetChanged();
+-            lm.scrollToPosition(trySelectedItem);
+-            return true;
+-        }
+-
+-        return false;
+-    }
+-
+-    private void chooseSelectedItem() {
+-        if (items == null || selectedItem < 0 || selectedItem >= getItemCount()) {
+-            return;
+-        }
+-        chooseApp(items.get(selectedItem));
+-    }
+-
+-    public static final class ViewHolder extends RecyclerView.ViewHolder{
+-        ItemAppBinding binding;
+-
+-        public ViewHolder(View itemView) {
+-            super(itemView);
+-            binding = ItemAppBinding.bind(itemView);
+-        }
+-    }
+-
+-    private List<AppInfo> getInstalledApps(Context context) {
+-        Map<String, Application> requiredPackages = new HashMap();
+-        Map<String, Application> requiredLinks = new HashMap();
+-        SettingsHelper config = SettingsHelper.getInstance( context );
+-        if ( config.getConfig() != null ) {
+-            List< Application > applications = SettingsHelper.getInstance( context ).getConfig().getApplications();
+-            for ( Application application : applications ) {
+-                if (application.isShowIcon() && !application.isRemove()) {
+-                    if (application.getType() == null || application.getType().equals(Application.TYPE_APP)) {
+-                        requiredPackages.put(application.getPkg(), application);
+-                    } else if (application.getType().equals(Application.TYPE_WEB)) {
+-                        requiredLinks.put(application.getUrl(), application);
+-                    }
+-                }
+-            }
+-        }
+-
+-        List<AppInfo> appInfos = new ArrayList<>();
+-        List<ApplicationInfo> packs = context.getPackageManager().getInstalledApplications(0);
+-        if (packs == null) {
+-            return new ArrayList<AppInfo>();
+-        }
+-        // First we display app icons
+-        for(int i=0;i < packs.size();i++) {
+-            ApplicationInfo p = packs.get(i);
+-            if ( context.getPackageManager().getLaunchIntentForPackage(p.packageName) != null &&
+-                    requiredPackages.containsKey( p.packageName ) ) {
+-                Application app = requiredPackages.get(p.packageName);
+-                AppInfo newInfo = new AppInfo();
+-                newInfo.type = AppInfo.TYPE_APP;
+-                newInfo.keyCode = app.getKeyCode();
+-                newInfo.name = app.getIconText() != null ? app.getIconText() : p.loadLabel(context.getPackageManager()).toString();
+-                newInfo.packageName = p.packageName;
+-                newInfo.iconUrl = app.getIcon();
+-                newInfo.screenOrder = app.getScreenOrder();
+-                appInfos.add(newInfo);
+-            }
+-        }
+-
+-        // Then we display weblinks
+-        for (Map.Entry<String, Application> entry : requiredLinks.entrySet()) {
+-            AppInfo newInfo = new AppInfo();
+-            newInfo.type = AppInfo.TYPE_WEB;
+-            newInfo.keyCode = entry.getValue().getKeyCode();
+-            newInfo.name = entry.getValue().getIconText();
+-            newInfo.url = entry.getValue().getUrl();
+-            newInfo.iconUrl = entry.getValue().getIcon();
+-            newInfo.screenOrder = entry.getValue().getScreenOrder();
+-            newInfo.useKiosk = entry.getValue().isUseKiosk() ? 1 : 0;
+-            appInfos.add(newInfo);
+-        }
+-
+-        // Apply manually set order
+-        Collections.sort(appInfos, new AppInfosComparator());
+-
+-        return appInfos;
+-    }
+-
+-    public class AppInfosComparator implements Comparator<AppInfo> {
+-        @Override
+-        public int compare(AppInfo o1, AppInfo o2) {
+-            if (o1.screenOrder == null) {
+-                if (o2.screenOrder == null) {
+-                    return 0;
+-                }
+-                return 1;
+-            }
+-            if (o2.screenOrder == null) {
+-                return -1;
+-            }
+-            return Integer.compare(o1.screenOrder, o2.screenOrder);
+-        }
+-    }
+-
+-    public interface OnAppChooseListener{
+-        void onAppChoose(@NonNull AppInfo resolveInfo);
+-    }
+-
+-    private View.OnClickListener onClickListener = new View.OnClickListener() {
+-        @Override
+-        public void onClick(View v) {
+-            chooseApp((AppInfo)v.getTag());
+-        }
+-    };
+-
+-    private void chooseApp(AppInfo appInfo) {
+-        switch (appInfo.type) {
+-            case AppInfo.TYPE_APP:
+-                Intent launchIntent = context.getPackageManager().getLaunchIntentForPackage(
+-                        appInfo.packageName);
+-                if (launchIntent != null) {
+-                    // These magic flags are found in the source code of the default Android launcher
+-                    // These flags preserve the app activity stack (otherwise a launch activity appears at the top which is not correct)
+-                    launchIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+-                            Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+-                    context.startActivity(launchIntent);
+-                }
+-                break;
+-            case AppInfo.TYPE_WEB:
+-                if (appInfo.url != null) {
+-                    Intent i = new Intent(Intent.ACTION_VIEW);
+-                    i.setData(Uri.parse(appInfo.url));
+-
+-                    if (appInfo.useKiosk != 0) {
+-                            i.setComponent(new ComponentName(Const.KIOSK_BROWSER_PACKAGE_NAME, Const.KIOSK_BROWSER_PACKAGE_NAME + ".MainActivity"));
+-                    }
+-
+-                    try {
+-                        context.startActivity(i);
+-                    } catch (ActivityNotFoundException e) {
+-                        Toast.makeText(context, R.string.browser_not_found, Toast.LENGTH_LONG).show();
+-                    }
+-                }
+-                break;
+-        }
+-        if (listener != null) {
+-            listener.onAppChoose(appInfo);
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/BaseActivity.java b/app/src/main/java/com/hmdm/launcher/ui/BaseActivity.java
+index a838bcd..6e497e7 100644
+--- a/app/src/main/java/com/hmdm/launcher/ui/BaseActivity.java
++++ b/app/src/main/java/com/hmdm/launcher/ui/BaseActivity.java
+@@ -223,7 +223,10 @@ public class BaseActivity extends AppCompatActivity {
+         System.exit(0);
+     }
+ 
+-    protected void createAndShowNetworkErrorDialog(String serverName, String serverPath, boolean showResetButton) {
++    protected void createAndShowNetworkErrorDialog(String serverName,
++                                                   String serverPath,
++                                                   boolean showResetButton,
++                                                   boolean showWifiButton) {
+         dismissDialog(networkErrorDialog);
+         networkErrorDialog = new Dialog( this );
+         dialogNetworkErrorBinding = DataBindingUtil.inflate(
+@@ -242,6 +245,7 @@ public class BaseActivity extends AppCompatActivity {
+         dialogNetworkErrorBinding.title.setText(getString(R.string.dialog_network_error_title, serverUrl));
+ 
+         dialogNetworkErrorBinding.resetButton.setVisibility(showResetButton ? View.VISIBLE : View.GONE);
++        dialogNetworkErrorBinding.wifiButton.setVisibility(showWifiButton ? View.VISIBLE : View.GONE);
+ 
+         networkErrorDialog.setContentView( dialogNetworkErrorBinding.getRoot() );
+         networkErrorDialog.show();
+diff --git a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+index 8765ec1..baa67a5 100644
+--- a/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
++++ b/app/src/main/java/com/hmdm/launcher/ui/MainActivity.java
+@@ -20,19 +20,16 @@
+ package com.hmdm.launcher.ui;
+ 
+ import android.Manifest;
+-import android.app.AlertDialog;
+ import android.app.Dialog;
+ import android.app.admin.DevicePolicyManager;
+ import android.bluetooth.BluetoothAdapter;
+ import android.content.BroadcastReceiver;
+-import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ import android.content.SharedPreferences;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.PackageInstaller;
+ import android.content.pm.PackageManager;
+ import android.content.res.Configuration;
+ import android.graphics.Color;
+@@ -46,7 +43,6 @@ import android.net.wifi.WifiManager;
+ import android.os.AsyncTask;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.Environment;
+ import android.os.Handler;
+ import android.os.SystemClock;
+ import android.provider.Settings;
+@@ -65,6 +61,7 @@ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
++import androidx.appcompat.app.AlertDialog;
+ import androidx.databinding.DataBindingUtil;
+ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+ import androidx.recyclerview.widget.GridLayoutManager;
+@@ -89,10 +86,8 @@ import com.hmdm.launcher.databinding.DialogOverlaySettingsBinding;
+ import com.hmdm.launcher.databinding.DialogPermissionsBinding;
+ import com.hmdm.launcher.databinding.DialogSystemSettingsBinding;
+ import com.hmdm.launcher.databinding.DialogUnknownSourcesBinding;
+-import com.hmdm.launcher.db.DatabaseHelper;
+-import com.hmdm.launcher.db.RemoteFileTable;
++import com.hmdm.launcher.helper.ConfigUpdater;
+ import com.hmdm.launcher.helper.CryptoHelper;
+-import com.hmdm.launcher.helper.MigrationHelper;
+ import com.hmdm.launcher.helper.SettingsHelper;
+ import com.hmdm.launcher.json.Action;
+ import com.hmdm.launcher.json.Application;
+@@ -109,17 +104,12 @@ import com.hmdm.launcher.server.UnsafeOkHttpClient;
+ import com.hmdm.launcher.service.LocationService;
+ import com.hmdm.launcher.service.PluginApiService;
+ import com.hmdm.launcher.service.StatusControlService;
+-import com.hmdm.launcher.task.ConfirmDeviceResetTask;
+-import com.hmdm.launcher.task.ConfirmPasswordResetTask;
+-import com.hmdm.launcher.task.ConfirmRebootTask;
+-import com.hmdm.launcher.task.GetRemoteLogConfigTask;
+ import com.hmdm.launcher.task.GetServerConfigTask;
+ import com.hmdm.launcher.task.SendDeviceInfoTask;
+ import com.hmdm.launcher.util.AppInfo;
+ import com.hmdm.launcher.util.CrashLoopProtection;
+ import com.hmdm.launcher.util.DeviceInfoProvider;
+ import com.hmdm.launcher.util.InstallUtils;
+-import com.hmdm.launcher.util.PushNotificationMqttWrapper;
+ import com.hmdm.launcher.util.RemoteLogger;
+ import com.hmdm.launcher.util.SystemUtils;
+ import com.hmdm.launcher.util.Utils;
+@@ -132,12 +122,8 @@ import org.apache.commons.io.FileUtils;
+ 
+ import java.io.File;
+ import java.io.IOException;
+-import java.net.URL;
+ import java.util.Arrays;
+-import java.util.HashMap;
+-import java.util.LinkedList;
+ import java.util.List;
+-import java.util.Map;
+ import java.util.concurrent.TimeUnit;
+ 
+ import okhttp3.OkHttpClient;
+@@ -146,7 +132,9 @@ import retrofit2.Response;
+ 
+ public class MainActivity
+         extends BaseActivity
+-        implements View.OnLongClickListener, BaseAppListAdapter.OnAppChooseListener, BaseAppListAdapter.SwitchAdapterListener, View.OnClickListener {
++        implements View.OnLongClickListener, BaseAppListAdapter.OnAppChooseListener,
++        BaseAppListAdapter.SwitchAdapterListener, View.OnClickListener,
++        ConfigUpdater.UINotifier {
+ 
+     private static final int PERMISSIONS_REQUEST = 1000;
+ 
+@@ -194,11 +182,8 @@ public class MainActivity
+     private int spanCount;
+ 
+     private static boolean configInitialized = false;
+-    private static boolean configInitializing = false;
++    // This flag is used to exit kiosk to avoid looping in onResume()
+     private static boolean interruptResumeFlow = false;
+-    private static List< Application > applicationsForInstall = new LinkedList();
+-    private static List< Application > applicationsForRun = new LinkedList();
+-    private static List< RemoteFile > filesForInstall = new LinkedList();
+     private static final int BOOT_DURATION_SEC = 120;
+     private static final int PAUSE_BETWEEN_AUTORUNS_SEC = 5;
+     private static final int SEND_DEVICE_INFO_PERIOD_MINS = 15;
+@@ -224,7 +209,7 @@ public class MainActivity
+ 
+     private int lastNetworkType;
+ 
+-    private Map<String, File> pendingInstallations = new HashMap<String,File>();
++    private ConfigUpdater configUpdater = new ConfigUpdater();
+ 
+     private BroadcastReceiver receiver = new BroadcastReceiver() {
+         @Override
+@@ -399,6 +384,8 @@ public class MainActivity
+         if (!getIntent().getBooleanExtra(Const.RESTORED_ACTIVITY, false)) {
+             startAppsAtBoot();
+         }
++
++        settingsHelper.setMainActivityRunning(true);
+     }
+ 
+     @Override
+@@ -424,77 +411,6 @@ public class MainActivity
+         intentFilter.addAction(Const.ACTION_EXIT);
+         intentFilter.addAction(Const.ACTION_POLICY_VIOLATION);
+         LocalBroadcastManager.getInstance(this).registerReceiver(receiver, intentFilter);
+-
+-        // Here we handle the completion of the silent app installation in the device owner mode
+-        // These intents are not delivered to LocalBroadcastManager
+-        registerReceiver(new BroadcastReceiver() {
+-            @Override
+-            public void onReceive(Context context, Intent intent) {
+-                if (intent.getAction().equals(Const.ACTION_INSTALL_COMPLETE)) {
+-                    int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, 0);
+-                    switch (status) {
+-                        case PackageInstaller.STATUS_PENDING_USER_ACTION:
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Request user confirmation to install");
+-                            Intent confirmationIntent = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+-
+-                            // Fix the Intent Redirection vulnerability
+-                            // https://support.google.com/faqs/answer/9267555
+-                            ComponentName name = confirmationIntent.resolveActivity(getPackageManager());
+-                            int flags = confirmationIntent.getFlags();
+-                            if (name != null && !name.getPackageName().equals(getPackageName()) &&
+-                                    (flags & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0 &&
+-                                    (flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0) {
+-                                confirmationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-                                try {
+-                                    startActivity(confirmationIntent);
+-                                } catch (Exception e) {
+-                                }
+-                            } else {
+-                                Log.e(Const.LOG_TAG, "Intent redirection detected, ignoring the fault intent!");
+-                            }
+-                            break;
+-                        case PackageInstaller.STATUS_SUCCESS:
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "App installed successfully");
+-                            String packageName = intent.getStringExtra(Const.PACKAGE_NAME);
+-                            if (packageName != null) {
+-                                Log.i(Const.LOG_TAG, "Install complete: " + packageName);
+-                                File file = pendingInstallations.get(packageName);
+-                                if (file != null) {
+-                                    pendingInstallations.remove(packageName);
+-                                    InstallUtils.deleteTempApk(file);
+-                                }
+-                                if (Utils.isDeviceOwner(MainActivity.this)){
+-                                    // Always grant all dangerous rights to the app
+-                                    // TODO: in the future, the rights must be configurable on the server
+-                                    Utils.autoGrantRequestedPermissions(MainActivity.this, packageName);
+-                                }
+-                            }
+-                            break;
+-                        default:
+-                            // Installation failure
+-                            String extraMessage = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+-                            String statusMessage = InstallUtils.getPackageInstallerStatusMessage(status);
+-                            String logRecord = "Install failed: " + statusMessage;
+-                            if (extraMessage != null && extraMessage.length() > 0) {
+-                                logRecord += ", extra: " + extraMessage;
+-                            }
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_ERROR, logRecord);
+-                            packageName = intent.getStringExtra(Const.PACKAGE_NAME);
+-                            if (packageName != null) {
+-                                File file = pendingInstallations.get(packageName);
+-                                if (file != null) {
+-                                    pendingInstallations.remove(packageName);
+-                                    InstallUtils.deleteTempApk(file);
+-                                }
+-                            }
+-
+-                            break;
+-                    }
+-                    checkAndStartLauncher();
+-                }
+-            }
+-        }, new IntentFilter(Const.ACTION_INSTALL_COMPLETE));
+-
+     }
+ 
+     @Override
+@@ -922,8 +838,9 @@ public class MainActivity
+     private void startLauncher() {
+         createButtons();
+ 
+-        if ( applicationsForInstall.size() > 0 ) {
+-            loadAndInstallApplications();
++        if (configUpdater.isPendingAppInstall()) {
++            // Here we go after completing the user confirmed app installation
++            configUpdater.repeatDownloadApps();
+         } else if ( !checkPermissions(true)) {
+             // Permissions are requested inside checkPermissions, so do nothing here
+             Log.i(Const.LOG_TAG, "startLauncher: requesting permissions");
+@@ -945,11 +862,8 @@ public class MainActivity
+                 showContent(settingsHelper.getConfig());
+             }
+             updateConfig( false );
+-        } else if ( ! configInitializing ) {
+-            Log.i(Const.LOG_TAG, "Proceed to lockRestrictions()");
+-            lockRestrictions();
+         } else {
+-            Log.i(Const.LOG_TAG, "Do nothing in startLauncher: configInitializing=true");
++            showContent(settingsHelper.getConfig());
+         }
+     }
+ 
+@@ -1078,39 +992,6 @@ public class MainActivity
+         }
+     }
+ 
+-    // This is an overlay button which is not necessary! We need normal buttons in the launcher window.
+-    /*private ImageView createManageButton(int imageResource, int imageResourceBlack, int offset) {
+-        WindowManager manager = ((WindowManager)getApplicationContext().getSystemService(Context.WINDOW_SERVICE));
+-
+-        WindowManager.LayoutParams localLayoutParams = new WindowManager.LayoutParams();
+-        localLayoutParams.type = Utils.OverlayWindowType();
+-        localLayoutParams.gravity = Gravity.RIGHT | Gravity.CENTER_VERTICAL;
+-        localLayoutParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+-
+-        localLayoutParams.height = getResources().getDimensionPixelOffset( R.dimen.activity_main_exit_button_size );
+-        localLayoutParams.width = getResources().getDimensionPixelOffset( R.dimen.activity_main_exit_button_size );
+-        localLayoutParams.format = PixelFormat.TRANSPARENT;
+-        localLayoutParams.y = offset;
+-
+-        boolean dark = true;
+-        try {
+-            ServerConfig config = settingsHelper.getConfig();
+-            if (config.getBackgroundColor() != null) {
+-                int color = Color.parseColor(config.getBackgroundColor());
+-                dark = !Utils.isLightColor(color);
+-            }
+-        } catch (Exception e) {
+-        }
+-
+-        ImageView manageButton = new ImageView( this );
+-        manageButton.setImageResource(dark ? imageResource : imageResourceBlack);
+-
+-        try {
+-            manager.addView( manageButton, localLayoutParams );
+-        } catch ( Exception e ) { e.printStackTrace(); }
+-        return manageButton;
+-    } */
+-
+     private ImageView createManageButton(int imageResource, int imageResourceBlack, int offset) {
+         RelativeLayout.LayoutParams layoutParams = new RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+         layoutParams.addRule(RelativeLayout.CENTER_VERTICAL);
+@@ -1175,397 +1056,9 @@ public class MainActivity
+     }
+ 
+     private void updateConfig( final boolean forceShowErrorDialog ) {
+-        if ( configInitializing ) {
+-            Log.i(Const.LOG_TAG, "updateConfig(): configInitializing=true, exiting");
+-            return;
+-        }
+-
+         needSendDeviceInfoAfterReconfigure = true;
+         needRedrawContentAfterReconfigure = true;
+-
+-        Log.i(Const.LOG_TAG, "updateConfig(): set configInitializing=true");
+-        configInitializing = true;
+-        DetailedInfoWorker.requestConfigUpdate(this);
+-
+-        // Work around a strange bug with stale SettingsHelper instance: re-read its value
+-        settingsHelper = SettingsHelper.getInstance(this);
+-
+-        if (settingsHelper.getConfig() != null && settingsHelper.getConfig().getRestrictions() != null) {
+-            Utils.releaseUserRestrictions(MainActivity.this, settingsHelper.getConfig().getRestrictions());
+-            // Explicitly release restrictions of installing/uninstalling apps
+-            Utils.releaseUserRestrictions(MainActivity.this, "no_install_apps,no_uninstall_apps");
+-        }
+-
+-        binding.setMessage( getString( R.string.main_activity_update_config ) );
+-        GetServerConfigTask task = new GetServerConfigTask( this ) {
+-            @Override
+-            protected void onPostExecute( Integer result ) {
+-                super.onPostExecute( result );
+-                configInitializing = false;
+-                Log.i(Const.LOG_TAG, "updateConfig(): set configInitializing=false after getting config");
+-
+-                switch ( result ) {
+-                    case Const.TASK_SUCCESS:
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Configuration updated");
+-                        updateRemoteLogConfig();
+-                        break;
+-                    case Const.TASK_ERROR:
+-                        if ( enterDeviceIdDialog != null ) {
+-                            enterDeviceIdDialogBinding.setError( true );
+-                            enterDeviceIdDialog.show();
+-                        } else {
+-                            createAndShowEnterDeviceIdDialog( true, settingsHelper.getDeviceId() );
+-                        }
+-                        break;
+-                    case Const.TASK_NETWORK_ERROR:
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to update config: network error");
+-                        if ( settingsHelper.getConfig() != null && !forceShowErrorDialog ) {
+-                            updateRemoteLogConfig();
+-                        } else {
+-                            // Do not show the reset button if the launcher is installed by scanning a QR code
+-                            // Only show the reset button on manual setup at first start (when config is not yet loaded)
+-                            createAndShowNetworkErrorDialog(settingsHelper.getBaseUrl(), settingsHelper.getServerProject(),
+-                                    settingsHelper.getConfig() == null && !settingsHelper.isQrProvisioning());
+-                        }
+-                        break;
+-                }
+-            }
+-        };
+-        task.execute();
+-    }
+-
+-    private void updateRemoteLogConfig() {
+-        Log.i(Const.LOG_TAG, "updateRemoteLogConfig(): get logging configuration");
+-
+-        GetRemoteLogConfigTask task = new GetRemoteLogConfigTask( this ) {
+-            @Override
+-            protected void onPostExecute( Integer result ) {
+-                super.onPostExecute( result );
+-                Log.i(Const.LOG_TAG, "updateRemoteLogConfig(): result=" + result);
+-                RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Device owner: " + Utils.isDeviceOwner(MainActivity.this));
+-                checkServerMigration();
+-            }
+-        };
+-        task.execute();
+-    }
+-
+-    private void checkServerMigration() {
+-        if (settingsHelper != null && settingsHelper.getConfig() != null && settingsHelper.getConfig().getNewServerUrl() != null &&
+-                !settingsHelper.getConfig().getNewServerUrl().trim().equals("")) {
+-            try {
+-                final MigrationHelper migrationHelper = new MigrationHelper(settingsHelper.getConfig().getNewServerUrl().trim());
+-                if (migrationHelper.needMigrating(this)) {
+-                    // Before migration, test that new URL is working well
+-                    migrationHelper.tryNewServer(this, new MigrationHelper.CompletionHandler() {
+-                        @Override
+-                        public void onSuccess() {
+-                            // Everything is OK, migrate!
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Migrated to " + settingsHelper.getConfig().getNewServerUrl().trim());
+-                            settingsHelper.setBaseUrl(migrationHelper.getBaseUrl());
+-                            settingsHelper.setSecondaryBaseUrl(migrationHelper.getBaseUrl());
+-                            settingsHelper.setServerProject(migrationHelper.getServerProject());
+-                            ServerServiceKeeper.resetServices();
+-                            configInitializing = false;
+-                            updateConfig(false);
+-                        }
+-
+-                        @Override
+-                        public void onError(String cause) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to migrate to " + settingsHelper.getConfig().getNewServerUrl().trim() + ": " + cause);
+-                            setupPushService();
+-                        }
+-                    });
+-                    return;
+-                }
+-            } catch (Exception e) {
+-                // Malformed URL
+-                RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to migrate to " + settingsHelper.getConfig().getNewServerUrl().trim() + ": malformed URL");
+-            }
+-        }
+-        setupPushService();
+-    }
+-
+-    private void setupPushService() {
+-        String pushOptions = null;
+-        int keepaliveTime = Const.DEFAULT_PUSH_ALARM_KEEPALIVE_TIME_SEC;
+-        if (settingsHelper != null && settingsHelper.getConfig() != null) {
+-            pushOptions = settingsHelper.getConfig().getPushOptions();
+-            Integer newKeepaliveTime = settingsHelper.getConfig().getKeepaliveTime();
+-            if (newKeepaliveTime != null && newKeepaliveTime >= 30) {
+-                keepaliveTime = newKeepaliveTime;
+-            }
+-        }
+-        if (BuildConfig.ENABLE_PUSH && pushOptions != null && (pushOptions.equals(ServerConfig.PUSH_OPTIONS_MQTT_WORKER)
+-                || pushOptions.equals(ServerConfig.PUSH_OPTIONS_MQTT_ALARM))) {
+-            try {
+-                URL url = new URL(settingsHelper.getBaseUrl());
+-                Runnable nextRunnable = () -> {
+-                    checkFactoryReset();
+-                };
+-                PushNotificationMqttWrapper.getInstance().connect(this, url.getHost(), BuildConfig.MQTT_PORT,
+-                        pushOptions, keepaliveTime, settingsHelper.getDeviceId(), nextRunnable, nextRunnable);
+-            } catch (Exception e) {
+-                e.printStackTrace();
+-                checkFactoryReset();
+-            }
+-        } else {
+-            checkFactoryReset();
+-        }
+-    }
+-
+-    private void checkFactoryReset() {
+-        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
+-        if (config != null && config.getFactoryReset() != null && config.getFactoryReset()) {
+-            // We got a factory reset request, let's confirm and erase everything!
+-            RemoteLogger.log(this, Const.LOG_INFO, "Device reset by server request");
+-            ConfirmDeviceResetTask confirmTask = new ConfirmDeviceResetTask(this) {
+-                @Override
+-                protected void onPostExecute( Integer result ) {
+-                    // Do a factory reset if we can
+-                    if (result == null || result != Const.TASK_SUCCESS ) {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to confirm device reset on server");
+-                    } else if (Utils.checkAdminMode(MainActivity.this)) {
+-                        // no_factory_reset restriction doesn't prevent against admin's reset action
+-                        // So we do not need to release this restriction prior to resetting the device
+-                        if (!Utils.factoryReset(MainActivity.this)) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Device reset failed");
+-                        }
+-                    } else {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Device reset failed: no permissions");
+-                    }
+-                    // If we can't, proceed the initialization flow
+-                    checkRemoteReboot();
+-                }
+-            };
+-
+-            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(this, true, true);
+-            deviceInfo.setFactoryReset(Utils.checkAdminMode(this));
+-            confirmTask.execute(deviceInfo);
+-
+-        } else {
+-            checkRemoteReboot();
+-        }
+-    }
+-
+-    private void checkRemoteReboot() {
+-        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
+-        if (config != null && config.getReboot() != null && config.getReboot()) {
+-            // Log and confirm reboot before rebooting
+-            RemoteLogger.log(this, Const.LOG_INFO, "Rebooting by server request");
+-            ConfirmRebootTask confirmTask = new ConfirmRebootTask(this) {
+-                @Override
+-                protected void onPostExecute( Integer result ) {
+-                    if (result == null || result != Const.TASK_SUCCESS ) {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to confirm reboot on server");
+-                    } else if (Utils.checkAdminMode(MainActivity.this)) {
+-                        if (!Utils.reboot(MainActivity.this)) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Reboot failed");
+-                        }
+-                    } else {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Reboot failed: no permissions");
+-                    }
+-                    checkPasswordReset();
+-                }
+-            };
+-
+-            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(this, true, true);
+-            confirmTask.execute(deviceInfo);
+-
+-        } else {
+-            checkPasswordReset();
+-        }
+-
+-    }
+-
+-    private void checkPasswordReset() {
+-        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
+-        if (config != null && config.getPasswordReset() != null) {
+-            if (Utils.passwordReset(this, config.getPasswordReset())) {
+-                RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Password successfully changed");
+-            } else {
+-                RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to reset password");
+-            }
+-
+-            ConfirmPasswordResetTask confirmTask = new ConfirmPasswordResetTask(this) {
+-                @Override
+-                protected void onPostExecute( Integer result ) {
+-                    setDefaultLauncher();
+-                }
+-            };
+-
+-            DeviceInfo deviceInfo = DeviceInfoProvider.getDeviceInfo(this, true, true);
+-            confirmTask.execute(deviceInfo);
+-
+-        } else {
+-            setDefaultLauncher();
+-        }
+-
+-    }
+-
+-    private void setDefaultLauncher() {
+-        ServerConfig config = settingsHelper != null ? settingsHelper.getConfig() : null;
+-        if (Utils.isDeviceOwner(this) && config != null) {
+-            // "Run default launcher" means we should not set Headwind MDM as a default launcher
+-            // and clear the setting if it has been already set
+-            boolean needSetLauncher = (config.getRunDefaultLauncher() == null || !config.getRunDefaultLauncher());
+-            String defaultLauncher = Utils.getDefaultLauncher(this);
+-
+-            // As per the documentation, setting the default preferred activity should not be done on the main thread
+-            new AsyncTask<Void, Void, Void>() {
+-                @Override
+-                protected Void doInBackground(Void... voids) {
+-                    if (needSetLauncher && !getPackageName().equalsIgnoreCase(defaultLauncher)) {
+-                        Utils.setDefaultLauncher(MainActivity.this);
+-                    } else if (!needSetLauncher && getPackageName().equalsIgnoreCase(defaultLauncher)) {
+-                        Utils.clearDefaultLauncher(MainActivity.this);
+-                    }
+-                    return null;
+-                }
+-
+-                @Override
+-                protected void onPostExecute(Void v) {
+-                    updateLocationService();
+-                }
+-            }.execute();
+-            return;
+-        }
+-        updateLocationService();
+-    }
+-
+-    private void updateLocationService() {
+-        startLocationServiceWithRetry();
+-        checkAndUpdateFiles();
+-    }
+-
+-    private class RemoteFileStatus {
+-        public RemoteFile remoteFile;
+-        public boolean installed;
+-    }
+-
+-    private void checkAndUpdateFiles() {
+-        new AsyncTask<Void, Void, Void>() {
+-            @Override
+-            protected Void doInBackground(Void... voids) {
+-                ServerConfig config = settingsHelper.getConfig();
+-                // This may be a long procedure due to checksum calculation so execute it in the background thread
+-                InstallUtils.generateFilesForInstallList(MainActivity.this, config.getFiles(), filesForInstall);
+-                return null;
+-            }
+-
+-            @Override
+-            protected void onPostExecute(Void v) {
+-                loadAndInstallFiles();
+-            }
+-        }.execute();
+-    }
+-
+-    private void loadAndInstallFiles() {
+-        if ( filesForInstall.size() > 0 ) {
+-            RemoteFile remoteFile = filesForInstall.remove(0);
+-
+-            new AsyncTask<RemoteFile, Void, RemoteFileStatus>() {
+-
+-                @Override
+-                protected RemoteFileStatus doInBackground(RemoteFile... remoteFiles) {
+-                    final RemoteFile remoteFile = remoteFiles[0];
+-                    RemoteFileStatus remoteFileStatus = null;
+-
+-                    if (remoteFile.isRemove()) {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "Removing file: " + remoteFile.getPath());
+-                        File file = new File(Environment.getExternalStorageDirectory(), remoteFile.getPath());
+-                        try {
+-                            file.delete();
+-                            RemoteFileTable.deleteByPath(DatabaseHelper.instance(MainActivity.this).getWritableDatabase(), remoteFile.getPath());
+-                        } catch (Exception e) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to remove file: " +
+-                                    remoteFile.getPath() + ": " + e.getMessage());
+-                            e.printStackTrace();
+-                        }
+-
+-                    } else if (remoteFile.getUrl() != null) {
+-                        updateMessageForFileDownloading(remoteFile.getPath());
+-
+-                        File file = null;
+-                        try {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "Downloading file: " + remoteFile.getPath());
+-                            file = InstallUtils.downloadFile(MainActivity.this, remoteFile.getUrl(),
+-                                    new InstallUtils.DownloadProgress() {
+-                                        @Override
+-                                        public void onDownloadProgress(final int progress, final long total, final long current) {
+-                                            handler.post(new Runnable() {
+-                                                @Override
+-                                                public void run() {
+-                                                    binding.progress.setMax(100);
+-                                                    binding.progress.setProgress(progress);
+-
+-                                                    binding.setFileLength(total);
+-                                                    binding.setDownloadedLength(current);
+-                                                }
+-                                            });
+-                                        }
+-                                    });
+-                        } catch (Exception e) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN,
+-                                    "Failed to download file " + remoteFile.getPath() + ": " + e.getMessage());
+-                            e.printStackTrace();
+-                        }
+-
+-                        remoteFileStatus = new RemoteFileStatus();
+-                        remoteFileStatus.remoteFile = remoteFile;
+-                        if (file != null) {
+-                            File finalFile = new File(Environment.getExternalStorageDirectory(), remoteFile.getPath());
+-                            try {
+-                                if (finalFile.exists()) {
+-                                    finalFile.delete();
+-                                }
+-                                if (!remoteFile.isVarContent()) {
+-                                    FileUtils.moveFile(file, finalFile);
+-                                } else {
+-                                    createFileFromTemplate(file, finalFile, settingsHelper.getDeviceId(), settingsHelper.getConfig());
+-                                }
+-                                RemoteFileTable.insert(DatabaseHelper.instance(MainActivity.this).getWritableDatabase(), remoteFile);
+-                                remoteFileStatus.installed = true;
+-                            } catch (Exception e) {
+-                                RemoteLogger.log(MainActivity.this, Const.LOG_WARN,
+-                                        "Failed to create file " + remoteFile.getPath() + ": " + e.getMessage());
+-                                e.printStackTrace();
+-                                remoteFileStatus.installed = false;
+-                            }
+-                        } else {
+-                            remoteFileStatus.installed = false;
+-                        }
+-                    }
+-
+-                    return remoteFileStatus;
+-                }
+-
+-                @Override
+-                protected void onPostExecute(RemoteFileStatus fileStatus) {
+-                    if (fileStatus != null) {
+-                        if (!fileStatus.installed) {
+-                            filesForInstall.add( 0, fileStatus.remoteFile );
+-                            if (!ProUtils.kioskModeRequired(MainActivity.this)) {
+-                                // Notify the error dialog that we're downloading a file, not an app
+-                                downloadingFile = true;
+-                                createAndShowFileNotDownloadedDialog(fileStatus.remoteFile.getUrl());
+-                                binding.setDownloading( false );
+-                            } else {
+-                                // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
+-                                // Note: view is not used in this method so just pass null there
+-                                confirmDownloadFailureClicked(null);
+-                            }
+-                            return;
+-                        }
+-                    }
+-                    Log.i(Const.LOG_TAG, "loadAndInstallFiles(): proceed to next file");
+-                    loadAndInstallFiles();
+-                }
+-
+-            }.execute(remoteFile);
+-        } else {
+-            Log.i(Const.LOG_TAG, "Proceed to application update");
+-            checkAndUpdateApplications();
+-        }
++        configUpdater.updateConfig(this, this, forceShowErrorDialog);
+     }
+ 
+     // Workaround against crash "App is in background" on Android 9: this is an Android OS bug
+@@ -1598,237 +1091,159 @@ public class MainActivity
+         startService(intent);
+     }
+ 
+-    private void checkAndUpdateApplications() {
+-        Log.i(Const.LOG_TAG, "checkAndUpdateApplications(): starting update applications");
+-        binding.setMessage( getString( R.string.main_activity_applications_update ) );
+-
+-        configInitialized = true;
+-        configInitializing = false;
+-
+-        ServerConfig config = settingsHelper.getConfig();
+-        InstallUtils.generateApplicationsForInstallList(this, config.getApplications(), applicationsForInstall);
+-
+-        Log.i(Const.LOG_TAG, "checkAndUpdateApplications(): list size=" + applicationsForInstall.size());
+-
+-        loadAndInstallApplications();
++    @Override
++    public void onConfigUpdateStart() {
++        binding.setMessage( getString( R.string.main_activity_update_config ) );
+     }
+ 
+-    private class ApplicationStatus {
+-        public Application application;
+-        public boolean installed;
++    @Override
++    public void onConfigUpdateServerError() {
++        if ( enterDeviceIdDialog != null ) {
++            enterDeviceIdDialogBinding.setError( true );
++            enterDeviceIdDialog.show();
++        } else {
++            createAndShowEnterDeviceIdDialog( true, settingsHelper.getDeviceId() );
++        }
+     }
+ 
+-    // Here we avoid ConcurrentModificationException by executing all operations with applicationForInstall list in a main thread
+-    private void loadAndInstallApplications() {
+-        if ( applicationsForInstall.size() > 0 ) {
+-            Application application = applicationsForInstall.remove(0);
+-
+-            new AsyncTask<Application, Void, ApplicationStatus>() {
+-
+-                @Override
+-                protected ApplicationStatus doInBackground(Application... applications) {
+-                    final Application application = applications[0];
+-                    ApplicationStatus applicationStatus = null;
+-
+-                    if (application.isRemove()) {
+-                        // Remove the app
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "Removing app: " + application.getPkg());
+-                        updateMessageForApplicationRemoving( application.getName() );
+-                        uninstallApplication(application.getPkg());
+-
+-                    } else if ( application.getUrl() != null && !application.getUrl().startsWith("market://details") ) {
+-                        updateMessageForApplicationDownloading(application.getName());
+-
+-                        File file = null;
+-                        try {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "Downloading app: " + application.getPkg());
+-                            file = InstallUtils.downloadFile(MainActivity.this, application.getUrl(),
+-                                    new InstallUtils.DownloadProgress() {
+-                                        @Override
+-                                        public void onDownloadProgress(final int progress, final long total, final long current) {
+-                                            handler.post(new Runnable() {
+-                                                @Override
+-                                                public void run() {
+-                                                    binding.progress.setMax(100);
+-                                                    binding.progress.setProgress(progress);
+-
+-                                                    binding.setFileLength(total);
+-                                                    binding.setDownloadedLength(current);
+-                                                }
+-                                            });
+-                                        }
+-                                    });
+-                        } catch (Exception e) {
+-                            RemoteLogger.log(MainActivity.this, Const.LOG_WARN, "Failed to download app " + application.getPkg() + ": " + e.getMessage());
+-                            e.printStackTrace();
+-                        }
+-
+-                        applicationStatus = new ApplicationStatus();
+-                        applicationStatus.application = application;
+-                        if (file != null) {
+-                            updateMessageForApplicationInstalling(application.getName());
+-                            installApplication(file, application.getPkg(), application.getVersion());
+-                            applicationStatus.installed = true;
+-                        } else {
+-                            applicationStatus.installed = false;
+-                        }
+-                    } else if (application.getUrl().startsWith("market://details")) {
+-                        RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Installing app " + application.getPkg() + " from Google Play");
+-                        installApplicationFromPlayMarket(application.getUrl(), application.getPkg());
+-                        applicationStatus = new ApplicationStatus();
+-                        applicationStatus.application = application;
+-                        applicationStatus.installed = true;
+-                    } else {
+-                        handler.post( new Runnable() {
+-                            @Override
+-                            public void run() {
+-                                Log.i(Const.LOG_TAG, "loadAndInstallApplications(): proceed to next app");
+-                                loadAndInstallApplications();
+-                            }
+-                        } );
+-                    }
+-
+-                    return applicationStatus;
+-                }
++    @Override
++    public void onConfigUpdateNetworkError() {
++        if (ProUtils.isKioskModeRunning(this)) {
++            interruptResumeFlow = true;
++            Intent restoreLauncherIntent = new Intent(MainActivity.this, MainActivity.class);
++            restoreLauncherIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
++            startActivity(restoreLauncherIntent);
++        }
++        // Do not show the reset button if the launcher is installed by scanning a QR code
++        // Only show the reset button on manual setup at first start (when config is not yet loaded)
++        createAndShowNetworkErrorDialog(settingsHelper.getBaseUrl(), settingsHelper.getServerProject(),
++                settingsHelper.getConfig() == null && !settingsHelper.isQrProvisioning(),
++                settingsHelper.getConfig() != null && settingsHelper.getConfig().isShowWifi());
++    }
+ 
+-                @Override
+-                protected void onPostExecute(ApplicationStatus applicationStatus) {
+-                    if (applicationStatus != null) {
+-                        if (applicationStatus.installed) {
+-                            if (applicationStatus.application.isRunAfterInstall()) {
+-                                applicationsForRun.add(applicationStatus.application);
+-                            }
+-                        } else {
+-                            applicationsForInstall.add( 0, applicationStatus.application );
+-                            if (!ProUtils.kioskModeRequired(MainActivity.this)) {
+-                                // Notify the error dialog that we're downloading an app
+-                                downloadingFile = false;
+-                                createAndShowFileNotDownloadedDialog(applicationStatus.application.getName());
+-                                binding.setDownloading( false );
+-                            } else {
+-                                // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
+-                                // Note: view is not used in this method so just pass null there
+-                                confirmDownloadFailureClicked(null);
+-                            }
+-                        }
+-                    }
+-                }
++    @Override
++    public void onPoliciesUpdated() {
++        startLocationServiceWithRetry();
++    }
+ 
+-            }.execute(application);
+-        } else {
+-            lockRestrictions();
+-        }
++    @Override
++    public void onFileDownloading(RemoteFile remoteFile) {
++        handler.post( new Runnable() {
++            @Override
++            public void run() {
++                binding.setMessage(getString(R.string.main_file_downloading) + " " + remoteFile.getPath());
++                binding.setDownloading( true );
++            }
++        } );
+     }
+ 
+-    private void installApplicationFromPlayMarket(final String uri, final String packageName) {
+-        RemoteLogger.log(MainActivity.this, Const.LOG_DEBUG, "Asking user to install app " + packageName);
+-        Intent intent = new Intent(Intent.ACTION_VIEW);
+-        intent.setData(Uri.parse(uri));
+-        startActivity(intent);
++    @Override
++    public void onDownloadProgress(final int progress, final long total, final long current) {
++        handler.post(new Runnable() {
++            @Override
++            public void run() {
++                binding.progress.setMax(100);
++                binding.progress.setProgress(progress);
++
++                binding.setFileLength(total);
++                binding.setDownloadedLength(current);
++            }
++        });
+     }
+ 
+-    // This function is called from a background thread
+-    private void installApplication( File file, final String packageName, final String version ) {
+-        if (packageName.equals(getPackageName()) &&
+-                getPackageManager().getLaunchIntentForPackage(Const.LAUNCHER_RESTARTER_PACKAGE_ID) != null) {
+-            // Restart self in EMUI: there's no auto restart after update in EMUI, we must use a helper app
+-            startLauncherRestarter();
+-        }
+-        pendingInstallations.put(packageName, file);
+-        String versionData = version == null || version.equals("0") ? "" : " " + version;
+-        if (Utils.isDeviceOwner(this) || BuildConfig.SYSTEM_PRIVILEGES) {
+-                RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Silently installing app " + packageName + versionData);
+-            InstallUtils.silentInstallApplication(this, file, packageName, new InstallUtils.InstallErrorHandler() {
+-                    @Override
+-                    public void onInstallError() {
+-                        Log.i(Const.LOG_TAG, "installApplication(): error installing app " + packageName);
+-                        pendingInstallations.remove(packageName);
+-                        if (file.exists()) {
+-                            file.delete();
+-                        }
+-                        handler.post(new Runnable() {
+-                            @Override
+-                            public void run() {
+-                                new AlertDialog.Builder(MainActivity.this)
+-                                    .setMessage(getString(R.string.install_error) + " " + packageName)
+-                                    .setPositiveButton(R.string.dialog_administrator_mode_continue, new DialogInterface.OnClickListener() {
+-                                        @Override
+-                                        public void onClick(DialogInterface dialog, int which) {
+-                                            checkAndStartLauncher();
+-                                        }
+-                                    })
+-                                    .create()
+-                                    .show();
+-                            }
+-                        });
+-                    }
+-                });
++    @Override
++    public void onFileDownloadError(RemoteFile remoteFile) {
++        if (!ProUtils.kioskModeRequired(this)) {
++            // Notify the error dialog that we're downloading a file, not an app
++            downloadingFile = true;
++            createAndShowFileNotDownloadedDialog(remoteFile.getUrl());
++            binding.setDownloading( false );
+         } else {
+-            RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Asking user to install app " + packageName + versionData);
+-            InstallUtils.requestInstallApplication(MainActivity.this, file, new InstallUtils.InstallErrorHandler() {
+-                @Override
+-                public void onInstallError() {
+-                    pendingInstallations.remove(packageName);
+-                    if (file.exists()) {
+-                        file.delete();
+-                    }
+-                    handler.post(new Runnable() {
+-                        @Override
+-                        public void run() {
+-                            checkAndStartLauncher();
+-                        }
+-                    });
+-                }
+-            });
++            // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
++            // Note: view is not used in this method so just pass null there
++            confirmDownloadFailureClicked(null);
+         }
+     }
+ 
+-    private void uninstallApplication(final String packageName) {
+-        if (Utils.isDeviceOwner(this) || BuildConfig.SYSTEM_PRIVILEGES) {
+-            RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Silently uninstall app " + packageName);
+-            InstallUtils.silentUninstallApplication(this, packageName);
+-        } else {
+-            RemoteLogger.log(MainActivity.this, Const.LOG_INFO, "Asking user to uninstall app " + packageName);
+-            InstallUtils.requestUninstallApplication(this, packageName);
+-        }
++    @Override
++    public void onAppUpdateStart() {
++        binding.setMessage( getString( R.string.main_activity_applications_update ) );
++        configInitialized = true;
+     }
+ 
+-    private void updateMessageForApplicationInstalling( final String name ) {
++    @Override
++    public void onAppInstalling(final Application application) {
+         handler.post( new Runnable() {
+             @Override
+             public void run() {
+-                binding.setMessage( getString(R.string.main_app_installing) + " " + name );
++                binding.setMessage(getString(R.string.main_app_installing) + " " + application.getName());
+                 binding.setDownloading( false );
+             }
+         } );
+     }
+ 
+-    private void updateMessageForFileDownloading( final String name ) {
+-        handler.post( new Runnable() {
++    @Override
++    public void onAppDownloadError(Application application) {
++        if (!ProUtils.kioskModeRequired(MainActivity.this)) {
++            // Notify the error dialog that we're downloading an app
++            downloadingFile = false;
++            createAndShowFileNotDownloadedDialog(application.getName());
++            binding.setDownloading( false );
++        } else {
++            // Avoid user interaction in kiosk mode, just ignore download error and keep the old version
++            // Note: view is not used in this method so just pass null there
++            confirmDownloadFailureClicked(null);
++        }
++    }
++
++    @Override
++    public void onAppInstallError(String packageName) {
++        handler.post(new Runnable() {
+             @Override
+             public void run() {
+-                binding.setMessage( getString(R.string.main_file_downloading) + " " + name );
+-                binding.setDownloading( true );
++                new AlertDialog.Builder(MainActivity.this)
++                        .setMessage(getString(R.string.install_error) + " " + packageName)
++                        .setPositiveButton(R.string.dialog_administrator_mode_continue, new DialogInterface.OnClickListener() {
++                            @Override
++                            public void onClick(DialogInterface dialog, int which) {
++                                configUpdater.repeatDownloadApps();
++                            }
++                        })
++                        .create()
++                        .show();
+             }
+-        } );
++        });
+     }
+ 
+-    private void updateMessageForApplicationDownloading( final String name ) {
++    @Override
++    public void onAppInstallComplete(String packageName) {
++
++    }
++
++    @Override
++    public void onConfigUpdateComplete() {
++        Log.i(Const.LOG_TAG, "Showing content from setActions()");
++        showContent(settingsHelper.getConfig());
++    }
++
++    @Override
++    public void onAppDownloading(final Application application) {
+         handler.post( new Runnable() {
+             @Override
+             public void run() {
+-                binding.setMessage( getString(R.string.main_app_downloading) + " " + name );
+-                binding.setDownloading( true );
++                binding.setMessage(getString(R.string.main_app_downloading) + " " + application.getName());
++                binding.setDownloading(true);
+             }
+         } );
+     }
+ 
+-    private void updateMessageForApplicationRemoving( final String name ) {
++    @Override
++    public void onAppRemoving(final Application application) {
+         handler.post( new Runnable() {
+             @Override
+             public void run() {
+-                binding.setMessage( getString(R.string.main_app_removing) + " " + name );
+-                binding.setDownloading( false );
++                binding.setMessage(getString(R.string.main_app_removing) + " " + application.getName());
++                binding.setDownloading(false);
+             }
+         } );
+     }
+@@ -2026,7 +1441,7 @@ public class MainActivity
+                     // If Headwind MDM itself is set as kiosk app, the kiosk mode is already turned on;
+                     // So here we just proceed to drawing the content
+                     (!kioskApp.equals(getPackageName()) || !ProUtils.isKioskModeRunning(this))) {
+-                if (ProUtils.startCosuKioskMode(kioskApp, this)) {
++                if (ProUtils.startCosuKioskMode(kioskApp, this, false)) {
+                     getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                     return;
+                 } else {
+@@ -2257,6 +1672,8 @@ public class MainActivity
+     }
+ 
+     private void scheduleInstalledAppsRun() {
++        List<Application> applicationsForRun = configUpdater.getApplicationsForRun();
++
+         if (applicationsForRun.size() == 0) {
+             return;
+         }
+@@ -2301,6 +1718,8 @@ public class MainActivity
+     protected void onDestroy() {
+         super.onDestroy();
+ 
++        settingsHelper.setMainActivityRunning(false);
++
+         WindowManager manager = ((WindowManager)getApplicationContext().getSystemService(Context.WINDOW_SERVICE));
+         if ( applicationNotAllowed != null ) {
+             try { manager.removeView( applicationNotAllowed ); }
+@@ -2419,9 +1838,9 @@ public class MainActivity
+     public void repeatDownloadClicked( View view ) {
+         dismissDialog(fileNotDownloadedDialog);
+         if (downloadingFile) {
+-            loadAndInstallFiles();
++            configUpdater.repeatDownloadFiles();
+         } else {
+-            loadAndInstallApplications();
++            configUpdater.repeatDownloadApps();
+         }
+     }
+ 
+@@ -2429,20 +1848,9 @@ public class MainActivity
+         dismissDialog(fileNotDownloadedDialog);
+ 
+         if (downloadingFile) {
+-            if (filesForInstall.size() > 0) {
+-                RemoteFile remoteFile = filesForInstall.remove(0);
+-                settingsHelper.removeRemoteFile(remoteFile);
+-            }
+-            loadAndInstallFiles();
++            configUpdater.skipDownloadFiles();
+         } else {
+-            if (applicationsForInstall.size() > 0) {
+-                Application application = applicationsForInstall.remove(0);
+-                // Mark this app not to download any more until the config is refreshed
+-                // But we should not remove the app from a list because it may be
+-                // already installed!
+-                settingsHelper.removeApplicationUrl(application);
+-            }
+-            loadAndInstallApplications();
++            configUpdater.skipDownloadApps();
+         }
+     }
+ 
+@@ -2559,6 +1967,20 @@ public class MainActivity
+         createAndShowServerDialog(false, settingsHelper.getBaseUrl(), settingsHelper.getServerProject());
+     }
+ 
++    public void networkErrorWifiClicked( View view ) {
++        LocalBroadcastManager.getInstance(this).sendBroadcast(new Intent(Const.ACTION_ENABLE_SETTINGS));
++        if (ProUtils.kioskModeRequired(this) && ProUtils.isKioskModeRunning(this)) {
++            String kioskApp = settingsHelper.getConfig().getMainApp();
++            ProUtils.startCosuKioskMode(kioskApp, this, true);
++        }
++        handler.postDelayed(new Runnable() {
++            @Override
++            public void run() {
++                startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
++            }
++        }, 500);
++    }
++
+     public void networkErrorCancelClicked(View view) {
+         dismissDialog(networkErrorDialog);
+ 
+@@ -2573,6 +1995,7 @@ public class MainActivity
+         Log.i(Const.LOG_TAG, "networkErrorCancelClicked()");
+         if ( settingsHelper.getConfig() != null ) {
+             showContent( settingsHelper.getConfig() );
++            configUpdater.skipConfigLoad();
+         } else {
+             Log.i(Const.LOG_TAG, "networkErrorCancelClicked(): no configuration available, retrying");
+             Toast.makeText(this, R.string.empty_configuration, Toast.LENGTH_LONG).show();
+diff --git a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+index 4c58d1b..83ba751 100644
+--- a/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
++++ b/app/src/main/java/com/hmdm/launcher/util/PushNotificationMqttWrapper.java
+@@ -60,7 +60,7 @@ public class PushNotificationMqttWrapper {
+     private static PushNotificationMqttWrapper instance;
+ 
+     private MqttAndroidClient client;
+-    private Handler handler;
++    private Handler handler = new Handler(Looper.getMainLooper());
+     private BroadcastReceiver debugReceiver;
+     private Context context;
+     private boolean needProcessConnectExtended;
+@@ -86,15 +86,14 @@ public class PushNotificationMqttWrapper {
+ 
+     public void connect(final Context context, String host, int port, String pushType, int keepaliveTime,
+                         final String deviceId, final Runnable onSuccess, final Runnable onFailure) {
++        this.context = context;
+         cancelReconnectionAfterFailure(context);
+-        handler = new Handler(Looper.getMainLooper());
+         if (client != null && client.isConnected()) {
+             if (onSuccess != null) {
+                 handler.post(onSuccess);
+             }
+             return;
+         }
+-        this.context = context;
+         MqttAndroidConnectOptions connectOptions = new MqttAndroidConnectOptions();
+         connectOptions.setAutomaticReconnect(true);
+         connectOptions.setKeepAliveInterval(keepaliveTime);
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+index 41d8558..ad16079 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationProcessor.java
+@@ -22,9 +22,8 @@ package com.hmdm.launcher.worker;
+ import android.content.Context;
+ import android.content.Intent;
+ 
+-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+-
+ import com.hmdm.launcher.Const;
++import com.hmdm.launcher.helper.ConfigUpdater;
+ import com.hmdm.launcher.json.PushMessage;
+ import com.hmdm.launcher.util.RemoteLogger;
+ 
+@@ -37,8 +36,7 @@ public class PushNotificationProcessor {
+         RemoteLogger.log(context, Const.LOG_INFO, "Got Push Message, type " + message.getMessageType());
+         if (message.getMessageType().equals(PushMessage.TYPE_CONFIG_UPDATED)) {
+             // Update local configuration
+-            LocalBroadcastManager.getInstance(context).
+-                    sendBroadcast(new Intent(Const.ACTION_UPDATE_CONFIGURATION));
++            ConfigUpdater.notifyConfigUpdate(context);
+         } else if (message.getMessageType().equals(PushMessage.TYPE_RUN_APP)) {
+             // Run application
+             runApplication(context, message.getPayloadJSON());
+diff --git a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+index 4800d25..14047a1 100644
+--- a/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
++++ b/app/src/main/java/com/hmdm/launcher/worker/PushNotificationWorker.java
+@@ -20,10 +20,8 @@
+ package com.hmdm.launcher.worker;
+ 
+ import android.content.Context;
+-import android.content.Intent;
+ 
+ import androidx.annotation.NonNull;
+-import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+ import androidx.work.ExistingPeriodicWorkPolicy;
+ import androidx.work.PeriodicWorkRequest;
+ import androidx.work.WorkManager;
+@@ -31,6 +29,7 @@ import androidx.work.Worker;
+ import androidx.work.WorkerParameters;
+ 
+ import com.hmdm.launcher.Const;
++import com.hmdm.launcher.helper.ConfigUpdater;
+ import com.hmdm.launcher.helper.SettingsHelper;
+ import com.hmdm.launcher.json.PushMessage;
+ import com.hmdm.launcher.json.PushResponse;
+@@ -157,8 +156,7 @@ public class PushNotificationWorker extends Worker {
+         }
+         RemoteLogger.log(context, Const.LOG_DEBUG, "Forcing configuration update");
+         settingsHelper.setConfigUpdateTimestamp(now);
+-        LocalBroadcastManager.getInstance(context).
+-                sendBroadcast(new Intent(Const.ACTION_UPDATE_CONFIGURATION));
++        ConfigUpdater.notifyConfigUpdate(context);
+         return Result.success();
+     }
+ }

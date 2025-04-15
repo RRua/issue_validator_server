@@ -1,0 +1,231 @@
+diff --git a/core/src/com/agateau/tinywheels/DebugScreen.java b/core/src/com/agateau/tinywheels/DebugScreen.java
+index c70df63d..b1be2dd8 100644
+--- a/core/src/com/agateau/tinywheels/DebugScreen.java
++++ b/core/src/com/agateau/tinywheels/DebugScreen.java
+@@ -18,7 +18,6 @@
+  */
+ package com.agateau.tinywheels;
+ 
+-import com.agateau.ui.FloatSliderMenuItem;
+ import com.agateau.ui.IntSliderMenuItem;
+ import com.agateau.ui.Menu;
+ import com.agateau.ui.RefreshHelper;
+@@ -149,13 +148,12 @@ public class DebugScreen extends TwStageScreen {
+         final Introspector introspector = mCurrentIntrospector;
+ 
+         final DebugFloatSliderMenuItem item = new DebugFloatSliderMenuItem(mMenu, keyName, introspector);
+-        item.setRange(min, max);
+-        item.setStepSize(stepSize);
+-        item.setValue(introspector.getFloat(keyName));
++        item.setRange(min, max, stepSize);
++        item.setFloatValue(introspector.getFloat(keyName));
+         item.addListener(new ChangeListener() {
+             @Override
+             public void changed(ChangeEvent event, Actor actor) {
+-                float value = item.getValue();
++                float value = item.getFloatValue();
+                 introspector.setFloat(keyName, value);
+                 item.updateMainActor();
+             }
+@@ -194,7 +192,7 @@ public class DebugScreen extends TwStageScreen {
+         }
+     }
+ 
+-    private class DebugFloatSliderMenuItem extends FloatSliderMenuItem {
++    private class DebugFloatSliderMenuItem extends IntSliderMenuItem {
+         private final String mKeyName;
+         private final Introspector mIntrospector;
+ 
+@@ -205,13 +203,14 @@ public class DebugScreen extends TwStageScreen {
+         }
+ 
+         @Override
+-        protected String formatValue(float value) {
++        protected String formatValue(int value) {
+             String text = super.formatValue(value);
+             float ref = mIntrospector.getReference(mKeyName);
+             float current = mIntrospector.get(mKeyName);
+ 
+             if (ref != current) {
+-                text += " (" + super.formatValue(ref) + ")";
++                int intValue = (int)(ref * getDivisor());
++                text += " (" + super.formatValue(intValue) + ")";
+             }
+             return text;
+         }
+diff --git a/core/src/com/agateau/ui/FloatSliderMenuItem.java b/core/src/com/agateau/ui/FloatSliderMenuItem.java
+deleted file mode 100644
+index 32e55ddf..00000000
+--- a/core/src/com/agateau/ui/FloatSliderMenuItem.java
++++ /dev/null
+@@ -1,70 +0,0 @@
+-package com.agateau.ui;
+-
+-import com.badlogic.gdx.math.MathUtils;
+-import com.badlogic.gdx.scenes.scene2d.Actor;
+-import com.badlogic.gdx.scenes.scene2d.ui.Label;
+-import com.badlogic.gdx.utils.Align;
+-
+-/**
+- * A Menu item to select float values
+- */
+-public class FloatSliderMenuItem extends RangeMenuItem {
+-    private Label mLabel;
+-    private float mMin = 0;
+-    private float mMax = 100;
+-    private float mStepSize = 1;
+-    private float mValue = 0;
+-
+-    public FloatSliderMenuItem(Menu menu) {
+-        super(menu);
+-        setStepSize(1);
+-    }
+-
+-    public void setStepSize(float stepSize) {
+-        mStepSize = stepSize;
+-    }
+-
+-    public void setRange(float min, float max) {
+-        mMin = min;
+-        mMax = max;
+-        setValue(getValue());
+-    }
+-
+-    public float getValue() {
+-        return mValue;
+-    }
+-
+-    public void setValue(float value) {
+-        mValue = MathUtils.clamp(value, mMin, mMax);
+-        updateMainActor();
+-    }
+-
+-    @Override
+-    protected Actor createMainActor(Menu menu) {
+-        mLabel = new Label("", menu.getSkin());
+-        mLabel.setAlignment(Align.center);
+-        return mLabel;
+-    }
+-
+-    @Override
+-    public void updateMainActor() {
+-        if (mLabel == null) {
+-            return;
+-        }
+-        mLabel.setText(formatValue(getValue()));
+-    }
+-
+-    @Override
+-    protected void decrease() {
+-        setValue(mValue - mStepSize);
+-    }
+-
+-    @Override
+-    protected void increase() {
+-        setValue(mValue + mStepSize);
+-    }
+-
+-    protected String formatValue(float value) {
+-        return String.valueOf(value);
+-    }
+-}
+diff --git a/core/src/com/agateau/ui/IntSliderMenuItem.java b/core/src/com/agateau/ui/IntSliderMenuItem.java
+index e5ca40cf..6b295e8d 100644
+--- a/core/src/com/agateau/ui/IntSliderMenuItem.java
++++ b/core/src/com/agateau/ui/IntSliderMenuItem.java
+@@ -1,5 +1,6 @@
+ package com.agateau.ui;
+ 
++import com.agateau.utils.Assert;
+ import com.badlogic.gdx.graphics.g2d.Batch;
+ import com.badlogic.gdx.graphics.g2d.BitmapFont;
+ import com.badlogic.gdx.math.MathUtils;
+@@ -15,6 +16,8 @@ import com.badlogic.gdx.utils.Align;
+  * A Menu item to select int values
+  */
+ public class IntSliderMenuItem extends RangeMenuItem {
++    private static final float NO_DIVISOR = -1;
++
+     private static class SliderMainActor extends Actor {
+         private final Skin mSkin;
+         private final SliderMenuItemStyle mStyle;
+@@ -79,6 +82,7 @@ public class IntSliderMenuItem extends RangeMenuItem {
+     private int mMin = 0;
+     private int mMax = 100;
+     private int mStepSize = 1;
++    private float mDivisor = NO_DIVISOR;
+     private int mValue = 0;
+ 
+     public IntSliderMenuItem(Menu menu) {
+@@ -93,6 +97,15 @@ public class IntSliderMenuItem extends RangeMenuItem {
+         mMin = min;
+         mMax = max;
+         mStepSize = stepSize;
++        mDivisor = NO_DIVISOR;
++        setValue(getValue());
++    }
++
++    public void setRange(float min, float max, float stepSize) {
++        mStepSize = 1;
++        mDivisor = 1 / stepSize;
++        mMin = (int)(min * mDivisor);
++        mMax = (int)(max * mDivisor);
+         setValue(getValue());
+     }
+ 
+@@ -109,6 +122,14 @@ public class IntSliderMenuItem extends RangeMenuItem {
+         updateMainActor();
+     }
+ 
++    public void setFloatValue(float value) {
++        setValue((int)(value * mDivisor));
++    }
++
++    public float getFloatValue() {
++        return mValue / mDivisor;
++    }
++
+     @Override
+     protected Actor createMainActor(Menu menu) {
+         mMainActor = new SliderMainActor(menu.getSkin(), this);
+@@ -135,7 +156,15 @@ public class IntSliderMenuItem extends RangeMenuItem {
+     }
+ 
+     protected String formatValue(int value) {
+-        return String.valueOf(value);
++        if (mDivisor == NO_DIVISOR) {
++            return String.valueOf(value);
++        } else {
++            return String.valueOf(value / mDivisor);
++        }
++    }
++
++    protected float getDivisor() {
++        return mDivisor;
+     }
+ 
+     private void onSliderChanged(float percent) {
+diff --git a/uigallery/src/com/agateau/ui/gallery/GalleryScreen.java b/uigallery/src/com/agateau/ui/gallery/GalleryScreen.java
+index 720ae27d..c0b9cf5d 100644
+--- a/uigallery/src/com/agateau/ui/gallery/GalleryScreen.java
++++ b/uigallery/src/com/agateau/ui/gallery/GalleryScreen.java
+@@ -19,7 +19,6 @@
+ package com.agateau.ui.gallery;
+ 
+ import com.agateau.tinywheels.MenuScrollPane;
+-import com.agateau.ui.FloatSliderMenuItem;
+ import com.agateau.ui.GridMenuItem;
+ import com.agateau.ui.IntSliderMenuItem;
+ import com.agateau.ui.Menu;
+@@ -143,9 +142,8 @@ class GalleryScreen extends StageScreen {
+         intSliderMenuItem.setRange(12, 36, 2);
+         menu.addItemWithLabel("Ints", intSliderMenuItem);
+ 
+-        FloatSliderMenuItem floatSliderMenuItem = new FloatSliderMenuItem(menu);
+-        floatSliderMenuItem.setRange(1, 9);
+-        floatSliderMenuItem.setStepSize(0.5f);
++        IntSliderMenuItem floatSliderMenuItem = new IntSliderMenuItem(menu);
++        floatSliderMenuItem.setRange(1f, 9f, 0.5f);
+         menu.addItemWithLabel("Floats", floatSliderMenuItem);
+ 
+         menu.addTitleLabel("GridMenuItem");

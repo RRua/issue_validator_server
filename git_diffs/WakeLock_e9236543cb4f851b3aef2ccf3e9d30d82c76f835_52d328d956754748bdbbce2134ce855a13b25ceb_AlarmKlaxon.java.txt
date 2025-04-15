@@ -1,0 +1,620 @@
+diff --git a/src/com/android/alarmclock/AlarmAlert.java b/src/com/android/alarmclock/AlarmAlert.java
+index a89a88437..a3096188a 100644
+--- a/src/com/android/alarmclock/AlarmAlert.java
++++ b/src/com/android/alarmclock/AlarmAlert.java
+@@ -17,17 +17,15 @@
+ package com.android.alarmclock;
+ 
+ import android.app.Activity;
+-import android.app.KeyguardManager;
+-import android.content.Context;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.content.res.Configuration;
+-import android.graphics.PixelFormat;
+ import android.os.Bundle;
+ import android.view.KeyEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.LayoutInflater;
++import android.view.Window;
+ import android.view.WindowManager;
+ import android.widget.Button;
+ import android.widget.Toast;
+@@ -46,9 +44,6 @@ public class AlarmAlert extends Activity {
+     private static final int SNOOZE = 1;
+     private static final int DISMISS = 2;
+     private static final int KILLED = 3;
+-
+-    private KeyguardManager mKeyguardManager;
+-    private KeyguardManager.KeyguardLock mKeyguardLock;
+     private Button mSnoozeButton;
+     private int mState = UNKNOWN;
+ 
+@@ -63,37 +58,18 @@ public class AlarmAlert extends Activity {
+         // Maintain a lock during the playback of the alarm. This lock may have
+         // already been acquired in AlarmReceiver. If the process was killed,
+         // the global wake lock is gone. Acquire again just to be sure.
+-        AlarmAlertWakeLock.acquire(this);
++        AlarmAlertWakeLock.acquireCpuWakeLock(this);
+ 
+         /* FIXME Intentionally verbose: always log this until we've
+            fully debugged the app failing to start up */
+         Log.v("AlarmAlert.onCreate()");
+ 
+-        // Popup alert over black screen
+-        WindowManager.LayoutParams lp = getWindow().getAttributes();
+-        lp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+-        lp.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+-        // XXX DO NOT COPY THIS!!!  THIS IS BOGUS!  Making an activity have
+-        // a system alert type is completely broken, because the activity
+-        // manager will still hide/show it as if it is part of the normal
+-        // activity stack.  If this is really what you want and you want it
+-        // to work correctly, you should create and show your own custom window.
+-        lp.type = WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+-        lp.token = null;
+-        getWindow().setAttributes(lp);
+-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+-
+-        mKeyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+-
+         Intent i = getIntent();
+         mAlarmId = i.getIntExtra(Alarms.ID, -1);
+ 
+         mKlaxon = new AlarmKlaxon();
+         mKlaxon.postPlay(this, mAlarmId);
+ 
+-        /* Set the title from the passed in label */
+-        setTitleFromIntent(i);
+-
+         /* allow next alarm to trigger while this activity is
+            active */
+         Alarms.disableSnoozeAlert(AlarmAlert.this);
+@@ -116,6 +92,8 @@ public class AlarmAlert extends Activity {
+             }
+         });
+ 
++        requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
++        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED);
+         updateLayout();
+     }
+ 
+@@ -124,7 +102,8 @@ public class AlarmAlert extends Activity {
+         if (mLabel == null || mLabel.length() == 0) {
+             mLabel = getString(R.string.default_label);
+         }
+-        setTitle(mLabel);
++        TextView title = (TextView) findViewById(R.id.alertTitle);
++        title.setText(mLabel);
+     }
+ 
+     private void updateSilencedText() {
+@@ -134,21 +113,27 @@ public class AlarmAlert extends Activity {
+         silenced.setVisibility(View.VISIBLE);
+     }
+ 
++    // This method is overwritten in AlarmAlertFullScreen in order to show a
++    // full activity with the wallpaper as the background.
++    protected View inflateView(LayoutInflater inflater) {
++        return inflater.inflate(R.layout.alarm_alert, null);
++    }
++
+     private void updateLayout() {
+-        setContentView(R.layout.alarm_alert);
++        LayoutInflater inflater = LayoutInflater.from(this);
++
++        setContentView(inflateView(inflater));
+ 
+         /* set clock face */
+-        LayoutInflater mFactory = LayoutInflater.from(this);
+         SharedPreferences settings =
+                 getSharedPreferences(AlarmClock.PREFERENCES, 0);
+         int face = settings.getInt(AlarmClock.PREF_CLOCK_FACE, 0);
+         if (face < 0 || face >= AlarmClock.CLOCKS.length) {
+             face = 0;
+         }
+-        View clockLayout =
+-                (View) mFactory.inflate(AlarmClock.CLOCKS[face], null);
+         ViewGroup clockView = (ViewGroup) findViewById(R.id.clockView);
+-        clockView.addView(clockLayout);
++        inflater.inflate(AlarmClock.CLOCKS[face], clockView);
++        View clockLayout = findViewById(R.id.clock);
+         if (clockLayout instanceof DigitalClock) {
+             ((DigitalClock) clockLayout).setAnimate();
+         }
+@@ -179,6 +164,9 @@ public class AlarmAlert extends Activity {
+                         finish();
+                     }
+                 });
++
++        /* Set the title from the passed in label */
++        setTitleFromIntent(getIntent());
+     }
+ 
+     // Attempt to snooze this alert.
+@@ -235,7 +223,6 @@ public class AlarmAlert extends Activity {
+         if (Log.LOGV) Log.v("AlarmAlert.OnNewIntent()");
+         mState = UNKNOWN;
+         mSnoozeButton.setEnabled(true);
+-        disableKeyguard();
+ 
+         mAlarmId = intent.getIntExtra(Alarms.ID, -1);
+         // Play the new alarm sound.
+@@ -255,7 +242,9 @@ public class AlarmAlert extends Activity {
+     protected void onResume() {
+         super.onResume();
+         if (Log.LOGV) Log.v("AlarmAlert.onResume()");
+-        disableKeyguard();
++        // Acquire a separate lock for the screen to stay on. This is necessary
++        // to avoid flashing the keyguard when the screen is locked.
++        AlarmAlertWakeLock.acquireScreenWakeLock(this);
+     }
+ 
+     @Override
+@@ -269,12 +258,6 @@ public class AlarmAlert extends Activity {
+         releaseLocks();
+     }
+ 
+-    @Override
+-    public void onConfigurationChanged(Configuration config) {
+-        super.onConfigurationChanged(config);
+-        updateLayout();
+-    }
+-
+     @Override
+     public boolean dispatchKeyEvent(KeyEvent event) {
+         // Do this on key down to handle a few of the system keys. Only handle
+@@ -314,25 +297,10 @@ public class AlarmAlert extends Activity {
+         return super.dispatchKeyEvent(event);
+     }
+ 
+-    private synchronized void enableKeyguard() {
+-        if (mKeyguardLock != null) {
+-            mKeyguardLock.reenableKeyguard();
+-            mKeyguardLock = null;
+-        }
+-    }
+-
+-    private synchronized void disableKeyguard() {
+-        if (mKeyguardLock == null) {
+-            mKeyguardLock = mKeyguardManager.newKeyguardLock(Log.LOGTAG);
+-            mKeyguardLock.disableKeyguard();
+-        }
+-    }
+-
+     /**
+      * release wake and keyguard locks
+      */
+     private synchronized void releaseLocks() {
+         AlarmAlertWakeLock.release();
+-        enableKeyguard();
+     }
+ }
+diff --git a/src/com/android/alarmclock/AlarmAlertFullScreen.java b/src/com/android/alarmclock/AlarmAlertFullScreen.java
+new file mode 100644
+index 000000000..07d0d9c60
+--- /dev/null
++++ b/src/com/android/alarmclock/AlarmAlertFullScreen.java
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (C) 2009 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.alarmclock;
++
++import android.graphics.drawable.BitmapDrawable;
++import android.view.View;
++import android.view.Gravity;
++import android.view.LayoutInflater;
++
++/**
++ * Full screen alarm alert: pops visible indicator and plays alarm tone. This
++ * activity displays the alert in full screen in order to be secure. The
++ * background is the current wallpaper.
++ */
++public class AlarmAlertFullScreen extends AlarmAlert {
++
++    @Override
++    final protected View inflateView(LayoutInflater inflater) {
++        View v = inflater.inflate(R.layout.alarm_alert, null);
++
++        // Display the wallpaper as the background.
++        BitmapDrawable wallpaper = (BitmapDrawable) getWallpaper();
++        wallpaper.setGravity(Gravity.CENTER);
++        v.setBackgroundDrawable(wallpaper);
++
++        return v;
++    }
++
++}
+diff --git a/src/com/android/alarmclock/AlarmAlertWakeLock.java b/src/com/android/alarmclock/AlarmAlertWakeLock.java
+index 10e5b54e4..0291df8b8 100644
+--- a/src/com/android/alarmclock/AlarmAlertWakeLock.java
++++ b/src/com/android/alarmclock/AlarmAlertWakeLock.java
+@@ -25,29 +25,50 @@ import android.os.PowerManager;
+  */
+ class AlarmAlertWakeLock {
+ 
+-    private static PowerManager.WakeLock sWakeLock;
++    private static PowerManager.WakeLock sScreenWakeLock;
++    private static PowerManager.WakeLock sCpuWakeLock;
+ 
+-    static void acquire(Context context) {
+-        Log.v("Acquiring wake lock");
+-        if (sWakeLock != null) {
+-            sWakeLock.release();
++    static void acquireCpuWakeLock(Context context) {
++        Log.v("Acquiring cpu wake lock");
++        if (sCpuWakeLock != null) {
++            return;
+         }
+ 
+         PowerManager pm =
+                 (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+ 
+-        sWakeLock = pm.newWakeLock(
++        sCpuWakeLock = pm.newWakeLock(
++                PowerManager.PARTIAL_WAKE_LOCK |
++                PowerManager.ACQUIRE_CAUSES_WAKEUP |
++                PowerManager.ON_AFTER_RELEASE, Log.LOGTAG);
++        sCpuWakeLock.acquire();
++    }
++
++    static void acquireScreenWakeLock(Context context) {
++        Log.v("Acquiring screen wake lock");
++        if (sScreenWakeLock != null) {
++            return;
++        }
++
++        PowerManager pm =
++                (PowerManager) context.getSystemService(Context.POWER_SERVICE);
++
++        sScreenWakeLock = pm.newWakeLock(
+                 PowerManager.FULL_WAKE_LOCK |
+                 PowerManager.ACQUIRE_CAUSES_WAKEUP |
+                 PowerManager.ON_AFTER_RELEASE, Log.LOGTAG);
+-        sWakeLock.acquire();
++        sScreenWakeLock.acquire();
+     }
+ 
+     static void release() {
+         Log.v("Releasing wake lock");
+-        if (sWakeLock != null) {
+-            sWakeLock.release();
+-            sWakeLock = null;
++        if (sCpuWakeLock != null) {
++            sCpuWakeLock.release();
++            sCpuWakeLock = null;
++        }
++        if (sScreenWakeLock != null) {
++            sScreenWakeLock.release();
++            sScreenWakeLock = null;
+         }
+     }
+ }
+diff --git a/src/com/android/alarmclock/AlarmClock.java b/src/com/android/alarmclock/AlarmClock.java
+index f8902b967..9804994d8 100644
+--- a/src/com/android/alarmclock/AlarmClock.java
++++ b/src/com/android/alarmclock/AlarmClock.java
+@@ -41,6 +41,7 @@ import android.widget.TextView;
+ import android.widget.CheckBox;
+ 
+ import java.util.Calendar;
++import java.text.DateFormatSymbols;
+ 
+ /**
+  * AlarmClock application.
+@@ -48,7 +49,6 @@ import java.util.Calendar;
+ public class AlarmClock extends Activity {
+ 
+     final static String PREFERENCES = "AlarmClock";
+-    final static int SET_ALARM = 1;
+     final static String PREF_CLOCK_FACE = "face";
+     final static String PREF_SHOW_CLOCK = "show_clock";
+ 
+@@ -68,6 +68,8 @@ public class AlarmClock extends Activity {
+     private ListView mAlarmsList;
+     private Cursor mCursor;
+ 
++    private String mAm, mPm;
++
+     /**
+      * Which clock face to show
+      */
+@@ -91,6 +93,10 @@ public class AlarmClock extends Activity {
+ 
+         public View newView(Context context, Cursor cursor, ViewGroup parent) {
+             View ret = mFactory.inflate(R.layout.alarm_time, parent, false);
++
++            ((TextView) ret.findViewById(R.id.am)).setText(mAm);
++            ((TextView) ret.findViewById(R.id.pm)).setText(mPm);
++
+             DigitalClock digitalClock = (DigitalClock)ret.findViewById(R.id.digitalClock);
+             digitalClock.setLive(false);
+             if (Log.LOGV) Log.v("newView " + cursor.getPosition());
+@@ -129,7 +135,7 @@ public class AlarmClock extends Activity {
+                         if (true) {
+                             Intent intent = new Intent(AlarmClock.this, SetAlarm.class);
+                             intent.putExtra(Alarms.ID, id);
+-                            startActivityForResult(intent, SET_ALARM);
++                            startActivity(intent);
+                         } else {
+                             // TESTING: immediately pop alarm
+                             Intent fireAlarm = new Intent(AlarmClock.this, AlarmAlert.class);
+@@ -199,6 +205,10 @@ public class AlarmClock extends Activity {
+     protected void onCreate(Bundle icicle) {
+         super.onCreate(icicle);
+ 
++        String[] ampm = new DateFormatSymbols().getAmPmStrings();
++        mAm = ampm[0];
++        mPm = ampm[1];
++
+         // sanity check -- no database, no clock
+         if (getContentResolver() == null) {
+             new AlertDialog.Builder(this)
+@@ -268,25 +278,27 @@ public class AlarmClock extends Activity {
+         if (mClock != null) {
+             mClockLayout.removeView(mClock);
+         }
+-        mClock = mFactory.inflate(CLOCKS[mFace], null);
+-        mClockLayout.addView(mClock, 0);
++
++        LayoutInflater.from(this).inflate(CLOCKS[mFace], mClockLayout);
++        mClock = findViewById(R.id.clock);
++
++        TextView am = (TextView) findViewById(R.id.am);
++        TextView pm = (TextView) findViewById(R.id.pm);
++
++        if (am != null) {
++            am.setText(mAm);
++        }
++        if (pm != null) {
++            pm.setText(mPm);
++        }
+     }
+ 
+     @Override
+     public boolean onCreateOptionsMenu(Menu menu) {
+-        super.onCreateOptionsMenu(menu);
+-
+-        mAddAlarmItem = menu.add(0, 0, 0, R.string.add_alarm);
+-        mAddAlarmItem.setIcon(android.R.drawable.ic_menu_add);
+-
+-        mToggleClockItem = menu.add(0, 0, 0, R.string.hide_clock);
+-        mToggleClockItem.setIcon(R.drawable.ic_menu_clock_face);
+-        
+-        MenuItem settingsItem = menu.add(0, 0, 0, R.string.settings);
+-        settingsItem.setIcon(android.R.drawable.ic_menu_preferences);
+-        settingsItem.setIntent(new Intent(this, SettingsActivity.class));
++        // Inflate our menu.
++        getMenuInflater().inflate(R.menu.main_menu, menu);
+ 
+-        return true;
++        return super.onCreateOptionsMenu(menu);
+     }
+ 
+     /**
+@@ -295,32 +307,41 @@ public class AlarmClock extends Activity {
+      */
+     @Override
+     public boolean onPrepareOptionsMenu(Menu menu) {
+-        super.onPrepareOptionsMenu(menu);
+-        mAddAlarmItem.setVisible(mAlarmsList.getChildCount() < MAX_ALARM_COUNT);
+-        mToggleClockItem.setTitle(getClockVisibility() ? R.string.hide_clock :
+-                                  R.string.show_clock);
+-        return true;
++        menu.findItem(R.id.menu_add_alarm).setVisible(
++                mAlarmsList.getAdapter().getCount() < MAX_ALARM_COUNT);
++        menu.findItem(R.id.menu_toggle_clock).setTitle(
++                getClockVisibility() ? R.string.hide_clock
++                    : R.string.show_clock);
++        return super.onPrepareOptionsMenu(menu);
+     }
+ 
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+-        if (item == mAddAlarmItem) {
+-            Uri uri = Alarms.addAlarm(getContentResolver());
+-            // FIXME: scroll to new item.  mAlarmsList.requestChildRectangleOnScreen() ?
+-            String segment = uri.getPathSegments().get(1);
+-            int newId = Integer.parseInt(segment);
+-            if (Log.LOGV) Log.v("In AlarmClock, new alarm id = " + newId);
+-            Intent intent = new Intent(AlarmClock.this, SetAlarm.class);
+-            intent.putExtra(Alarms.ID, newId);
+-            startActivityForResult(intent, SET_ALARM);
+-            return true;
+-        } else if (item == mToggleClockItem) {
+-            setClockVisibility(!getClockVisibility());
+-            saveClockVisibility();
+-            return true;
++        switch (item.getItemId()) {
++            case R.id.menu_add_alarm:
++                Uri uri = Alarms.addAlarm(getContentResolver());
++                // FIXME: scroll to new item?
++                String segment = uri.getPathSegments().get(1);
++                int newId = Integer.parseInt(segment);
++                if (Log.LOGV) {
++                    Log.v("In AlarmClock, new alarm id = " + newId);
++                }
++                Intent intent = new Intent(this, SetAlarm.class);
++                intent.putExtra(Alarms.ID, newId);
++                startActivity(intent);
++                return true;
++
++            case R.id.menu_toggle_clock:
++                setClockVisibility(!getClockVisibility());
++                saveClockVisibility();
++                return true;
++
++            case R.id.menu_settings:
++                startActivity(new Intent(this, SettingsActivity.class));
++                return true;
+         }
+ 
+-        return false;
++        return super.onOptionsItemSelected(item);
+     }
+ 
+ 
+diff --git a/src/com/android/alarmclock/AlarmReceiver.java b/src/com/android/alarmclock/AlarmReceiver.java
+index 4982f95b8..eed76b6ce 100644
+--- a/src/com/android/alarmclock/AlarmReceiver.java
++++ b/src/com/android/alarmclock/AlarmReceiver.java
+@@ -16,6 +16,7 @@
+ 
+ package com.android.alarmclock;
+ 
++import android.app.KeyguardManager;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.BroadcastReceiver;
+@@ -49,15 +50,24 @@ public class AlarmReceiver extends BroadcastReceiver {
+ 
+         /* Wake the device and stay awake until the AlarmAlert intent is
+          * handled. */
+-        AlarmAlertWakeLock.acquire(context);
++        AlarmAlertWakeLock.acquireCpuWakeLock(context);
+ 
+         /* Close dialogs and window shade */
+         Intent i = new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+         context.sendBroadcast(i);
+ 
++        // Decide which activity to start based on the state of the keyguard.
++        Class c = AlarmAlert.class;
++        KeyguardManager km = (KeyguardManager) context.getSystemService(
++                Context.KEYGUARD_SERVICE);
++        if (km.inKeyguardRestrictedInputMode()) {
++            // Use the full screen activity for security.
++            c = AlarmAlertFullScreen.class;
++        }
++
+         /* launch UI, explicitly stating that this is not due to user action
+          * so that the current app's notification management is not disturbed */
+-        Intent fireAlarm = new Intent(context, AlarmAlert.class);
++        Intent fireAlarm = new Intent(context, c);
+         fireAlarm.putExtra(Alarms.ID, id);
+         fireAlarm.putExtra(Alarms.LABEL, intent.getStringExtra(Alarms.LABEL));
+         fireAlarm.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+diff --git a/src/com/android/alarmclock/Alarms.java b/src/com/android/alarmclock/Alarms.java
+index 881723493..e34b1b56c 100644
+--- a/src/com/android/alarmclock/Alarms.java
++++ b/src/com/android/alarmclock/Alarms.java
+@@ -33,6 +33,7 @@ import android.provider.Settings;
+ import android.text.format.DateFormat;
+ 
+ import java.util.Calendar;
++import java.text.DateFormatSymbols;
+ 
+ /**
+  * The Alarms provider supplies info about Alarm Clock settings
+@@ -54,6 +55,20 @@ public class Alarms {
+     private final static String M12 = "h:mm aa";
+     private final static String M24 = "k:mm";
+ 
++    /**
++     * Mapping from days in this application (where Monday is 0) to
++     * days in DateFormatSymbols (where Monday is 2).
++     */
++    private static int[] DAY_MAP = new int[] {
++        Calendar.MONDAY,
++        Calendar.TUESDAY,
++        Calendar.WEDNESDAY,
++        Calendar.THURSDAY,
++        Calendar.FRIDAY,
++        Calendar.SATURDAY,
++        Calendar.SUNDAY,
++    };
++
+     static class DaysOfWeek {
+ 
+         int mDays;
+@@ -99,15 +114,15 @@ public class Alarms {
+             }
+ 
+             /* short or long form? */
+-            CharSequence[] strings =
+-                    context.getResources().getTextArray(
+-                            (dayCount > 1) ? R.array.days_of_week_short :
+-                            R.array.days_of_week);
++            DateFormatSymbols dfs = new DateFormatSymbols();
++            String[] dayList = (dayCount > 1) ?
++                                    dfs.getShortWeekdays() :
++                                    dfs.getWeekdays();
+ 
+             /* selected days */
+             for (int i = 0; i < 7; i++) {
+                 if ((mDays & (1 << i)) != 0) {
+-                    ret.append(strings[i]);
++                    ret.append(dayList[DAY_MAP[i]]);
+                     dayCount -= 1;
+                     if (dayCount > 0) ret.append(
+                             context.getText(R.string.day_concat));
+diff --git a/src/com/android/alarmclock/DigitalClock.java b/src/com/android/alarmclock/DigitalClock.java
+index 65dcc2c9c..d131066e1 100644
+--- a/src/com/android/alarmclock/DigitalClock.java
++++ b/src/com/android/alarmclock/DigitalClock.java
+@@ -130,16 +130,9 @@ public class DigitalClock extends LinearLayout {
+         mAttached = true;
+ 
+         if (mAnimate) {
+-            AnimationDrawable frameAnimation =
+-                    (AnimationDrawable) mContext.getResources().getDrawable(
+-                            R.drawable.animate_circle);
+-            View digitalClock = findViewById(R.id.digitalClock);
+-            digitalClock.setBackgroundDrawable(frameAnimation);
++            setBackgroundResource(R.drawable.animate_circle);
+             /* Start the animation (looped playback by default). */
+-            ((AnimationDrawable) digitalClock.getBackground()).start();
+-            /* No luck wrapping animation or individual bitmaps in a
+-               ScaleDrawable */
+-            digitalClock.requestLayout();
++            ((AnimationDrawable) getBackground()).start();
+         }
+ 
+         if (mLive) {
+diff --git a/src/com/android/alarmclock/RepeatPreference.java b/src/com/android/alarmclock/RepeatPreference.java
+index 8313858a4..ba33faa27 100644
+--- a/src/com/android/alarmclock/RepeatPreference.java
++++ b/src/com/android/alarmclock/RepeatPreference.java
+@@ -22,6 +22,9 @@ import android.content.DialogInterface;
+ import android.preference.ListPreference;
+ import android.util.AttributeSet;
+ 
++import java.text.DateFormatSymbols;
++import java.util.Calendar;
++
+ public class RepeatPreference extends ListPreference {
+ 
+     private Alarms.DaysOfWeek mDaysOfWeek = new Alarms.DaysOfWeek();
+@@ -37,6 +40,19 @@ public class RepeatPreference extends ListPreference {
+ 
+     public RepeatPreference(Context context, AttributeSet attrs) {
+         super(context, attrs);
++
++        String[] weekdays = new DateFormatSymbols().getWeekdays();
++        String[] values = new String[] {
++            weekdays[Calendar.MONDAY],
++            weekdays[Calendar.TUESDAY],
++            weekdays[Calendar.WEDNESDAY],
++            weekdays[Calendar.THURSDAY],
++            weekdays[Calendar.FRIDAY],
++            weekdays[Calendar.SATURDAY],
++            weekdays[Calendar.SUNDAY],
++        };
++        setEntries(values);
++        setEntryValues(values);
+     }
+ 
+     void setOnRepeatChangedObserver(OnRepeatChangedObserver onRepeatChangedObserver) {

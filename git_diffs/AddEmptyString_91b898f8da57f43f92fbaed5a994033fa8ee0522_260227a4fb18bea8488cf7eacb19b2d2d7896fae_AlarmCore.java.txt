@@ -1,0 +1,3624 @@
+diff --git a/app/src/main/java/com/better/alarm/configuration/Container.kt b/app/src/main/java/com/better/alarm/configuration/Container.kt
+index fc385340..e5542fb0 100644
+--- a/app/src/main/java/com/better/alarm/configuration/Container.kt
++++ b/app/src/main/java/com/better/alarm/configuration/Container.kt
+@@ -24,7 +24,6 @@ import com.better.alarm.presenter.AlarmsListActivity
+ import com.better.alarm.presenter.DynamicThemeHandler
+ import com.better.alarm.presenter.ScheduledReceiver
+ import com.better.alarm.presenter.ToastPresenter
+-import com.better.alarm.statemachine.HandlerFactory
+ import com.better.alarm.util.Optional
+ import com.better.alarm.wakelock.WakeLockManager
+ import com.better.alarm.wakelock.Wakelocks
+@@ -94,11 +93,10 @@ fun startKoin(context: Context): Koin {
+         single<AlarmsScheduler> { AlarmsScheduler(get(), logger("AlarmsScheduler"), get(), get(), get()) }
+         factory<IAlarmsScheduler> { get<AlarmsScheduler>() }
+         single<AlarmCore.IStateNotifier> { AlarmStateNotifier(get()) }
+-        single<HandlerFactory> { ImmediateHandlerFactory() }
+         single<ContainerFactory> { PersistingContainerFactory(get(), get()) }
+         factory { get<Context>().contentResolver }
+         single<DatabaseQuery> { DatabaseQuery(get(), get()) }
+-        single<AlarmCoreFactory> { AlarmCoreFactory(logger("AlarmCore"), get(), get(), get(), get(), get(), get()) }
++        single<AlarmCoreFactory> { AlarmCoreFactory(logger("AlarmCore"), get(), get(), get(), get(), get()) }
+         single<Alarms> { Alarms(get(), get(), get(), get(), logger("Alarms")) }
+         factory<IAlarmsManager> { get<Alarms>() }
+         single { ScheduledReceiver(get(), get(), get(), get()) }
+diff --git a/app/src/main/java/com/better/alarm/model/AlarmCore.java b/app/src/main/java/com/better/alarm/model/AlarmCore.java
+deleted file mode 100644
+index 9b417b9a..00000000
+--- a/app/src/main/java/com/better/alarm/model/AlarmCore.java
++++ /dev/null
+@@ -1,1012 +0,0 @@
+-/*
+- * Copyright (C) 2009 The Android Open Source Project
+- * Copyright (C) 2012 Yuriy Kulikov yuriy.kulikov.87@gmail.com
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm.model;
+-
+-import android.net.Uri;
+-
+-import com.better.alarm.configuration.Prefs;
+-import com.better.alarm.configuration.Store;
+-import com.better.alarm.interfaces.Alarm;
+-import com.better.alarm.interfaces.AlarmEditor;
+-import com.better.alarm.interfaces.Intents;
+-import com.better.alarm.logger.Logger;
+-import com.better.alarm.statemachine.ComplexTransition;
+-import com.better.alarm.statemachine.HandlerFactory;
+-import com.better.alarm.statemachine.IOnStateChangedListener;
+-import com.better.alarm.statemachine.IState;
+-import com.better.alarm.statemachine.Message;
+-import com.better.alarm.statemachine.State;
+-import com.better.alarm.statemachine.StateMachine;
+-
+-import org.jetbrains.annotations.NotNull;
+-
+-import java.text.DateFormat;
+-import java.text.SimpleDateFormat;
+-import java.util.Calendar;
+-import java.util.List;
+-import java.util.Locale;
+-
+-import io.reactivex.Observable;
+-import io.reactivex.annotations.NonNull;
+-import io.reactivex.functions.Consumer;
+-import kotlin.jvm.functions.Function1;
+-
+-/**
+- * Alarm is a class which models a real word alarm. It is a simple state
+- * machine. External events (e.g. user input {@link #snooze()} or
+- * {@link #dismiss()}) or timer events {@link #onAlarmFired(CalendarType)}
+- * trigger transitions. Alarm notifies listeners when transitions happen by
+- * broadcasting Intents listed in {@link Intents}, e.g.
+- * {@link Intents#ALARM_PREALARM_ACTION} or {@link Intents#ALARM_DISMISS_ACTION}
+- * . State and properties of the alarm are stored in the database and are
+- * updated every time when changes to alarm happen.
+- * <p>
+- * <pre>
+- * @startuml
+- * State DISABLED
+- * State RESCHEDULE
+- * State ENABLE
+- * State ENABLED {
+- * State PREALARM_SET
+- * State SET
+- * State FIRED
+- * State PREALARM_FIRED
+- * State SNOOZED
+- * State PREALARM_SNOOZED
+- * RESCHEDULE :Complex transitiontran
+- * PREALARM_FIRED :timer
+- * SNOOZED :timer
+- * PREALARM_SNOOZED :timer
+- * PREALARM_SET :timer
+- * SET :timer
+- *
+- * DISABLED -down-> ENABLE :enable\nchange
+- * ENABLED -up-> DISABLED :disable
+- * ENABLED -up-> RESCHEDULE :dismiss
+- * ENABLED -up-> ENABLE :change\nrefresh
+- *
+- * PREALARM_SET -down-> PREALARM_FIRED :fired
+- * PREALARM_FIRED -down-> PREALARM_SNOOZED :snooze
+- * PREALARM_SNOOZED -up-> FIRED
+- * SET -down-> FIRED :fired
+- * PREALARM_FIRED --right--> FIRED :fired
+- * FIRED -down->  SNOOZED :snooze
+- * SNOOZED -up-> FIRED :fired
+- *
+- * RESCHEDULE -up-> DISABLED :disabled
+- *
+- * RESCHEDULE -down-> PREALARM_SET :PA
+- * RESCHEDULE -down-> SET :nPA
+- * ENABLE -down-> PREALARM_SET :PA
+- * ENABLE -down-> SET :nPA
+- *
+- * }
+- * @enduml
+- * </pre>
+- *
+- * @author Yuriy
+- */
+-public final class AlarmCore implements Alarm, Consumer<AlarmValue> {
+-    private final IAlarmsScheduler mAlarmsScheduler;
+-    private final Logger log;
+-    private final IStateNotifier broadcaster;
+-    private AlarmActiveRecord container;
+-    private final AlarmStateMachine stateMachine;
+-    private final DateFormat df;
+-
+-    private final Observable<Integer> preAlarmDuration;
+-    private final Observable<Integer> snoozeDuration;
+-    private final Observable<Integer> autoSilence;
+-
+-    private final Store store;
+-    private final Calendars calendars;
+-
+-    public AlarmCore(AlarmActiveRecord container, Logger logger, IAlarmsScheduler alarmsScheduler, IStateNotifier broadcaster, HandlerFactory handlerFactory, Prefs prefs, Store store, Calendars calendars) {
+-        this.log = logger;
+-        this.calendars = calendars;
+-        this.mAlarmsScheduler = alarmsScheduler;
+-        this.container = container;
+-        this.broadcaster = broadcaster;
+-        this.df = new SimpleDateFormat("dd-MM-yy HH:mm:ss", Locale.GERMANY);
+-
+-        this.preAlarmDuration = prefs.preAlarmDuration();
+-        this.snoozeDuration = prefs.snoozeDuration();
+-        this.autoSilence = prefs.autoSilence();
+-
+-        this.store = store;
+-
+-        stateMachine = new AlarmStateMachine(container.getState(), "Alarm " + container.getId(), handlerFactory);
+-
+-        preAlarmDuration
+-                .skip(1)// not interested in the first update on startup
+-                .subscribe(new Consumer() {
+-                    @Override
+-                    public void accept(Object o) throws Exception {
+-                        stateMachine.sendMessage(AlarmStateMachine.PREALARM_DURATION_CHANGED);
+-                    }
+-                });
+-    }
+-
+-    public void start() {
+-        // we always resume SM. This means that initial state will not receive
+-        // enter(), only resume()
+-        stateMachine.resume();
+-        updateListInStore();
+-    }
+-
+-    /**
+-     * Strategy used to notify other components about alarm state.
+-     */
+-    public interface IStateNotifier {
+-        void broadcastAlarmState(int id, String action);
+-    }
+-
+-    private static Function1<Integer, String> whatToString = new Function1<Integer, String>() {
+-        @Override
+-        public String invoke(Integer what) {
+-            switch (what) {
+-                case AlarmStateMachine.ENABLE:
+-                    return "ENABLE";
+-                case AlarmStateMachine.DISABLE:
+-                    return "DISABLE";
+-                case AlarmStateMachine.SNOOZE:
+-                    return "SNOOZE";
+-                case AlarmStateMachine.DISMISS:
+-                    return "DISMISS";
+-                case AlarmStateMachine.CHANGE:
+-                    return "CHANGE";
+-                case AlarmStateMachine.FIRED:
+-                    return "FIRED";
+-                case AlarmStateMachine.PREALARM_DURATION_CHANGED:
+-                    return "PREALARM_DURATION_CHANGED";
+-                case AlarmStateMachine.REFRESH:
+-                    return "REFRESH";
+-                case AlarmStateMachine.DELETE:
+-                    return "DELETE";
+-                case AlarmStateMachine.TIME_SET:
+-                    return "TIME_SET";
+-                case AlarmStateMachine.INEXACT_FIRED:
+-                    return "SKIP_FIRED";
+-                case AlarmStateMachine.SKIP:
+-                    return "SKIP";
+-            }
+-            return "" + what;
+-        }
+-    };
+-
+-    /**
+-     * SM to handle Alarm states
+-     */
+-    private class AlarmStateMachine extends StateMachine {
+-        public static final int ENABLE = 1;
+-        public static final int DISABLE = 2;
+-        public static final int SNOOZE = 3;
+-        public static final int DISMISS = 4;
+-        public static final int CHANGE = 5;
+-        public static final int FIRED = 6;
+-        public static final int PREALARM_DURATION_CHANGED = 7;
+-        public static final int REFRESH = 9;
+-        public static final int DELETE = 10;
+-        public static final int TIME_SET = 11;
+-        public static final int INEXACT_FIRED = 12;
+-        public static final int SKIP = 13;
+-
+-        public final DisabledState disabledState;
+-        public final DeletedState deletedState;
+-        public final EnabledState enabledState;
+-        public final RescheduleTransition rescheduleTransition;
+-        public final EnableTransition enableTransition;
+-        public final EnabledState.SetState.PreAlarmSetState preAlarmSet;
+-        public final EnabledState.SetState.NormalSetState normalSet;
+-        public final EnabledState.SnoozedState snoozed;
+-        public final EnabledState.SkippingSetState skipping;
+-        public final EnabledState.PreAlarmFiredState preAlarmFired;
+-        public final EnabledState.PreAlarmSnoozedState preAlarmSnoozed;
+-        public final EnabledState.FiredState fired;
+-
+-        public AlarmStateMachine(String initialState, String name, HandlerFactory handlerFactory) {
+-            super(name, handlerFactory, log, whatToString);
+-            disabledState = new DisabledState();
+-            rescheduleTransition = new RescheduleTransition();
+-            enableTransition = new EnableTransition();
+-
+-            enabledState = new EnabledState();
+-            EnabledState.SetState set = enabledState.new SetState();
+-            normalSet = set.new NormalSetState();
+-            preAlarmSet = set.new PreAlarmSetState();
+-            skipping = enabledState.new SkippingSetState();
+-
+-            snoozed = enabledState.new SnoozedState();
+-            preAlarmFired = enabledState.new PreAlarmFiredState();
+-            preAlarmSnoozed = enabledState.new PreAlarmSnoozedState();
+-            fired = enabledState.new FiredState();
+-            deletedState = new DeletedState();
+-
+-            addState(disabledState);
+-            addState(enabledState);
+-            addState(deletedState);
+-            addState(rescheduleTransition);
+-            addState(enableTransition);
+-
+-            addState(set, enabledState);
+-            addState(preAlarmSet, set);
+-            addState(normalSet, set);
+-            addState(snoozed, enabledState);
+-            addState(skipping, enabledState);
+-            addState(preAlarmFired, enabledState);
+-            addState(fired, enabledState);
+-            addState(preAlarmSnoozed, enabledState);
+-
+-            addOnStateChangedListener(new IOnStateChangedListener() {
+-                @Override
+-                public void onStateChanged(IState state) {
+-                    if (state != enabledState && !(state instanceof ComplexTransition)) {
+-                        container = container.withState(state.getName());
+-                    }
+-                }
+-            });
+-
+-            setInitialState(stringToState(initialState));
+-        }
+-
+-        private class DeletedState extends AlarmState {
+-            @Override
+-            public void enter() {
+-                removeAlarm();
+-                container.delete();
+-                removeFromStore();
+-                //TODO unregister from updates
+-            }
+-        }
+-
+-        private class DisabledState extends AlarmState {
+-            @Override
+-            public void enter() {
+-                updateListInStore();
+-            }
+-
+-            @Override
+-            protected void onChange(AlarmValue alarmValue) {
+-                writeChangeData(alarmValue);
+-                updateListInStore();
+-                if (container.isEnabled()) {
+-                    transitionTo(enableTransition);
+-                }
+-            }
+-
+-            @Override
+-            protected void onEnable() {
+-                container = container.withIsEnabled(true);
+-                transitionTo(enableTransition);
+-            }
+-
+-            @Override
+-            protected void onDelete() {
+-                transitionTo(deletedState);
+-            }
+-        }
+-
+-
+-        private class RescheduleTransition extends ComplexTransition {
+-            @Override
+-            public void performComplexTransition() {
+-                if (container.getDaysOfWeek().isRepeatSet()) {
+-                    if (container.isPrealarm() && preAlarmDuration.blockingFirst() != -1) {
+-                        transitionTo(preAlarmSet);
+-                    } else {
+-                        transitionTo(normalSet);
+-                    }
+-                } else {
+-                    log.d("Repeating is not set, disabling the alarm");
+-                    container = container.withIsEnabled(false);
+-                    transitionTo(disabledState);
+-                }
+-            }
+-        }
+-
+-        /**
+-         * Transition checks if preAlarm for the next alarm is in the future.
+-         * This is required to prevent the situation when user sets alarm in
+-         * time which is less than preAlarm duration. In this case main alarm
+-         * should be set.
+-         */
+-        private class EnableTransition extends ComplexTransition {
+-            @Override
+-            public void performComplexTransition() {
+-                Calendar preAlarm = calculateNextTime();
+-                Integer preAlarmMinutes = preAlarmDuration.blockingFirst();
+-                preAlarm.add(Calendar.MINUTE, -1 * preAlarmMinutes);
+-                if (container.isPrealarm() && preAlarm.after(calendars.now()) && preAlarmMinutes != -1) {
+-                    transitionTo(preAlarmSet);
+-                } else {
+-                    transitionTo(normalSet);
+-                }
+-            }
+-        }
+-
+-        /**
+-         * Master state for all enabled states. Handles disable and delete
+-         */
+-        private class EnabledState extends AlarmState {
+-            @Override
+-            public void enter() {
+-                if (!container.isEnabled()) {
+-                    // if due to an exception during development an alarm is not enabled but the state is
+-                    container = container.withIsEnabled(true);
+-                }
+-                updateListInStore();
+-            }
+-
+-            @Override
+-            protected void onChange(AlarmValue alarmValue) {
+-                writeChangeData(alarmValue);
+-                updateListInStore();
+-                if (container.isEnabled()) {
+-                    transitionTo(enableTransition);
+-                } else {
+-                    transitionTo(disabledState);
+-                }
+-            }
+-
+-            @Override
+-            protected void onDismiss() {
+-                transitionTo(rescheduleTransition);
+-            }
+-
+-            @Override
+-            protected void onDisable() {
+-                container = container.withIsEnabled(false);
+-                transitionTo(disabledState);
+-            }
+-
+-            @Override
+-            protected void onRefresh() {
+-                transitionTo(enableTransition);
+-            }
+-
+-            @Override
+-            protected void onTimeSet() {
+-                // nothing to do
+-            }
+-
+-            @Override
+-            protected void onDelete() {
+-                transitionTo(deletedState);
+-            }
+-
+-            private class SetState extends AlarmState {
+-
+-                private class NormalSetState extends AlarmState {
+-                    @Override
+-                    public void enter() {
+-                        int what = getCurrentMessage().what();
+-                        if (what == DISMISS || what == SNOOZE || what == CHANGE) {
+-                            broadcastAlarmSetWithNormalTime(calculateNextTime().getTimeInMillis());
+-                        }
+-                    }
+-
+-                    @Override
+-                    public void resume() {
+-                        Calendar nextTime = calculateNextTime();
+-                        setAlarm(nextTime, CalendarType.NORMAL);
+-                        showSkipNotification(nextTime);
+-                    }
+-
+-                    @Override
+-                    protected void onFired() {
+-                        transitionTo(fired);
+-                    }
+-
+-                    @Override
+-                    protected void onPreAlarmDurationChanged() {
+-                        transitionTo(enableTransition);
+-                    }
+-                }
+-
+-                private class PreAlarmSetState extends AlarmState {
+-
+-                    @Override
+-                    public void enter() {
+-                        int what = getCurrentMessage().what();
+-                        if (what == DISMISS || what == SNOOZE || what == CHANGE) {
+-                            broadcastAlarmSetWithNormalTime(calculateNextPrealarmTime().getTimeInMillis());
+-                        }
+-
+-                        updateListInStore();
+-                    }
+-
+-                    @Override
+-                    public void resume() {
+-                        Calendar nextPrealarmTime = calculateNextPrealarmTime();
+-                        if (nextPrealarmTime.after(calendars.now())) {
+-                            setAlarm(nextPrealarmTime, CalendarType.PREALARM);
+-                            showSkipNotification(nextPrealarmTime);
+-                        } else {
+-                            // TODO this should never happen
+-                            log.e("PreAlarm is still in the past!");
+-                            transitionTo(container.isEnabled() ? enableTransition : disabledState);
+-                        }
+-                    }
+-
+-                    @NotNull
+-                    private Calendar calculateNextPrealarmTime() {
+-                        Calendar c = calculateNextTime();
+-                        c.add(Calendar.MINUTE, -1 * preAlarmDuration.blockingFirst());
+-                        // since prealarm is before main alarm, it can be already in the
+-                        // past, so it has to be adjusted.
+-                        advanceCalendar(c);
+-                        return c;
+-                    }
+-
+-                    @Override
+-                    protected void onFired() {
+-                        transitionTo(preAlarmFired);
+-                    }
+-
+-                    @Override
+-                    protected void onPreAlarmDurationChanged() {
+-                        transitionTo(enableTransition);
+-                    }
+-                }
+-
+-                private void showSkipNotification(Calendar c) {
+-                    Calendar calendar = (Calendar) c.clone();
+-                    calendar.add(Calendar.MINUTE, -120);
+-                    if (calendar.after(calendars.now())) {
+-                        mAlarmsScheduler.setInexactAlarm(getId(), calendar);
+-                    } else {
+-                        log.d("Alarm " + getId() + " is due in less than 2 hours - show notification");
+-                        broadcastAlarmState(Intents.ALARM_SHOW_SKIP);
+-                    }
+-                }
+-
+-                @Override
+-                public void enter() {
+-                    updateListInStore();
+-                }
+-
+-                @Override
+-                protected void onSkipFired() {
+-                    broadcastAlarmState(Intents.ALARM_SHOW_SKIP);
+-                }
+-
+-                @Override
+-                protected void onSkipped() {
+-                    if (container.getDaysOfWeek().isRepeatSet()) {
+-                        transitionTo(skipping);
+-                    } else {
+-                        transitionTo(rescheduleTransition);
+-                    }
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    broadcastAlarmState(Intents.ALARM_REMOVE_SKIP);
+-                    if (!alarmWillBeRescheduled(getCurrentMessage())) {
+-                        removeAlarm();
+-                    }
+-                    mAlarmsScheduler.removeInexactAlarm(getId());
+-                }
+-
+-                @Override
+-                protected void onTimeSet() {
+-                    transitionTo(enableTransition);
+-                }
+-            }
+-
+-            private class SkippingSetState extends AlarmState {
+-                @Override
+-                public void enter() {
+-                    updateListInStore();
+-                }
+-
+-                @Override
+-                public void resume() {
+-                    Calendar nextTime = calculateNextTime();
+-                    if (nextTime.after(calendars.now())) {
+-                        mAlarmsScheduler.setInexactAlarm(getId(), nextTime);
+-
+-                        Calendar nextAfterSkip = calculateNextTime();
+-                        nextAfterSkip.add(Calendar.DAY_OF_YEAR, 1);
+-                        int addDays = container.getDaysOfWeek().getNextAlarm(nextAfterSkip);
+-                        if (addDays > 0) {
+-                            nextAfterSkip.add(Calendar.DAY_OF_WEEK, addDays);
+-                        }
+-
+-                        // this will never (hopefully) fire, but in order to display it everywhere...
+-                        setAlarm(nextAfterSkip, CalendarType.NORMAL);
+-                    } else {
+-                        transitionTo(container.isEnabled() ? enableTransition : disabledState);
+-                    }
+-                }
+-
+-                @Override
+-                protected void onFired() {
+-                    // yeah should never happen
+-                    transitionTo(fired);
+-                }
+-
+-                @Override
+-                protected void onSkipFired() {
+-                    transitionTo(enableTransition);
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    mAlarmsScheduler.removeInexactAlarm(getId());
+-                    // avoids flicker of the icon
+-                    if (getCurrentMessage().what() != SKIP) {
+-                        removeAlarm();
+-                    }
+-                }
+-            }
+-
+-            /**
+-             * handles both snoozed and main for now
+-             */
+-            private class FiredState extends AlarmState {
+-                @Override
+-                public void enter() {
+-                    broadcastAlarmState(Intents.ALARM_ALERT_ACTION);
+-                    int autoSilenceMinutes = autoSilence.blockingFirst();
+-                    if (autoSilenceMinutes > 0) {
+-                        // -1 means OFF
+-                        Calendar nextTime = calendars.now();
+-                        nextTime.add(Calendar.MINUTE, autoSilenceMinutes);
+-                        setAlarm(nextTime, CalendarType.AUTOSILENCE);
+-                    }
+-                }
+-
+-                @Override
+-                protected void onFired() {
+-                    // TODO actually we have to create a new state for this
+-                    // or maybe not :-)
+-                    broadcastAlarmState(Intents.ACTION_SOUND_EXPIRED);
+-                }
+-
+-                @Override
+-                protected void onSnooze() {
+-                    transitionTo(snoozed);
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    broadcastAlarmState(Intents.ALARM_DISMISS_ACTION);
+-                    removeAlarm();
+-                }
+-            }
+-
+-            private class PreAlarmFiredState extends AlarmState {
+-                @Override
+-                public void enter() {
+-                    broadcastAlarmState(Intents.ALARM_PREALARM_ACTION);
+-                    setAlarm(calculateNextTime(), CalendarType.NORMAL);
+-                }
+-
+-                @Override
+-                protected void onFired() {
+-                    transitionTo(fired);
+-                }
+-
+-                @Override
+-                protected void onSnooze() {
+-                    if (getCurrentMessage().obj().isPresent()) {
+-                        //snooze to time with prealarm -> go to snoozed
+-                        transitionTo(snoozed);
+-                    } else {
+-                        transitionTo(preAlarmSnoozed);
+-                    }
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    removeAlarm();
+-                    if (getCurrentMessage().what() != FIRED) {
+-                        // do not dismiss because we will immediately fire another event at the service
+-                        broadcastAlarmState(Intents.ALARM_DISMISS_ACTION);
+-                    }
+-                }
+-            }
+-
+-            private class SnoozedState extends AlarmState {
+-                Calendar nextTime;
+-
+-                @Override
+-                public void enter() {
+-                    Calendar now = calendars.now();
+-                    Message reason = getCurrentMessage();
+-                    if (reason.obj().isPresent()) {
+-                        Calendar customTime = calendars.now();
+-                        //TODO pass an object, dont misuse these poor args
+-                        customTime.set(Calendar.HOUR_OF_DAY, reason.arg1().get());
+-                        customTime.set(Calendar.MINUTE, reason.arg2().get());
+-                        if (customTime.after(now)) {
+-                            nextTime = customTime;
+-                        } else {
+-                            nextTime = getNextRegualarSnoozeCalendar();
+-                        }
+-                    } else {
+-                        nextTime = getNextRegualarSnoozeCalendar();
+-                    }
+-                    // change the next time to show notification properly
+-                    container = container.withNextTime(nextTime);
+-                    broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION); // Yar. 18.08
+-                }
+-
+-                @Override
+-                public void resume() {
+-                    // alarm was started again while snoozed alarm was hanging in there
+-                    if (nextTime == null) {
+-                        nextTime = getNextRegualarSnoozeCalendar();
+-                    }
+-
+-                    setAlarm(nextTime, CalendarType.NORMAL);
+-                    //broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION); Yar_18.08-2038: nafig broadcast iz resume
+-                }
+-
+-                private Calendar getNextRegualarSnoozeCalendar() {
+-                    Calendar nextTime = calendars.now();
+-                    int snoozeMinutes = snoozeDuration.blockingFirst();
+-                    nextTime.add(Calendar.MINUTE, snoozeMinutes);
+-                    return nextTime;
+-                }
+-
+-                @Override
+-                protected void onFired() {
+-                    transitionTo(fired);
+-                }
+-
+-                @Override
+-                protected void onSnooze() {
+-                    //reschedule from notification
+-                    enter();
+-                    resume();
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    removeAlarm();
+-                    broadcastAlarmState(Intents.ACTION_CANCEL_SNOOZE);
+-                }
+-            }
+-
+-            private class PreAlarmSnoozedState extends AlarmState {
+-                @Override
+-                public void enter() {
+-                    //Yar 18.08: setAlarm -> resume; setAlarm(calculateNextTime(), CalendarType.NORMAL);
+-                    broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION);
+-                }
+-
+-                @Override
+-                protected void onFired() {
+-                    transitionTo(fired);
+-                }
+-
+-                @Override
+-                protected void onSnooze() {
+-                    //reschedule from notification
+-                    transitionTo(snoozed);
+-                }
+-
+-                @Override
+-                public void exit() {
+-                    removeAlarm();
+-                    broadcastAlarmState(Intents.ACTION_CANCEL_SNOOZE);
+-                }
+-
+-                @Override
+-                public void resume() {
+-                    setAlarm(calculateNextTime(), CalendarType.NORMAL);
+-                    super.resume();
+-                }
+-            }
+-        }
+-
+-        private void broadcastAlarmState(String action) {
+-            log.d(container.getId() + " - " + action);
+-            broadcaster.broadcastAlarmState(container.getId(), action);
+-            updateListInStore();
+-        }
+-
+-        private void broadcastAlarmSetWithNormalTime(long millis) {
+-            store.sets().onNext(new Store.AlarmSet(container, millis));
+-            updateListInStore();
+-        }
+-
+-        private void setAlarm(Calendar calendar, CalendarType calendarType) {
+-            mAlarmsScheduler.setAlarm(container.getId(), calendarType, calendar, container);
+-            container = container.withNextTime(calendar);
+-        }
+-
+-        private void removeAlarm() {
+-            mAlarmsScheduler.removeAlarm(container.getId());
+-        }
+-
+-        private void removeFromStore() {
+-            store.alarms().take(1).subscribe(new Consumer<List<AlarmValue>>() {
+-                @Override
+-                public void accept(@NonNull List<AlarmValue> alarmValues) {
+-                    List<AlarmValue> withoutId = AlarmUtilsKt.removeWithId(alarmValues, container.getId());
+-                    store.alarmsSubject().onNext(withoutId);
+-                }
+-            });
+-        }
+-
+-        private void writeChangeData(AlarmValue data) {
+-            container = container.withChangeData(data);
+-        }
+-
+-        private Calendar calculateNextTime() {
+-            Calendar c = calendars.now();
+-            c.set(Calendar.HOUR_OF_DAY, container.getHour());
+-            c.set(Calendar.MINUTE, container.getMinutes());
+-            c.set(Calendar.SECOND, 0);
+-            c.set(Calendar.MILLISECOND, 0);
+-            advanceCalendar(c);
+-            return c;
+-        }
+-
+-        private void advanceCalendar(Calendar calendar) {
+-            Calendar now = calendars.now();
+-            // if alarm is behind current time, advance one day
+-            if (calendar.before(now)) {
+-                calendar.add(Calendar.DAY_OF_YEAR, 1);
+-            }
+-            int addDays = container.getDaysOfWeek().getNextAlarm(calendar);
+-            if (addDays > 0) {
+-                calendar.add(Calendar.DAY_OF_WEEK, addDays);
+-            }
+-        }
+-
+-        private State stringToState(String initialState) {
+-            if ("".equals(initialState)) {
+-                log.d("new Alarm - DisabledState");
+-                return disabledState;
+-            }
+-            for (State state : getStates()) {
+-                if (state.getName().equals(initialState)) return state;
+-            }
+-            log.d("wtf? state not found");
+-            return disabledState;
+-        }
+-
+-        private boolean alarmWillBeRescheduled(Message reason) {
+-            boolean alarmWillBeRescheduled = reason.what() == CHANGE && ((AlarmValue) reason.obj().get()).isEnabled();
+-            return alarmWillBeRescheduled;
+-        }
+-
+-        private class AlarmState extends State {
+-            private boolean handled;
+-
+-            @Override
+-            public final boolean processMessage(Message msg) {
+-                handled = true;
+-                switch (msg.what()) {
+-                    case ENABLE:
+-                        onEnable();
+-                        break;
+-                    case DISABLE:
+-                        onDisable();
+-                        break;
+-                    case SNOOZE:
+-                        onSnooze();
+-                        break;
+-                    case DISMISS:
+-                        onDismiss();
+-                        break;
+-                    case CHANGE:
+-                        onChange((AlarmValue) msg.obj().get());
+-                        break;
+-                    case FIRED:
+-                        onFired();
+-                        break;
+-                    case PREALARM_DURATION_CHANGED:
+-                        onPreAlarmDurationChanged();
+-                        break;
+-                    case REFRESH:
+-                        onRefresh();
+-                        break;
+-                    case TIME_SET:
+-                        onTimeSet();
+-                        break;
+-                    case INEXACT_FIRED:
+-                        onSkipFired();
+-                        break;
+-                    case SKIP:
+-                        onSkipped();
+-                        break;
+-                    case DELETE:
+-                        onDelete();
+-                        break;
+-                    default:
+-                        throw new RuntimeException("Handling of message code " + msg.what() + " is not implemented");
+-                }
+-                return handled;
+-            }
+-
+-            protected final void markNotHandled() {
+-                handled = false;
+-            }
+-
+-            protected void onEnable() {
+-                markNotHandled();
+-            }
+-
+-            protected void onDisable() {
+-                markNotHandled();
+-            }
+-
+-            protected void onSnooze() {
+-                markNotHandled();
+-            }
+-
+-            protected void onDismiss() {
+-                markNotHandled();
+-            }
+-
+-            protected void onChange(AlarmValue alarmValue) {
+-                markNotHandled();
+-            }
+-
+-            protected void onFired() {
+-                markNotHandled();
+-            }
+-
+-            protected void onSkipFired() {
+-                markNotHandled();
+-            }
+-
+-            protected void onSkipped() {
+-                markNotHandled();
+-            }
+-
+-            protected void onPreAlarmDurationChanged() {
+-                markNotHandled();
+-            }
+-
+-            protected void onRefresh() {
+-                markNotHandled();
+-            }
+-
+-            protected void onTimeSet() {
+-                markNotHandled();
+-            }
+-
+-            protected void onDelete() {
+-                markNotHandled();
+-            }
+-        }
+-    }
+-
+-    private void updateListInStore() {
+-        store.alarms().take(1).subscribe(new Consumer<List<AlarmValue>>() {
+-            @Override
+-            public void accept(@NonNull List<AlarmValue> alarmValues) {
+-                List<AlarmValue> copy = AlarmUtilsKt.addOrReplace(alarmValues, container);
+-
+-                store.alarmsSubject().onNext(copy);
+-            }
+-        });
+-    }
+-
+-    /**
+-     * for {@link #edit()}
+-     */
+-    @Override
+-    public void accept(@NonNull AlarmValue alarmChangeData) throws Exception {
+-        change(alarmChangeData);
+-    }
+-
+-    public void onAlarmFired(CalendarType calendarType) {
+-        stateMachine.sendMessage(AlarmStateMachine.FIRED);
+-    }
+-
+-    public void onInexactAlarmFired() {
+-        stateMachine.sendMessage(AlarmStateMachine.INEXACT_FIRED);
+-    }
+-
+-    public void requestSkip() {
+-        stateMachine.sendMessage(AlarmStateMachine.SKIP);
+-    }
+-
+-    @Override
+-    public boolean isSkipping() {
+-        return container.getSkipping();
+-    }
+-
+-    public void refresh() {
+-        stateMachine.sendMessage(AlarmStateMachine.REFRESH);
+-    }
+-
+-    public void onTimeSet() {
+-        stateMachine.sendMessage(AlarmStateMachine.TIME_SET);
+-    }
+-
+-    public void change(AlarmValue data) {
+-        stateMachine.obtainMessage(AlarmStateMachine.CHANGE)
+-                .withObj(data)
+-                .send();
+-    }
+-
+-    @Override
+-    public void enable(boolean enable) {
+-        stateMachine.sendMessage(enable ? AlarmStateMachine.ENABLE : AlarmStateMachine.DISABLE);
+-    }
+-
+-    @Override
+-    public void snooze() {
+-        stateMachine.sendMessage(AlarmStateMachine.SNOOZE);
+-    }
+-
+-    @Override
+-    public void snooze(int hourOfDay, int minute) {
+-        stateMachine.obtainMessage(AlarmStateMachine.SNOOZE)
+-                .withArg1(hourOfDay)
+-                .withArg2(minute)
+-                //This is a marker, sick stuff
+-                .withObj(new Object())
+-                .send();
+-    }
+-
+-    @Override
+-    public void dismiss() {
+-        stateMachine.sendMessage(AlarmStateMachine.DISMISS);
+-    }
+-
+-    @Override
+-    public void delete() {
+-        stateMachine.sendMessage(AlarmStateMachine.DELETE);
+-    }
+-
+-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+-    // ++++++ getters for GUI +++++++++++++++++++++++++++++++
+-    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+-
+-    @Override
+-    public int getId() {
+-        return container.getId();
+-    }
+-
+-    @Override
+-    public String getLabelOrDefault() {
+-        return container.getLabel();
+-    }
+-
+-    @Override
+-    public Alarmtone getAlarmtone() {
+-        return container.getAlarmtone();
+-    }
+-
+-    @Override
+-    public String toString() {
+-        return "AlarmCore " + container.getId() +
+-                " in " + stateMachine.getCurrentState().getName() +
+-                " on " + df.format(container.getNextTime().getTime());
+-    }
+-
+-    @Override
+-    public AlarmEditor edit() {
+-        return new AlarmEditor((Consumer<AlarmValue>) this, container.getAlarmValue());
+-    }
+-
+-    @Override
+-    @Deprecated
+-    public Calendar getSnoozedTime() {
+-        return container.getNextTime();
+-    }
+-}
+diff --git a/app/src/main/java/com/better/alarm/model/AlarmCore.kt b/app/src/main/java/com/better/alarm/model/AlarmCore.kt
+new file mode 100644
+index 00000000..bd26955b
+--- /dev/null
++++ b/app/src/main/java/com/better/alarm/model/AlarmCore.kt
+@@ -0,0 +1,785 @@
++/*
++ * Copyright (C) 2009 The Android Open Source Project
++ * Copyright (C) 2012 Yuriy Kulikov yuriy.kulikov.87@gmail.com
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.better.alarm.model
++
++import com.better.alarm.configuration.Prefs
++import com.better.alarm.configuration.Store
++import com.better.alarm.interfaces.Alarm
++import com.better.alarm.interfaces.AlarmEditor
++import com.better.alarm.interfaces.Intents
++import com.better.alarm.logger.Logger
++import com.better.alarm.statemachine.ComplexTransition
++import com.better.alarm.statemachine.State
++import com.better.alarm.statemachine.StateMachine
++import io.reactivex.Observable
++import io.reactivex.annotations.NonNull
++import io.reactivex.disposables.CompositeDisposable
++import io.reactivex.functions.Consumer
++import java.text.DateFormat
++import java.text.SimpleDateFormat
++import java.util.Calendar
++import java.util.Locale
++
++sealed class Event {
++    override fun toString(): String = javaClass.simpleName
++}
++
++data class Snooze(val hour: Int?, val minute: Int?) : Event()
++data class Change(val value: AlarmValue) : Event()
++object PrealarmDurationChanged : Event()
++object Dismiss : Event()
++object RequestSkip : Event()
++object Fired : Event()
++object Enable : Event()
++object Disable : Event()
++object Refresh : Event()
++object TimeSet : Event()
++object InexactFired : Event()
++object Delete : Event()
++object Create : Event()
++
++/**
++ * Alarm is a class which models a real word alarm. It is a simple state
++ * machine. External events (e.g. user input [snooze] or [dismiss]) or timer events [onAlarmFired]
++ * trigger transitions. Alarm notifies listeners when transitions happen by
++ * broadcasting Intents listed in [Intents], e.g.
++ * [Intents.ALARM_PREALARM_ACTION] or [Intents.ALARM_DISMISS_ACTION]
++ *
++ * State and properties of the alarm are stored in the database and are updated every time when
++ * changes to alarm happen.
++ *
++ * @startuml
++ * State DISABLED
++ * State RESCHEDULE
++ * State ENABLE
++ * State ENABLED {
++ * State PREALARM_SET
++ * State SET
++ * State FIRED
++ * State PREALARM_FIRED
++ * State SNOOZED
++ * State PREALARM_SNOOZED
++ * RESCHEDULE :Complex transitiontran
++ * PREALARM_FIRED :timer
++ * SNOOZED :timer
++ * PREALARM_SNOOZED :timer
++ * PREALARM_SET :timer
++ * SET :timer
++ *
++ * DISABLED -down-> ENABLE :enable\nchange
++ * ENABLED -up-> DISABLED :disable
++ * ENABLED -up-> RESCHEDULE :dismiss
++ * ENABLED -up-> ENABLE :change\nrefresh
++ *
++ * PREALARM_SET -down-> PREALARM_FIRED :fired
++ * PREALARM_FIRED -down-> PREALARM_SNOOZED :snooze
++ * PREALARM_SNOOZED -up-> FIRED
++ * SET -down-> FIRED :fired
++ * PREALARM_FIRED --right--> FIRED :fired
++ * FIRED -down->  SNOOZED :snooze
++ * SNOOZED -up-> FIRED :fired
++ *
++ * RESCHEDULE -up-> DISABLED :disabled
++ *
++ * RESCHEDULE -down-> PREALARM_SET :PA
++ * RESCHEDULE -down-> SET :nPA
++ * ENABLE -down-> PREALARM_SET :PA
++ * ENABLE -down-> SET :nPA
++ *
++ * }
++ * @enduml
++ */
++class AlarmCore(
++        private var container: AlarmActiveRecord,
++        private val log: Logger,
++        private val mAlarmsScheduler: IAlarmsScheduler,
++        private val broadcaster: IStateNotifier,
++        prefs: Prefs,
++        private val store: Store,
++        private val calendars: Calendars
++) : Alarm, Consumer<AlarmValue> {
++    private val stateMachine: StateMachine<Event>
++    private val df: DateFormat
++
++    private val preAlarmDuration: Observable<Int>
++    private val snoozeDuration: Observable<Int>
++    private val autoSilence: Observable<Int>
++
++    private val disposable = CompositeDisposable()
++
++
++    init {
++        this.df = SimpleDateFormat("dd-MM-yy HH:mm:ss", Locale.GERMANY)
++
++        this.preAlarmDuration = prefs.preAlarmDuration()
++        this.snoozeDuration = prefs.snoozeDuration()
++        this.autoSilence = prefs.autoSilence()
++
++        stateMachine = StateMachine("Alarm " + container.id, log)
++
++        preAlarmDuration
++                .skip(1)// not interested in the first update on startup
++                .subscribe {
++                    stateMachine.sendEvent(PrealarmDurationChanged)
++                }
++                .let { disposable.add(it) }
++    }
++
++    /**
++     * Strategy used to notify other components about alarm state.
++     */
++    interface IStateNotifier {
++        fun broadcastAlarmState(id: Int, action: String)
++    }
++
++    private val disabledState = DisabledState()
++    private val rescheduleTransition = RescheduleTransition()
++    private val enableTransition = EnableTransition()
++    private val enabledState = EnabledState()
++    private val set = enabledState.SetState()
++    private val normalSet = set.NormalSetState()
++    private val preAlarmSet = set.PreAlarmSetState()
++    private val skipping = enabledState.SkippingSetState()
++    private val snoozed = enabledState.SnoozedState()
++    private val preAlarmFired = enabledState.PreAlarmFiredState()
++    private val preAlarmSnoozed = enabledState.PreAlarmSnoozedState()
++    private val fired = enabledState.FiredState()
++    private val deletedState = DeletedState()
++
++    fun start() {
++        stateMachine.start {
++            addState(disabledState)
++            addState(enabledState)
++            addState(deletedState)
++            addState(rescheduleTransition)
++            addState(enableTransition)
++
++            addState(set, enabledState)
++            addState(preAlarmSet, set)
++            addState(normalSet, set)
++            addState(snoozed, enabledState)
++            addState(skipping, enabledState)
++            addState(preAlarmFired, enabledState)
++            addState(fired, enabledState)
++            addState(preAlarmSnoozed, enabledState)
++
++            val initial = mutableTree.keys.firstOrNull { it.name == container.state }
++            setInitialState(initial ?: disabledState)
++        }
++
++        updateListInStore()
++    }
++
++    private inner class DeletedState : AlarmState() {
++        override fun onEnter(reason: Event) {
++            removeAlarm()
++            container.delete()
++            removeFromStore()
++            disposable.dispose()
++        }
++    }
++
++    private inner class DisabledState : AlarmState() {
++        override fun onEnter(reason: Event) {
++            updateListInStore()
++        }
++
++        override fun onChange(alarmValue: AlarmValue) {
++            writeChangeData(alarmValue)
++            updateListInStore()
++            if (container.isEnabled) {
++                stateMachine.transitionTo(enableTransition)
++            }
++        }
++
++        override fun onEnable() {
++            container = container.withIsEnabled(true)
++            stateMachine.transitionTo(enableTransition)
++        }
++
++        override fun onDelete() {
++            stateMachine.transitionTo(deletedState)
++        }
++    }
++
++
++    private inner class RescheduleTransition : ComplexTransition<Event>() {
++        override fun performComplexTransition() {
++            if (container.daysOfWeek.isRepeatSet) {
++                if (container.isPrealarm && preAlarmDuration.blockingFirst() != -1) {
++                    stateMachine.transitionTo(preAlarmSet)
++                } else {
++                    stateMachine.transitionTo(normalSet)
++                }
++            } else {
++                log.d("Repeating is not set, disabling the alarm")
++                container = container.withIsEnabled(false)
++                stateMachine.transitionTo(disabledState)
++            }
++        }
++    }
++
++    /**
++     * Transition checks if preAlarm for the next alarm is in the future.
++     * This is required to prevent the situation when user sets alarm in
++     * time which is less than preAlarm duration. In this case main alarm
++     * should be set.
++     */
++    private inner class EnableTransition : ComplexTransition<Event>() {
++        override fun performComplexTransition() {
++            val preAlarm = calculateNextTime()
++            val preAlarmMinutes = preAlarmDuration.blockingFirst()
++            preAlarm.add(Calendar.MINUTE, -1 * preAlarmMinutes!!)
++            if (container.isPrealarm && preAlarm.after(calendars.now()) && preAlarmMinutes != -1) {
++                stateMachine.transitionTo(preAlarmSet)
++            } else {
++                stateMachine.transitionTo(normalSet)
++            }
++        }
++    }
++
++    /**
++     * Master state for all enabled states. Handles disable and delete
++     */
++    private inner class EnabledState : AlarmState() {
++        override fun onEnter(reason: Event) {
++            if (!container.isEnabled) {
++                // if due to an exception during development an alarm is not enabled but the state is
++                container = container.withIsEnabled(true)
++            }
++            updateListInStore()
++        }
++
++        override fun onChange(alarmValue: AlarmValue) {
++            writeChangeData(alarmValue)
++            updateListInStore()
++            if (container.isEnabled) {
++                stateMachine.transitionTo(enableTransition)
++            } else {
++                stateMachine.transitionTo(disabledState)
++            }
++        }
++
++        override fun onDismiss() {
++            stateMachine.transitionTo(rescheduleTransition)
++        }
++
++        override fun onDisable() {
++            container = container.withIsEnabled(false)
++            stateMachine.transitionTo(disabledState)
++        }
++
++        override fun onRefresh() {
++            stateMachine.transitionTo(enableTransition)
++        }
++
++        override fun onTimeSet() {
++            // nothing to do
++        }
++
++        override fun onDelete() {
++            stateMachine.transitionTo(deletedState)
++        }
++
++        inner class SetState : AlarmState() {
++
++            inner class NormalSetState : AlarmState() {
++                override fun onEnter(reason: Event) {
++                    when (reason) {
++                        is Dismiss, is Snooze, is Change -> {
++                            broadcastAlarmSetWithNormalTime(calculateNextTime().timeInMillis)
++                        }
++                    }
++                }
++
++                override fun onResume() {
++                    val nextTime = calculateNextTime()
++                    setAlarm(nextTime, CalendarType.NORMAL)
++                    showSkipNotification(nextTime)
++                }
++
++                override fun onFired() {
++                    stateMachine.transitionTo(fired)
++                }
++
++                override fun onPreAlarmDurationChanged() {
++                    stateMachine.transitionTo(enableTransition)
++                }
++            }
++
++            inner class PreAlarmSetState : AlarmState() {
++
++                override fun onEnter(reason: Event) {
++                    when (reason) {
++                        is Dismiss, is Snooze, is Change -> {
++                            broadcastAlarmSetWithNormalTime(calculateNextPrealarmTime().timeInMillis)
++                        }
++                    }
++
++                    updateListInStore()
++                }
++
++                override fun onResume() {
++                    val nextPrealarmTime = calculateNextPrealarmTime()
++                    if (nextPrealarmTime.after(calendars.now())) {
++                        setAlarm(nextPrealarmTime, CalendarType.PREALARM)
++                        showSkipNotification(nextPrealarmTime)
++                    } else {
++                        // TODO this should never happen
++                        log.e("PreAlarm is still in the past!")
++                        stateMachine.transitionTo(if (container.isEnabled) enableTransition else disabledState)
++                    }
++                }
++
++                private fun calculateNextPrealarmTime(): Calendar {
++                    return calculateNextTime().apply {
++                        add(Calendar.MINUTE, -1 * preAlarmDuration.blockingFirst())
++                        // since prealarm is before main alarm, it can be already in the
++                        // past, so it has to be adjusted.
++                        advanceCalendar()
++                    }
++                }
++
++                override fun onFired() {
++                    stateMachine.transitionTo(preAlarmFired)
++                }
++
++                override fun onPreAlarmDurationChanged() {
++                    stateMachine.transitionTo(enableTransition)
++                }
++            }
++
++            private fun showSkipNotification(c: Calendar) {
++                val calendar = c.clone() as Calendar
++                calendar.add(Calendar.MINUTE, -120)
++                if (calendar.after(calendars.now())) {
++                    mAlarmsScheduler.setInexactAlarm(id, calendar)
++                } else {
++                    log.d("Alarm $id is due in less than 2 hours - show notification")
++                    broadcastAlarmState(Intents.ALARM_SHOW_SKIP)
++                }
++            }
++
++            override fun onEnter(reason: Event) {
++                updateListInStore()
++            }
++
++            override fun onInexactFired() {
++                broadcastAlarmState(Intents.ALARM_SHOW_SKIP)
++            }
++
++            override fun onRequestSkip() {
++                when {
++                    container.daysOfWeek.isRepeatSet -> stateMachine.transitionTo(skipping)
++                    else -> stateMachine.transitionTo(rescheduleTransition)
++                }
++            }
++
++            override fun exit(reason: Event?) {
++                broadcastAlarmState(Intents.ALARM_REMOVE_SKIP)
++                if (!alarmWillBeRescheduled(reason)) {
++                    removeAlarm()
++                }
++                mAlarmsScheduler.removeInexactAlarm(id)
++            }
++
++            override fun onTimeSet() {
++                stateMachine.transitionTo(enableTransition)
++            }
++        }
++
++        inner class SkippingSetState : AlarmState() {
++            override fun onEnter(reason: Event) {
++                updateListInStore()
++            }
++
++            override fun onResume() {
++                val nextTime = calculateNextTime()
++                if (nextTime.after(calendars.now())) {
++                    mAlarmsScheduler.setInexactAlarm(id, nextTime)
++
++                    val nextAfterSkip = calculateNextTime()
++                    nextAfterSkip.add(Calendar.DAY_OF_YEAR, 1)
++                    val addDays = container.daysOfWeek.getNextAlarm(nextAfterSkip)
++                    if (addDays > 0) {
++                        nextAfterSkip.add(Calendar.DAY_OF_WEEK, addDays)
++                    }
++
++                    // this will never (hopefully) fire, but in order to display it everywhere...
++                    setAlarm(nextAfterSkip, CalendarType.NORMAL)
++                } else {
++                    stateMachine.transitionTo(if (container.isEnabled) enableTransition else disabledState)
++                }
++            }
++
++            override fun onFired() {
++                // yeah should never happen
++                stateMachine.transitionTo(fired)
++            }
++
++            override fun onInexactFired() {
++                stateMachine.transitionTo(enableTransition)
++            }
++
++            override fun exit(reason: Event?) {
++                mAlarmsScheduler.removeInexactAlarm(id)
++                // avoids flicker of the icon
++                if (reason !is RequestSkip) {
++                    removeAlarm()
++                }
++            }
++        }
++
++        /**
++         * handles both snoozed and main for now
++         */
++        inner class FiredState : AlarmState() {
++            override fun onEnter(reason: Event) {
++                broadcastAlarmState(Intents.ALARM_ALERT_ACTION)
++                val autoSilenceMinutes = autoSilence.blockingFirst()
++                if (autoSilenceMinutes > 0) {
++                    // -1 means OFF
++                    val nextTime = calendars.now()
++                    nextTime.add(Calendar.MINUTE, autoSilenceMinutes)
++                    setAlarm(nextTime, CalendarType.AUTOSILENCE)
++                }
++            }
++
++            override fun onFired() {
++                // TODO actually we have to create a new state for this
++                // or maybe not :-)
++                broadcastAlarmState(Intents.ACTION_SOUND_EXPIRED)
++            }
++
++            override fun onSnooze(msg: Snooze) {
++                stateMachine.transitionTo(snoozed)
++            }
++
++            override fun exit(reason: Event?) {
++                broadcastAlarmState(Intents.ALARM_DISMISS_ACTION)
++                removeAlarm()
++            }
++        }
++
++        inner class PreAlarmFiredState : AlarmState() {
++            override fun onEnter(reason: Event) {
++                broadcastAlarmState(Intents.ALARM_PREALARM_ACTION)
++                setAlarm(calculateNextTime(), CalendarType.NORMAL)
++            }
++
++            override fun onFired() {
++                stateMachine.transitionTo(fired)
++            }
++
++            override fun onSnooze(msg: Snooze) {
++                if (msg.minute != null) {
++                    //snooze to time with prealarm -> go to snoozed
++                    stateMachine.transitionTo(snoozed)
++                } else {
++                    stateMachine.transitionTo(preAlarmSnoozed)
++                }
++            }
++
++            override fun exit(reason: Event?) {
++                removeAlarm()
++                if (reason !is Fired) {
++                    // do not dismiss because we will immediately fire another event at the service
++                    broadcastAlarmState(Intents.ALARM_DISMISS_ACTION)
++                }
++            }
++        }
++
++        inner class SnoozedState : AlarmState() {
++            internal var nextTime: Calendar? = null
++
++            private fun nextRegualarSnoozeCalendar(): Calendar {
++                val nextTime = calendars.now()
++                val snoozeMinutes = snoozeDuration.blockingFirst()
++                nextTime.add(Calendar.MINUTE, snoozeMinutes)
++                return nextTime
++            }
++
++            override fun onEnter(reason: Event) {
++                val now = calendars.now()
++                nextTime = when {
++                    reason is Snooze && reason.hour != null && reason.minute != null -> {
++                        log.debug { "Enter snooze $reason" }
++                        val customTime = calendars.now().apply {
++                            set(Calendar.HOUR_OF_DAY, reason.hour)
++                            set(Calendar.MINUTE, reason.minute)
++                        }
++                        when {
++                            customTime.after(now) -> customTime
++                            else -> nextRegualarSnoozeCalendar()
++                        }
++                    }
++                    else -> nextRegualarSnoozeCalendar()
++                }
++                // change the next time to show notification properly
++                container = container.withNextTime(nextTime!!)
++                broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION) // Yar. 18.08
++            }
++
++            override fun onResume() {
++                // alarm was started again while snoozed alarm was hanging in there
++                if (nextTime == null) {
++                    nextTime = nextRegualarSnoozeCalendar()
++                }
++
++                setAlarm(nextTime!!, CalendarType.NORMAL)
++                //broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION); Yar_18.08-2038: nafig broadcast iz resume
++            }
++
++            override fun onFired() {
++                stateMachine.transitionTo(fired)
++            }
++
++            override fun onSnooze(snooze: Snooze) {
++                //reschedule from notification
++                enter(snooze)
++                onResume()
++            }
++
++            override fun exit(reason: Event?) {
++                removeAlarm()
++                broadcastAlarmState(Intents.ACTION_CANCEL_SNOOZE)
++            }
++        }
++
++        inner class PreAlarmSnoozedState : AlarmState() {
++            override fun onEnter(reason: Event) {
++                //Yar 18.08: setAlarm -> resume; setAlarm(calculateNextTime(), CalendarType.NORMAL);
++                broadcastAlarmState(Intents.ALARM_SNOOZE_ACTION)
++            }
++
++            override fun onFired() {
++                stateMachine.transitionTo(fired)
++            }
++
++            override fun onSnooze(msg: Snooze) {
++                //reschedule from notification
++                stateMachine.transitionTo(snoozed)
++            }
++
++            override fun exit(reason: Event?) {
++                removeAlarm()
++                broadcastAlarmState(Intents.ACTION_CANCEL_SNOOZE)
++            }
++
++            override fun onResume() {
++                setAlarm(calculateNextTime(), CalendarType.NORMAL)
++            }
++        }
++    }
++
++    private fun broadcastAlarmState(action: String) {
++        log.d(container.id.toString() + " - " + action)
++        broadcaster.broadcastAlarmState(container.id, action)
++        updateListInStore()
++    }
++
++    private fun broadcastAlarmSetWithNormalTime(millis: Long) {
++        store.sets().onNext(Store.AlarmSet(container, millis))
++        updateListInStore()
++    }
++
++    private fun setAlarm(calendar: Calendar, calendarType: CalendarType) {
++        mAlarmsScheduler.setAlarm(container.id, calendarType, calendar, container)
++        container = container.withNextTime(calendar)
++    }
++
++    private fun removeAlarm() {
++        mAlarmsScheduler.removeAlarm(container.id)
++    }
++
++    private fun removeFromStore() {
++        store.alarms().firstOrError().subscribe { alarmValues ->
++            val withoutId = removeWithId(alarmValues, container.id)
++            store.alarmsSubject().onNext(withoutId)
++        }.let { disposable.add(it) }
++    }
++
++    private fun writeChangeData(data: AlarmValue) {
++        container = container.withChangeData(data)
++    }
++
++    private fun calculateNextTime(): Calendar {
++        return calendars.now().apply {
++            set(Calendar.HOUR_OF_DAY, container.hour)
++            set(Calendar.MINUTE, container.minutes)
++            set(Calendar.SECOND, 0)
++            set(Calendar.MILLISECOND, 0)
++            advanceCalendar()
++        }
++    }
++
++    private fun Calendar.advanceCalendar() {
++        val now = calendars.now()
++        // if alarm is behind current time, advance one day
++        if (before(now)) {
++            add(Calendar.DAY_OF_YEAR, 1)
++        }
++        val addDays = container.daysOfWeek.getNextAlarm(this)
++        if (addDays > 0) {
++            add(Calendar.DAY_OF_WEEK, addDays)
++        }
++    }
++
++    private fun alarmWillBeRescheduled(reason: Event?): Boolean {
++        return reason is Change && reason.value.isEnabled
++    }
++
++    private abstract inner class AlarmState : State<Event>() {
++        private var handled: Boolean = false
++
++        final override fun enter(reason: Event?) {
++            when (reason) {
++                null -> onResume()
++                else -> {
++                    if (this !is EnabledState && this !is ComplexTransition<*>) {
++                        container = container.withState(name)
++                    }
++                    onEnter(reason)
++                    onResume()
++                }
++            }
++        }
++
++        open fun onEnter(reason: Event) {}
++        open fun onResume() {}
++        override fun exit(reason: Event?) {}
++
++        override fun onEvent(event: Event): Boolean {
++            handled = true
++            when (event) {
++                is Enable -> onEnable()
++                is Disable -> onDisable()
++                is Snooze -> onSnooze(event)
++                is Dismiss -> onDismiss()
++                is Change -> onChange(event.value)
++                is Fired -> onFired()
++                is PrealarmDurationChanged -> onPreAlarmDurationChanged()
++                is Refresh -> onRefresh()
++                is TimeSet -> onTimeSet()
++                is InexactFired -> onInexactFired()
++                is RequestSkip -> onRequestSkip()
++                is Delete -> onDelete()
++            }
++            return handled
++        }
++
++        protected fun markNotHandled() {
++            handled = false
++        }
++
++        protected open fun onEnable() = markNotHandled()
++        protected open fun onDisable() = markNotHandled()
++        protected open fun onSnooze(msg: Snooze) = markNotHandled()
++        protected open fun onDismiss() = markNotHandled()
++        protected open fun onChange(alarmValue: AlarmValue) = markNotHandled()
++        protected open fun onFired() = markNotHandled()
++        protected open fun onInexactFired() = markNotHandled()
++        protected open fun onRequestSkip() = markNotHandled()
++        protected open fun onPreAlarmDurationChanged() = markNotHandled()
++        protected open fun onRefresh() = markNotHandled()
++        protected open fun onTimeSet() = markNotHandled()
++        protected open fun onDelete() = markNotHandled()
++    }
++
++    private fun updateListInStore() {
++        store.alarms().take(1).subscribe { alarmValues ->
++            val copy = addOrReplace(alarmValues, container)
++            store.alarmsSubject().onNext(copy)
++        }.let { disposable.add(it) }
++    }
++
++    /**
++     * for [edit]
++     */
++    @Throws(Exception::class)
++    override fun accept(@NonNull alarmChangeData: AlarmValue) {
++        change(alarmChangeData)
++    }
++
++    fun onAlarmFired(calendarType: CalendarType) {
++        stateMachine.sendEvent(Fired)
++    }
++
++    fun onInexactAlarmFired() {
++        stateMachine.sendEvent(InexactFired)
++    }
++
++    override fun requestSkip() {
++        stateMachine.sendEvent(RequestSkip)
++    }
++
++    override fun isSkipping(): Boolean = container.skipping
++
++    fun refresh() {
++        stateMachine.sendEvent(Refresh)
++    }
++
++    fun onTimeSet() {
++        stateMachine.sendEvent(TimeSet)
++    }
++
++    fun change(data: AlarmValue) {
++        stateMachine.sendEvent(Change(data))
++    }
++
++    override fun enable(enable: Boolean) {
++        stateMachine.sendEvent(if (enable) Enable else Disable)
++    }
++
++    override fun snooze() {
++        stateMachine.sendEvent(Snooze(null, null))
++    }
++
++    override fun snooze(hourOfDay: Int, minute: Int) {
++        stateMachine.sendEvent(Snooze(hourOfDay, minute))
++    }
++
++    override fun dismiss() {
++        stateMachine.sendEvent(Dismiss)
++    }
++
++    override fun delete() {
++        stateMachine.sendEvent(Delete)
++    }
++
++    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++
++    // ++++++ getters for GUI +++++++++++++++++++++++++++++++
++    // ++++++++++++++++++++++++++++++++++++++++++++++++++++++
++
++    override fun getId(): Int = container.id
++    override fun getLabelOrDefault(): String = container.label
++    override fun getAlarmtone(): Alarmtone = container.alarmtone
++
++    override fun toString(): String {
++        return "AlarmCore ${container.id} $stateMachine on ${df.format(container.nextTime.time)}"
++    }
++
++    override fun edit(): AlarmEditor {
++        return AlarmEditor(this as Consumer<AlarmValue>, container.alarmValue)
++    }
++
++    @Deprecated("")
++    override fun getSnoozedTime(): Calendar {
++        return container.nextTime
++    }
++}
+diff --git a/app/src/main/java/com/better/alarm/model/AlarmCoreFactory.kt b/app/src/main/java/com/better/alarm/model/AlarmCoreFactory.kt
+index 123927fa..1d16b26a 100644
+--- a/app/src/main/java/com/better/alarm/model/AlarmCoreFactory.kt
++++ b/app/src/main/java/com/better/alarm/model/AlarmCoreFactory.kt
+@@ -3,7 +3,6 @@ package com.better.alarm.model
+ import com.better.alarm.configuration.Prefs
+ import com.better.alarm.configuration.Store
+ import com.better.alarm.logger.Logger
+-import com.better.alarm.statemachine.HandlerFactory
+ 
+ /**
+  * Created by Yuriy on 09.08.2017.
+@@ -13,12 +12,11 @@ class AlarmCoreFactory(
+         private val logger: Logger,
+         private val alarmsScheduler: IAlarmsScheduler,
+         private val broadcaster: AlarmCore.IStateNotifier,
+-        private val handlerFactory: HandlerFactory,
+         private val prefs: Prefs,
+         private val store: Store,
+         private val calendars: Calendars
+ ) {
+     fun create(container: AlarmActiveRecord): AlarmCore {
+-        return AlarmCore(container, logger, alarmsScheduler, broadcaster, handlerFactory, prefs, store, calendars)
++        return AlarmCore(container, logger, alarmsScheduler, broadcaster, prefs, store, calendars)
+     }
+ }
+diff --git a/app/src/main/java/com/better/alarm/model/AlarmsReceiver.kt b/app/src/main/java/com/better/alarm/model/AlarmsReceiver.kt
+index e4b4b1ce..f7a89025 100644
+--- a/app/src/main/java/com/better/alarm/model/AlarmsReceiver.kt
++++ b/app/src/main/java/com/better/alarm/model/AlarmsReceiver.kt
+@@ -68,7 +68,7 @@ class AlarmsReceiver : BroadcastReceiver() {
+ 
+                 PresentationToModelIntents.ACTION_REQUEST_SKIP -> {
+                     val id = intent.getIntExtra(AlarmsScheduler.EXTRA_ID, -1)
+-                    log.d("Skip $id")
++                    log.d("RequestSkip $id")
+                     alarms.getAlarm(id)?.requestSkip()
+                 }
+             }
+diff --git a/app/src/main/java/com/better/alarm/model/ImmediateHandlerFactory.kt b/app/src/main/java/com/better/alarm/model/ImmediateHandlerFactory.kt
+deleted file mode 100644
+index f079ce17..00000000
+--- a/app/src/main/java/com/better/alarm/model/ImmediateHandlerFactory.kt
++++ /dev/null
+@@ -1,47 +0,0 @@
+-package com.better.alarm.model
+-
+-import com.better.alarm.statemachine.HandlerFactory
+-import com.better.alarm.statemachine.IHandler
+-import com.better.alarm.statemachine.Message
+-import com.better.alarm.statemachine.MessageHandler
+-
+-class ImmediateHandlerFactory : HandlerFactory {
+-    override fun create(messageHandler: MessageHandler): IHandler {
+-        return object : IHandler {
+-            val messages = mutableListOf<Message>()
+-
+-            override fun sendMessageAtFrontOfQueue(message: Message) {
+-                sendMessage(message, true)
+-            }
+-
+-            override fun sendMessage(message: Message) {
+-                sendMessage(message, false)
+-            }
+-
+-            private fun sendMessage(message: Message, front: Boolean) {
+-                when {
+-                    messages.isEmpty() -> {
+-                        messageHandler.handleMessage(message)
+-                    }
+-                    front -> {
+-                        messages.add(0, message)
+-                    }
+-                    else -> {
+-                        messages.add(message)
+-                    }
+-                }
+-                while (messages.isNotEmpty()) {
+-                    messageHandler.handleMessage(messages.removeAt(0))
+-                }
+-            }
+-
+-            override fun obtainMessage(what: Int, obj: Any): Message {
+-                return Message(what, this, null, null, obj)
+-            }
+-
+-            override fun obtainMessage(what: Int): Message {
+-                return Message(what, this, null, null, null)
+-            }
+-        }
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.java b/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.java
+deleted file mode 100644
+index 4940499d..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.java
++++ /dev/null
+@@ -1,25 +0,0 @@
+-package com.better.alarm.statemachine;
+-
+-public abstract class ComplexTransition extends State {
+-    abstract public void performComplexTransition();
+-
+-    @Override
+-    public final void enter() {
+-        performComplexTransition();
+-    }
+-
+-    @Override
+-    public final void resume() {
+-        //empty
+-    }
+-
+-    @Override
+-    public final boolean processMessage(Message msg) {
+-        throw new RuntimeException("performComplexTransition() must transit immediately");
+-    }
+-
+-    @Override
+-    public final void exit() {
+-        // nothing to do
+-    }
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.kt b/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.kt
+new file mode 100644
+index 00000000..968aec2d
+--- /dev/null
++++ b/app/src/main/java/com/better/alarm/statemachine/ComplexTransition.kt
+@@ -0,0 +1,16 @@
++package com.better.alarm.statemachine
++
++abstract class ComplexTransition<T> : State<T>() {
++    abstract fun performComplexTransition()
++    override fun enter(reason: T?) {
++        performComplexTransition()
++    }
++
++    override fun onEvent(event: T): Boolean {
++        throw RuntimeException("performComplexTransition() must transit immediately")
++    }
++
++    override fun exit(reason: T?) {
++        // nothing to do
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/better/alarm/statemachine/HandlerFactory.java b/app/src/main/java/com/better/alarm/statemachine/HandlerFactory.java
+deleted file mode 100644
+index a4e8df30..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/HandlerFactory.java
++++ /dev/null
+@@ -1,8 +0,0 @@
+-package com.better.alarm.statemachine;
+-
+-/**
+- * Created by Yuriy on 07.03.2017.
+- */
+-public interface HandlerFactory {
+-    IHandler create(MessageHandler messageHandler);
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/IHandler.java b/app/src/main/java/com/better/alarm/statemachine/IHandler.java
+deleted file mode 100644
+index 2306d187..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/IHandler.java
++++ /dev/null
+@@ -1,14 +0,0 @@
+-package com.better.alarm.statemachine;
+-
+-/**
+- * Created by Yuriy on 07.03.2017.
+- */
+-public interface IHandler {
+-    void sendMessageAtFrontOfQueue(Message message);
+-
+-    void sendMessage(Message what);
+-
+-    Message obtainMessage(int what, Object obj);
+-
+-    Message obtainMessage(int what);
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/IOnStateChangedListener.java b/app/src/main/java/com/better/alarm/statemachine/IOnStateChangedListener.java
+deleted file mode 100644
+index c9b98946..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/IOnStateChangedListener.java
++++ /dev/null
+@@ -1,5 +0,0 @@
+-package com.better.alarm.statemachine;
+-
+-public interface IOnStateChangedListener {
+-    public void onStateChanged(IState state);
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/IState.java b/app/src/main/java/com/better/alarm/statemachine/IState.java
+deleted file mode 100644
+index 1fb95723..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/IState.java
++++ /dev/null
+@@ -1,72 +0,0 @@
+-/**
+- * Copyright (C) 2011 The Android Open Source Project
+- * <p>
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- * <p>
+- * http://www.apache.org/licenses/LICENSE-2.0
+- * <p>
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm.statemachine;
+-
+-/**
+- * {@hide}
+- * <p>
+- * The interface for implementing states in a {@link StateMachine}
+- */
+-public interface IState {
+-
+-    /**
+-     * Returned by processMessage to indicate the the message was processed.
+-     */
+-    static final boolean HANDLED = true;
+-
+-    /**
+-     * Returned by processMessage to indicate the the message was NOT processed.
+-     */
+-    static final boolean NOT_HANDLED = false;
+-
+-    /**
+-     * Called when a state is entered.
+-     */
+-    void enter();
+-
+-    /**
+-     * Called when state is resumed. Like onResume()
+-     */
+-    void resume();
+-
+-    /**
+-     * Called when a state is exited.
+-     */
+-    void exit();
+-
+-    /**
+-     * Called when a message is to be processed by the state machine.
+-     * <p>
+-     * This routine is never reentered thus no synchronization is needed as only
+-     * one processMessage method will ever be executing within a state machine
+-     * at any given time. This does mean that processing by this routine must be
+-     * completed as expeditiously as possible as no subsequent messages will be
+-     * processed until this routine returns.
+-     *
+-     * @param msg to process
+-     * @return HANDLED if processing has completed and NOT_HANDLED if the
+-     * message wasn't processed.
+-     */
+-    boolean processMessage(Message msg);
+-
+-    /**
+-     * Name of State for debugging purposes.
+-     *
+-     * @return persistedString of state.
+-     */
+-    String getName();
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/Message.kt b/app/src/main/java/com/better/alarm/statemachine/Message.kt
+deleted file mode 100644
+index 2d557c70..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/Message.kt
++++ /dev/null
+@@ -1,52 +0,0 @@
+-package com.better.alarm.statemachine
+-
+-import com.better.alarm.util.Optional
+-
+-/**
+- * Created by Yuriy on 07.03.2017.
+- */
+-data class Message
+-(
+-        val what: Int,
+-        /** aux  */
+-        val handler: IHandler,
+-        val arg1: Int? = null,
+-        val arg2: Int? = null,
+-        val obj: Any? = null
+-) {
+-    fun what(): Int = what
+-
+-    /** aux  */
+-    private fun handler(): IHandler = handler
+-
+-    fun arg1(): Optional<Int> = Optional.fromNullable(arg1)
+-
+-    fun arg2(): Optional<Int> = Optional.fromNullable(arg2)
+-
+-    fun obj(): Optional<Any> = Optional.fromNullable(obj)
+-
+-    fun send() {
+-        handler().sendMessage(this)
+-    }
+-
+-    fun sendAtFront() {
+-        handler().sendMessageAtFrontOfQueue(this)
+-    }
+-
+-    override fun toString(): String {
+-        return "Message[$what]{${listOfNotNull(arg1, arg2, obj).joinToString(separator = ", ")}}]"
+-    }
+-
+-    fun formatToString(converter: (Int) -> String): String {
+-        return "Message[${converter.invoke(what)}]{${listOfNotNull(arg1, arg2, obj).joinToString(separator = ", ")}}"
+-    }
+-
+-    fun withObj(obj: Any) = copy(obj = obj)
+-    fun withArg1(arg1: Int) = copy(arg1 = arg1)
+-    fun withArg2(arg2: Int) = copy(arg2 = arg2)
+-
+-    companion object {
+-        @JvmStatic
+-        fun create(what: Int, handler: IHandler) = Message(what, handler)
+-    }
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/MessageHandler.java b/app/src/main/java/com/better/alarm/statemachine/MessageHandler.java
+deleted file mode 100644
+index d6ebc65a..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/MessageHandler.java
++++ /dev/null
+@@ -1,8 +0,0 @@
+-package com.better.alarm.statemachine;
+-
+-/**
+- * Created by Yuriy on 07.03.2017.
+- */
+-public interface MessageHandler {
+-    void handleMessage(Message msg);
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/State.java b/app/src/main/java/com/better/alarm/statemachine/State.java
+deleted file mode 100644
+index 04743b4a..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/State.java
++++ /dev/null
+@@ -1,77 +0,0 @@
+-/**
+- * Copyright (C) 2009 The Android Open Source Project
+- * <p>
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- * <p>
+- * http://www.apache.org/licenses/LICENSE-2.0
+- * <p>
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm.statemachine;
+-
+-/**
+- * {@hide}
+- * <p>
+- * The class for implementing states in a StateMachine
+- */
+-public class State implements IState {
+-    /*
+-     * (non-Javadoc)
+-     *
+-     * @see com.android.internal.util.IState#enter()
+-     */
+-    @Override
+-    public void enter() {
+-        //default
+-    }
+-
+-    @Override
+-    @Deprecated
+-    public void resume() {
+-        //default
+-    }
+-
+-    /*
+-     * (non-Javadoc)
+-     *
+-     * @see com.android.internal.util.IState#exit()
+-     */
+-    @Override
+-    public void exit() {
+-        //default
+-    }
+-
+-    /*
+-     * (non-Javadoc)
+-     *
+-     * @see com.android.internal.util.IState#processMessage(android.os.Message)
+-     */
+-    @Override
+-    public boolean processMessage(Message msg) {
+-        return false;
+-    }
+-
+-    /**
+-     * Name of State for debugging purposes.
+-     * <p>
+-     * This default implementation returns the class persistedString, returning the
+-     * instance persistedString would better in cases where a State class is used for
+-     * multiple states. But normally there is one class per state and the class
+-     * persistedString is sufficient and easy to get. You may want to provide a setName or
+-     * some other mechanism for setting another persistedString if the class persistedString is not
+-     * appropriate.
+-     */
+-    @Override
+-    public String getName() {
+-        String name = getClass().getName();
+-        int lastDollar = name.lastIndexOf('$');
+-        return name.substring(lastDollar + 1);
+-    }
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/StateMachine.java b/app/src/main/java/com/better/alarm/statemachine/StateMachine.java
+deleted file mode 100644
+index c4967a93..00000000
+--- a/app/src/main/java/com/better/alarm/statemachine/StateMachine.java
++++ /dev/null
+@@ -1,612 +0,0 @@
+-/**
+- * Copyright (C) 2009 The Android Open Source Project
+- * <p>
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- * <p>
+- * http://www.apache.org/licenses/LICENSE-2.0
+- * <p>
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm.statemachine;
+-
+-import com.better.alarm.logger.Logger;
+-
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.HashMap;
+-import java.util.concurrent.CopyOnWriteArrayList;
+-
+-import kotlin.jvm.functions.Function1;
+-
+-public class StateMachine {
+-    private final String mName;
+-
+-    private final Logger log;
+-
+-    /**
+-     * Message.what value when initializing
+-     */
+-    private static final int SM_INIT_CMD = -2;
+-
+-    private SmHandler mSmHandler;
+-
+-    private static class SmHandler implements MessageHandler {
+-        private final Logger log;
+-
+-        /**
+-         * The current message
+-         */
+-        private Message mMsg;
+-
+-        /**
+-         * true if construction of the state machine has not been completed
+-         */
+-        private boolean mIsConstructionCompleted;
+-
+-        /**
+-         * Stack used to manage the current hierarchy of states
+-         */
+-        private StateInfo mStateStack[];
+-
+-        /**
+-         * Top of mStateStack
+-         */
+-        private int mStateStackTopIndex = -1;
+-
+-        /**
+-         * A temporary stack used to manage the state stack
+-         */
+-        private StateInfo mTempStateStack[];
+-
+-        /**
+-         * The top of the mTempStateStack
+-         */
+-        private int mTempStateStackCount;
+-
+-        /**
+-         * Reference to the StateMachine
+-         */
+-        private StateMachine mSm;
+-
+-        private final IHandler handler;
+-
+-        /**
+-         * The map of all of the states in the state machine
+-         */
+-        private final HashMap<State, StateInfo> mStateInfo = new HashMap<State, StateInfo>();
+-
+-        /**
+-         * The initial state that will process the first message
+-         */
+-        private State mInitialState;
+-
+-        /**
+-         * The destination state when transitionTo has been invoked
+-         */
+-        private State mDestState;
+-
+-        /**
+-         * The list of deferred messages
+-         */
+-        private final ArrayList<Message> mDeferredMessages = new ArrayList<Message>();
+-
+-        private final CopyOnWriteArrayList<IOnStateChangedListener> onStateChangedListeners = new CopyOnWriteArrayList<IOnStateChangedListener>();
+-        private final Function1<Integer, String> converter;
+-
+-        /**
+-         * Information about a state. Used to maintain the hierarchy.
+-         */
+-        private class StateInfo {
+-            /**
+-             * The state
+-             */
+-            public State state;
+-
+-            /**
+-             * The parent of this state, null if there is no parent
+-             */
+-            public StateInfo parentStateInfo;
+-
+-            /**
+-             * True when the state has been entered and on the stack
+-             */
+-            public boolean active;
+-
+-            /**
+-             * Convert StateInfo to string
+-             */
+-            @Override
+-            public String toString() {
+-                return "state=" + state.getName() + ",active=" + active + ",parent="
+-                        + (parentStateInfo == null ? "null" : parentStateInfo.state.getName());
+-            }
+-        }
+-
+-        /**
+-         * Handle messages sent to the state machine by calling the current
+-         * state's processMessage. It also handles the enter/exit calls and
+-         * placing any deferred messages back onto the queue when transitioning
+-         * to a new state.
+-         */
+-        @Override
+-        public final void handleMessage(Message msg) {
+-            /** Save the current message */
+-            mMsg = msg;
+-
+-            if (mIsConstructionCompleted) {
+-                /** Normal path */
+-                processMsg(msg);
+-            } else if (!mIsConstructionCompleted && mMsg.what() == SM_INIT_CMD) {
+-                /** Initial one time path. */
+-                mIsConstructionCompleted = true;
+-                boolean resume = msg.arg1().or(-100500) == 1;
+-                invokeEnterMethods(0, resume);
+-            } else throw new RuntimeException("StateMachine.handleMessage: "
+-                    + "The start method not called, received msg: " + msg);
+-            performTransitions();
+-        }
+-
+-        /**
+-         * Do any transitions
+-         */
+-        private void performTransitions() {
+-            /**
+-             * If transitionTo has been called, exit and then enter the
+-             * appropriate states. We loop on this to allow enter and exit
+-             * methods to use transitionTo.
+-             */
+-            State destState = null;
+-            while (mDestState != null) {
+-                /**
+-                 * Save mDestState locally and set to null to know if enter/exit
+-                 * use transitionTo.
+-                 */
+-                destState = mDestState;
+-                mDestState = null;
+-
+-                /**
+-                 * Determine the states to exit and enter and return the common
+-                 * ancestor state of the enter/exit states. Then invoke the exit
+-                 * methods then the enter methods.
+-                 */
+-                StateInfo commonStateInfo = setupTempStateStackWithStatesToEnter(destState);
+-                invokeExitMethods(commonStateInfo);
+-                int stateStackEnteringIndex = moveTempStateStackToStateStack();
+-                invokeEnterMethods(stateStackEnteringIndex, false);
+-
+-                /**
+-                 * Since we have transitioned to a new state we need to have any
+-                 * deferred messages moved to the front of the message queue so
+-                 * they will be processed before any other messages in the
+-                 * message queue.
+-                 */
+-                moveDeferredMessageAtFrontOfQueue();
+-            }
+-        }
+-
+-        /**
+-         * Complete the construction of the state machine.
+-         *
+-         * @param resume
+-         */
+-        private final void completeConstruction(boolean resume) {
+-            /**
+-             * Determine the maximum depth of the state hierarchy so we can
+-             * allocate the state stacks.
+-             */
+-            int maxDepth = 0;
+-            for (StateInfo si : mStateInfo.values()) {
+-                int depth = 0;
+-                for (StateInfo i = si; i != null; depth++) {
+-                    i = i.parentStateInfo;
+-                }
+-                if (maxDepth < depth) {
+-                    maxDepth = depth;
+-                }
+-            }
+-
+-            mStateStack = new StateInfo[maxDepth];
+-            mTempStateStack = new StateInfo[maxDepth];
+-            setupInitialStateStack();
+-
+-            /**
+-             * Sending SM_INIT_CMD message to invoke enter methods
+-             * asynchronously
+-             */
+-            handler.obtainMessage(SM_INIT_CMD)
+-                    .withArg1(resume ? 1 : 0)
+-                    .sendAtFront();
+-        }
+-
+-        /**
+-         * Process the message. If the current state doesn't handle it, call the
+-         * states parent and so on. If it is never handled then call the state
+-         * machines unhandledMessage method.
+-         */
+-        private final void processMsg(Message msg) {
+-            StateInfo curStateInfo = mStateStack[mStateStackTopIndex];
+-            // TODO handled/not handled
+-            log.d('[' + mSm.getName() + "] " + curStateInfo.state.getName() + " <- " + msg.formatToString(converter));
+-
+-            while (!curStateInfo.state.processMessage(msg)) {
+-                /**
+-                 * Not processed
+-                 */
+-                curStateInfo = curStateInfo.parentStateInfo;
+-                if (curStateInfo == null) {
+-                    /**
+-                     * No parents left so it's not handled
+-                     */
+-                    mSm.log.e(mSm.mName + " was not able to handle " + msg.formatToString(converter));
+-                    break;
+-                }
+-                log.d('[' + mSm.getName() + "] \\" + curStateInfo.state.getName());
+-            }
+-        }
+-
+-        /**
+-         * Call the exit method for each state from the top of stack up to the
+-         * common ancestor state.
+-         */
+-        private final void invokeExitMethods(StateInfo commonStateInfo) {
+-            while (mStateStackTopIndex >= 0 && mStateStack[mStateStackTopIndex] != commonStateInfo) {
+-                State curState = mStateStack[mStateStackTopIndex].state;
+-                curState.exit();
+-                mStateStack[mStateStackTopIndex].active = false;
+-                mStateStackTopIndex -= 1;
+-            }
+-        }
+-
+-        /**
+-         * Invoke the enter method starting at the entering index to top of
+-         * state stack
+-         *
+-         * @param resume true if state machine is resuming from hibernation. In
+-         *               this case {@link IState#enter()} will not be invoked
+-         */
+-        private final void invokeEnterMethods(int stateStackEnteringIndex, boolean resume) {
+-            for (int i = stateStackEnteringIndex; i <= mStateStackTopIndex; i++) {
+-                if (!resume) {
+-                    onStateChanged(mStateStack[i].state);
+-                    mStateStack[i].state.enter();
+-                }
+-                mStateStack[i].state.resume();
+-                mStateStack[i].active = true;
+-            }
+-        }
+-
+-        /**
+-         * Move the deferred message to the front of the message queue.
+-         */
+-        private final void moveDeferredMessageAtFrontOfQueue() {
+-            /**
+-             * The oldest messages on the deferred list must be at the front of
+-             * the queue so start at the back, which as the most resent message
+-             * and end with the oldest messages at the front of the queue.
+-             */
+-            for (int i = mDeferredMessages.size() - 1; i >= 0; i--) {
+-                Message curMsg = mDeferredMessages.get(i);
+-                log.d(curMsg + " in " + mSm.getName());
+-                handler.sendMessageAtFrontOfQueue(curMsg);
+-            }
+-            mDeferredMessages.clear();
+-        }
+-
+-        /**
+-         * Move the contents of the temporary stack to the state stack reversing
+-         * the order of the items on the temporary stack as they are moved.
+-         *
+-         * @return index into mStateStack where entering needs to start
+-         */
+-        private final int moveTempStateStackToStateStack() {
+-            int startingIndex = mStateStackTopIndex + 1;
+-            int i = mTempStateStackCount - 1;
+-            int j = startingIndex;
+-            while (i >= 0) {
+-                mStateStack[j] = mTempStateStack[i];
+-                j += 1;
+-                i -= 1;
+-            }
+-
+-            mStateStackTopIndex = j - 1;
+-            return startingIndex;
+-        }
+-
+-        /**
+-         * Setup the mTempStateStack with the states we are going to enter.
+-         * <p>
+-         * This is found by searching up the destState's ancestors for a state
+-         * that is already active i.e. StateInfo.active == true. The destStae
+-         * and all of its inactive parents will be on the TempStateStack as the
+-         * list of states to enter.
+-         *
+-         * @return StateInfo of the common ancestor for the destState and
+-         * current state or null if there is no common parent.
+-         */
+-        private final StateInfo setupTempStateStackWithStatesToEnter(State destState) {
+-            /**
+-             * Search up the parent list of the destination state for an active
+-             * state. Use a do while() loop as the destState must always be
+-             * entered even if it is active. This can happen if we are
+-             * exiting/entering the current state.
+-             */
+-            mTempStateStackCount = 0;
+-            StateInfo curStateInfo = mStateInfo.get(destState);
+-            do {
+-                mTempStateStack[mTempStateStackCount++] = curStateInfo;
+-                curStateInfo = curStateInfo.parentStateInfo;
+-            } while (curStateInfo != null && !curStateInfo.active);
+-
+-            return curStateInfo;
+-        }
+-
+-        /**
+-         * Initialize StateStack to mInitialState.
+-         */
+-        private final void setupInitialStateStack() {
+-            StateInfo curStateInfo = mStateInfo.get(mInitialState);
+-            for (mTempStateStackCount = 0; curStateInfo != null; mTempStateStackCount++) {
+-                mTempStateStack[mTempStateStackCount] = curStateInfo;
+-                curStateInfo = curStateInfo.parentStateInfo;
+-            }
+-
+-            // Empty the StateStack
+-            mStateStackTopIndex = -1;
+-
+-            moveTempStateStackToStateStack();
+-        }
+-
+-        /**
+-         * @return current message
+-         */
+-        private final Message getCurrentMessage() {
+-            return mMsg;
+-        }
+-
+-        /**
+-         * @return current state
+-         */
+-        private final IState getCurrentState() {
+-            return mStateStack[mStateStackTopIndex].state;
+-        }
+-
+-        /**
+-         * Add a new state to the state machine. Bottom up addition of states is
+-         * allowed but the same state may only exist in one hierarchy.
+-         *
+-         * @param state  the state to add
+-         * @param parent the parent of state
+-         * @return stateInfo for this state
+-         */
+-        private final StateInfo addState(State state, State parent) {
+-            StateInfo parentStateInfo = null;
+-            if (parent != null) {
+-                parentStateInfo = mStateInfo.get(parent);
+-                if (parentStateInfo == null) {
+-                    // Recursively add our parent as it's not been added yet.
+-                    parentStateInfo = addState(parent, null);
+-                }
+-            }
+-            StateInfo stateInfo = mStateInfo.get(state);
+-            if (stateInfo == null) {
+-                stateInfo = new StateInfo();
+-                mStateInfo.put(state, stateInfo);
+-            }
+-
+-            // Validate that we aren't adding the same state in two different
+-            // hierarchies.
+-            if (stateInfo.parentStateInfo != null && stateInfo.parentStateInfo != parentStateInfo)
+-                throw new RuntimeException("state already added");
+-            stateInfo.state = state;
+-            stateInfo.parentStateInfo = parentStateInfo;
+-            stateInfo.active = false;
+-            return stateInfo;
+-        }
+-
+-        private SmHandler(HandlerFactory hf, StateMachine sm, Logger log, Function1<Integer, String> converter) {
+-            mSm = sm;
+-            this.log = log;
+-            this.handler = hf.create(this);
+-            this.converter = converter;
+-        }
+-
+-        /**
+-         * @see StateMachine#setInitialState(State)
+-         */
+-        private final void setInitialState(State initialState) {
+-            mInitialState = initialState;
+-        }
+-
+-        /**
+-         * @see StateMachine#transitionTo(IState)
+-         */
+-        private final void transitionTo(IState destState) {
+-            mDestState = (State) destState;
+-            log.d("[" + mSm.getName() + "] " + mStateStack[mStateStackTopIndex].state.getName() + " -> "
+-                    + mDestState.getName());
+-        }
+-
+-        /**
+-         * @see StateMachine#deferMessage(Message)
+-         */
+-        private final void deferMessage(Message msg) {
+-            log.d(msg + " in " + mSm.getName());
+-            mDeferredMessages.add(msg);
+-        }
+-
+-        /**
+-         * Get all states.
+-         *
+-         * @return
+-         */
+-        public Collection<State> getStates() {
+-            return mStateInfo.keySet();
+-        }
+-
+-        private void onStateChanged(State state) {
+-            for (IOnStateChangedListener onStateChangedListener : onStateChangedListeners) {
+-                onStateChangedListener.onStateChanged(state);
+-            }
+-        }
+-
+-        public void addOnStateChangedListener(IOnStateChangedListener onStateChangedListener) {
+-            onStateChangedListeners.add(onStateChangedListener);
+-        }
+-    }
+-
+-    /**
+-     * Constructor creates a StateMachine using the looper.
+-     *
+-     * @param name of the state machine
+-     */
+-    public StateMachine(String name, HandlerFactory handlerFactory, Logger log, Function1<Integer, String> converter) {
+-        mName = name;
+-        this.log = log;
+-        mSmHandler = new SmHandler(handlerFactory, this, log, converter);
+-    }
+-
+-    /**
+-     * Add a new state to the state machine
+-     *
+-     * @param state  the state to add
+-     * @param parent the parent of state
+-     */
+-    protected final void addState(State state, State parent) {
+-        mSmHandler.addState(state, parent);
+-    }
+-
+-    public final Collection<State> getStates() {
+-        return mSmHandler.getStates();
+-    }
+-
+-    /**
+-     * @return current message
+-     */
+-    protected final Message getCurrentMessage() {
+-        return mSmHandler.getCurrentMessage();
+-    }
+-
+-    /**
+-     * @return current state
+-     */
+-    public final IState getCurrentState() {
+-        return mSmHandler.getCurrentState();
+-    }
+-
+-    /**
+-     * Add a new state to the state machine, parent will be null
+-     *
+-     * @param state to add
+-     */
+-    protected final void addState(State state) {
+-        mSmHandler.addState(state, null);
+-    }
+-
+-    /**
+-     * Set the initial state. This must be invoked before and messages are sent
+-     * to the state machine.
+-     *
+-     * @param initialState is the state which will receive the first message.
+-     */
+-    protected final void setInitialState(State initialState) {
+-        mSmHandler.setInitialState(initialState);
+-    }
+-
+-    /**
+-     * transition to destination state. Upon returning from processMessage the
+-     * current state's exit will be executed and upon the next message arriving
+-     * destState.enter will be invoked.
+-     * <p>
+-     * this function can also be called inside the enter function of the
+-     * previous transition target, but the behavior is undefined when it is
+-     * called mid-way through a previous transition (for example, calling this
+-     * in the enter() routine of a intermediate node when the current transition
+-     * target is one of the nodes descendants).
+-     *
+-     * @param destState will be the state that receives the next message.
+-     */
+-    protected final void transitionTo(IState destState) {
+-        mSmHandler.transitionTo(destState);
+-    }
+-
+-    /**
+-     * transition to destination state. Upon returning from processMessage the
+-     * current state's exit will be executed and upon the next message arriving
+-     * destState.enter will be invoked.
+-     * <p>
+-     * this function can also be called inside the enter function of the
+-     * previous transition target, but the behavior is undefined when it is
+-     * called mid-way through a previous transition (for example, calling this
+-     * in the enter() routine of a intermediate node when the current transition
+-     * target is one of the nodes descendants).
+-     *
+-     * @param destState will be the state that receives the next message.
+-     */
+-    protected final void transitionTo(Class<? extends IState> destState) {
+-        for (IState state : getStates()) {
+-            if (state.getClass().equals(destState)) {
+-                mSmHandler.transitionTo(state);
+-                return;
+-            }
+-        }
+-        throw new RuntimeException("State not found!");
+-    }
+-
+-    /**
+-     * Defer this message until next state transition. Upon transitioning all
+-     * deferred messages will be placed on the queue and reprocessed in the
+-     * original order. (i.e. The next state the oldest messages will be
+-     * processed first)
+-     *
+-     * @param msg is deferred until the next transition.
+-     */
+-    protected final void deferMessage(Message msg) {
+-        mSmHandler.deferMessage(msg);
+-    }
+-
+-    /**
+-     * This will be called before calling {@link IState#enter()}
+-     */
+-    protected void addOnStateChangedListener(IOnStateChangedListener onStateChangedListener) {
+-        mSmHandler.addOnStateChangedListener(onStateChangedListener);
+-    }
+-
+-    /**
+-     * @return the persistedString
+-     */
+-    public final String getName() {
+-        return mName;
+-    }
+-
+-    /**
+-     * Enqueue a message to this state machine.
+-     */
+-    public final void sendMessage(int what) {
+-        mSmHandler.handler.obtainMessage(what).send();
+-    }
+-
+-    public final Message obtainMessage(int what) {
+-        return mSmHandler.handler.obtainMessage(what);
+-    }
+-
+-    /**
+-     * Start the state machine.
+-     */
+-    public void start() {
+-        mSmHandler.completeConstruction(false);
+-    }
+-
+-    /**
+-     * Start the state machine.
+-     */
+-    public void resume() {
+-        mSmHandler.completeConstruction(true);
+-    }
+-}
+diff --git a/app/src/main/java/com/better/alarm/statemachine/StateMachine.kt b/app/src/main/java/com/better/alarm/statemachine/StateMachine.kt
+new file mode 100644
+index 00000000..0732ecc4
+--- /dev/null
++++ b/app/src/main/java/com/better/alarm/statemachine/StateMachine.kt
+@@ -0,0 +1,299 @@
++/*
++ * MIT License
++ *
++ * Copyright (c) 2019 Yuriy Kulikov
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in all
++ * copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++ * SOFTWARE.
++ */
++package com.better.alarm.statemachine
++
++import com.better.alarm.logger.Logger
++import kotlin.properties.Delegates
++
++/**
++ * # State Machine
++ * State machine (SM) processes incoming events in its [currentState]. If this state cannot handle the event
++ * ([State.onEvent] returned false), event is propagated to the parent of the state.
++ *
++ * ## State pattern
++ * SM has a finite amount of states of which exactly one is the current state.
++ * SM delegates processing of incoming events to this state.
++ * State can be changed by the SM itself as a reaction to an external event.
++ *
++ * [State pattern on Wikipedia](https://en.wikipedia.org/wiki/State_pattern)
++ *
++ * [State Machine on Wikipedia](https://en.wikipedia.org/wiki/Finite-state_machine)
++ *
++ * ## Hierarchical Finite State Machine
++ * States are organized as a rooted forest (union of rooted trees). SM has multiple sub-hierarchies, each one is a rooted tree.
++ * If a state was not able to process an event (returned *false* from [State.onEvent]), the event if delivered
++ * to the parent of this state.
++ *
++ * **Any state can be current state, not just leaf states**
++ *
++ * [Tree on Wikipedia](https://en.wikipedia.org/wiki/Tree_(graph_theory))
++ *
++ * ## Event propagation
++ * Consider this SM, which is in the *x* state:
++ * ```
++ *          root       O
++ *        /      \      \
++ *       A        B      M
++ *     /  \     /  \      \
++ *   a    b   *x*    y     G
++ * ```
++ * If *x* is not able to handle an event, it is delivered to B, which is a parent of *x*. If B is also not able to
++ * handle this event, it goes to the next parent. If no parent is available (root was not able to handle), an exception
++ * is thrown. O-M-G is a separate hierarchy which is not used in this case (no common parent).
++ *
++ * [HFSM](https://en.wikipedia.org/wiki/UML_state_machine#Hierarchically_nested_states)
++ *
++ * ## Transitions
++ * Transition is a change of the SM state due to an external event. Transitions trigger [State.exit] and [State.enter]
++ * on the states which are involved in the transition. All states in the hierarchy are notified, not only the leaf states.
++ *
++ * Consider moving from *x* to *y*:
++ * ```
++ *
++ *          root         ->             ->         root
++ *        /      \       ->             ->       /      \
++ *       A        B      -> from x to y ->      A        B
++ *     /  \     /  \     ->             ->    /  \     /  \
++ *   a    b   *x*    y   ->             ->   a    b  x    *y*
++ * ```
++ * States will be notified in this order: x.exit(), y.enter().
++ * The B state will not get any event because root was not exited or entered.
++ *
++ *  * Consider moving from *a* to *y*:
++ * ```
++ *          root         ->             ->         root
++ *        /      \       ->             ->       /      \
++ *       A        B      -> from x to b ->      A        B
++ *     /  \     /  \     ->             ->    /  \      /  \
++ *  *a*    b   x    y    ->             ->   a    b    x   *y*
++ * ```
++ * States will be notified in this order: a.exit(), A.exit(), B.enter(), y.enter().
++ * The root state will not get any event because root was not exited or entered.
++ * A and B states are parent states of the leaf states and they also receive [State.enter] and [State.exit].
++ * Both callbacks will receive the **reason** - an external event which has caused the transition.
++ *
++ * ## Transitions between trees
++ *
++ * Consider moving from *a* to *M*:
++ * ```
++ *          root        O       ->             ->         root        O
++ *        /      \       \      ->             ->       /      \       \
++ *       A        B       M     -> from x to L ->      A        B      *M*
++ *     /  \     /  \       \    ->             ->    /  \     /  \       \
++ *  *a*    b   x    y       G   ->             ->   a    b    x   y       G
++ * ```
++ * States will be notified in this order: a.exit(), A.exit(), root.exit(), O.enter(), M.enter().
++ *
++ * ## Origin
++ * This particular state machine is a part of an open source project licensed under MIT license.
++ * It is inspired by an
++ * [Android SM](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/master/core/java/com/android/internal/util/StateMachine.java)
++ */
++internal class StateMachine<T : Any>(
++        val name: String,
++        private val logger: Logger
++) {
++    /** State hierarchy as a tree. Root Node is null.*/
++    private lateinit var tree: Map<State<T>, Node<T>>
++
++    /** Current state of the state machine */
++    private var currentState: State<T> by Delegates.notNull()
++
++    /** State into which the state machine transitions */
++    private var targetState: State<T> by Delegates.notNull()
++
++    /**
++     * Counter which is incremented when SM starts processing and decremented when it finishes.
++     * Use to make sure that [transitionTo] is only used when SM is processing. See [withProcessingFlag].
++     */
++    private var processing: Int = 0
++
++    /** Events not processed by current state and put on hold until the next transition */
++    private val deferred = mutableListOf<T>()
++
++    /**
++     * Configure and start the state machine. [State.enter] will be called on the initial state and its parents.
++     */
++    fun start(event: T? = null, configurator: StateMachineBuilder.(StateMachineBuilder) -> Unit) {
++        tree = StateMachineBuilder()
++                .apply { configurator(this, this) }
++                .mutableTree
++                .toMap()
++        enterInitialState(event)
++    }
++
++    /**
++     * Process the event. If [State.onEvent] returns false, event goes to the next parent state.
++     */
++    fun sendEvent(event: T) = withProcessingFlag {
++        val hierarchy = branchToRoot(currentState)
++
++        logger.debug { "[$name] $event -> (${hierarchy.joinToString(" > ")})" }
++
++        val processedIn: State<T>? = hierarchy.firstOrNull { state: State<T> ->
++            logger.debug { "[$name] $state.processEvent()" }
++            state.onEvent(event)
++        }
++
++        requireNotNull(processedIn) { "[$name] was not able to handle $event" }
++
++        performTransitions(event)
++    }
++
++    /**
++     * Trigger a transition. Allowed only while processing events. All exiting states will
++     * receive [State.exit] and all entering states [State.enter] calls.
++     * Transitions will be performed after the [sendEvent] is done.
++     * Can be called from [State.enter]. In this case last call wins.
++     */
++    fun transitionTo(state: State<T>) {
++        check(processing > 0) { "transitionTo can only be called within processEvent" }
++        targetState = state
++        logger.debug { "[$name] ${currentState.name} -> ${targetState.name}" }
++    }
++
++    /**
++     * Indicate that current state defers processing of this event to the next state.
++     * Event will be delivered upon state change to the next state.
++     */
++    fun deferEvent(event: T) {
++        logger.debug { "[$name] deferring $event from $name to next state" }
++        deferred.add(event)
++    }
++
++    /**
++     * Loop until [currentState] is not the same as [targetState] which can be caused by [transitionTo]
++     */
++    private fun performTransitions(reason: T?) {
++        check(processing > 0)
++        while (currentState != targetState) {
++            val currentBranch = branchToRoot(currentState)
++            val targetBranch = branchToRoot(targetState)
++            val common = currentBranch.intersect(targetBranch)
++
++            val toExit = currentBranch.minus(common)
++            val toEnter = targetBranch.minus(common).reversed()
++
++            // now that we know the branches, change the current state to target state
++            // calling exit/enter may change this afterwards
++            currentState = targetState
++
++            logger.debug { "[$name] exiting $toExit, entering $toEnter" }
++
++            toExit.forEach { state -> state.exit(reason) }
++            toEnter.forEach { state -> state.enter(reason) }
++
++            processDeferred()
++        }
++    }
++
++    private fun processDeferred() {
++        val copy = deferred.toList()
++        deferred.clear()
++        copy.forEach { sendEvent(it) }
++    }
++
++    private fun branchToRoot(state: State<T>): List<State<T>> {
++        return generateSequence(tree.getValue(state)) { it.parentNode }
++                .map { it.state }
++                .toList()
++    }
++
++    /** Goes all states from root to [currentState] and invokes [State.enter] */
++    private fun enterInitialState(event: T?) = withProcessingFlag {
++        val toEnter = branchToRoot(currentState).reversed()
++        logger.debug { "[$name] entering $toEnter" }
++        toEnter.forEach { it.enter(event) }
++        performTransitions(event)
++    }
++
++    /**
++     * Executes the [block] increasing [processing] before and decreasing it after the block execution.
++     */
++    private inline fun withProcessingFlag(block: () -> Unit) {
++        processing++
++        block()
++        processing--
++    }
++
++    inner class StateMachineBuilder {
++        internal val mutableTree = mutableMapOf<State<T>, Node<T>>()
++
++        /**
++         * Adds a new state. Parent must be added before it is used here as [parent].
++         *
++         * At least one state must have [initial] == true or [setInitialState]
++         */
++        fun addState(state: State<T>, parent: State<T>? = null, initial: Boolean = false) {
++            val parentNode: Node<T>? = parent?.let {
++                requireNotNull(mutableTree[it]) { "Parent $parent must be added before adding a child" }
++            }
++
++            mutableTree[state] = Node(state, parentNode)
++
++            if (initial) setInitialState(state)
++        }
++
++        fun setInitialState(state: State<T>) {
++            currentState = state
++            targetState = state
++        }
++    }
++}
++
++/** Node in the state tree */
++internal class Node<T>(
++        var state: State<T>,
++        var parentNode: Node<T>?
++)
++
++/**
++ * Event handler in a [StateMachine]
++ */
++abstract class State<T> {
++    /**
++     * State is entered. It is not called if the state is re-entered (transition to self).
++     *
++     * [reason] is the message which caused and and *null* if [enter] is called from the initial state is entered.
++     */
++    abstract fun enter(reason: T?)
++
++    /**
++     * State is exited. It is only called if the state is completely left. Transitions in the child states do not
++     * cause this.
++     *
++     * [reason] is the message which caused and and *null* if [exit] is called from the initial state is entered.
++     */
++    abstract fun exit(reason: T?)
++
++    /**
++     * Process events in the state. Return *true* if the state has handled the event and *false* if not.
++     * Unhandled event will be propagated to the parent.
++     */
++    abstract fun onEvent(event: T): Boolean
++
++    open val name: String = javaClass.simpleName
++
++    override fun toString(): String = name
++}
+diff --git a/app/src/test/java/com/better/alarm/AlarmCoreTest.kt b/app/src/test/java/com/better/alarm/AlarmCoreTest.kt
+index b64d53b9..35ffe4c1 100644
+--- a/app/src/test/java/com/better/alarm/AlarmCoreTest.kt
++++ b/app/src/test/java/com/better/alarm/AlarmCoreTest.kt
+@@ -75,7 +75,6 @@ class AlarmCoreTest {
+                 logger,
+                 alarmsScheduler,
+                 stateNotifierMock,
+-                TestHandlerFactory(testScheduler),
+                 prefs,
+                 store,
+                 calendars
+@@ -199,7 +198,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -223,7 +222,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -250,7 +249,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -275,7 +274,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -299,7 +298,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -319,7 +318,7 @@ class AlarmCoreTest {
+                     .commit()
+         }
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+ 
+@@ -349,7 +348,7 @@ class AlarmCoreTest {
+         verify { stateNotifierMock.broadcastAlarmState(alarm.id, Intents.ALARM_SHOW_SKIP) }
+         assertThat(alarmSetterMock.calendar).isNotNull()
+ 
+-        act("Skip") {
++        act("RequestSkip") {
+             alarm.requestSkip()
+         }
+         act("Disable") {
+diff --git a/app/src/test/java/com/better/alarm/AlarmsTest.java b/app/src/test/java/com/better/alarm/AlarmsTest.java
+index e10824a4..e90cc7ec 100644
+--- a/app/src/test/java/com/better/alarm/AlarmsTest.java
++++ b/app/src/test/java/com/better/alarm/AlarmsTest.java
+@@ -103,7 +103,6 @@ public class AlarmsTest {
+         Alarms alarms = new Alarms(alarmsScheduler, query, new AlarmCoreFactory(logger,
+                 alarmsScheduler,
+                 stateNotifierMock,
+-                new TestHandlerFactory(testScheduler),
+                 prefs,
+                 store,
+                 calendars
+@@ -371,6 +370,7 @@ public class AlarmsTest {
+         //when alarm fired
+         instance.onAlarmFired((AlarmCore) newAlarm, CalendarType.NORMAL);
+         testScheduler.triggerActions();
++        verify(stateNotifierMock).broadcastAlarmState(eq(newAlarm.getId()), eq(Intents.ACTION_CANCEL_SNOOZE));
+         verify(stateNotifierMock).broadcastAlarmState(eq(newAlarm.getId()), eq(Intents.ALARM_ALERT_ACTION));
+ 
+         //when alarm is snoozed
+@@ -379,7 +379,7 @@ public class AlarmsTest {
+         verify(stateNotifierMock, times(2)).broadcastAlarmState(eq(newAlarm.getId()), eq(Intents.ALARM_DISMISS_ACTION));
+ 
+         newAlarm.delete();
+-        verify(stateNotifierMock).broadcastAlarmState(eq(newAlarm.getId()), eq(Intents.ACTION_CANCEL_SNOOZE));
++        verify(stateNotifierMock, times(2)).broadcastAlarmState(eq(newAlarm.getId()), eq(Intents.ACTION_CANCEL_SNOOZE));
+     }
+ 
+ 
+@@ -504,7 +504,7 @@ public class AlarmsTest {
+         instance.snooze(newAlarm);
+         testScheduler.triggerActions();
+ 
+-        System.out.println("------------");
++        System.out.println("----- now snooze -------");
+ 
+         newAlarm.snooze(7, 42);
+         testScheduler.triggerActions();
+diff --git a/app/src/test/java/com/better/alarm/TestHandlerFactory.java b/app/src/test/java/com/better/alarm/TestHandlerFactory.java
+deleted file mode 100644
+index 34c849c0..00000000
+--- a/app/src/test/java/com/better/alarm/TestHandlerFactory.java
++++ /dev/null
+@@ -1,49 +0,0 @@
+-package com.better.alarm;
+-
+-import com.better.alarm.statemachine.HandlerFactory;
+-import com.better.alarm.statemachine.IHandler;
+-import com.better.alarm.statemachine.Message;
+-import com.better.alarm.statemachine.MessageHandler;
+-
+-import io.reactivex.Scheduler;
+-
+-/**
+- * Created by Yuriy on 25.06.2017.
+- */
+-class TestHandlerFactory implements HandlerFactory {
+-    private Scheduler testScheduler;
+-
+-    public TestHandlerFactory(Scheduler scheduler) {
+-        this.testScheduler = scheduler;
+-    }
+-
+-    @Override
+-    public IHandler create(final MessageHandler messageHandler) {
+-        return new IHandler() {
+-            @Override
+-            public void sendMessageAtFrontOfQueue(Message message) {
+-                sendMessage(message);
+-            }
+-
+-            @Override
+-            public void sendMessage(final Message message) {
+-                testScheduler.scheduleDirect(new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        messageHandler.handleMessage(message);
+-                    }
+-                });
+-            }
+-
+-            @Override
+-            public Message obtainMessage(int what, Object obj) {
+-                return new Message(what, this, null, null, obj);
+-            }
+-
+-            @Override
+-            public Message obtainMessage(int what) {
+-                return new Message(what, this, null, null, null);
+-            }
+-        };
+-    }
+-}
+diff --git a/app/src/test/java/com/better/alarm/statemachine/StateMachineTest.kt b/app/src/test/java/com/better/alarm/statemachine/StateMachineTest.kt
+new file mode 100644
+index 00000000..01a6cfd1
+--- /dev/null
++++ b/app/src/test/java/com/better/alarm/statemachine/StateMachineTest.kt
+@@ -0,0 +1,268 @@
++package com.better.alarm.statemachine
++
++import com.better.alarm.logger.Logger
++import com.better.alarm.logger.SysoutLogWriter
++import org.assertj.core.api.Assertions.assertThat
++import org.junit.Test
++
++class StateMachineTest {
++    private val stateMachine = StateMachine<Event>(
++            name = "TestStateMachine",
++            logger = Logger.create(SysoutLogWriter())
++    )
++
++    private val captured: MutableList<CapturedEvent> = mutableListOf()
++    private val capturedEvents: List<OnEvent> get() = captured.filterIsInstance<OnEvent>()
++    private val capturedTransitions: List<CapturedEvent> get() = captured.filterNot { it is OnEvent }
++
++    private fun state(tag: String, block: (Event) -> Boolean): State<Event> {
++        return object : State<Event>() {
++            override fun enter(reason: Event?) {
++                captured.add(OnEnter(this))
++            }
++
++            override fun exit(reason: Event?) {
++                captured.add(OnExit(this))
++            }
++
++            override fun onEvent(event: Event): Boolean {
++                captured.add(OnEvent(this, event))
++                return block(event)
++            }
++
++            override val name get() = "[$tag]"
++        }
++    }
++
++    @Test
++    fun `events are processed in states hierarchy`() {
++        val root = state("root") { true }
++        val s1 = state("s1") { true }
++        val s2 = state("s2") { false }
++        val s3 = state("s3") { false }
++
++        stateMachine
++                .start(Switch(on = true)) {
++                    addState(state = root)
++                    addState(state = s1, parent = root)
++                    addState(state = s2, parent = s1)
++                    addState(state = s3, parent = s2, initial = true)
++                }
++
++        assertThat(capturedEvents).isEmpty()
++
++        val grind = Grind(1)
++
++        // event goes to s3, then s2 and is handled in s1
++        stateMachine.sendEvent(grind)
++
++        // root does not receive the events
++        assertThat(capturedEvents).containsExactly(
++                OnEvent(s3, grind),
++                OnEvent(s2, grind),
++                OnEvent(s1, grind)
++        )
++    }
++
++    @Test
++    fun `states are entered in the proper order on start`() {
++        val root = state("root") { true }
++        val s1 = state("s1") { true }
++        val s2 = state("s2") { false }
++        val s3 = state("s3") { false }
++
++        stateMachine
++                .start(Switch(on = true)) {
++                    addState(state = root)
++                    addState(state = s1, parent = root)
++                    addState(state = s2, parent = s1)
++                    addState(state = s3, parent = s2, initial = true)
++                }
++
++        assertThat(captured).containsExactly(
++                OnEnter(root),
++                OnEnter(s1),
++                OnEnter(s2),
++                OnEnter(s3)
++        )
++    }
++
++    @Test
++    fun `states are entered in the proper order on start if branching is present`() {
++        val root = state("root") { true }
++        val s0 = state("s0") { true }
++        val s1 = state("s1") { true }
++        val s1a = state("s1a") { false }
++        val s1b = state("s1b") { false }
++
++        val s2 = state("s2") { true }
++        val s2a = state("s2a") { false }
++        val s2b = state("s2b") { false }
++        //           root
++        //           /
++        //          s0
++        //       /      \
++        //      s1      s2
++        //     /  \     /  \
++        //  s1a  s1b   s2a  s2b
++        stateMachine
++                .start(Switch(on = true)) {
++                    addState(state = root)
++                    addState(state = s0, parent = root)
++                    addState(state = s1, parent = s0)
++                    addState(state = s1a, parent = s1)
++                    addState(state = s1b, parent = s1)
++                    addState(state = s2, parent = s0)
++                    addState(state = s2a, parent = s2)
++                    addState(state = s2b, parent = s2)
++                    setInitialState(s2b)
++                }
++
++        assertThat(captured).containsExactly(
++                OnEnter(root),
++                OnEnter(s0),
++                OnEnter(s2),
++                OnEnter(s2b)
++        )
++    }
++
++    @Test
++    fun `transitions trigger enter methods`() {
++        val root = state("root") { true }
++        val s0 = state("s0") { true }
++        val s1 = state("s1") { true }
++        val s1a = state("s1a") { false }
++        val s1b = state("s1b") {
++            stateMachine.transitionTo(s0)
++            true
++        }
++
++        val s2 = state("s2") { true }
++        val s2a = state("s2a") { false }
++        val s2b = state("s2b") {
++            stateMachine.transitionTo(s1b)
++            true
++        }
++        //           root
++        //           /
++        //          s0
++        //       /      \
++        //      s1      s2
++        //     /  \     /  \
++        //  s1a  s1b   s2a  s2b
++        stateMachine
++                .start(Switch(on = true)) {
++                    addState(state = root)
++                    addState(state = s0, parent = root)
++                    addState(state = s1, parent = s0)
++                    addState(state = s1a, parent = s1)
++                    addState(state = s1b, parent = s1)
++                    addState(state = s2, parent = s0)
++                    addState(state = s2a, parent = s2)
++                    addState(state = s2b, parent = s2)
++                    setInitialState(s2b)
++                }
++        // VERIFY after start we have entered s2b
++        assertThat(capturedTransitions).containsExactly(
++                OnEnter(root),
++                OnEnter(s0),
++                OnEnter(s2),
++                OnEnter(s2b)
++        )
++        captured.clear()
++
++        // WHEN trigger transition to s1b
++        stateMachine.sendEvent(Brew(1))
++        // VERIFY first we exit and then we enter
++        assertThat(capturedTransitions).containsExactly(
++                OnExit(s2b),
++                OnExit(s2),
++                OnEnter(s1),
++                OnEnter(s1b)
++        )
++
++        // RESET
++        captured.clear()
++        // WHEN trigger transition to s0
++        stateMachine.sendEvent(Brew(1))
++        // VERIFY since we are already in root and s0, no states will be entered, only 2 states exit
++        assertThat(capturedTransitions).containsExactly(
++                OnExit(s1b),
++                OnExit(s1)
++        )
++    }
++
++    @Test
++    fun `defer allows to process events in the next state after transition`() {
++        val root = state("root") { true }
++        val s0 = state("s0") { true }
++        val s1 = state("s1") { true }
++        val s1a = state("s1a") { false }
++        val ready = state("ready") { true }
++
++        val s2 = state("s2") { true }
++        val s2a = state("s2a") { false }
++        val grinding = state("grinding") {
++            when (it) {
++                is DoneGrinding -> stateMachine.transitionTo(ready)
++                // all other events are deferred because we are busy
++                else -> stateMachine.deferEvent(it)
++            }
++            true
++        }
++        //           root
++        //           /
++        //          s0
++        //       /      \
++        //      s1      s2
++        //     /  \     /  \
++        //  s1a ready s2a  grinding
++        stateMachine
++                .start(Switch(on = true)) {
++                    addState(state = root)
++                    addState(state = s0, parent = root)
++                    addState(state = s1, parent = s0)
++                    addState(state = s1a, parent = s1)
++                    addState(state = ready, parent = s1)
++                    addState(state = s2, parent = s0)
++                    addState(state = s2a, parent = s2)
++                    addState(state = grinding, parent = s2)
++                    setInitialState(grinding)
++                }
++
++        // WHEN events are sent
++        stateMachine.sendEvent(Brew(1))
++        stateMachine.sendEvent(Brew(2))
++        // VERIFY they are processed by current state
++        assertThat(capturedEvents).containsExactly(
++                OnEvent(grinding, Brew(1)),
++                OnEvent(grinding, Brew(2))
++        )
++
++        // RESET
++        captured.clear()
++        // WHEN trigger transition to s1b
++        stateMachine.sendEvent(DoneGrinding)
++        // VERIFY all deferred events are delivered to ready
++        assertThat(capturedEvents).containsExactly(
++                OnEvent(grinding, DoneGrinding),
++                OnEvent(ready, Brew(1)),
++                OnEvent(ready, Brew(2))
++        )
++    }
++}
++
++sealed class Event {
++    override fun toString(): String = javaClass.simpleName
++}
++
++data class Switch(val on: Boolean) : Event()
++data class Grind(val portions: Int) : Event()
++object DoneGrinding : Event()
++data class Brew(val cups: Int) : Event()
++object DoneBrewing : Event()
++
++sealed class CapturedEvent
++data class OnEnter(val state: State<Event>) : CapturedEvent()
++data class OnExit(val state: State<Event>) : CapturedEvent()
++data class OnEvent(val state: State<Event>, val event: Event) : CapturedEvent()

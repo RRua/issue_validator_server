@@ -1,0 +1,2169 @@
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/AddGameActivity.java b/app/src/main/java/com/atelieryl/wonderdroid/AddGameActivity.java
+new file mode 100644
+index 0000000..2a79b1d
+--- /dev/null
++++ b/app/src/main/java/com/atelieryl/wonderdroid/AddGameActivity.java
+@@ -0,0 +1,470 @@
++package com.atelieryl.wonderdroid;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.DialogInterface;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.graphics.Color;
++import android.net.Uri;
++import android.os.AsyncTask;
++import android.preference.PreferenceManager;
++import android.provider.DocumentsContract;
++import android.support.v4.provider.DocumentFile;
++import android.support.v7.app.ActionBar;
++import android.support.v7.app.AppCompatActivity;
++import android.os.Bundle;
++import android.util.Log;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.AdapterView;
++import android.widget.ArrayAdapter;
++import android.widget.Button;
++import android.widget.CheckBox;
++import android.widget.CompoundButton;
++import android.widget.LinearLayout;
++import android.widget.ListView;
++import android.widget.ScrollView;
++import android.widget.Switch;
++import android.widget.TextView;
++import android.widget.Toast;
++
++import java.io.File;
++import java.io.FileDescriptor;
++import java.io.FileInputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.util.ArrayList;
++import java.util.Collections;
++
++public class AddGameActivity extends AppCompatActivity {
++
++    private ActionBar actionBar;
++    private ScrollView addGameChoices;
++    private LinearLayout addGamePrefs;
++    private Button selectFileButton;
++    private Button selectFolderButton;
++    private Button rescanFolderButton;
++    private Button addGameCancelButton;
++    private Button addGameCloseButton;
++    private CheckBox includeSubfoldersCheckBox;
++    private TextView scanFolderNoteRescan;
++    private Switch overwriteSwitch;
++    private Switch copyModeSwitch;
++    private ListView listView;
++
++    private SharedPreferences prefs;
++    private boolean includeSubfolders;
++    private boolean overwrite;
++    private boolean copyMode;
++    private String lastFolderUri;
++    private String lastFolderPath;
++    private boolean scanFolder;
++    private Uri uri;
++    ArrayList<DocumentFile> fileQueue;
++    private ArrayList<String> fileQueueDisplay;
++    private ArrayList<String> fileQueueDisplayUpdated;
++    private ArrayAdapter adapter;
++    private boolean scanning;
++    private boolean canceled;
++    private AsyncTask fileOpTask;
++    private boolean upgrade;
++    private boolean noBoxArt;
++
++    final int BUFFER_SIZE = 1000;
++    final String OPENVGDB_FILENAME = "openvgdb.sqlite";
++    final int OPENVGDB_FILE_SIZE = 42300000;
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_add_game);
++
++        // Views
++        actionBar = getSupportActionBar();
++        addGameChoices = findViewById(R.id.addGameChoices);
++        addGamePrefs = findViewById(R.id.addGamePrefs);
++        selectFileButton = findViewById(R.id.selectFileButton);
++        selectFolderButton = findViewById(R.id.selectFolderButton);
++        rescanFolderButton = findViewById(R.id.rescanFolderButton);
++        addGameCancelButton = findViewById(R.id.addGameCancelButton);
++        addGameCloseButton = findViewById(R.id.addGameCloseButton);
++        includeSubfoldersCheckBox = findViewById(R.id.includeSubfoldersCheckBox);
++        scanFolderNoteRescan = findViewById(R.id.scanFolderNoteRescan);
++        overwriteSwitch = findViewById(R.id.overwriteSwitch);
++        copyModeSwitch = findViewById(R.id.copyModeSwitch);
++        listView = findViewById(R.id.addGameListView);
++
++        // Prefs
++        prefs = PreferenceManager.getDefaultSharedPreferences(this);
++        includeSubfolders = prefs.getBoolean("include_subfolders", true);
++        overwrite = prefs.getBoolean("overwrite", false);
++        copyMode = prefs.getBoolean("copy_mode", true);
++        lastFolderUri = prefs.getString("last_folder_uri", null);
++        if (lastFolderUri != null) {
++            uri = Uri.parse(lastFolderUri);
++            lastFolderPath = uri.getPath().split(":")[1];
++        }
++        noBoxArt = prefs.getBoolean("no_box_art", false);
++
++        // Set views
++        includeSubfoldersCheckBox.setChecked(includeSubfolders);
++        overwriteSwitch.setChecked(overwrite);
++        copyModeSwitch.setChecked(copyMode);
++        if (lastFolderPath != null) {
++            scanFolderNoteRescan.setText(getString(R.string.scan_folder_note_rescan) + " " + lastFolderPath);
++            scanFolderNoteRescan.setVisibility(View.VISIBLE);
++            rescanFolderButton.setVisibility(View.VISIBLE);
++        }
++
++        // Listeners
++        selectFileButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                selectFile();
++            }
++        });
++        selectFolderButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                selectFolder(null);
++            }
++        });
++        rescanFolderButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                scanFolder = true;
++                fileOrFolderSelected();
++            }
++        });
++        includeSubfoldersCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                includeSubfolders = isChecked;
++                SharedPreferences.Editor editor = prefs.edit();
++                editor.putBoolean("include_subfolders", includeSubfolders);
++                editor.commit();
++            }
++        });
++        overwriteSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                overwrite = isChecked;
++                SharedPreferences.Editor editor = prefs.edit();
++                editor.putBoolean("overwrite", overwrite);
++                editor.commit();
++            }
++        });
++        copyModeSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                copyMode = isChecked;
++                SharedPreferences.Editor editor = prefs.edit();
++                editor.putBoolean("copy_mode", copyMode);
++                editor.commit();
++            }
++        });
++        addGameCancelButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                fileOpTask.cancel(true);
++            }
++        });
++        addGameCloseButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                finish();
++            }
++        });
++
++        // Intent extras (upgrading from WonderDroid X)
++        Intent intent = getIntent();
++        upgrade = intent.getBooleanExtra("upgrade", false);
++        if (upgrade) {
++            String romPath = null;
++            File romdirx = ((WonderDroid)getApplication()).getRomDir();
++            if (romdirx != null) {
++                String sdpath = romdirx.getAbsolutePath();
++                romPath = prefs.getString("emu_rompath", "wonderdroid");
++                if (!romPath.startsWith("/")) {
++                    romPath = sdpath + "/" + romPath;
++                }
++            }
++            selectFolder(romPath);
++        }
++
++        // Set up ListView
++        fileQueueDisplay = new ArrayList<>();
++        fileQueueDisplayUpdated = new ArrayList<>();
++        adapter = new ArrayAdapter(getApplicationContext(), android.R.layout.simple_list_item_2, android.R.id.text1, fileQueueDisplayUpdated) {
++            @Override
++            public View getView(int position, View view, ViewGroup parent) {
++                if (view == null) {
++                    view = LayoutInflater.from(getContext()).inflate(android.R.layout.simple_list_item_2, parent, false);
++                }
++
++                TextView text1 = (TextView) view.findViewById(android.R.id.text1);
++                TextView text2 = (TextView) view.findViewById(android.R.id.text2);
++
++                text1.setTextColor(Color.WHITE);
++                text2.setTextColor(Color.WHITE);
++
++                try {
++                    String[] displayTextSplit = fileQueueDisplayUpdated.get(position).split("\0");
++
++                    if (displayTextSplit[1].equals(OPENVGDB_FILENAME))
++                        text1.setText(getString(R.string.openvgdb));
++                    else
++                        text1.setText(displayTextSplit[1]);
++
++                    switch (displayTextSplit[0]) {
++                        case "i":
++                            text2.setText(getString(R.string.in_progress) + " " + displayTextSplit[2]);
++                            break;
++                        case "p":
++                            text2.setText(getString(R.string.pending));
++                            break;
++                        case "e":
++                            text2.setText(getString(R.string.file_exists));
++                            break;
++                        case "f":
++                            text2.setText(getString(R.string.file_error));
++                            break;
++                        case "u":
++                            text2.setText(getString(R.string.unrecognized_extension));
++                            break;
++                        case "n":
++                            text2.setText(getString(R.string.no_corresponding_game));
++                            break;
++                        case "c":
++                            text2.setText(getString(R.string.canceled));
++                            break;
++                    }
++                } catch (Exception e) {}
++
++                return view;
++            }
++        };
++        listView.setAdapter(adapter);
++        listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
++            @Override
++            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
++                String[] displayTextSplit = fileQueueDisplayUpdated.get(position).split("\0");
++                if (!displayTextSplit[0].equals("f")) return;
++                Toast.makeText(getApplicationContext(), displayTextSplit[2], Toast.LENGTH_SHORT).show();
++            }
++        });
++    }
++
++    public void selectFile() {
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++        intent.addCategory(Intent.CATEGORY_OPENABLE);
++        intent.setType("*/*");
++        startActivityForResult(intent, 0);
++    }
++
++    public void selectFolder(String romPath) {
++        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
++        if (romPath != null)
++            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, romPath);
++        startActivityForResult(intent, 1);
++    }
++
++    private void fileOrFolderSelected() {
++        if (scanFolder) {
++            SharedPreferences.Editor editor = prefs.edit();
++            editor.putString("last_folder_uri", uri.toString());
++            editor.commit();
++            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
++        }
++        addGameChoices.setVisibility(View.GONE);
++        addGamePrefs.setVisibility(View.GONE);
++        listView.setVisibility(View.VISIBLE);
++        fileOpTask = new FileOpTask().execute();
++        addGameCancelButton.setVisibility(View.VISIBLE);
++    }
++
++    @Override
++    public void onActivityResult(int requestCode, int resultCode, Intent resultData) {
++        if (resultCode == Activity.RESULT_OK) {
++            if (resultData != null) {
++                uri = resultData.getData();
++                scanFolder = (requestCode == 1);
++                fileOrFolderSelected();
++            }
++        }
++    }
++
++    public class FileOpTask extends AsyncTask<Void, Void, Void> {
++        private Void setCanceled() {
++            canceled = true;
++            publishProgress();
++            return null;
++        }
++
++        @Override
++        protected Void doInBackground(Void... params) {
++            // Scan for files
++            scanning = true;
++            publishProgress();
++            fileQueue = new ArrayList<>();
++            if (scanFolder) {
++                // Scan folder
++                DocumentFile documentFile = DocumentFile.fromTreeUri(getApplicationContext(), uri);
++                ArrayList<DocumentFile> dirQueue = new ArrayList<>();
++                dirQueue.add(documentFile);
++                if (includeSubfolders) {
++                    for (DocumentFile file : documentFile.listFiles()) {
++                        if (isCancelled()) return setCanceled();
++                        if (file.isDirectory())
++                            dirQueue.add(file);
++                    }
++                }
++                for (DocumentFile dir : dirQueue) {
++                    for (DocumentFile file : dir.listFiles()) {
++                        if (isCancelled()) return setCanceled();
++                        if (!file.isDirectory()) {
++                            fileQueue.add(file);
++                            fileQueueDisplay.add("p\0" + file.getName());
++                        }
++                    }
++                }
++            } else {
++                // Single file
++                DocumentFile documentFile = DocumentFile.fromSingleUri(getApplicationContext(), uri);
++                fileQueue.add(documentFile);
++                fileQueueDisplay.add("p\0" + documentFile.getName());
++            }
++            scanning = false;
++            publishProgress();
++            // Get destination path
++            String storagePath = prefs.getString("storage_path", "");
++            // Check for OpenVGDB
++            if (!noBoxArt) {
++                File openVGDBFile = new File(storagePath + "/" + OPENVGDB_FILENAME);
++                if (!openVGDBFile.exists()) {
++                    fileQueue.add(0, null);
++                    fileQueueDisplay.add(0, "p\0" + OPENVGDB_FILENAME);
++                }
++            }
++            // Perform file operations
++            for (int i = 0; i < fileQueue.size(); i++) {
++                if (isCancelled()) return setCanceled();
++                DocumentFile srcFile = fileQueue.get(i);
++                String filename;
++                if (srcFile != null) {
++                    filename = srcFile.getName();
++                } else {
++                    filename = OPENVGDB_FILENAME;
++                }
++                // Ref: https://stackoverflow.com/questions/36023334
++                try {
++                    File outFile = new File(storagePath + "/" + filename);
++                    // check if file exists
++                    if (!overwrite && outFile.exists()) {
++                        fileQueueDisplay.set(i, "e\0" + filename);
++                    } else {
++                        // copy output file
++                        OutputStream out = getApplication().getContentResolver().openOutputStream(Uri.fromFile(outFile));
++                        InputStream in;
++                        long fileSize;
++                        if (srcFile != null) {
++                            in = getApplication().getContentResolver().openInputStream(srcFile.getUri());
++                            fileSize = srcFile.length();
++                        } else {
++                            in = getApplicationContext().getAssets().open(OPENVGDB_FILENAME);
++                            fileSize = OPENVGDB_FILE_SIZE;
++                        }
++                        long transferred = 0;
++                        byte[] buffer = new byte[BUFFER_SIZE];
++                        int read;
++                        while ((read = in.read(buffer)) != -1) {
++                            if (isCancelled()) {
++                                out.flush();
++                                out.close();
++                                outFile.delete();
++                                return setCanceled();
++                            }
++                            out.write(buffer, 0, read);
++                            transferred += BUFFER_SIZE;
++                            fileQueueDisplay.set(i, "i\0" + filename + "\0" + (int) (((double) transferred / fileSize) * 100) + "%");
++                            publishProgress();
++                        }
++                        in.close();
++                        // write output file
++                        out.flush();
++                        out.close();
++                        fileQueue.remove(i);
++                        fileQueueDisplay.remove(i);
++                        // delete original file
++                        if (!copyMode && srcFile != null) {
++                            srcFile.delete();
++                        }
++                        i--;
++                    }
++                } catch (Exception e) {
++                    fileQueueDisplay.set(i, "f\0" + filename + "\0" + e.getMessage());
++                }
++                publishProgress();
++            }
++            return null;
++        }
++        @Override
++        protected void onCancelled(Void result) {
++            addGameCancelButton.setVisibility(View.GONE);
++            addGameCloseButton.setVisibility(View.VISIBLE);
++            for (int i = 0; i < fileQueueDisplay.size(); i++) {
++                DocumentFile srcFile = fileQueue.get(i);
++                String filename = srcFile.getName();
++                fileQueueDisplay.set(i, "c\0" + filename);
++            }
++            onProgressUpdate();
++        }
++        @Override
++        protected void onPostExecute(Void result) {
++            if (fileQueue.size() > 0) {
++                actionBar.setTitle(R.string.errors);
++                addGameCancelButton.setVisibility(View.GONE);
++                addGameCloseButton.setVisibility(View.VISIBLE);
++            } else {
++                if (upgrade) {
++                    String romPath = prefs.getString("emu_rompath", "wonderdroid");
++                    String memPath = prefs.getString("emu_mempath", "wonderdroid/cartmem");
++                    if (!memPath.equals(romPath + "/cartmem")) {
++                        Toast.makeText(getApplicationContext(), R.string.upgrade_save_warning, Toast.LENGTH_LONG).show();
++                    }
++                }
++                finish();
++            }
++        }
++        @Override
++        protected void onProgressUpdate(Void... progress) {
++            fileQueueDisplayUpdated.clear();
++            fileQueueDisplayUpdated.addAll(fileQueueDisplay);
++            adapter.notifyDataSetChanged();
++            if (scanning)
++                actionBar.setTitle(R.string.scanning);
++            else {
++                String title;
++                if (isCancelled())
++                    title = getString(R.string.canceled);
++                else if (copyMode)
++                    title = getString(R.string.copy);
++                else
++                    title = getString(R.string.move);
++                actionBar.setTitle(title + " (" + fileQueueDisplay.size() + " " + getString(R.string.remaining) + ")");
++            }
++        }
++    }
++
++    // Syntax is status\0filename\0extra
++    // i    In progress; percent as extra
++    // p    Pending
++    // e    File already exists and overwrite is disabled
++    // f    File error; error as extra
++    // u    Unrecognized file extension
++    // z    File already exists in a ZIP
++    // n    No corresponding game exists
++    // c    Canceled
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java b/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
+similarity index 94%
+rename from app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java
+rename to app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
+index 28d3db0..7c19a3b 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/GameRenderer.java
+@@ -2,7 +2,7 @@
+ package com.atelieryl.wonderdroid;
+ 
+ import java.nio.ByteBuffer;
+-import java.nio.ShortBuffer;
++import java.nio.IntBuffer;
+ 
+ import android.annotation.SuppressLint;
+ import android.graphics.Bitmap;
+@@ -19,7 +19,7 @@ import com.atelieryl.wonderdroid.utils.EmuThread;
+ import com.atelieryl.wonderdroid.utils.AudioRunnable;
+ 
+ @SuppressLint("NewApi")
+-public class WonderSwanRenderer implements EmuThread.Renderer {
++public class GameRenderer implements EmuThread.Renderer {
+ 
+     private AudioTrack audio = new AudioTrack(AudioManager.STREAM_MUSIC, WonderSwan.audiofreq,
+             WonderSwan.channelconf, WonderSwan.encoding, AudioTrack.getMinBufferSize(
+@@ -30,7 +30,7 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+ 
+     private boolean showButtons = false;
+ 
+-    private final ShortBuffer frameone;
++    private final IntBuffer frameone;
+ 
+     private final Bitmap framebuffer;
+ 
+@@ -48,16 +48,16 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+ 
+     private boolean clearBeforeDraw = true;
+ 
+-    public WonderSwanRenderer() {
++    public GameRenderer() {
+ 
+         textPaint.setColor(0xFFFFFFFF);
+         textPaint.setTextSize(35);
+         textPaint.setShadowLayer(3, 1, 1, 0x99000000);
+         textPaint.setAntiAlias(true);
+ 
+-        frameone = ByteBuffer.allocateDirect(WonderSwan.FRAMEBUFFERSIZE).asShortBuffer();
++        frameone = ByteBuffer.allocateDirect(WonderSwan.FRAMEBUFFERSIZE).asIntBuffer();
+         framebuffer = Bitmap.createBitmap(WonderSwan.SCREEN_WIDTH, WonderSwan.SCREEN_HEIGHT,
+-                Bitmap.Config.RGB_565);
++                Bitmap.Config.ARGB_8888);
+         
+         drawThread = new DrawThread(framebuffer, scale);
+         drawThread.start();
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/Main.java b/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
+similarity index 53%
+rename from app/src/main/java/com/atelieryl/wonderdroid/Main.java
+rename to app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
+index 98e3714..f886550 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/Main.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/MainActivity.java
+@@ -3,10 +3,7 @@ package com.atelieryl.wonderdroid;
+ 
+ import android.app.AlertDialog;
+ import android.content.DialogInterface;
+-import android.graphics.Color;
+-import android.graphics.drawable.ColorDrawable;
+ import android.support.v7.widget.Toolbar;
+-import android.util.Log;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+@@ -34,7 +31,7 @@ import android.view.WindowManager;
+ import android.widget.ProgressBar;
+ import android.widget.Toast;
+ 
+-public class Main extends BaseActivity {
++public class MainActivity extends BaseActivity {
+ 
+     public static final String ROM = "rom";
+ 
+@@ -48,17 +45,11 @@ public class Main extends BaseActivity {
+ 
+     private Rom mRom;
+ 
+-    private WonderSwanHeader mRomHeader;
+-
+-    private File mCartMem;
+-
+     private boolean mControlsVisible = false;
+ 
+     private boolean showControls = true;
+     
+-    private String memPath = "wonderdroid/cartmem";
+-
+-    private String shortMemPath = "wonderdroid/cartmem";
++    private String dirPath = "wonderdroid/cartmem";
+ 
+     private Menu menu;
+ 
+@@ -74,10 +65,9 @@ public class Main extends BaseActivity {
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
+-        mRom = (Rom)this.getIntent().getExtras().getSerializable(ROM);
+-        mRomHeader = (WonderSwanHeader)this.getIntent().getExtras().getSerializable(ROMHEADER);
++        mRom = (Rom) this.getIntent().getExtras().getSerializable(ROM);
+ 
+-        if (mRom == null || mRomHeader == null) {
++        if (mRom == null) {
+             throw new IllegalArgumentException();
+         }
+ 
+@@ -92,78 +82,62 @@ public class Main extends BaseActivity {
+         parseEmuOptions(prefs);
+         parseKeys(prefs);
+         
+-        memPath = prefs.getString("emu_mempath", "wonderdroid/cartmem");
+-        if (!memPath.endsWith("/")) {
+-        	memPath = memPath + "/";
+-        }
+-        shortMemPath = memPath;
+-        if (!memPath.startsWith("/")) {
+-            memPath = Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + memPath;
+-        }
++        dirPath = prefs.getString("storage_path", "");
+ 
+         mPB = (ProgressBar)this.findViewById(R.id.romloadprogressbar);
+ 
+-        AsyncTask<Void, Void, Void> loader = new AsyncTask<Void, Void, Void>() {
++        new GameLoader().execute((Void[])null);
+ 
+-            @Override
+-            protected void onPreExecute() {
+-            }
++        packageName = getPackageName();
++        showStateWarning = !prefs.getBoolean("hidestatewarning", false);
++    }
+ 
+-            @Override
+-            protected Void doInBackground(Void... params) {
+-                mCartMem = new File(memPath + mRomHeader.internalname + ".mem");
+-                try {
+-                    mCartMem.createNewFile();
+-                } catch (IOException e) {
+-                    e.printStackTrace();
+-                    //throw new RuntimeException();
+-                }
++    public class GameLoader extends AsyncTask<Void, Void, Integer> {
+ 
+-                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(Main.this);
+-                String name = prefs.getString("ws_name", "");
+-                String sex = prefs.getString("ws_sex", "1");
+-                String blood = prefs.getString("ws_blood", "1");
+-                GregorianCalendar cal = new GregorianCalendar();
+-                cal.setTimeInMillis(prefs.getLong("ws_birthday", 0));
+-
+-                WonderSwan.load(Rom.getRomFile(mContext, mRom).getAbsolutePath(),
+-                        mRomHeader.isColor, name, cal.get(GregorianCalendar.YEAR),
+-                        cal.get(GregorianCalendar.MONTH), cal.get(GregorianCalendar.DAY_OF_MONTH),
+-                        Integer.parseInt(blood), Integer.parseInt(sex));
+-                return null;
+-            }
++        @Override
++        protected Integer doInBackground(Void... params) {
++//                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(MainActivity.this);
++//                String name = prefs.getString("ws_name", "");
++//                String sex = prefs.getString("ws_sex", "1");
++//                String blood = prefs.getString("ws_blood", "1");
++//                GregorianCalendar cal = new GregorianCalendar();
++//                cal.setTimeInMillis(prefs.getLong("ws_birthday", 0));
+ 
+-            @Override
+-            protected void onPostExecute(Void result) {
+-                if (mPB != null) {
+-                    mPB.setVisibility(ProgressBar.GONE);
+-                }
++            return WonderSwan.load(Rom.getRomFile(mContext, mRom).getAbsolutePath(), dirPath);
++        }
+ 
+-                WonderSwan.reset();
++        @Override
++        protected void onPostExecute(Integer errorCode) {
++            if (mPB != null) {
++                mPB.setVisibility(ProgressBar.GONE);
++            }
+ 
+-                if (checkFileAccess(mCartMem, false, false) && (mCartMem.length() > 0)) {
+-                    WonderSwan.loadbackup(mCartMem.getAbsolutePath());
+-                }
+-                view.start();
+-                // Show controls automatically
+-                if (showControls) {
+-                	mControlsVisible = true;
+-                    view.showButtons(mControlsVisible);
+-                }
++            if (errorCode != 0) {
++                Toast.makeText(mContext, R.string.cannotloadrom, Toast.LENGTH_SHORT).show();
++                WonderSwan.exit();
++                finish();
++                return;
+             }
+-        };
+ 
+-        loader.execute((Void[])null);
++            WonderSwan.reset();
++            //WonderSwan.loadbackup(mCartMem.getAbsolutePath());
+ 
+-        packageName = getPackageName();
+-        showStateWarning = !prefs.getBoolean("hidestatewarning", false);
+-    }
++            view.start();
++            // Show controls automatically
++            if (showControls) {
++                mControlsVisible = true;
++                view.showButtons(mControlsVisible);
++            }
++        }
++    };
+ 
+     @Override
+     public boolean onOptionsItemSelected(MenuItem item) {
+         // Handle item selection
+         switch (item.getItemId()) {
+             case R.id.main_exitmi:
++                view.stop();
++                WonderSwan.exit();
+                 this.finish();
+                 return true;
+ 
+@@ -172,12 +146,12 @@ public class Main extends BaseActivity {
+                 return true;
+ 
+             case R.id.main_resetmi:
+-                recreate();
+-                //WonderSwan.reset();
++                WonderSwan.reset();
++                //recreate();
+                 return true;
+ 
+             case R.id.main_prefsmi:
+-                Intent intent = new Intent(this, Prefs.class);
++                Intent intent = new Intent(this, PrefsActivity.class);
+                 startActivity(intent);
+                 return true;
+ 
+@@ -191,7 +165,7 @@ public class Main extends BaseActivity {
+                 if (showStateWarning) {
+                     AlertDialog.Builder builder;
+                     builder = new AlertDialog.Builder(this);
+-                    builder.setMessage(getResources().getString(R.string.statewarning).replace("???", shortMemPath))
++                    builder.setMessage(getResources().getString(R.string.statewarning))
+                             .setPositiveButton(R.string.understand, new DialogInterface.OnClickListener() {
+                                 public void onClick(DialogInterface dialog, int which) {
+                                     showStateWarning = false;
+@@ -255,32 +229,32 @@ public class Main extends BaseActivity {
+     }
+ 
+     public void updateStateMenuTitles() {
+-        for (int i = -1; i <= 5; i++) {
+-            String statePath = memPath + mRomHeader.internalname + "_" + Integer.toString(i).replace("-", "a") + "_0.sav";
+-            String menuTitle = getResources().getString(R.string.slot) + " " + Integer.toString(i).replace("-", "a");
+-            if (i < 0) {
+-                menuTitle = getResources().getString(R.string.auto);
+-            } else if (i == 0) {
+-                menuTitle = getResources().getString(R.string.undo);
+-            }
+-            menuTitle += ": ";
+-            File stateFile = new File(statePath);
+-            int loadStateMenuItemId = getResources().getIdentifier("load_" + Integer.toString(i).replace("-", "a"), "id", packageName);
+-            MenuItem loadStateMenuItem = menu.findItem(loadStateMenuItemId);
+-            if (checkFileAccess(stateFile, false, true)) {
+-                menuTitle += formatDate(stateFile.lastModified());
+-                loadStateMenuItem.setEnabled(true);
+-            } else {
+-                menuTitle += getResources().getString(R.string.empty);
+-                loadStateMenuItem.setEnabled(false);
+-            }
+-            loadStateMenuItem.setTitle(menuTitle);
+-            if (i > 0) {
+-                int saveStateMenuItemId = getResources().getIdentifier("save_" + Integer.toString(i), "id", packageName);
+-                MenuItem saveStateMenuItem = menu.findItem(saveStateMenuItemId);
+-                saveStateMenuItem.setTitle(menuTitle);
+-            }
+-        }
++//        for (int i = -1; i <= 5; i++) {
++//            String statePath = dirPath + mRomHeader.internalname + "_" + Integer.toString(i).replace("-", "a") + "_0.sav";
++//            String menuTitle = getResources().getString(R.string.slot) + " " + Integer.toString(i).replace("-", "a");
++//            if (i < 0) {
++//                menuTitle = getResources().getString(R.string.auto);
++//            } else if (i == 0) {
++//                menuTitle = getResources().getString(R.string.undo);
++//            }
++//            menuTitle += ": ";
++//            File stateFile = new File(statePath);
++//            int loadStateMenuItemId = getResources().getIdentifier("load_" + Integer.toString(i).replace("-", "a"), "id", packageName);
++//            MenuItem loadStateMenuItem = menu.findItem(loadStateMenuItemId);
++//            if (checkFileAccess(stateFile, false, true)) {
++//                menuTitle += formatDate(stateFile.lastModified());
++//                loadStateMenuItem.setEnabled(true);
++//            } else {
++//                menuTitle += getResources().getString(R.string.empty);
++//                loadStateMenuItem.setEnabled(false);
++//            }
++//            loadStateMenuItem.setTitle(menuTitle);
++//            if (i > 0) {
++//                int saveStateMenuItemId = getResources().getIdentifier("save_" + Integer.toString(i), "id", packageName);
++//                MenuItem saveStateMenuItem = menu.findItem(saveStateMenuItemId);
++//                saveStateMenuItem.setTitle(menuTitle);
++//            }
++//        }
+     }
+ 
+     @Override
+@@ -326,11 +300,11 @@ public class Main extends BaseActivity {
+         view.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LOW_PROFILE);
+         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                 WindowManager.LayoutParams.FLAG_FULLSCREEN);
+-        if (mRomHeader.isVertical || !prefs.getBoolean("reversehorizontalorientation", false)) {
+-        	this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+-        } else {
++//        if (mRomHeader.isVertical || !prefs.getBoolean("reversehorizontalorientation", false)) {
++//        	this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
++//        } else {
+         	this.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+-        }
++//        }
+     }
+     
+     @Override
+@@ -339,9 +313,7 @@ public class Main extends BaseActivity {
+         super.onPause();
+         view.stop();
+         saveState(-1);
+-        if (checkFileAccess(mCartMem, true, false)) {
+-            WonderSwan.savebackup(mCartMem.getAbsolutePath());
+-        }
++        //WonderSwan.savebackup(mCartMem.getAbsolutePath());
+     }
+     
+     @Override
+@@ -351,66 +323,47 @@ public class Main extends BaseActivity {
+     }
+ 
+     public void saveState(int stateNo) {
+-        for (int backupNo = 0; backupNo <= maxBackupNo; backupNo++) {
+-            String statePath = memPath + mRomHeader.internalname + "_" + Integer.toString(stateNo).replace("-", "a") + "_" + Integer.toString(backupNo) + ".sav";
+-            File stateFile = new File(statePath);
+-            try {
+-                stateFile.createNewFile();
+-            } catch (IOException e) {
+-                e.printStackTrace();
+-                //throw new RuntimeException();
+-            }
+-            if (checkFileAccess(stateFile, true, false)) {
+-                for (int i = 0; i < 2; i++) {
+-                    WonderSwan.savestate(stateFile.getAbsolutePath());
+-                }
+-            } else {
+-                break;
+-            }
+-        }
++//        for (int backupNo = 0; backupNo <= maxBackupNo; backupNo++) {
++//            String statePath = dirPath + mRomHeader.internalname + "_" + Integer.toString(stateNo).replace("-", "a") + "_" + Integer.toString(backupNo) + ".sav";
++//            File stateFile = new File(statePath);
++//            try {
++//                stateFile.createNewFile();
++//            } catch (IOException e) {
++//                e.printStackTrace();
++//                //throw new RuntimeException();
++//            }
++//            if (checkFileAccess(stateFile, true, false)) {
++//                for (int i = 0; i < 2; i++) {
++//                    WonderSwan.savestate(stateFile.getAbsolutePath());
++//                }
++//            } else {
++//                break;
++//            }
++//        }
+     }
+ 
+     public void loadState(int stateNo) {
+-        String statePath;
+-        File stateFile;
+-        int startingBackupNo = currentBackupNo;
+-        while (true) {
+-            statePath = memPath + mRomHeader.internalname + "_" + Integer.toString(stateNo).replace("-", "a") + "_" + Integer.toString(currentBackupNo) + ".sav";
+-            currentBackupNo++;
+-            if (currentBackupNo > maxBackupNo) {
+-                currentBackupNo = 0;
+-            }
+-            stateFile = new File(statePath);
+-            if (checkFileAccess(stateFile, false, true)) {
+-                break;
+-            } else if (startingBackupNo == currentBackupNo) {
+-                Toast.makeText(this, R.string.readmemfileerror, Toast.LENGTH_SHORT).show();
+-                return;
+-            }
+-        }
+-        if (stateNo != 0) {
+-            saveState(0);
+-        }
+-        WonderSwan.loadstate(stateFile.getAbsolutePath());
+-    }
+-
+-    public boolean checkFileAccess(File file, boolean write, boolean suppressToasts) {
+-    	boolean accessOK = false;
+-    	try {
+-    		if (file.isFile() && (!write || file.canWrite()) && (write || file.canRead())) {
+-    			accessOK = true;
+-    		}
+-    	} catch (Exception e) {
+-    		
+-    	}
+-        if (!accessOK && !suppressToasts) {
+-    		if (write) {
+-    			Toast.makeText(this, R.string.writememfileerror, Toast.LENGTH_SHORT).show();
+-    		} else {
+-    			Toast.makeText(this, R.string.readmemfileerror, Toast.LENGTH_SHORT).show();
+-    		}
+-    	}
+-    	return accessOK;
++//        String statePath;
++//        File stateFile;
++//        int startingBackupNo = currentBackupNo;
++//        while (true) {
++//            statePath = dirPath + mRomHeader.internalname + "_" + Integer.toString(stateNo).replace("-", "a") + "_" + Integer.toString(currentBackupNo) + ".sav";
++//            currentBackupNo++;
++//            if (currentBackupNo > maxBackupNo) {
++//                currentBackupNo = 0;
++//            }
++//            stateFile = new File(statePath);
++//            if (checkFileAccess(stateFile, false, true)) {
++//                break;
++//            } else if (startingBackupNo == currentBackupNo) {
++//                Toast.makeText(this, R.string.readmemfileerror, Toast.LENGTH_SHORT).show();
++//                return;
++//            }
++//        }
++//        if (stateNo != 0) {
++//            saveState(0);
++//        }
++//        WonderSwan.loadstate(stateFile.getAbsolutePath());
+     }
+ 
+     private String formatDate(long milliseconds) {
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/OnboardingActivity.java b/app/src/main/java/com/atelieryl/wonderdroid/OnboardingActivity.java
+new file mode 100644
+index 0000000..086a6e5
+--- /dev/null
++++ b/app/src/main/java/com/atelieryl/wonderdroid/OnboardingActivity.java
+@@ -0,0 +1,252 @@
++package com.atelieryl.wonderdroid;
++
++import android.Manifest;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.content.pm.PackageManager;
++import android.graphics.Color;
++import android.preference.PreferenceManager;
++import android.support.v4.content.ContextCompat;
++import android.support.v7.app.AppCompatActivity;
++import android.os.Bundle;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.AdapterView;
++import android.widget.ArrayAdapter;
++import android.widget.Button;
++import android.widget.CheckBox;
++import android.widget.CompoundButton;
++import android.widget.ImageView;
++import android.widget.ListView;
++import android.widget.TextView;
++
++import java.io.File;
++import java.util.ArrayList;
++
++public class OnboardingActivity extends AppCompatActivity {
++
++    private TextView textView;
++    private ListView listView;
++    private Button nextButton;
++    private Button refreshButton;
++    private ImageView heroImageView;
++    private CheckBox noBoxArtCheckBox;
++
++    private SharedPreferences prefs;
++    private String storagePath;
++
++    private boolean upgrade;
++
++    private enum Steps {
++        START,
++        UPGRADE_WELCOME,
++        PRIVACY,
++        CHOOSE_DRIVE,
++        UPGRADE_PROMPT
++    }
++
++    private Steps currentStep = Steps.START;
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        setContentView(R.layout.activity_onboarding);
++
++        // Views
++        textView = findViewById(R.id.onboardingTextView);
++        listView = findViewById(R.id.onboardingListView);
++        nextButton = findViewById(R.id.onboardingNextButton);
++        refreshButton = findViewById(R.id.onboardingRefreshButton);
++        heroImageView = findViewById(R.id.heroImageView);
++        noBoxArtCheckBox = findViewById(R.id.noBoxArtCheckBox);
++
++        // Prefs
++        prefs = PreferenceManager.getDefaultSharedPreferences(this);
++        storagePath = prefs.getString("storage_path", "");
++
++        // Listeners
++        nextButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                renderNextStep();
++            }
++        });
++        refreshButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                renderCurrentStep();
++            }
++        });
++        noBoxArtCheckBox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
++            @Override
++            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
++                SharedPreferences.Editor editor = prefs.edit();
++                editor.putBoolean("no_box_art", isChecked);
++                editor.commit();
++            }
++        });
++
++        // Check if user is upgrading from WonderDroid X.
++        // Either storage permission is enabled or "setreversehorizontalorientation" is set, while storagePath is null
++        boolean storagePermission = PackageManager.PERMISSION_GRANTED == ContextCompat
++                .checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
++        boolean setreversehorizontalorientation = prefs.getBoolean("setreversehorizontalorientation", false);
++        String romPath = prefs.getString("emu_rompath", "\0");
++        upgrade = (storagePermission || setreversehorizontalorientation || !romPath.equals("\0")) && storagePath == "";
++        renderNextStep();
++    }
++
++    @Override
++    public void onBackPressed() {
++        renderPrevStep();
++    }
++
++    public void renderNextStep() {
++        switch (currentStep) {
++            case START:
++                if (upgrade)
++                    currentStep = Steps.UPGRADE_WELCOME;
++                else
++                    currentStep = Steps.PRIVACY;
++                break;
++            case UPGRADE_WELCOME:
++                currentStep = Steps.PRIVACY;
++                break;
++            case PRIVACY:
++                currentStep = Steps.CHOOSE_DRIVE;
++                break;
++            case CHOOSE_DRIVE:
++                if (upgrade)
++                    currentStep = Steps.UPGRADE_PROMPT;
++                else
++                    finish();
++                break;
++            case UPGRADE_PROMPT:
++                Intent intent = new Intent(this, AddGameActivity.class);
++                intent.putExtra("upgrade", true);
++                startActivity(intent);
++                finish();
++                break;
++        }
++        renderCurrentStep();
++    }
++
++    private void renderPrevStep() {
++        switch (currentStep) {
++            case PRIVACY:
++                if (upgrade)
++                    currentStep = Steps.UPGRADE_WELCOME;
++                break;
++            case CHOOSE_DRIVE:
++                currentStep = Steps.PRIVACY;
++                break;
++            case UPGRADE_PROMPT:
++                currentStep = Steps.CHOOSE_DRIVE;
++                break;
++        }
++        renderCurrentStep();
++    }
++
++    public void renderCurrentStep() {
++        switch (currentStep) {
++            case UPGRADE_WELCOME:
++                load_upgrade_welcome_screen();
++                break;
++            case PRIVACY:
++                load_privacy_screen();
++                break;
++            case CHOOSE_DRIVE:
++                load_choose_drive_screen();
++                break;
++            case UPGRADE_PROMPT:
++                load_upgrade_prompt_screen();
++                break;
++        }
++    }
++
++    private void load_upgrade_welcome_screen() {
++        listView.setVisibility(View.GONE);
++        nextButton.setVisibility(View.VISIBLE);
++        refreshButton.setVisibility(View.GONE);
++        textView.setText(R.string.upgrade_welcome);
++        heroImageView.setImageDrawable(getResources().getDrawable(R.drawable.onboarding_upgrade));
++        noBoxArtCheckBox.setVisibility(View.GONE);
++    }
++
++    private void load_privacy_screen() {
++        listView.setVisibility(View.GONE);
++        nextButton.setVisibility(View.VISIBLE);
++        refreshButton.setVisibility(View.GONE);
++        textView.setText(R.string.privacy);
++        heroImageView.setImageDrawable(getResources().getDrawable(R.drawable.onboarding_privacy));
++        noBoxArtCheckBox.setVisibility(View.VISIBLE);
++    }
++
++    private void load_choose_drive_screen() {
++        listView.setVisibility(View.VISIBLE);
++        nextButton.setVisibility(View.GONE);
++        refreshButton.setVisibility(View.VISIBLE);
++        textView.setText(R.string.select_drive_prompt);
++        heroImageView.setImageDrawable(getResources().getDrawable(R.drawable.onboarding_drive));
++        noBoxArtCheckBox.setVisibility(View.GONE);
++
++        // Get storage path again
++        storagePath = prefs.getString("storage_path", "");
++
++        // Look up and display drives
++        ArrayList<String> driveStoragePaths = new ArrayList<>();
++        ArrayList<Float> driveFreeSpacesMB = new ArrayList<>();
++        ArrayList<Float> driveTotalSpacesMB = new ArrayList<>();
++        int currentDrive = -1;
++        File[] externalStorageVolumes = ContextCompat.getExternalFilesDirs(getApplicationContext(), null);
++        for (int i = 0; i < externalStorageVolumes.length; i++) {
++            driveStoragePaths.add(externalStorageVolumes[i].getPath());
++            driveFreeSpacesMB.add(new Float(externalStorageVolumes[i].getUsableSpace() / 1000000));
++            driveTotalSpacesMB.add(new Float(externalStorageVolumes[i].getTotalSpace() / 1000000));
++        }
++        ArrayAdapter adapter = new ArrayAdapter(getApplicationContext(), android.R.layout.simple_list_item_2, android.R.id.text1, driveStoragePaths) {
++            @Override
++            public View getView(int position, View view, ViewGroup parent) {
++                if (view == null) {
++                    view = LayoutInflater.from(getContext()).inflate(android.R.layout.simple_list_item_2, parent, false);
++                }
++                //View view = super.getView(position, convertView, parent);
++                TextView text1 = (TextView) view.findViewById(android.R.id.text1);
++                TextView text2 = (TextView) view.findViewById(android.R.id.text2);
++
++                text1.setTextColor(Color.WHITE);
++                text2.setTextColor(Color.WHITE);
++
++                String inUseString = "";
++                if (storagePath.equals(driveStoragePaths.get(position)))
++                    inUseString = " (" + getString(R.string.in_use) + ")";
++
++                text1.setText(driveStoragePaths.get(position).replace("Android/data/" + getPackageName() + "/files", "…") + inUseString);
++                text2.setText(driveFreeSpacesMB.get(position).toString() + " MB " + getString(R.string.free_total) + " " + driveTotalSpacesMB.get(position).toString() + " MB");
++
++                return view;
++            }
++        };
++        listView.setAdapter(adapter);
++        listView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
++            @Override
++            public void onItemClick(AdapterView parent, View view, int position, long id) {
++                storagePath = driveStoragePaths.get(position);
++                SharedPreferences.Editor editor = prefs.edit();
++                editor.putString("storage_path", storagePath);
++                editor.commit();
++                renderNextStep();
++            }
++        });
++    }
++
++    private void load_upgrade_prompt_screen() {
++        listView.setVisibility(View.GONE);
++        nextButton.setVisibility(View.VISIBLE);
++        refreshButton.setVisibility(View.GONE);
++        textView.setText(getString(R.string.upgrade_prompt_1) + "\n\n" + getString(R.string.upgrade_prompt_2));
++        heroImageView.setImageDrawable(getResources().getDrawable(R.drawable.onboarding_prompt));
++        noBoxArtCheckBox.setVisibility(View.GONE);
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/Prefs.java b/app/src/main/java/com/atelieryl/wonderdroid/PrefsActivity.java
+similarity index 88%
+rename from app/src/main/java/com/atelieryl/wonderdroid/Prefs.java
+rename to app/src/main/java/com/atelieryl/wonderdroid/PrefsActivity.java
+index 28575dd..96149cb 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/Prefs.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/PrefsActivity.java
+@@ -3,11 +3,10 @@ package com.atelieryl.wonderdroid;
+ 
+ import android.content.Intent;
+ import android.os.Bundle;
+-import android.preference.EditTextPreference;
+ import android.preference.Preference;
+ import android.preference.PreferenceActivity;
+ 
+-public class Prefs extends PreferenceActivity {
++public class PrefsActivity extends PreferenceActivity {
+     PreferenceActivity activity = this;
+     boolean goBack = false;
+     boolean mappingControls = false;
+@@ -24,18 +23,18 @@ public class Prefs extends PreferenceActivity {
+         }
+ 
+         if (mappingControls && goBack) {
+-            this.addPreferencesFromResource(R.layout.mapcontrols);
++            this.addPreferencesFromResource(R.layout.prefs_map_controls);
+         } else if (goBack) {
+-            this.addPreferencesFromResource(R.layout.sizeposition);
++            this.addPreferencesFromResource(R.layout.prefs_size_position);
+         } else {
+-            this.addPreferencesFromResource(R.layout.prefs);
++            this.addPreferencesFromResource(R.layout.activity_prefs);
+             findPreference("mapcontrols").setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
+                 @Override
+                 public boolean onPreferenceClick(Preference preference) {
+                     goBack = true;
+                     mappingControls = true;
+                     activity.setPreferenceScreen(null);
+-                    activity.addPreferencesFromResource(R.layout.mapcontrols);
++                    activity.addPreferencesFromResource(R.layout.prefs_map_controls);
+                     return true;
+                 }
+             });
+@@ -45,7 +44,7 @@ public class Prefs extends PreferenceActivity {
+                 public boolean onPreferenceClick(Preference preference) {
+                     goBack = true;
+                     activity.setPreferenceScreen(null);
+-                    activity.addPreferencesFromResource(R.layout.sizeposition);
++                    activity.addPreferencesFromResource(R.layout.prefs_size_position);
+                     return true;
+                 }
+             });
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/Select.java b/app/src/main/java/com/atelieryl/wonderdroid/SelectActivity.java
+similarity index 50%
+rename from app/src/main/java/com/atelieryl/wonderdroid/Select.java
+rename to app/src/main/java/com/atelieryl/wonderdroid/SelectActivity.java
+index 612b3b0..2d38476 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/Select.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/SelectActivity.java
+@@ -2,19 +2,19 @@
+ package com.atelieryl.wonderdroid;
+ 
+ import java.io.File;
+-import java.util.Locale;
+-import java.util.Random;
+ 
+-import android.Manifest;
+ import android.app.Activity;
+-import android.content.pm.PackageManager;
+-import android.support.v4.app.ActivityCompat;
+-import android.support.v4.content.ContextCompat;
++import android.app.DownloadManager;
++import android.content.BroadcastReceiver;
++import android.content.IntentFilter;
++import android.support.design.widget.FloatingActionButton;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ 
+ import com.atelieryl.wonderdroid.utils.RomAdapter;
++import com.downloader.Error;
++import com.downloader.OnDownloadListener;
+ 
+ import android.app.AlertDialog;
+ import android.content.Context;
+@@ -26,32 +26,23 @@ import android.graphics.Bitmap;
+ import android.graphics.Color;
+ import android.net.Uri;
+ import android.os.Bundle;
+-import android.os.Handler;
+ import android.preference.PreferenceManager;
+ import android.util.Log;
+ import android.view.View;
+-import android.view.animation.Animation;
+-import android.view.animation.Animation.AnimationListener;
+-import android.view.animation.AnimationUtils;
+ 
+-import android.widget.Adapter;
+ import android.widget.AdapterView;
+ import android.widget.AdapterView.OnItemClickListener;
+ import android.widget.AdapterView.OnItemSelectedListener;
+-import android.widget.BaseAdapter;
+-import android.widget.FrameLayout;
+ import android.widget.Gallery;
+ import android.widget.GridView;
+ import android.widget.ImageView;
+-import android.widget.ListAdapter;
+-import android.widget.SpinnerAdapter;
+ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ @SuppressWarnings("deprecation")
+-public class Select extends BaseActivity {
++public class SelectActivity extends BaseActivity {
+ 
+-    private static final String TAG = Select.class.getSimpleName();
++    private static final String TAG = SelectActivity.class.getSimpleName();
+     
+     private static String currentRomPath = "";
+ 
+@@ -61,33 +52,40 @@ public class Select extends BaseActivity {
+ 
+     private RomAdapter mRAdapter;
+ 
+-    private TextView mScreenFormat;
+-
+     private Gallery gallery;
+ 
+     private GridView grid;
+ 
+-    private boolean adSupported = true;
+-    
+-    private AlertDialog pathErrorAlertDialog;
+-
+     private int galleryPosition = 0;
+ 
+     private Activity mActivity = (Activity) this;
+ 
++    private FloatingActionButton floatingActionButton;
++
++    private SharedPreferences prefs;
++
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         if (savedInstanceState != null) {
+             galleryPosition = savedInstanceState.getInt("galleryPosition");
+         }
+-        setContentView(R.layout.select);
++        setContentView(R.layout.activity_select);
+         gallery = (Gallery)this.findViewById(R.id.select_gallery);
+         /*if (gallery == null)
+             grid = (GridView)this.findViewById(R.id.select_grid);*/
+ 
+         findViewById(android.R.id.content).setBackgroundColor(Color.parseColor("#303030"));
+ 
++        floatingActionButton = findViewById(R.id.floatingActionButton);
++        floatingActionButton.setOnClickListener(new View.OnClickListener() {
++            @Override
++            public void onClick(View v) {
++                Intent intent = new Intent(getApplicationContext(), AddGameActivity.class);
++                startActivity(intent);
++            }
++        });
++
+         // Help translate button
+         /*if (Locale.getDefault().getLanguage().equals("ja")) {
+         	final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+@@ -113,15 +111,7 @@ public class Select extends BaseActivity {
+             }
+         }*/
+ 
+-        // Set reversehorizontalorientation to false if just installed or upgraded
+-        final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+-        boolean setreversehorizontalorientation = prefs.getBoolean("setreversehorizontalorientation", false);
+-        if (!setreversehorizontalorientation) {
+-            SharedPreferences.Editor editor = prefs.edit();
+-            editor.putBoolean("reversehorizontalorientation", false);
+-            editor.putBoolean("setreversehorizontalorientation", true);
+-            editor.commit();
+-        }
++        prefs = PreferenceManager.getDefaultSharedPreferences(this);
+     }
+ 
+     @Override
+@@ -141,7 +131,7 @@ public class Select extends BaseActivity {
+                 this.finish();
+                 return true;*/
+             case R.id.select_prefsmi:
+-                Intent intent = new Intent(this, Prefs.class);
++                Intent intent = new Intent(this, PrefsActivity.class);
+                 startActivity(intent);
+                 return true;
+             case R.id.select_reportmi:
+@@ -201,11 +191,10 @@ public class Select extends BaseActivity {
+     	}
+     }
+ 
+-    private void startEmu(int romid) {
++    private void startEmu(int romIndex) {
+         try {
+-            Intent intent = new Intent(this, Main.class);
+-            intent.putExtra(Main.ROM, mRAdapter.getItem(romid));
+-            intent.putExtra(Main.ROMHEADER, mRAdapter.getHeader(romid));
++            Intent intent = new Intent(this, MainActivity.class);
++            intent.putExtra(MainActivity.ROM, mRAdapter.getItem(romIndex));
+             startActivity(intent);
+         } catch (Exception e) {
+             Toast.makeText(this, R.string.cannotloadrom, Toast.LENGTH_SHORT).show();
+@@ -215,144 +204,65 @@ public class Select extends BaseActivity {
+     @Override
+     protected void onPause() {
+         super.onPause();
+-        if (pathErrorAlertDialog != null) {
+-        	pathErrorAlertDialog.dismiss();
+-        }
+-    }
+-
+-    //AdView ad = null;
+-
+-    private void parseSupportOptions() {
+-        //SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+-        //adSupported = prefs.getBoolean("adsupported", false);
+     }
+ 
+     @Override
+     protected void onStart() {
+         super.onStart();
+-
+-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+-            if (!ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+-                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
+-            }
+-        }
+     }
+ 
+     @Override
+     protected void onResume() {
+         super.onResume();
+ 
+-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+-            if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+-                AlertDialog.Builder builder;
+-                builder = new AlertDialog.Builder(this);
+-                builder.setMessage(R.string.askpermissions)
+-                        .setPositiveButton(R.string.ok, new DialogInterface.OnClickListener() {
+-                            public void onClick(DialogInterface dialog, int which) {
+-                                ActivityCompat.requestPermissions(mActivity, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
+-                            }
+-                        })
+-                        .setCancelable(false)
+-                        .show();
+-            }
+-            ((TextView)this.findViewById(R.id.select_noroms)).setText(getResources().getString(R.string.needpermissions));
++        // Onboarding
++        String storageVolume = prefs.getString("storage_path", null);
++        if (storageVolume == null) {
++            Intent intent = new Intent(this, OnboardingActivity.class);
++            startActivity(intent);
+             return;
+         }
+ 
+-        File romdirx = getWonderDroidApplication().getRomDir();
+-        if (romdirx == null) {
+-            Toast.makeText(this, R.string.nosdcard, Toast.LENGTH_LONG).show();
++        // Get destination path and check if it's available
++        String storagePath = prefs.getString("storage_path", "");
++        try {
++            File testFile = new File(storagePath + "/" + "test.txt");
++            testFile.createNewFile();
++            testFile.delete();
++        } catch (Exception e) {
++            AlertDialog.Builder builder;
++            builder = new AlertDialog.Builder(this);
++            builder.setMessage(getString(R.string.storage_error) + "\n" + e.getMessage());
++            builder.setPositiveButton(R.string.gotopreferences, new DialogInterface.OnClickListener() {
++                public void onClick(DialogInterface dialog, int which) {
++                    Intent intent = new Intent(SelectActivity.this, AddGameActivity.class);
++                    startActivity(intent);
++                }
++            });
+             return;
+         }
+ 
+-        String sdpath = romdirx.getAbsolutePath();
+-
+-        parseSupportOptions();
+-
+-        /*if (adSupported) {
+-            FrameLayout adbox = (FrameLayout)findViewById(R.id.adbox);
+-            ad = new AdView(this, AdSize.BANNER, "a14fbeecba23019");
+-            AdRequest r = new AdRequest();
+-            r.addTestDevice("6A3DABBD306114452F0D233CDADCF438");
+-            ad.loadAd(r);
+-            adbox.addView(ad);
+-        }*/
++        OnDownloadListener onDownloadListener = new OnDownloadListener() {
++            @Override
++            public void onDownloadComplete() {
++                mRAdapter.notifyDataSetChanged();
++                setBackground();
++            }
+ 
+-        final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+-        
+-        String romPath = prefs.getString("emu_rompath", "wonderdroid");
+-        if (!romPath.endsWith("/")) {
+-        	romPath = romPath + "/";
+-        }
+-        String shortRomPath = romPath;
+-        if (!romPath.startsWith("/")) {
+-        	romPath = sdpath + "/" + romPath;
+-        }
+-        
+-        String memPath = prefs.getString("emu_mempath", "wonderdroid/cartmem");
+-        if (!memPath.startsWith("/")) {
+-        	memPath = sdpath + "/" + memPath;
+-        }
+-        if (!memPath.endsWith("/")) {
+-        	memPath = memPath + "/";
+-        }
+-        
+-        if (!currentRomPath.equals("") && !romPath.equals(currentRomPath)) {
+-            galleryPosition = 0;
+-        	recreate();
+-        }
+-        currentRomPath = romPath;
+-        
+-        AlertDialog.Builder builder;
+-        builder = new AlertDialog.Builder(this);
+-        
+-        boolean romdirok = false;
+-        boolean cartmemdirok = false;
+-        
+-        try {
+-	        File romdir = new File(romPath);
+-	        romdir.mkdirs();
+-	        romdirok = romdir.exists() && romdir.isDirectory() && romdir.canRead();
+-        } catch (Exception e) { }
+-        try {
+-	        File cartmemdir = new File(memPath);
+-	        cartmemdir.mkdirs();
+-	        cartmemdirok = cartmemdir.exists() && cartmemdir.isDirectory() && cartmemdir.canWrite();
+-        } catch (Exception e) { }
+-        
+-        if (!romdirok || !cartmemdirok) {
+-        	if (!cartmemdirok) {
+-        		builder.setTitle(R.string.mempatherror);
+-        		builder.setMessage(R.string.mempatherrordescription);
+-        		builder.setMessage(getResources().getString(R.string.mempatherrordescription).replace("???", memPath));
+-        	}
+-        	if (!romdirok) {
+-        		builder.setTitle(R.string.rompatherror);
+-        		builder.setMessage(getResources().getString(R.string.rompatherrordescription).replace("???", romPath));
+-        		((TextView)this.findViewById(R.id.select_noroms)).setText(getResources().getString(R.string.rompatherrordescription).replace("???", romPath));
+-        	}
+-            builder.setPositiveButton(R.string.gotopreferences, new DialogInterface.OnClickListener() {
+-	            public void onClick(DialogInterface dialog, int which) { 
+-	            	Intent intent = new Intent(Select.this, Prefs.class);
+-	                startActivity(intent);
+-	            }
+-	        });
+-            pathErrorAlertDialog = builder.show();
+-        }
+-        
+-        if (!romdirok) return;
++            @Override
++            public void onError(Error error) {
++                Log.e("WonderDroid Box Art", error.getServerErrorMessage());
++            }
++        };
+ 
+-        mScreenFormat = (TextView)this.findViewById(R.id.select_screenformat);
+         mAssetManager = this.getAssets();
+-        mRAdapter = new RomAdapter(this.getBaseContext(), romPath, mAssetManager);
++        mRAdapter = new RomAdapter(this.getBaseContext(), storagePath, mAssetManager, onDownloadListener);
+ 
+         if (mRAdapter.getCount() != 0) {
+ 
+-            ((TextView)this.findViewById(R.id.select_noroms)).setVisibility(View.GONE);
++            this.findViewById(R.id.select_noroms).setVisibility(View.GONE);
+ 
+-            mScreenFormat.setVisibility(View.VISIBLE);
+-
+-            setupGalleryOrGrid(mRAdapter, new OnItemClickListener() {
++            setUpGallery(mRAdapter, new OnItemClickListener() {
+ 
+                 @Override
+                 public void onItemClick(AdapterView<?> arg0, View arg1, int arg2, long arg3) {
+@@ -363,42 +273,8 @@ public class Select extends BaseActivity {
+ 
+                 @Override
+                 public void onItemSelected(AdapterView<?> arg0, View arg1, int arg2, long arg3) {
+-
+-                    WonderSwanHeader header = null;
+-                    try {
+-                        header = mRAdapter.getHeader(arg2);
+-                    } catch (Exception e) {
+-                        Log.d(TAG, "Cannot get header for ROM at index " + arg2);
+-                    }
+-                    if (header != null) {
+-                        String newtext = "";
+-                        /*if (header.isColor) {
+-                            newtext += getString(R.string.colour);
+-                        } else {
+-                            newtext += getString(R.string.mono);
+-                        }*/
+-
+-                        if (header.isVertical) {
+-                            newtext += getString(R.string.vertical);
+-                        } else {
+-                            newtext += getString(R.string.horizontal);
+-                        }
+-
+-                        mScreenFormat.setText(newtext);
+-                    } else {
+-                        mScreenFormat.setText("");
+-                    }
+-
+-                    Bitmap newbitmap = mRAdapter.getBitmap(arg2);
+-                    if (prefs.getBoolean("showbackground", true) && newbitmap != null) {
+-                        mBG1.setVisibility(View.VISIBLE);
+-                        mBG1.setImageBitmap(newbitmap);
+-                    } else {
+-                        mBG1.setVisibility(View.GONE);
+-                    }
+-
+                     galleryPosition = arg2;
+-
++                    setBackground();
+                 }
+ 
+                 @Override
+@@ -409,12 +285,22 @@ public class Select extends BaseActivity {
+ 
+             mBG1 = (ImageView)this.findViewById(R.id.select_bg1);
+         } else {
+-        	((TextView)this.findViewById(R.id.select_noroms)).setText(getResources().getString(R.string.noroms).replace("???", shortRomPath));
++            ((TextView)this.findViewById(R.id.select_noroms)).setText(R.string.noroms);
+         }
+ 
+     }
+ 
+-    private final void setupGalleryOrGrid(RomAdapter adapter,
++    private void setBackground() {
++        Bitmap newbitmap = mRAdapter.getBitmap(galleryPosition);
++        if (prefs.getBoolean("showbackground", true) && newbitmap != null) {
++            mBG1.setVisibility(View.VISIBLE);
++            mBG1.setImageBitmap(newbitmap);
++        } else {
++            mBG1.setVisibility(View.GONE);
++        }
++    }
++
++    private final void setUpGallery(RomAdapter adapter,
+             OnItemClickListener itemClickListener, OnItemSelectedListener itemSelectedListener) {
+         if (gallery == null) {
+             grid.setAdapter(mRAdapter);
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
+index 4a5b49e..47713be 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderDroid.java
+@@ -2,6 +2,7 @@
+ package com.atelieryl.wonderdroid;
+ 
+ import com.atelieryl.wonderdroid.utils.ZipCache;
++import com.downloader.PRDownloader;
+ 
+ import android.app.Application;
+ import android.os.Environment;
+@@ -23,6 +24,7 @@ public class WonderDroid extends Application {
+         WonderSwan.outputDebugShizzle();
+         ZipCache.dumpInfo(this.getBaseContext());
+         ZipCache.clean(this.getBaseContext());
++        PRDownloader.initialize(getApplicationContext());
+     }
+ 
+     public File getRomDir() {
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+index 30d65fe..e497f8c 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+@@ -1,7 +1,7 @@
+ 
+ package com.atelieryl.wonderdroid;
+ 
+-import java.nio.ShortBuffer;
++import java.nio.IntBuffer;
+ 
+ import com.atelieryl.wonderdroid.utils.CpuUtils;
+ 
+@@ -17,7 +17,7 @@ public class WonderSwan {
+ 
+     static public final int SCREEN_HEIGHT = 144;
+ 
+-    static public final int FRAMEBUFFERSIZE = (SCREEN_WIDTH * SCREEN_HEIGHT) * 2;
++    static public final int FRAMEBUFFERSIZE = (SCREEN_WIDTH * SCREEN_HEIGHT) * 4;
+ 
+     static public boolean audioEnabled = true;
+ 
+@@ -25,7 +25,7 @@ public class WonderSwan {
+     
+     static public int prevSamples;
+ 
+-    static final int audiobufferlen = 2000;
++    static final int audiobufferlen = 65536; // 0x10000
+ 
+     static public short[] audiobuffer = new short[audiobufferlen];
+     
+@@ -59,11 +59,12 @@ public class WonderSwan {
+         System.loadLibrary("mednafen");
+     }
+ 
+-    static public native void load(String rompath, boolean wsc, String name, int year, int month,
+-            int day, int blood, int sex);
++    static public native int load(String rom_path, String dir_path);
+ 
+     static public native void reset();
+ 
++    static public native void exit();
++
+     /*static public void execute_frame(ShortBuffer framebuffer, boolean skipframe) {
+         if (buttonsDirty) {
+             WonderSwan.updatebuttons(WonderSwanButton.Y1.down, WonderSwanButton.Y2.down,
+@@ -94,7 +95,7 @@ public class WonderSwan {
+         }
+     }*/
+ 
+-    static public void execute_frame(ShortBuffer framebuffer, boolean skipframe) {
++    static public void execute_frame(IntBuffer framebuffer, boolean skipframe) {
+         if (buttonsDirty) {
+             WonderSwan.updatebuttons(WonderSwanButton.Y1.down, WonderSwanButton.Y2.down,
+                     WonderSwanButton.Y3.down, WonderSwanButton.Y4.down, WonderSwanButton.X1.down,
+@@ -111,7 +112,7 @@ public class WonderSwan {
+     }
+ 
+     static private native int _execute_frame(boolean skipframe, boolean audio,
+-            ShortBuffer framebuffer, short[] audiobuffer);
++            IntBuffer framebuffer, short[] audiobuffer);
+ 
+     static public native void updatebuttons(boolean y1, boolean y2, boolean y3, boolean y4,
+             boolean x1, boolean x2, boolean x3, boolean x4, boolean a, boolean b, boolean start);
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/MD5.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/MD5.java
+new file mode 100644
+index 0000000..d1c2e4f
+--- /dev/null
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/MD5.java
+@@ -0,0 +1,84 @@
++package com.atelieryl.wonderdroid.utils;
++
++/*
++ * Copyright (C) 2012 The CyanogenMod Project
++ *
++ * * Licensed under the GNU GPLv2 license
++ *
++ * The text of the license can be found in the LICENSE file
++ * or at https://www.gnu.org/licenses/gpl-2.0.txt
++ */
++
++import android.text.TextUtils;
++import android.util.Log;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.io.InputStream;
++import java.math.BigInteger;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++
++public class MD5 {
++    private static final String TAG = "MD5";
++
++    public static boolean checkMD5(String md5, File updateFile) {
++        if (TextUtils.isEmpty(md5) || updateFile == null) {
++            Log.e(TAG, "MD5 string empty or updateFile null");
++            return false;
++        }
++
++        String calculatedDigest = calculateMD5(updateFile);
++        if (calculatedDigest == null) {
++            Log.e(TAG, "calculatedDigest null");
++            return false;
++        }
++
++        Log.v(TAG, "Calculated digest: " + calculatedDigest);
++        Log.v(TAG, "Provided digest: " + md5);
++
++        return calculatedDigest.equalsIgnoreCase(md5);
++    }
++
++    public static String calculateMD5(File updateFile) {
++        MessageDigest digest;
++        try {
++            digest = MessageDigest.getInstance("MD5");
++        } catch (NoSuchAlgorithmException e) {
++            Log.e(TAG, "Exception while getting digest", e);
++            return null;
++        }
++
++        InputStream is;
++        try {
++            is = new FileInputStream(updateFile);
++        } catch (FileNotFoundException e) {
++            Log.e(TAG, "Exception while getting FileInputStream", e);
++            return null;
++        }
++
++        byte[] buffer = new byte[8192];
++        int read;
++        try {
++            while ((read = is.read(buffer)) > 0) {
++                digest.update(buffer, 0, read);
++            }
++            byte[] md5sum = digest.digest();
++            BigInteger bigInt = new BigInteger(1, md5sum);
++            String output = bigInt.toString(16);
++            // Fill to 32 chars
++            output = String.format("%32s", output).replace(' ', '0');
++            return output;
++        } catch (IOException e) {
++            throw new RuntimeException("Unable to process file for MD5", e);
++        } finally {
++            try {
++                is.close();
++            } catch (IOException e) {
++                Log.e(TAG, "Exception on closing MD5 input stream", e);
++            }
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
+index d525d10..369bcd1 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomAdapter.java
+@@ -13,14 +13,25 @@ import java.util.zip.ZipFile;
+ 
+ import com.atelieryl.wonderdroid.WonderSwanHeader;
+ import com.atelieryl.wonderdroid.views.RomGalleryView;
++import com.downloader.Error;
++import com.downloader.OnDownloadListener;
++import com.downloader.PRDownloader;
++
+ import android.annotation.SuppressLint;
++import android.app.DownloadManager;
+ import android.content.Context;
++import android.content.SharedPreferences;
+ import android.content.res.AssetManager;
++import android.database.Cursor;
++import android.database.sqlite.SQLiteDatabase;
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+ import android.graphics.Matrix;
+ 
++import android.net.Uri;
++import android.os.AsyncTask;
+ import android.os.Build;
++import android.preference.PreferenceManager;
+ import android.support.v4.util.LruCache;
+ import android.util.Log;
+ import android.view.View;
+@@ -33,10 +44,18 @@ public class RomAdapter extends BaseAdapter {
+ 
+         private static final long serialVersionUID = 1L;
+ 
+-        public static String[] romExtension = new String[] {
++        public static String[] allRomExtensions = new String[] {
++                "ws", "wsc", "gg", "sms", "pce", "ngp", "ngc"
++        };
++
++        public static String[] wsRomExtensions = new String[] {
+                 "ws", "wsc"
+         };
+ 
++        public static String[] boxArtExtensions = new String[] {
++                "jpg", "png"
++        };
++
+         public enum Type {
+             ZIP, RAW
+         }
+@@ -63,7 +82,7 @@ public class RomAdapter extends BaseAdapter {
+                 case ZIP:
+                     try {
+                         return ZipCache.getFile(context, new ZipFile(rom.sourcefile), rom.fileName,
+-                                romExtension);
++                                allRomExtensions);
+                     } catch (Exception ex) {
+                         ex.printStackTrace();
+                         return null;
+@@ -110,10 +129,7 @@ public class RomAdapter extends BaseAdapter {
+         @SuppressLint("NewApi")
+         @Override
+         protected int sizeOf(String key, Bitmap value) {
+-            if (Build.VERSION.SDK_INT >= 12)
+-                return value.getByteCount();
+-            else
+-                return value.getRowBytes() * value.getHeight();
++            return value.getByteCount();
+         }
+ 
+     };
+@@ -126,33 +142,33 @@ public class RomAdapter extends BaseAdapter {
+ 
+     private final Rom[] mRoms;
+ 
+-    public RomAdapter(Context context, String romdir, AssetManager assetManager) {
++    private final OnDownloadListener mOnDownloadListener;
++
++    public RomAdapter(Context context, String romdir, AssetManager assetManager, OnDownloadListener onDownloadListener) {
+         mAssetManager = assetManager;
+         mRomDir = new File(romdir);
+         mContext = context;
+         mRoms = findRoms();
++        mOnDownloadListener = onDownloadListener;
+     }
+ 
+     private Rom[] findRoms() {
+         File[] sourceFiles = mRomDir.listFiles(new RomFilter());
+-        ArrayList<Rom> roms = new ArrayList<Rom>();
++        ArrayList<Rom> roms = new ArrayList<>();
+         if (sourceFiles != null) {
+-            for (int i = 0; i < sourceFiles.length; i++) {
++            for (File sourceFile : sourceFiles) {
+ 
+-                if (sourceFiles[i].getName().endsWith("zip")) {
++                if (sourceFile.getName().endsWith("zip")) {
+                     try {
+-                        for (String entry : ZipUtils.getValidEntries(new ZipFile(sourceFiles[i]),
+-                                Rom.romExtension)) {
+-                            roms.add(new Rom(Rom.Type.ZIP, sourceFiles[i], entry, sourceFiles[i]
+-                                    .getName().replaceFirst("\\.zip", "")));
++                        for (String entry : ZipUtils.getValidEntries(new ZipFile(sourceFile), Rom.allRomExtensions)) {
++                            roms.add(new Rom(Rom.Type.ZIP, sourceFile, entry, entry + " (ZIP)"));
+                         }
+                     } catch (Exception ex) {
+                         ex.printStackTrace();
+                         break;
+                     }
+                 } else {
+-                    roms.add(new Rom(Rom.Type.RAW, sourceFiles[i], null, sourceFiles[i].getName()
+-                            .replaceFirst("\\.wsc", "").replaceFirst("\\.ws", "")));
++                    roms.add(new Rom(Rom.Type.RAW, sourceFile, sourceFile.getName(), sourceFile.getName()));
+                 }
+ 
+             }
+@@ -165,19 +181,119 @@ public class RomAdapter extends BaseAdapter {
+             }
+         });
+ 
++        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(mContext);
++        if (!prefs.getBoolean("no_box_art", false))
++            new BoxArtTask().execute(allRoms);
++
+         return allRoms;
+     }
+ 
++    public class BoxArtTask extends AsyncTask<Rom, Void, Void> {
++
++        SQLiteDatabase openVGDB = null;
++
++        private boolean openDB() { // Also gets the download manager
++            try {
++                openVGDB = SQLiteDatabase.openDatabase(mRomDir + "/openvgdb.sqlite", null, SQLiteDatabase.OPEN_READONLY);
++                return true;
++            } catch (Exception e) {
++                Log.e("WonderDroid", e.toString());
++                return false;
++            }
++        }
++
++        @Override
++        protected Void doInBackground(Rom... roms) {
++
++            for (Rom rom : roms) {
++                // Look for box art
++                boolean boxArtExists = false;
++                for (String boxArtExtension : Rom.boxArtExtensions) {
++                    File boxArtFile = new File(mRomDir + "/" + rom.fileName + "." + boxArtExtension);
++                    if (boxArtFile.exists()) {
++                        boxArtExists = true;
++                        break;
++                    }
++                }
++                if (!boxArtExists) {
++                    if (openVGDB == null && !openDB()) return null;
++                    File romFile = Rom.getRomFile(mContext, rom);
++                    String md5 = MD5.calculateMD5(romFile).toUpperCase();
++                    Cursor cursor = openVGDB.rawQuery("SELECT * FROM ROMs WHERE romHashMD5 = \"" + md5 + "\"", null);
++                    String url = null;
++                    if (cursor.moveToFirst()) {
++                        String romID = cursor.getString(0);
++                        cursor = openVGDB.rawQuery("SELECT * FROM RELEASES WHERE romID = \"" + romID + "\"", null);
++                        if (cursor.moveToFirst()) {
++                            url = cursor.getString(7);
++                        }
++                    }
++                    if (url != null) {
++                        // Get extension
++                        String extension = null;
++                        for (String boxArtExtension : Rom.boxArtExtensions) {
++                            if (url.endsWith("." + boxArtExtension)) {
++                                extension = boxArtExtension;
++                                break;
++                            }
++                        }
++                        if (extension == null) continue;
++                        // Queue download
++                        PRDownloader.download(url, mRomDir.getPath(), rom.fileName + "." + extension)
++                                    .build()
++                                    .start(mOnDownloadListener);
++                    } else {
++                        File emptyFile = new File(rom.fileName + "." + Rom.boxArtExtensions[0]);
++                        try {
++                            emptyFile.createNewFile();
++                        } catch (IOException e) {
++                            Log.e("WonderDroid", e.toString());
++                        }
++                    }
++                }
++            }
++            if (openVGDB != null) openVGDB.close();
++            return null;
++        }
++
++    }
++
+     public Bitmap getBitmap(int index) {
+         try {
+-            WonderSwanHeader header = getHeader(index);
+-            String internalname = header.internalname;
+-            Bitmap splash = splashCache.get(internalname);
++            Rom rom = (Rom)(this.getItem(index));
++            String filename = rom.fileName;
++
++            // Cache
++            Bitmap splash = splashCache.get(filename);
+             if (splash != null)
+                 return splash;
+ 
+-            splash = BitmapFactory.decodeStream(mAssetManager
+-                    .open("snaps/" + internalname + ".png"));
++            // Box art
++            for (String extension : Rom.boxArtExtensions) {
++                String boxArtFilePath = mRomDir + "/" + rom.fileName + "." + extension;
++                File boxArtFile = new File(boxArtFilePath);
++                if (boxArtFile.exists()) {
++                    splash = BitmapFactory.decodeFile(boxArtFilePath);
++                    if (splash != null)
++                        splashCache.put(filename, splash);
++                    return splash;
++                }
++            }
++
++            // Check if WS game before proceeding
++            boolean isWsGame = false;
++            for (String extension : Rom.wsRomExtensions) {
++                if (filename.endsWith("." + extension)) {
++                    isWsGame = true;
++                    break;
++                }
++            }
++            if (!isWsGame) return null;
++
++            // WS games: screenshot
++            WonderSwanHeader header = getHeader(index);
++            String internalname = header.internalname;
++            splash = BitmapFactory.decodeStream(mAssetManager.open("snaps/" + internalname + ".png"));
+             if (header.isVertical) {
+                 Matrix rotationmatrix = new Matrix();
+                 rotationmatrix.setRotate(270, splash.getWidth() / 2, splash.getHeight() / 2);
+@@ -185,11 +301,11 @@ public class RomAdapter extends BaseAdapter {
+                         rotationmatrix, false);
+             }
+             if (splash != null)
+-                splashCache.put(internalname, splash);
++                splashCache.put(filename, splash);
+             return splash;
+         } catch (Exception e) {
+             // e.printStackTrace();
+-            Log.d(TAG, "No shot for ROM at index" + index);
++            Log.d(TAG, "No box art for ROM at index " + index + " because " + e.getMessage());
+             return null;
+         }
+ 
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomFilter.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomFilter.java
+index 5031fd0..a44dc09 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/RomFilter.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/RomFilter.java
+@@ -11,10 +11,14 @@ public class RomFilter implements FileFilter {
+             String[] parts = pathname.getName().split("\\.");
+             if (parts.length >= 2) {
+                 String extension = parts[parts.length - 1];
+-                if (extension.compareTo("wsc") == 0 || extension.compareTo("ws") == 0
+-                        || extension.compareTo("zip") == 0) {
++                if (extension.compareTo("zip") == 0) {
+                     return true;
+                 }
++                for (String ext : RomAdapter.Rom.allRomExtensions) {
++                    if (extension.compareTo(ext) == 0) {
++                        return true;
++                    }
++                }
+             }
+         }
+         return false;
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/DatePreference.java b/app/src/main/java/com/atelieryl/wonderdroid/views/DatePreference.java
+index 125f59b..c6873c8 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/DatePreference.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/DatePreference.java
+@@ -54,7 +54,7 @@ public class DatePreference extends Preference {
+ 	protected View onCreateView (ViewGroup parent) {
+ 
+ 		LayoutInflater layoutInflater = (LayoutInflater)getContext().getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+-		LinearLayout layout = (LinearLayout)layoutInflater.inflate(R.layout.datepref, null);
++		LinearLayout layout = (LinearLayout)layoutInflater.inflate(R.layout.pref_date, null);
+ 
+ 		TextView title = (TextView)layout.getChildAt(0);
+ 		title.setText(getTitle());
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+index c321fdf..5e1f472 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+@@ -2,16 +2,14 @@
+ package com.atelieryl.wonderdroid.views;
+ 
+ import com.atelieryl.wonderdroid.Button;
+-import com.atelieryl.wonderdroid.R;
+ import com.atelieryl.wonderdroid.TouchInputHandler;
+ import com.atelieryl.wonderdroid.TouchInputHandler.Pointer;
+ import com.atelieryl.wonderdroid.WonderSwan;
+ import com.atelieryl.wonderdroid.WonderSwan.WonderSwanButton;
+-import com.atelieryl.wonderdroid.WonderSwanRenderer;
++import com.atelieryl.wonderdroid.GameRenderer;
+ import com.atelieryl.wonderdroid.utils.EmuThread;
+ import com.atelieryl.wonderdroid.VibrateTask;
+ 
+-import android.app.Activity;
+ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.graphics.ColorMatrixColorFilter;
+@@ -42,7 +40,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 	private boolean mPaused = false;
+ 
+ 	private EmuThread mThread;
+-	private final WonderSwanRenderer renderer;
++	private final GameRenderer renderer;
+ 	private boolean controlsVisible = false;
+ 	private GradientDrawable[] buttons;
+ 	private final TouchInputHandler inputHandler;
+@@ -104,7 +102,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		SurfaceHolder holder = this.getHolder();
+ 		holder.addCallback(this);
+ 
+-		renderer = new WonderSwanRenderer();
++		renderer = new GameRenderer();
+ 		mThread = new EmuThread(renderer);
+ 		
+ 		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/HardwareButtonPreference.java b/app/src/main/java/com/atelieryl/wonderdroid/views/HardwareButtonPreference.java
+index b37d933..6e68265 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/HardwareButtonPreference.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/HardwareButtonPreference.java
+@@ -36,7 +36,7 @@ public class HardwareButtonPreference extends Preference {
+ 	protected View onCreateView (ViewGroup parent) {
+ 
+ 		LayoutInflater layoutInflater = (LayoutInflater)getContext().getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+-		LinearLayout layout = (LinearLayout)layoutInflater.inflate(R.layout.hardwardbuttonpref, null);
++		LinearLayout layout = (LinearLayout)layoutInflater.inflate(R.layout.pref_hardware_button, null);
+ 
+ 		TextView controltext = (TextView)layout.getChildAt(0);
+ 		controltext.setText(getTitle());
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/RomGalleryView.java b/app/src/main/java/com/atelieryl/wonderdroid/views/RomGalleryView.java
+index 51fdb5f..00c4d97 100755
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/RomGalleryView.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/RomGalleryView.java
+@@ -20,7 +20,7 @@ public class RomGalleryView extends LinearLayout {
+         LayoutInflater layoutInflater = (LayoutInflater)context
+                 .getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+         LinearLayout mLayout = (LinearLayout)((LinearLayout)layoutInflater.inflate(
+-                R.layout.romgalleyview, this)).getChildAt(0);
++                R.layout.view_rom_gallery, this)).getChildAt(0);
+         iv = (ImageView)mLayout.getChildAt(1);
+         title = ((TextView)mLayout.getChildAt(0));
+     }

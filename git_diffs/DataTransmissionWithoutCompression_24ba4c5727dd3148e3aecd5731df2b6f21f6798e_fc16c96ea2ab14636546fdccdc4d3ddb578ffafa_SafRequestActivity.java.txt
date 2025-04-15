@@ -1,0 +1,372 @@
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginConstants.java b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginConstants.java
+deleted file mode 100644
+index 345c4c3..0000000
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginConstants.java
++++ /dev/null
+@@ -1,53 +0,0 @@
+-/*
+- * Copyright (C) 2016 Oleg Chernovskiy <adonai@xaker.ru>
+- *
+- * This program is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program. If not, see <http://www.gnu.org/licenses/>.
+- */
+-package com.kanedias.vanilla.audiotag;
+-
+-/**
+- * This class constants should be synchronized with VanillaMusic <code>PluginUtils</code> class
+- */
+-public class PluginConstants {
+-
+-    private PluginConstants() {
+-    }
+-
+-    // these actions are for passing between main player and plugins
+-    static final String ACTION_REQUEST_PLUGIN_PARAMS = "ch.blinkenlights.android.vanilla.action.REQUEST_PLUGIN_PARAMS"; // broadcast
+-    static final String ACTION_HANDLE_PLUGIN_PARAMS = "ch.blinkenlights.android.vanilla.action.HANDLE_PLUGIN_PARAMS"; // answer
+-    static final String ACTION_WAKE_PLUGIN = "ch.blinkenlights.android.vanilla.action.WAKE_PLUGIN"; // targeted for each found
+-    static final String ACTION_LAUNCH_PLUGIN = "ch.blinkenlights.android.vanilla.action.LAUNCH_PLUGIN"; // targeted at selected by user
+-
+-    // these are used by plugins to describe themselves
+-    static final String EXTRA_PARAM_PLUGIN_NAME = "ch.blinkenlights.android.vanilla.extra.PLUGIN_NAME";
+-    static final String EXTRA_PARAM_PLUGIN_APP = "ch.blinkenlights.android.vanilla.extra.PLUGIN_APP";
+-    static final String EXTRA_PARAM_PLUGIN_DESC = "ch.blinkenlights.android.vanilla.extra.PLUGIN_DESC";
+-
+-    // this is passed to plugin when it is selected by user
+-    static final String EXTRA_PARAM_URI = "ch.blinkenlights.android.vanilla.extra.URI";
+-
+-    // plugin-to-plugin extras (pass EXTRA_PARAM_PLUGIN_APP too to know whom to answer)
+-    static final String EXTRA_PARAM_P2P = "ch.blinkenlights.android.vanilla.extra.P2P"; // marker
+-    static final String EXTRA_PARAM_P2P_KEY = "ch.blinkenlights.android.vanilla.extra.P2P_KEY";
+-    static final String EXTRA_PARAM_P2P_VAL = "ch.blinkenlights.android.vanilla.extra.P2P_VALUE";
+-
+-    // related to tag editor
+-    static final String P2P_WRITE_TAG = "WRITE_TAG";
+-    static final String P2P_READ_TAG = "READ_TAG";
+-    static final String P2P_WRITE_ART = "WRITE_ART";
+-    static final String P2P_READ_ART = "READ_ART";
+-
+-    static final String LOG_TAG = "Vanilla:TagEditorPlugin";
+-}
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
+index 211ef19..286690d 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginQueryBroadcastReceiver.java
+@@ -20,6 +20,7 @@ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.util.Log;
++import com.kanedias.vanilla.plugins.PluginConstants;
+ 
+ /**
+  * Broadcast receiver used for retrieving query intents
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java
+index e538331..c9d1a5a 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/PluginService.java
+@@ -32,6 +32,9 @@ import android.support.v4.provider.DocumentFile;
+ import android.util.Log;
+ import android.widget.Toast;
+ 
++import com.kanedias.vanilla.plugins.PluginConstants;
++import com.kanedias.vanilla.plugins.saf.SafRequestActivity;
++import com.kanedias.vanilla.plugins.saf.SafUtils;
+ import org.jaudiotagger.audio.AudioFile;
+ import org.jaudiotagger.audio.AudioFileIO;
+ import org.jaudiotagger.audio.exceptions.CannotReadException;
+@@ -56,9 +59,10 @@ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+ import java.util.UUID;
++import java.util.concurrent.atomic.AtomicInteger;
+ 
+ import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+-import static com.kanedias.vanilla.audiotag.PluginConstants.*;
++import static com.kanedias.vanilla.plugins.PluginConstants.*;
+ 
+ /**
+  * Main service of Plugin system.
+@@ -89,9 +93,7 @@ import static com.kanedias.vanilla.audiotag.PluginConstants.*;
+  */
+ public class PluginService extends Service {
+ 
+-    static final String EXTRA_PARAM_SAF_P2P = "ch.blinkenlights.android.vanilla.extra.SAF_P2P";
+-
+-    static final String PREF_SDCARD_URI = "ch.blinkenlights.android.vanilla.pref.SDCARD_URI";
++    private AtomicInteger mBindCounter = new AtomicInteger(0);
+ 
+     private SharedPreferences mPrefs;
+ 
+@@ -114,6 +116,7 @@ public class PluginService extends Service {
+      */
+     @Override
+     public IBinder onBind(Intent intent) {
++        mBindCounter.incrementAndGet();
+         if (loadFile()) {
+             return new PluginBinder();
+         }
+@@ -128,7 +131,9 @@ public class PluginService extends Service {
+     public boolean onUnbind(Intent intent) {
+         // we need to stop this service or ServiceConnection will remain active and onBind won't be called again
+         // activity will see old file loaded in such case!
+-        stopSelf();
++        if(mBindCounter.decrementAndGet() == 0) {
++            stopSelf();
++        }
+         return false;
+     }
+ 
+@@ -216,6 +221,10 @@ public class PluginService extends Service {
+      * @return true if and only if file was successfully read and initialized in tag system, false otherwise
+      */
+     public boolean loadFile() {
++        if (mTag != null) {
++            return true; // don't reload same file
++        }
++
+         // we need only path passed to us
+         Uri fileUri = mLaunchIntent.getParcelableExtra(EXTRA_PARAM_URI);
+         if (fileUri == null) {
+@@ -245,7 +254,7 @@ public class PluginService extends Service {
+     }
+ 
+     public void writeFile() {
+-        if (TagEditorUtils.isSafNeeded(mAudioFile)) {
++        if (SafUtils.isSafNeeded(mAudioFile.getFile())) {
+             if (mPrefs.contains(PREF_SDCARD_URI)) {
+                 // we already got the permission!
+                 persistThroughSaf(null);
+@@ -255,6 +264,7 @@ public class PluginService extends Service {
+             // request SAF permissions in SAF activity
+             Intent dialogIntent = new Intent(this, SafRequestActivity.class);
+             dialogIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++            dialogIntent.putExtra(PluginConstants.EXTRA_PARAM_PLUGIN_APP, getApplicationInfo());
+             dialogIntent.putExtras(mLaunchIntent);
+             startActivity(dialogIntent);
+             // it will pass us URI back after the work is done
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/SafRequestActivity.java b/app/src/main/java/com/kanedias/vanilla/audiotag/SafRequestActivity.java
+deleted file mode 100644
+index 0e043c2..0000000
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/SafRequestActivity.java
++++ /dev/null
+@@ -1,160 +0,0 @@
+-package com.kanedias.vanilla.audiotag;
+-
+-import android.annotation.TargetApi;
+-import android.app.Activity;
+-import android.app.AlertDialog;
+-import android.content.ComponentName;
+-import android.content.DialogInterface;
+-import android.content.Intent;
+-import android.content.ServiceConnection;
+-import android.content.SharedPreferences;
+-import android.net.Uri;
+-import android.os.Build;
+-import android.os.IBinder;
+-import android.preference.PreferenceManager;
+-import android.widget.Toast;
+-
+-import org.jaudiotagger.audio.AudioFile;
+-
+-import java.io.File;
+-
+-import static com.kanedias.vanilla.audiotag.PluginConstants.ACTION_LAUNCH_PLUGIN;
+-import static com.kanedias.vanilla.audiotag.PluginConstants.EXTRA_PARAM_URI;
+-
+-/**
+- * Activity that is needed solely for requesting SAF permissions for external SD cards.
+- *
+- * @author  Kanedias on 17.02.17.
+- */
+-public class SafRequestActivity extends Activity {
+-
+-    private static final int SAF_FILE_REQUEST_CODE = 1;
+-    private static final int SAF_TREE_REQUEST_CODE = 2;
+-
+-    /**
+-     * File to search access for
+-     */
+-    private File mFile;
+-
+-    private SharedPreferences mPrefs;
+-
+-    private ServiceConnection mServiceConn = new ServiceConnection() {
+-        @Override
+-        public void onServiceConnected(ComponentName name, IBinder service) {
+-        }
+-
+-        @Override
+-        public void onServiceDisconnected(ComponentName name) {
+-        }
+-    };
+-
+-
+-    @Override
+-    protected void onResume() {
+-        super.onResume();
+-
+-        mPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+-
+-        // need to bind the service or it will stop itself after TagEditActivity is closed
+-        Intent bind = new Intent(this, PluginService.class);
+-        bindService(bind, mServiceConn, 0);
+-
+-        Uri fileUri = getIntent().getParcelableExtra(EXTRA_PARAM_URI);
+-        mFile = new File(fileUri.getPath());
+-
+-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+-            // it's Lollipop - let's request tree URI instead of nitpicking with specific files...
+-            // deal with file passed after request is fulfilled
+-            callSafRequestTree();
+-            return;
+-        }
+-
+-        // it's Kitkat - we're doomed to request each file one by one
+-        // this is very unlikely actually - external card is still R/W for KitKat, so
+-        // service should be able to persist everything through normal File API
+-        callSafFilePicker();
+-    }
+-
+-    /**
+-     * Call tree-picker to select root of SD card.
+-     * Shows a hint how to do this, continues if "ok" is clicked.
+-     */
+-    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+-    private void callSafRequestTree() {
+-        new AlertDialog.Builder(this)
+-                .setTitle(R.string.need_sd_card_access)
+-                .setIcon(R.drawable.icon)
+-                .setView(R.layout.sd_operate_instructions)
+-                .setNegativeButton(android.R.string.cancel, new DialogInterface.OnClickListener() {
+-                    @Override
+-                    public void onClick(DialogInterface dialog, int which) {
+-                        finish();
+-                    }
+-                })
+-                .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+-                    @Override
+-                    public void onClick(DialogInterface dialog, int which) {
+-                        Intent selectFile = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+-                        startActivityForResult(selectFile, SAF_TREE_REQUEST_CODE);
+-                    }
+-                })
+-                .create()
+-                .show();
+-    }
+-
+-    /**
+-     * Mostly this is needed for SAF support. If the file is located on external SD card then android provides
+-     * only Storage Access Framework to be able to write anything.
+-     * @param requestCode our sent code, see {@link TagEditorUtils#isSafNeeded(AudioFile)}
+-     * @param resultCode success or error
+-     * @param data URI-containing intent
+-     */
+-    @Override
+-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+-        Intent serviceStart = new Intent(this, PluginService.class);
+-        serviceStart.setAction(ACTION_LAUNCH_PLUGIN);
+-        serviceStart.putExtras(getIntent());
+-        serviceStart.putExtra(PluginService.EXTRA_PARAM_SAF_P2P, data);
+-
+-        if (requestCode == SAF_FILE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+-            // access granted, write through
+-            serviceStart.putExtra(PluginService.EXTRA_PARAM_SAF_P2P, data);
+-            startService(serviceStart); // pass intent back to the service
+-        }
+-
+-        if (requestCode == SAF_TREE_REQUEST_CODE && resultCode == Activity.RESULT_OK) {
+-            saveTreeAccessForever(data);
+-            startService(serviceStart); // pass intent back to the service
+-        }
+-
+-        // canceled or denied
+-        finish();
+-    }
+-
+-    /**
+-     * Saves SAF-provided tree URI forever
+-     * @param data intent containing tree URI in data
+-     */
+-    @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+-    private void saveTreeAccessForever(Intent data) {
+-        Uri treeAccessUri = data.getData();
+-        getContentResolver().takePersistableUriPermission(treeAccessUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+-        mPrefs.edit().putString(PluginService.PREF_SDCARD_URI, treeAccessUri.toString()).apply();
+-    }
+-
+-    /**
+-     * Opens SAF file pick dialog to allow you to select specific file to write to
+-     */
+-    @TargetApi(Build.VERSION_CODES.KITKAT)
+-    private void callSafFilePicker() {
+-        Toast.makeText(this, R.string.file_on_external_sd_warning, Toast.LENGTH_LONG).show();
+-        Toast.makeText(this, R.string.file_on_external_sd_workaround, Toast.LENGTH_LONG).show();
+-        Toast.makeText(this, String.format(getString(R.string.file_on_external_sd_hint), mFile.getPath()), Toast.LENGTH_LONG).show();
+-
+-        Intent selectFile = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+-        selectFile.addCategory(Intent.CATEGORY_OPENABLE);
+-        selectFile.setType("audio/*");
+-        startActivityForResult(selectFile, SAF_FILE_REQUEST_CODE);
+-    }
+-
+-}
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
+index 267fda0..1fef63a 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditActivity.java
+@@ -44,7 +44,7 @@ import org.jaudiotagger.tag.FieldKey;
+ import org.jaudiotagger.tag.Tag;
+ 
+ import static android.Manifest.permission.WRITE_EXTERNAL_STORAGE;
+-import static com.kanedias.vanilla.audiotag.PluginConstants.*;
++import static com.kanedias.vanilla.plugins.PluginConstants.*;
+ 
+ /**
+  * Main activity of Tag Editor plugin. This will be presented as a dialog to the user
+@@ -105,6 +105,12 @@ public class TagEditActivity extends Activity {
+         setupUI();
+     }
+ 
++    @Override
++    protected void onDestroy() {
++        super.onDestroy();
++        unbindService(mServiceConn);
++    }
++
+     /**
+      * Initialize UI elements with handlers and action listeners
+      */
+diff --git a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditorUtils.java b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditorUtils.java
+index 926c125..58b2e43 100644
+--- a/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditorUtils.java
++++ b/app/src/main/java/com/kanedias/vanilla/audiotag/TagEditorUtils.java
+@@ -63,20 +63,4 @@ public class TagEditorUtils {
+     }
+ 
+ 
+-    /**
+-     * Shortcut for {@link #isSafNeeded(File)} for {@link AudioFile}
+-     */
+-    public static boolean isSafNeeded(AudioFile af) {
+-        return isSafNeeded(af.getFile());
+-    }
+-
+-    /**
+-     * Check if Android Storage Access Framework routines apply here
+-     * @return true if document seems to be SAF-accessible only, false otherwise
+-     */
+-    public static boolean isSafNeeded(File file) {
+-        // on external SD card after KitKat this will return false
+-        return !file.canWrite() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT;
+-    }
+-
+ }

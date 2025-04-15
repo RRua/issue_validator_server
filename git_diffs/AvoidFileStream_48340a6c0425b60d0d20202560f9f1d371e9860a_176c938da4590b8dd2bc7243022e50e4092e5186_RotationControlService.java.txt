@@ -1,0 +1,417 @@
+diff --git a/app/src/main/java/com/gabm/tapandturn/TapAndTurnApplication.java b/app/src/main/java/com/gabm/tapandturn/TapAndTurnApplication.java
+index 7308878..017db3a 100644
+--- a/app/src/main/java/com/gabm/tapandturn/TapAndTurnApplication.java
++++ b/app/src/main/java/com/gabm/tapandturn/TapAndTurnApplication.java
+@@ -3,10 +3,21 @@ package com.gabm.tapandturn;
+ import android.app.Application;
+ import android.content.Context;
+ import android.os.Build;
++import android.os.Environment;
+ import android.provider.Settings;
++import android.util.Log;
+ 
++import com.gabm.tapandturn.settings.SettingsKeys;
+ import com.gabm.tapandturn.settings.SettingsManager;
+ 
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.OutputStreamWriter;
++import java.text.SimpleDateFormat;
++import java.util.Calendar;
++import java.util.Date;
++
+ /**
+  * Created by gabm on 17/12/16.
+  */
+@@ -14,9 +25,65 @@ import com.gabm.tapandturn.settings.SettingsManager;
+ public class TapAndTurnApplication extends Application {
+ 
+     public static SettingsManager settings;
++    private static File logFile = null;
++    private static FileOutputStream logfileOutputStream = null;
++    private static OutputStreamWriter logfileWriter = null;
++
++
+     @Override
+     public void onCreate() {
+         super.onCreate();
+         settings = new SettingsManager(getApplicationContext());
++        setLoggingEnabled(TapAndTurnApplication.settings.getBoolean(SettingsKeys.LOGGING_ENABLED, false));
++    }
++
++    public static void setLoggingEnabled(boolean enabled) {
++        if (enabled)
++            createLogfile();
++        else
++            destroyLogfile();
++        TapAndTurnApplication.settings.putBoolean(SettingsKeys.LOGGING_ENABLED, enabled);
++    }
++
++    private static void createLogfile() {
++        try {
++            logFile = new File(Environment.getExternalStorageDirectory() + "/tap_and_turn_log_" + System.currentTimeMillis() + ".txt");
++            logFile.createNewFile();
++            logfileOutputStream = new FileOutputStream(logFile);
++            logfileWriter = new OutputStreamWriter(logfileOutputStream);
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
++    }
++
++    private static void destroyLogfile() {
++        try {
++            if (logfileWriter != null)
++                logfileWriter.close();
++
++            if (logfileOutputStream != null)
++                logfileOutputStream.close();
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
++    }
++
++    public static void log(int level, String tag, String msg) {
++        Log.println(level, tag, msg);
++
++        if (!settings.getBoolean(SettingsKeys.LOGGING_ENABLED, false))
++            return;
++
++        try {
++            Calendar calendar = Calendar.getInstance();
++            Date now = calendar.getTime();
++            SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZZZZZ");
++            String timestamp = simpleDateFormat.format(now);
++            logfileWriter.write(timestamp + " | " + level + " | " + tag + " | " + msg + "\n");
++            logfileWriter.flush();
++            logfileOutputStream.flush();
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
+     }
+ }
+diff --git a/app/src/main/java/com/gabm/tapandturn/services/RotationControlService.java b/app/src/main/java/com/gabm/tapandturn/services/RotationControlService.java
+index 3425e91..ddd7d25 100644
+--- a/app/src/main/java/com/gabm/tapandturn/services/RotationControlService.java
++++ b/app/src/main/java/com/gabm/tapandturn/services/RotationControlService.java
+@@ -57,13 +57,9 @@ public class RotationControlService extends Service implements PhysicalOrientati
+     private AbsoluteOrientation handlerScreenOrientation;
+     private final String TOGGLE_ACTIVE_BROADCAST = "ToggleActiveBroadcast";
+ 
+-    private File logFile = null;
+-    private FileOutputStream logfileOutputStream = null;
+-    private OutputStreamWriter logfileWriter = null;
+-
+     @Override
+     public void onClick(View view) {
+-        log(Log.INFO, "OnClick", "User demanded rotation");
++        TapAndTurnApplication.log(Log.INFO, "OnClick", "User demanded rotation");
+         orientationButtonOverlay.hide();
+         if (handlerScreenOrientation.equals(physicalOrientationSensor.getCurScreenOrientation()))
+             screenRotatorOverlay.forceOrientation(handlerScreenOrientation);
+@@ -81,7 +77,7 @@ public class RotationControlService extends Service implements PhysicalOrientati
+         public void onReceive(Context context, Intent intent) {
+             KeyguardManager kgm = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+             if (intent.getAction().equals(Intent.ACTION_SCREEN_OFF)) {
+-                log(Log.INFO, "BroadcastReceiver", "screen off");
++                TapAndTurnApplication.log(Log.INFO, "BroadcastReceiver", "screen off");
+ 
+                 if (isActive) {
+                     physicalOrientationSensor.disable();
+@@ -94,7 +90,7 @@ public class RotationControlService extends Service implements PhysicalOrientati
+             } else if (intent.getAction().equals(Intent.ACTION_SCREEN_ON) && !kgm.isKeyguardLocked() ||
+                        intent.getAction().equals(Intent.ACTION_USER_PRESENT))
+             {
+-                log(Log.INFO, "BroadcastReceiver", "screen on or user present");
++                TapAndTurnApplication.log(Log.INFO, "BroadcastReceiver", "screen on or user present");
+ 
+                 if (isActive) {
+                     physicalOrientationSensor.enable();
+@@ -121,31 +117,9 @@ public class RotationControlService extends Service implements PhysicalOrientati
+         unregisterReceiver(screenOffBroadcastReceiver);
+     }
+ 
+-    private void createLogfile() {
+-        try {
+-            logFile = new File(Environment.getExternalStorageDirectory() + "/tap_and_turn_log_" + System.currentTimeMillis() + ".txt");
+-            logFile.createNewFile();
+-            logfileOutputStream = new FileOutputStream(logFile);
+-            logfileWriter = new OutputStreamWriter(logfileOutputStream);
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+-    private void destroyLogfile() {
+-         try {
+-            logfileWriter.close();
+-            logfileOutputStream.close();
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-    }
+-
+     @Override
+     public void onCreate() {
+-        createLogfile();
+-
+-        log(Log.INFO, "RotationService", "Service started");
++        TapAndTurnApplication.log(Log.INFO, "RotationService", "Service started");
+ 
+ 
+         mNM = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
+@@ -187,7 +161,7 @@ public class RotationControlService extends Service implements PhysicalOrientati
+         if (isActive)
+             return;
+ 
+-        log(Log.INFO, "RotationService", "activated");
++        TapAndTurnApplication.log(Log.INFO, "RotationService", "activated");
+ 
+         isActive = true;
+         screenRotatorOverlay.forceOrientation(WindowManagerSensor.query(windowManager));
+@@ -210,28 +184,15 @@ public class RotationControlService extends Service implements PhysicalOrientati
+ 
+     @Override
+     public int onStartCommand(Intent intent, int flags, int startId) {
+-        log(Log.INFO, "LocalService", "Received start id " + startId + ": " + intent);
++        TapAndTurnApplication.log(Log.INFO, "LocalService", "Received start id " + startId + ": " + intent);
+         return START_STICKY;
+     }
+ 
+-    private void log(int level, String tag, String msg) {
+-        Log.println(level, tag, msg);
+-        try {
+-            Calendar calendar = Calendar.getInstance();
+-            Date now = calendar.getTime();
+-            SimpleDateFormat simpleDateFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZZZZZ");
+-            String timestamp = simpleDateFormat.format(now);
+-            logfileWriter.write(timestamp + " | " + level + " | " + tag + " | " + msg + "\n");
+-            logfileWriter.flush();
+-            logfileOutputStream.flush();
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-    }
++
+ 
+     @Override
+     public void onDestroy() {
+-        log(Log.INFO, "RotationService", "Service stopped");
++        TapAndTurnApplication.log(Log.INFO, "RotationService", "Service stopped");
+ 
+         deactivate();
+ 
+@@ -242,8 +203,6 @@ public class RotationControlService extends Service implements PhysicalOrientati
+ 
+         // Tell the user we stopped.
+         Toast.makeText(this, R.string.toast_service_stopped, Toast.LENGTH_SHORT).show();
+-
+-        destroyLogfile();
+     }
+ 
+     @Override
+@@ -288,7 +247,7 @@ public class RotationControlService extends Service implements PhysicalOrientati
+ 
+     @Override
+     public void onOrientationChange(AbsoluteOrientation newOrientation) {
+-        log(Log.INFO,"onOrientationChange", "old: " + screenRotatorOverlay.getCurrentlySetScreenOrientation().toString() + " new: " + newOrientation.toString());
++        TapAndTurnApplication.log(Log.INFO,"onOrientationChange", "old: " + screenRotatorOverlay.getCurrentlySetScreenOrientation().toString() + " new: " + newOrientation.toString());
+ 
+         if (!OverlayPermissionSensor.getInstance().query(getApplicationContext())) {
+             Toast.makeText(this, R.string.permission_lost, Toast.LENGTH_LONG).show();
+@@ -299,14 +258,14 @@ public class RotationControlService extends Service implements PhysicalOrientati
+             if (orientationButtonOverlay.isActive())
+                 orientationButtonOverlay.hide();
+ 
+-            log(Log.INFO,"onOrientationChange", "setting orientation to " + newOrientation.toString());
++            TapAndTurnApplication.log(Log.INFO,"onOrientationChange", "setting orientation to " + newOrientation.toString());
+             screenRotatorOverlay.forceOrientation(newOrientation);
+             return;
+         }
+ 
+         if (!newOrientation.equals(screenRotatorOverlay.getCurrentlySetScreenOrientation()) && !newOrientation.equals(AbsoluteOrientation.Enum.Unknown)) {
+ 
+-            log(Log.INFO,"onOrientationChange", "displaying button in " + newOrientation.toString());
++            TapAndTurnApplication.log(Log.INFO,"onOrientationChange", "displaying button in " + newOrientation.toString());
+             orientationButtonOverlay.show(screenRotatorOverlay.getCurrentlySetScreenOrientation(), newOrientation);
+ 
+             // if the new orientation is different from what the user requested
+diff --git a/app/src/main/java/com/gabm/tapandturn/settings/SettingsKeys.java b/app/src/main/java/com/gabm/tapandturn/settings/SettingsKeys.java
+index 87a26e1..40b9d7b 100644
+--- a/app/src/main/java/com/gabm/tapandturn/settings/SettingsKeys.java
++++ b/app/src/main/java/com/gabm/tapandturn/settings/SettingsKeys.java
+@@ -14,5 +14,6 @@ public enum SettingsKeys {
+     RESTORE_DEFAULT_ON_SCREEN_OFF,
+     ICONFOREGROUNDCOLOR,
+     ICONBACKGROUNDCOLOR,
+-    AUTO_RETURN_TO_DEFAULT
++    AUTO_RETURN_TO_DEFAULT,
++    LOGGING_ENABLED
+ }
+diff --git a/app/src/main/java/com/gabm/tapandturn/ui/MainActivity.java b/app/src/main/java/com/gabm/tapandturn/ui/MainActivity.java
+index b80ab0a..a9ed55d 100644
+--- a/app/src/main/java/com/gabm/tapandturn/ui/MainActivity.java
++++ b/app/src/main/java/com/gabm/tapandturn/ui/MainActivity.java
+@@ -11,6 +11,7 @@ import android.os.Build;
+ import android.os.Bundle;
+ import android.preference.PreferenceFragment;
+ import android.provider.Settings;
++import android.support.v4.content.ContextCompat;
+ import android.support.v7.app.AlertDialog;
+ import android.support.v7.app.AppCompatActivity;
+ import android.support.v7.widget.Toolbar;
+@@ -34,14 +35,16 @@ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import com.gabm.tapandturn.R;
++import com.gabm.tapandturn.TapAndTurnApplication;
+ import com.gabm.tapandturn.sensors.OverlayPermissionSensor;
+ import com.gabm.tapandturn.services.RotationControlService;
++import com.gabm.tapandturn.settings.SettingsKeys;
+ import com.gabm.tapandturn.settings.SettingsManager;
+ 
+ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedChangeListener, Button.OnClickListener {
+     private Switch serviceStateSwitch;
+-    private Button requestPermissionButton;
+-
++    private Button requestOverlayPermissionButton;
++    private Switch loggingStateSwitch;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -54,9 +57,11 @@ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedC
+         serviceStateSwitch = (Switch) findViewById(R.id.service_state_switch);
+         serviceStateSwitch.setOnCheckedChangeListener(this);
+ 
++        loggingStateSwitch = (Switch)findViewById(R.id.logging_switch);
++        loggingStateSwitch.setOnCheckedChangeListener(this);;
+ 
+-        requestPermissionButton = (Button) findViewById(R.id.request_button);
+-        requestPermissionButton.setOnClickListener(this);
++        requestOverlayPermissionButton = (Button) findViewById(R.id.request_button);
++        requestOverlayPermissionButton.setOnClickListener(this);
+ 
+         final ScrollView scrollview = ((ScrollView) findViewById(R.id.scrollview_content_main));
+         scrollview.post(new Runnable() {
+@@ -65,10 +70,6 @@ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedC
+                 scrollview.fullScroll(ScrollView.FOCUS_UP);
+             }
+         });
+-
+-
+-        String[] permissions = {Manifest.permission.WRITE_EXTERNAL_STORAGE};
+-        requestPermissions(permissions, 1234);
+     }
+ 
+     public static class MyPreferenceFragment extends PreferenceFragment
+@@ -160,26 +161,44 @@ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedC
+     }
+ 
+     /** code to post/handler request for permission */
+-    public final static int REQUEST_CODE = 5463;
++    public final static int REQUEST_OVERLAY_CODE = 5463;
++    public final static int REQUEST_WRITE_PERMISSION = 5464;
+ 
+-    public void requestPermission() {
+-        /** check if we already  have permission to draw over other apps */
++    public void requestOverlayPermission() {
++        /* check if we already  have permission to draw over other apps */
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+             if (!Settings.canDrawOverlays(getApplicationContext())) {
+-                /** if not construct intent to request permission */
++                /* if not construct intent to request permission */
+                 Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
+-                /** request permission via start activity for result */
+-                startActivityForResult(intent, REQUEST_CODE);
++                /* request permission via start activity for result */
++                startActivityForResult(intent, REQUEST_OVERLAY_CODE);
+             }
+         }
+     }
+ 
++    public boolean hasWritePermission() {
++        return ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
++    }
++
++    public void requestWritePermission() {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++
++            String[] permissions = {Manifest.permission.WRITE_EXTERNAL_STORAGE};
++            requestPermissions(permissions, REQUEST_WRITE_PERMISSION);
++        }
++    }
++
+     @Override
+     protected void onActivityResult(int requestCode, int resultCode,  Intent data) {
+-        if (requestCode == REQUEST_CODE)
+-            setPermissionGranted(OverlayPermissionSensor.getInstance().query(this));
++        if (requestCode == REQUEST_OVERLAY_CODE)
++            setOverlayPermissionGranted(OverlayPermissionSensor.getInstance().query(this));
++        else if (requestCode == REQUEST_WRITE_PERMISSION) {
++            TapAndTurnApplication.setLoggingEnabled(hasWritePermission());
++            setServiceStateSwitch(hasWritePermission());
++        }
+     }
+ 
++
+     @Override
+     protected void onStop() {
+         Log.i("Main", "stopped");
+@@ -193,13 +212,27 @@ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedC
+ 
+ 
+         setServiceStateSwitch(isServiceRunning(RotationControlService.class));
+-        setPermissionGranted(OverlayPermissionSensor.getInstance().query(this));
++        setOverlayPermissionGranted(OverlayPermissionSensor.getInstance().query(this));
++        setLoggingStateSwitch(TapAndTurnApplication.settings.getBoolean(SettingsKeys.LOGGING_ENABLED, false));
+     }
+ 
+     @Override
+     public void onCheckedChanged(CompoundButton compoundButton, boolean b) {
+         if (compoundButton == serviceStateSwitch)
+             setServiceStateSwitch(applyNewServiceState(b));
++        else if (compoundButton == loggingStateSwitch) {
++            if (b) {
++                if (!hasWritePermission()) {
++                    requestWritePermission();
++                } else {
++                    TapAndTurnApplication.setLoggingEnabled(true);
++                }
++            }
++            else {
++                TapAndTurnApplication.setLoggingEnabled(false);
++            }
++        }
++
+     }
+ 
+     // borrowed from: https://stackoverflow.com/questions/600207/how-to-check-if-a-service-is-running-on-android
+@@ -245,19 +278,23 @@ public class MainActivity extends AppCompatActivity implements Switch.OnCheckedC
+         serviceStateSwitch.setChecked(started);
+     }
+ 
+-    private void setPermissionGranted(boolean granted) {
+-        requestPermissionButton.setEnabled(!granted);
++    private void setLoggingStateSwitch(boolean on) {
++        loggingStateSwitch.setChecked(on);
++    }
++
++    private void setOverlayPermissionGranted(boolean granted) {
++        requestOverlayPermissionButton.setEnabled(!granted);
+ 
+         if (granted)
+-            requestPermissionButton.setText(R.string.permission_granted);
++            requestOverlayPermissionButton.setText(R.string.permission_granted);
+         else
+-            requestPermissionButton.setText(R.string.request_permission);
++            requestOverlayPermissionButton.setText(R.string.request_permission);
+     }
+ 
+     @Override
+     public void onClick(View view) {
+         if (!OverlayPermissionSensor.getInstance().query(this))
+-            requestPermission();
++            requestOverlayPermission();
+     }
+ 
+ 

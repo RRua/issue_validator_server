@@ -1,0 +1,1142 @@
+diff --git a/src/main/java/com/amaze/filemanager/activities/BaseActivity.java b/src/main/java/com/amaze/filemanager/activities/BaseActivity.java
+index 606f37f14..8c0050c64 100644
+--- a/src/main/java/com/amaze/filemanager/activities/BaseActivity.java
++++ b/src/main/java/com/amaze/filemanager/activities/BaseActivity.java
+@@ -1,10 +1,14 @@
+ package com.amaze.filemanager.activities;
+ 
+ import android.Manifest;
++import android.content.ComponentName;
++import android.content.Intent;
++import android.content.ServiceConnection;
+ import android.content.SharedPreferences;
+ import android.content.pm.PackageManager;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.os.IBinder;
+ import android.preference.PreferenceManager;
+ import android.support.v4.app.ActivityCompat;
+ import android.view.View;
+@@ -12,8 +16,10 @@ import android.view.View;
+ import com.afollestad.materialdialogs.DialogAction;
+ import com.afollestad.materialdialogs.MaterialDialog;
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.services.CopyService;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.Futils;
++import com.amaze.filemanager.utils.PreferenceUtils;
+ import com.amaze.filemanager.utils.color.ColorUsage;
+ import com.amaze.filemanager.utils.theme.AppTheme;
+ 
+@@ -29,6 +35,8 @@ public class BaseActivity extends BasicActivity {
+     public static boolean rootMode;
+     boolean checkStorage = true;
+ 
++    public static boolean IS_BOUND = false;
++
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+@@ -43,7 +51,7 @@ public class BaseActivity extends BasicActivity {
+         accentSkin = getColorPreference().getColorAsString(ColorUsage.ACCENT);
+         setTheme();
+ 
+-        rootMode = Sp.getBoolean("rootmode", false);
++        rootMode = Sp.getBoolean(PreferenceUtils.KEY_ROOT, false);
+ 
+         //requesting storage permissions
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkStorage)
+@@ -237,4 +245,33 @@ public class BaseActivity extends BasicActivity {
+             }
+         }
+     }
++
++    @Override
++    protected void onResume() {
++        super.onResume();
++
++        Intent intent = new Intent(this, CopyService.class);
++        bindService(intent, mConnection, 0);
++    }
++
++    @Override
++    protected void onPause() {
++        super.onPause();
++        unbindService(mConnection);
++    }
++
++    private ServiceConnection mConnection = new ServiceConnection() {
++
++        @Override
++        public void onServiceConnected(ComponentName className,
++                                       IBinder service) {
++            // We've bound to LocalService, cast the IBinder and get LocalService instance
++            IS_BOUND = true;
++        }
++
++        @Override
++        public void onServiceDisconnected(ComponentName arg0) {
++            IS_BOUND = false;
++        }
++    };
+ }
+\ No newline at end of file
+diff --git a/src/main/java/com/amaze/filemanager/fragments/ProcessViewer.java b/src/main/java/com/amaze/filemanager/fragments/ProcessViewer.java
+index 951aa23a5..0687aabd2 100644
+--- a/src/main/java/com/amaze/filemanager/fragments/ProcessViewer.java
++++ b/src/main/java/com/amaze/filemanager/fragments/ProcessViewer.java
+@@ -32,13 +32,10 @@ import android.os.IBinder;
+ import android.preference.PreferenceManager;
+ import android.support.v4.app.Fragment;
+ import android.support.v7.widget.CardView;
+-import android.util.DisplayMetrics;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.ImageButton;
+-import android.widget.ImageView;
+-import android.widget.LinearLayout;
+ import android.widget.ProgressBar;
+ import android.widget.TextView;
+ import android.widget.Toast;
+@@ -65,19 +62,17 @@ import java.util.ArrayList;
+ 
+ public class ProcessViewer extends Fragment {
+ 
+-    LinearLayout rootView;
++    private View rootView;
++    private CardView mCardView;
+ 
+-    // Ids to differentiate between already processed data package and new data package
+-    ArrayList<Integer> CopyIds = new ArrayList<Integer>();
+-    ArrayList<Integer> CancelledCopyIds = new ArrayList<Integer>();
+-    ArrayList<Integer> ExtractIds = new ArrayList<Integer>();
+-    ArrayList<Integer> CancelledExtractIds = new ArrayList<Integer>();
+-    ArrayList<Integer> ZipIds = new ArrayList<Integer>();
+-    ArrayList<Integer> CancelledZipIds = new ArrayList<Integer>();
++    boolean isInitialized = false;
+     SharedPreferences Sp;
+     IconUtils icons;
+     MainActivity mainActivity;
+     int accentColor, primaryColor;
++    ImageButton mCancelButton;
++    TextView mProgressTextView;
++    private ProgressBar mProgressBar;
+ 
+     private LineChart mLineChart;
+     private LineData mLineData = new LineData();
+@@ -85,7 +80,7 @@ public class ProcessViewer extends Fragment {
+     @Override
+     public View onCreateView(LayoutInflater inflater, ViewGroup container,
+                              Bundle savedInstanceState) {
+-        View root = (ViewGroup) inflater.inflate(R.layout.processparent, container, false);
++        rootView = inflater.inflate(R.layout.processparent, container, false);
+         setRetainInstance(false);
+ 
+         mainActivity = (MainActivity) getActivity();
+@@ -93,15 +88,48 @@ public class ProcessViewer extends Fragment {
+         accentColor = mainActivity.getColorPreference().getColor(ColorUsage.ACCENT);
+         primaryColor = mainActivity.getColorPreference().getColor(ColorUsage.getPrimary(MainActivity.currentTab));
+         if (mainActivity.getAppTheme().equals(AppTheme.DARK))
+-            root.setBackgroundResource((R.color.cardView_background));
++            rootView.setBackgroundResource((R.color.cardView_background));
+         mainActivity.updateViews(new ColorDrawable(primaryColor));
+-        rootView = (LinearLayout) root.findViewById(R.id.secondbut);
+         mainActivity.setActionBarTitle(getResources().getString(R.string.processes));
+         mainActivity.floatingActionButton.hideMenuButton(true);
+         Sp = PreferenceManager.getDefaultSharedPreferences(getActivity());
+         icons = new IconUtils(Sp, getActivity());
+         mainActivity.supportInvalidateOptionsMenu();
+-        return root;
++
++        mCardView = (CardView) rootView.findViewById(R.id.card_view);
++
++        mLineChart = (LineChart) rootView.findViewById(R.id.progress_chart);
++
++        mCancelButton = (ImageButton) rootView.findViewById(R.id.delete_button);
++        mProgressTextView = (TextView) rootView.findViewById(R.id.progressText);
++        mProgressBar = (ProgressBar) rootView.findViewById(R.id.progressBar1);
++
++        Drawable icon = icons.getCopyDrawable();
++
++        if (mainActivity.getAppTheme().equals(AppTheme.DARK)) {
++
++            mCancelButton.setImageResource(R.drawable.ic_action_cancel);
++            mCardView.setCardBackgroundColor(getResources().getColor(R.color.cardView_foreground));
++            mCardView.setCardElevation(0f);
++            mProgressTextView.setTextColor(Color.WHITE);
++        } else {
++
++            icon.setColorFilter(Color.parseColor("#666666"), PorterDuff.Mode.SRC_ATOP);
++            mProgressTextView.setTextColor(Color.BLACK);
++        }
++
++        mCancelButton.setImageDrawable(icon);
++        mCancelButton.setOnClickListener(new View.OnClickListener() {
++
++            public void onClick(View p1) {
++                Toast.makeText(getActivity(), getResources().getString(R.string.stopping), Toast.LENGTH_LONG).show();
++                Intent i = new Intent(CopyService.TAG_COPY_CANCEL_BROADCAST);
++                getActivity().sendBroadcast(i);
++                mProgressTextView.setText(getString(R.string.cancel));
++            }
++        });
++
++        return rootView;
+     }
+ 
+     private ServiceConnection mConnection = new ServiceConnection() {
+@@ -161,12 +189,12 @@ public class ProcessViewer extends Fragment {
+             ExtractService.LocalBinder binder = (ExtractService.LocalBinder) service;
+             ExtractService mService = binder.getService();
+             for (int i : mService.hash1.keySet()) {
+-                processExtractResults(mService.hash1.get(i));
++                //processExtractResults(mService.hash1.get(i));
+             }
+             mService.setProgressListener(new ExtractService.ProgressListener() {
+                 @Override
+                 public void onUpdate(DataPackage dataPackage) {
+-                    processExtractResults(dataPackage);
++                    //processExtractResults(dataPackage);
+                 }
+ 
+                 @Override
+@@ -190,12 +218,12 @@ public class ProcessViewer extends Fragment {
+             ZipTask.LocalBinder binder = (ZipTask.LocalBinder) service;
+             ZipTask mService = binder.getService();
+             for (int i : mService.hash1.keySet()) {
+-                processCompressResults(mService.hash1.get(i));
++                //processCompressResults(mService.hash1.get(i));
+             }
+             mService.setProgressListener(new ZipTask.ProgressListener() {
+                 @Override
+                 public void onUpdate(DataPackage dataPackage) {
+-                    processCompressResults(dataPackage);
++                    //processCompressResults(dataPackage);
+                 }
+ 
+                 @Override
+@@ -222,16 +250,6 @@ public class ProcessViewer extends Fragment {
+         getActivity().bindService(intent2, mCompressConnection, 0);
+     }
+ 
+-    void clear(){
+-        rootView.removeAllViewsInLayout();
+-        CopyIds.clear();
+-        CancelledCopyIds.clear();
+-        ExtractIds.clear();
+-        CancelledExtractIds.clear();
+-        ZipIds.clear();
+-        CancelledZipIds.clear();
+-    }
+-
+     @Override
+     public void onPause() {
+         super.onPause();
+@@ -243,131 +261,53 @@ public class ProcessViewer extends Fragment {
+     @Override
+     public void onDestroy() {
+         super.onDestroy();
+-        //clear();
+     }
+ 
+     public void processResults(final DataPackage dataPackage) {
+         if (dataPackage != null) {
+-            int id = dataPackage.getId();
+-            final Integer id1 = new Integer(id);
+-
+-            if (!CancelledCopyIds.contains(id1)) {
+-                // new data package utilizing
+ 
+-                if (CopyIds.contains(id1)) {
+-                    // views have been initialized, just update the progress from new data package
+-                    boolean completed = dataPackage.isCompleted();
+-                    View processView = rootView.findViewWithTag("copy" + id);
+-
+-                    /*if (completed) {
+-                        try {
+-
+-                            // operation completed, remove views
+-                            //rootView.removeViewInLayout(processView);
+-                            //CopyIds.remove(CopyIds.indexOf(id1));
+-                        } catch (Exception e) {
+-                            e.printStackTrace();
+-                        }
+-                    } else {
++            boolean completed = dataPackage.isCompleted();
+ 
++            String name = dataPackage.getName();
++            long total = dataPackage.getTotal();
++            long doneBytes = dataPackage.getByteProgress();
+ 
+-                    }*/
+-                    // update views from data package
+-
+-                    String name = dataPackage.getName();
+-                    long total = dataPackage.getTotal();
+-                    long doneBytes = dataPackage.getByteProgress();
+-
+-                    double progressPercent = (doneBytes/total)*100;
+-
+-                    addEntry(Futils.readableFileSizeFloat(doneBytes),
+-                            Futils.readableFileSizeFloat(dataPackage.getSpeedRaw()));
+-
+-                    boolean move = dataPackage.isMove();
+-                    String text = (move ? getResources().getString(R.string.moving)
+-                            : getResources().getString(R.string.copying)) + "\n"
+-                            + name + "\n"
+-                            + Futils.readableFileSize(doneBytes)
+-                            + "/" + Futils.readableFileSize(total) + "\n"
+-                            + progressPercent + "%" + "\n"
+-                            + dataPackage.getSourceProgress() + "/"
+-                            + dataPackage.getSourceFiles() + "\n"
+-                            + Futils.readableFileSize(dataPackage.getSpeedRaw());
+-                    ((TextView) processView.findViewById(R.id.progressText)).setText(text);
+-                    ProgressBar p = (ProgressBar) processView.findViewById(R.id.progressBar1);
+-                    p.setProgress((int) Math.round(progressPercent));
+-                } else {
++            float progressPercent = ((float)doneBytes/total)*100;
++            boolean move = dataPackage.isMove();
+ 
+-                    // initialize views for first time
+-                    CardView root = (android.support.v7.widget.CardView) getActivity()
+-                            .getLayoutInflater().inflate(R.layout.processrow, null);
+-                    rootView.addView(root);
++            if (isInitialized) {
++                // views have already been initialized, process the data and set new values
+ 
+-                    ViewGroup.LayoutParams params = root.getLayoutParams();
+-                    params.width = ViewGroup.LayoutParams.MATCH_PARENT;
+-                    params.height = dpToPx(300);
+-                    root.setLayoutParams(params);
+-                    root.setTag("copy" + id);
++                addEntry(Futils.readableFileSizeFloat(doneBytes),
++                        Futils.readableFileSizeFloat(dataPackage.getSpeedRaw()));
+ 
+-                    long doneBytes = dataPackage.getByteProgress();
+-                    long totalBytes = dataPackage.getTotal();
+-                    double progressPercent = (doneBytes/totalBytes)*100;
+-
+-                    mLineChart = (LineChart) root.findViewById(R.id.progress_chart);
+-                    chartInit(totalBytes);
+-
+-                    ImageButton cancel = (ImageButton) root.findViewById(R.id.delete_button);
+-                    TextView progressText = (TextView) root.findViewById(R.id.progressText);
+-
+-                    Drawable icon = icons.getCopyDrawable();
+-                    boolean move = dataPackage.isMove();
+-                    if (move) {
+-                        icon = icons.getCutDrawable();
+-                    }
+-                    if (mainActivity.getAppTheme().equals(AppTheme.DARK)) {
+-
+-                        cancel.setImageResource(R.drawable.ic_action_cancel);
+-                        root.setCardBackgroundColor(R.color.cardView_foreground);
+-                        root.setCardElevation(0f);
+-                        progressText.setTextColor(Color.WHITE);
+-                    } else {
+-
+-                        icon.setColorFilter(Color.parseColor("#666666"), PorterDuff.Mode.SRC_ATOP);
+-                        progressText.setTextColor(Color.BLACK);
+-                    }
+-
+-                    ((ImageView) root.findViewById(R.id.progressImage)).setImageDrawable(icon);
+-                    cancel.setOnClickListener(new View.OnClickListener() {
+-
+-                        public void onClick(View p1) {
+-                            Toast.makeText(getActivity(), getResources().getString(R.string.stopping), Toast.LENGTH_LONG).show();
+-                            Intent i = new Intent("copycancel");
+-                            i.putExtra("id", id1);
+-                            getActivity().sendBroadcast(i);
+-                            rootView.removeView(rootView.findViewWithTag("copy" + id1));
+-
+-                            CopyIds.remove(CopyIds.indexOf(id1));
+-                            CancelledCopyIds.add(id1);
+-                            // TODO: Implement this method
+-                        }
+-                    });
+-
+-                    String name = dataPackage.getName();
++                String text = (move ? getResources().getString(R.string.moving)
++                        : getResources().getString(R.string.copying)) + "\n"
++                        + name + "\n"
++                        + Futils.readableFileSize(doneBytes)
++                        + "/" + Futils.readableFileSize(total) + "\n"
++                        + progressPercent + "%" + "\n"
++                        + dataPackage.getSourceProgress() + "/"
++                        + dataPackage.getSourceFiles() + "\n"
++                        + Futils.readableFileSize(dataPackage.getSpeedRaw());
++                mProgressTextView.setText(text);
++                mProgressBar.setProgress(Math.round(progressPercent));
++            } else {
++                // initializing views for the first time
++                chartInit(total);
+ 
+-                    String text = getResources().getString(R.string.copying) + "\n" + name;
+-                    if (move) {
+-                        text = getResources().getString(R.string.moving) + "\n" + name;
+-                    }
+-                    progressText.setText(text);
+-                    ProgressBar p = (ProgressBar) root.findViewById(R.id.progressBar1);
+-                    p.setProgress((int) Math.round(progressPercent));
+-                    CopyIds.add(id1);
++                String text = getResources().getString(R.string.copying) + "\n" + name;
++                if (move) {
++                    text = getResources().getString(R.string.moving) + "\n" + name;
+                 }
++                mProgressTextView.setText(text);
++                mProgressBar.setProgress(Math.round(progressPercent));
++                isInitialized = true;
+             }
+         }
+     }
+ 
+-    public void processExtractResults(DataPackage dataPackage) {
++    /*public void processExtractResults(DataPackage dataPackage) {
+         final int id = dataPackage.getId();
+ 
+         if (!CancelledExtractIds.contains(id)) {
+@@ -521,7 +461,7 @@ public class ProcessViewer extends Fragment {
+                 rootView.addView(root);
+             }
+         }
+-    }
++    }*/
+ 
+     /**
+      * Add a new entry dynamically to the chart, initializes a {@link LineDataSet} if not done so
+@@ -596,10 +536,4 @@ public class ProcessViewer extends Fragment {
+         mLineChart.setData(mLineData);
+         mLineChart.invalidate();
+     }
+-
+-    public int dpToPx(double dp) {
+-        DisplayMetrics displayMetrics = getResources().getDisplayMetrics();
+-        int px = Math.round(Math.round(dp * (displayMetrics.xdpi / DisplayMetrics.DENSITY_DEFAULT)));
+-        return px;
+-    }
+ }
+diff --git a/src/main/java/com/amaze/filemanager/services/CopyService.java b/src/main/java/com/amaze/filemanager/services/CopyService.java
+index c848ef445..744afad57 100644
+--- a/src/main/java/com/amaze/filemanager/services/CopyService.java
++++ b/src/main/java/com/amaze/filemanager/services/CopyService.java
+@@ -26,17 +26,16 @@ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+-import android.content.SharedPreferences;
+ import android.os.AsyncTask;
+ import android.os.Binder;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.IBinder;
+-import android.preference.PreferenceManager;
+ import android.support.v4.app.NotificationCompat;
+ import android.util.Log;
+ 
+ import com.amaze.filemanager.R;
++import com.amaze.filemanager.activities.BaseActivity;
+ import com.amaze.filemanager.activities.MainActivity;
+ import com.amaze.filemanager.exceptions.RootNotPermittedException;
+ import com.amaze.filemanager.filesystem.BaseFile;
+@@ -44,29 +43,28 @@ import com.amaze.filemanager.filesystem.FileUtil;
+ import com.amaze.filemanager.filesystem.HFile;
+ import com.amaze.filemanager.filesystem.Operations;
+ import com.amaze.filemanager.filesystem.RootHelper;
+-import com.amaze.filemanager.utils.CopyWatcherUtil;
+ import com.amaze.filemanager.utils.DataPackage;
+ import com.amaze.filemanager.utils.Futils;
+ import com.amaze.filemanager.utils.GenericCopyThread;
+ import com.amaze.filemanager.utils.OpenMode;
+ import com.amaze.filemanager.utils.RootUtils;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
+ 
+ import java.io.File;
+ import java.io.IOException;
+ import java.util.ArrayList;
+-import java.util.HashMap;
+ 
+ 
+ public class CopyService extends Service {
+-    HashMap<Integer, Boolean> hash = new HashMap<Integer, Boolean>();
+-    public volatile ArrayList<DataPackage> dataPackages = new ArrayList<>();
+-    boolean rootmode;
++
++    public ArrayList<DataPackage> dataPackages = new ArrayList<>();
+     NotificationManager mNotifyManager;
+     NotificationCompat.Builder mBuilder;
+     Context c;
+ 
+     ProgressListener progressListener;
+     private final IBinder mBinder = new LocalBinder();
++    private ProgressHandler progressHandler;
+ 
+     boolean foreground=true;
+ 
+@@ -80,23 +78,26 @@ public class CopyService extends Service {
+     private static final String TAG_COPY_MOVE = "move";
+     private static final String TAG_COPY_START_ID = "id";
+ 
++    public static final String TAG_COPY_CANCEL_BROADCAST = "copycancel";
++
+     @Override
+     public void onCreate() {
+         c = getApplicationContext();
+-        SharedPreferences Sp=PreferenceManager.getDefaultSharedPreferences(this);
+-        rootmode=Sp.getBoolean("rootmode",false);
+-        registerReceiver(receiver3, new IntentFilter("copycancel"));
++
++        registerReceiver(receiver3, new IntentFilter(TAG_COPY_CANCEL_BROADCAST));
+     }
+ 
+     @Override
+     public int onStartCommand(Intent intent, int flags, int startId) {
++
+         Bundle b = new Bundle();
+         ArrayList<BaseFile> files = intent.getParcelableArrayListExtra(TAG_COPY_SOURCES);
+         String targetPath = intent.getStringExtra(TAG_COPY_TARGET);
+         int mode=intent.getIntExtra(TAG_COPY_OPEN_MODE, 0);
+         totalSize = getTotalBytes(files);
+-        mNotifyManager =
+-                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
++        totalSourceFiles = files.size();
++        progressHandler = new ProgressHandler(totalSourceFiles, totalSize);
++        mNotifyManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+         b.putInt(TAG_COPY_START_ID, startId);
+         Intent notificationIntent = new Intent(this, MainActivity.class);
+         notificationIntent.setAction(Intent.ACTION_MAIN);
+@@ -115,7 +116,7 @@ public class CopyService extends Service {
+         b.putString(TAG_COPY_TARGET, targetPath);
+         b.putInt(TAG_COPY_OPEN_MODE, mode);
+         b.putParcelableArrayList(TAG_COPY_SOURCES, files);
+-        hash.put(startId, true);
++        //hash.put(startId, true);
+ 
+         DataPackage intent1 = new DataPackage();
+         intent1.setName(files.get(0).getName());
+@@ -130,7 +131,7 @@ public class CopyService extends Service {
+ 
+         intent1.setMove(intent.getBooleanExtra(TAG_COPY_MOVE, false));
+         intent1.setCompleted(false);
+-        dataPackages.add(intent1);
++        putDataPackage(intent1);
+ 
+         //going async
+         new DoInBackground().execute(b);
+@@ -139,8 +140,6 @@ public class CopyService extends Service {
+         return START_STICKY;
+     }
+ 
+-
+-
+     long getTotalBytes(final ArrayList<BaseFile> files) {
+         long totalBytes = 0l;
+         try {
+@@ -178,34 +177,24 @@ public class CopyService extends Service {
+             copy=new Copy();
+             copy.execute(id, sourceFiles, targetPath, move,
+                     OpenMode.getOpenMode(p1[0].getInt(TAG_COPY_OPEN_MODE)));
+-
+-            // TODO: Implement this method
+             return id;
+         }
+ 
+         @Override
+         public void onPostExecute(Integer b) {
+-            publishResults(b, "", totalSourceFiles, totalSourceFiles, totalSize, totalSize, 0, true, move);
+-            generateNotification(copy.failedFOps,move);
++
++            //  publishResults(b, "", totalSourceFiles, totalSourceFiles, totalSize, totalSize, 0, true, move);
++            generateNotification(copy.failedFOps, move);
+             Intent intent = new Intent("loadlist");
+             sendBroadcast(intent);
+-            hash.put(b,false);
+-            boolean stop=true;
+-            for(int a:hash.keySet()){
+-                if(hash.get(a))stop=false;
+-            }
+-            if(!stop) stopSelf(b);
+-            else stopSelf();
+-
++            stopSelf();
+         }
+ 
+         class Copy {
+ 
+             ArrayList<HFile> failedFOps;
+             ArrayList<BaseFile> toDelete;
+-            boolean copy_successful;
+             public Copy() {
+-                copy_successful=true;
+                 failedFOps=new ArrayList<>();
+                 toDelete=new ArrayList<>();
+             }
+@@ -244,12 +233,9 @@ public class CopyService extends Service {
+             public void execute(final int id, final ArrayList<BaseFile> sourceFiles, final String targetPath,
+                                 final boolean move,OpenMode mode) {
+                 if (checkFolder((targetPath), c) == 1) {
+-                    getTotalBytes(sourceFiles);
+ 
+-                    totalSourceFiles = sourceFiles.size();
+-                    final ProgressHandler progressHandler=new ProgressHandler(totalSourceFiles, totalSize);
+                     GenericCopyThread copyThread = new GenericCopyThread(c);
+-                    CopyWatcherUtil watcherUtil = new CopyWatcherUtil(progressHandler, totalSize);
++                    ServiceWatcherUtil watcherUtil = new ServiceWatcherUtil(progressHandler, totalSize);
+ 
+                     progressHandler.setProgressListener(new ProgressHandler.ProgressListener() {
+ 
+@@ -269,9 +255,10 @@ public class CopyService extends Service {
+                         try {
+ 
+                             HFile hFile=new HFile(mode,targetPath, sourceFiles.get(i).getName(),f1.isDirectory());
+-                            if (hash.get(id)){
++                            if (!progressHandler.getCancelled()){
+ 
+-                                if(!f1.isSmb() && !new File(sourceFiles.get(i).getPath()).canRead() && rootmode){
++                                if(!f1.isSmb() && !new File(sourceFiles.get(i).getPath()).canRead()
++                                        && BaseActivity.rootMode){
+                                     copyRoot(f1, hFile, move);
+                                     continue;
+                                 }
+@@ -300,7 +287,7 @@ public class CopyService extends Service {
+                         e.printStackTrace();
+                     }
+ 
+-                } else if (rootmode) {
++                } else if (BaseActivity.rootMode) {
+                     for (int i = 0; i < sourceFiles.size(); i++) {
+                         HFile hFile=new HFile(mode,targetPath, sourceFiles.get(i).getName(),sourceFiles.get(i).isDirectory());
+                         copyRoot(sourceFiles.get(i), hFile, move);
+@@ -316,7 +303,8 @@ public class CopyService extends Service {
+                 }
+ 
+                 // making sure to delete files after copy operation is done
+-                if (move) {
++                // and not if the copy was cancelled
++                if (move && !progressHandler.getCancelled()) {
+                     ArrayList<BaseFile> toDelete=new ArrayList<>();
+                     for(BaseFile a:sourceFiles){
+                         if(!failedFOps.contains(a))
+@@ -325,6 +313,7 @@ public class CopyService extends Service {
+                     new DeleteTask(getContentResolver(), c).execute((toDelete));
+                 }
+             }
++
+             void copyRoot(BaseFile sourceFile, HFile targetFile, boolean move){
+ 
+                 try {
+@@ -342,11 +331,11 @@ public class CopyService extends Service {
+             private void copyFiles(final BaseFile sourceFile, final HFile targetFile,
+                                    GenericCopyThread copyThread,
+                                    ProgressHandler progressHandler,
+-                                   CopyWatcherUtil watcherUtil,
++                                   ServiceWatcherUtil watcherUtil,
+                                    final int id) throws IOException {
+                 Log.e("Copy",sourceFile.getPath());
+                 if (sourceFile.isDirectory()) {
+-                    if(!hash.get(id))return;
++                    if(progressHandler.getCancelled())return;
+ 
+                     if (!targetFile.exists()) targetFile.mkdir(c);
+ 
+@@ -356,23 +345,21 @@ public class CopyService extends Service {
+                     if(!Operations.isFileNameValid(sourceFile.getName())
+                             || Operations.isCopyLoopPossible(sourceFile, targetFile)){
+                         failedFOps.add(sourceFile);
+-                        copy_successful=false;
+                         return;
+                     }
+                     targetFile.setLastModified(sourceFile.lastModified());
+-                    if(!hash.get(id))return;
++                    if(progressHandler.getCancelled())return;
+                     ArrayList<BaseFile> filePaths = sourceFile.listFiles(false);
+                     for (BaseFile file : filePaths) {
+                         HFile destFile = new HFile(targetFile.getMode(),targetFile.getPath(),
+                                 file.getName(),file.isDirectory());
+                         copyFiles(file, destFile, copyThread, progressHandler, watcherUtil, id);
+                     }
+-                    if(!hash.get(id))return;
++                    if(progressHandler.getCancelled())return;
+                 } else {
+-                    if (!hash.get(id)) return;
++                    if (progressHandler.getCancelled()) return;
+                     if(!Operations.isFileNameValid(sourceFile.getName())){
+                         failedFOps.add(sourceFile);
+-                        copy_successful=false;
+                         return;
+                     }
+ 
+@@ -393,7 +380,6 @@ public class CopyService extends Service {
+                     } catch (InterruptedException e) {
+                         // thread interrupted due to some problem. we must return
+                         failedFOps.add(sourceFile);
+-                        copy_successful = false;
+                     }
+                 }
+             }
+@@ -443,10 +429,11 @@ public class CopyService extends Service {
+     private void publishResults(int id, String fileName, int sourceFiles, int sourceProgress,
+                                 long totalSize, long writtenSize, int speed, boolean isComplete,
+                                 boolean move) {
+-        if (hash.get(id)) {
++        if (!progressHandler.getCancelled()) {
++
+             //notification
+-            float progressPercent = (writtenSize/totalSize)*100;
+-            mBuilder.setProgress(100, (int) progressPercent, false);
++            float progressPercent = ((float) writtenSize/totalSize)*100;
++            mBuilder.setProgress(100, Math.round(progressPercent), false);
+             mBuilder.setOngoing(true);
+             int title = R.string.copying;
+             if (move) title = R.string.moving;
+@@ -456,15 +443,15 @@ public class CopyService extends Service {
+             int id1 = Integer.parseInt("456" + id);
+             mNotifyManager.notify(id1, mBuilder.build());
+             if (writtenSize == totalSize || totalSize == 0) {
+-                mBuilder.setContentTitle("Copy completed");
++                mBuilder.setContentTitle(getString(R.string.copy_complete));
+                 if (move)
+-                    mBuilder.setContentTitle("Move Completed");
++                    mBuilder.setContentTitle(getString(R.string.move_complete));
+                 mBuilder.setContentText("");
+                 mBuilder.setProgress(0, 0, false);
+                 mBuilder.setOngoing(false);
+                 mBuilder.setAutoCancel(true);
+                 mNotifyManager.notify(id1, mBuilder.build());
+-                publishCompletedResult(id, id1);
++                publishCompletedResult(id1);
+             }
+ 
+             //for processviewer
+@@ -481,12 +468,12 @@ public class CopyService extends Service {
+             putDataPackage(intent);
+             if(progressListener!=null){
+                 progressListener.onUpdate(intent);
+-                if(isComplete)progressListener.refresh();
++                if(isComplete) progressListener.refresh();
+             }
+-        } else publishCompletedResult(id, Integer.parseInt("456" + id));
++        } else publishCompletedResult(Integer.parseInt("456" + id));
+     }
+ 
+-    public void publishCompletedResult(int id,int id1){
++    public void publishCompletedResult(int id1){
+         try {
+             mNotifyManager.cancel(id1);
+         } catch (Exception e) {
+@@ -498,7 +485,7 @@ public class CopyService extends Service {
+     // avoid using the method as there is no way to know when we would be returning from command callbacks
+     // rather confirm from the command result itself, inside it's callback
+     boolean checkFiles(HFile hFile1,HFile hFile2) throws RootNotPermittedException {
+-        if(RootHelper.isDirectory(hFile1.getPath(),rootmode,5))
++        if(RootHelper.isDirectory(hFile1.getPath(), BaseActivity.rootMode, 5))
+         {
+             if(RootHelper.fileExists(hFile2.getPath()))return false;
+             ArrayList<BaseFile> baseFiles=RootHelper.getFilesList(hFile1.getPath(),true,true,null);
+@@ -545,7 +532,8 @@ public class CopyService extends Service {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             //cancel operation
+-            hash.put(intent.getIntExtra("id", 1), false);
++            //hash.put(intent.getIntExtra("id", 1), false);
++            progressHandler.setCancelled(true);
+         }
+     };
+ 
+@@ -575,7 +563,7 @@ public class CopyService extends Service {
+      * Returns the {@link #dataPackages} list which contains
+      * data to be transferred to {@link com.amaze.filemanager.fragments.ProcessViewer}
+      * Method call is synchronized so as to avoid modifying the list
+-     * by {@link CopyWatcherUtil#handlerThread} while {@link MainActivity#runOnUiThread(Runnable)}
++     * by {@link ServiceWatcherUtil#handlerThread} while {@link MainActivity#runOnUiThread(Runnable)}
+      * is executing the callbacks in {@link com.amaze.filemanager.fragments.ProcessViewer}
+      * @return
+      */
+@@ -586,7 +574,7 @@ public class CopyService extends Service {
+     /**
+      * Puts a {@link DataPackage} into a list
+      * Method call is synchronized so as to avoid modifying the list
+-     * by {@link CopyWatcherUtil#handlerThread} while {@link MainActivity#runOnUiThread(Runnable)}
++     * by {@link ServiceWatcherUtil#handlerThread} while {@link MainActivity#runOnUiThread(Runnable)}
+      * is executing the callbacks in {@link com.amaze.filemanager.fragments.ProcessViewer}
+      * @param dataPackage
+      */
+diff --git a/src/main/java/com/amaze/filemanager/services/ProgressHandler.java b/src/main/java/com/amaze/filemanager/services/ProgressHandler.java
+index 971a2ddc5..8f43c26dd 100644
+--- a/src/main/java/com/amaze/filemanager/services/ProgressHandler.java
++++ b/src/main/java/com/amaze/filemanager/services/ProgressHandler.java
+@@ -29,6 +29,9 @@ public class ProgressHandler {
+     // current copy speed (bytes copied in 1000ms time)
+     int speedRaw = 0;
+ 
++    // boolean manages the lifecycle of service and whether it should be canceled
++    private boolean isCancelled = false;
++
+     // callback interface to interact with process viewer fragment and notification
+     ProgressListener progressListener;
+ 
+@@ -67,6 +70,14 @@ public class ProgressHandler {
+         this.sourceFilesCopied = sourceFilesCopied;
+     }
+ 
++    public synchronized void setCancelled(boolean isCancelled) {
++        this.isCancelled = isCancelled;
++    }
++
++    public synchronized boolean getCancelled() {
++        return this.isCancelled;
++    }
++
+     public void setProgressListener(ProgressListener progressListener) {
+         this.progressListener = progressListener;
+     }
+diff --git a/src/main/java/com/amaze/filemanager/services/asynctasks/CopyFileCheck.java b/src/main/java/com/amaze/filemanager/services/asynctasks/CopyFileCheck.java
+index aa425312e..e711f68d3 100644
+--- a/src/main/java/com/amaze/filemanager/services/asynctasks/CopyFileCheck.java
++++ b/src/main/java/com/amaze/filemanager/services/asynctasks/CopyFileCheck.java
+@@ -12,18 +12,17 @@ import android.widget.Toast;
+ 
+ import com.afollestad.materialdialogs.DialogAction;
+ import com.afollestad.materialdialogs.MaterialDialog;
+-import com.afollestad.materialdialogs.Theme;
+ import com.amaze.filemanager.R;
+ import com.amaze.filemanager.activities.BaseActivity;
+ import com.amaze.filemanager.activities.MainActivity;
++import com.amaze.filemanager.filesystem.BaseFile;
++import com.amaze.filemanager.filesystem.HFile;
+ import com.amaze.filemanager.fragments.Main;
+ import com.amaze.filemanager.services.CopyService;
+-import com.amaze.filemanager.filesystem.BaseFile;
+ import com.amaze.filemanager.utils.DataUtils;
+ import com.amaze.filemanager.utils.Futils;
+-import com.amaze.filemanager.filesystem.HFile;
+ import com.amaze.filemanager.utils.OpenMode;
+-import com.amaze.filemanager.utils.theme.AppTheme;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
+ 
+ import java.io.File;
+ import java.util.ArrayList;
+@@ -113,7 +112,7 @@ public class CopyFileCheck extends AsyncTask<ArrayList<BaseFile>, String, ArrayL
+                         intent.putParcelableArrayListExtra("FILE_PATHS",ab);
+                         intent.putExtra("COPY_DIRECTORY", path);
+                         intent.putExtra("MODE",openMode);
+-                        mainActivity.startService(intent);
++                        ServiceWatcherUtil.runService(mainActivity, intent);
+                     } else {
+ 
+                         new MoveFiles(ab, ma, ma.getActivity(),openMode).executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, path);
+diff --git a/src/main/java/com/amaze/filemanager/services/asynctasks/MoveFiles.java b/src/main/java/com/amaze/filemanager/services/asynctasks/MoveFiles.java
+index 717c9f0d6..c41caa8f6 100644
+--- a/src/main/java/com/amaze/filemanager/services/asynctasks/MoveFiles.java
++++ b/src/main/java/com/amaze/filemanager/services/asynctasks/MoveFiles.java
+@@ -29,6 +29,7 @@ import com.amaze.filemanager.services.CopyService;
+ import com.amaze.filemanager.filesystem.BaseFile;
+ import com.amaze.filemanager.utils.Futils;
+ import com.amaze.filemanager.utils.OpenMode;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
+ 
+ import java.io.File;
+ import java.util.ArrayList;
+@@ -66,11 +67,11 @@ public class MoveFiles extends AsyncTask<String,Void,Boolean> {
+     public void onPostExecute(Boolean b){
+         if(b ){
+             if(ma!=null)if(ma.CURRENT_PATH.equals(path))ma.updateList();
+-                for(BaseFile f:files) {
+-                    Futils.scanFile(f.getPath(), context);
+-                    Futils.scanFile(path + "/" + f.getName(), context);
++            for(BaseFile f:files) {
++                Futils.scanFile(f.getPath(), context);
++                Futils.scanFile(path + "/" + f.getName(), context);
+ 
+-                }
++            }
+         }
+         else if(!b){
+             Intent intent = new Intent(context, CopyService.class);
+@@ -78,6 +79,8 @@ public class MoveFiles extends AsyncTask<String,Void,Boolean> {
+             intent.putExtra("COPY_DIRECTORY", path);
+             intent.putExtra("move",true);
+             intent.putExtra("MODE",mode);
+-            context.startService(intent);}
++
++            ServiceWatcherUtil.runService(context, intent);
++        }
+     }
+ }
+diff --git a/src/main/java/com/amaze/filemanager/utils/CopyWatcherUtil.java b/src/main/java/com/amaze/filemanager/utils/CopyWatcherUtil.java
+deleted file mode 100644
+index e726bd146..000000000
+--- a/src/main/java/com/amaze/filemanager/utils/CopyWatcherUtil.java
++++ /dev/null
+@@ -1,67 +0,0 @@
+-package com.amaze.filemanager.utils;
+-
+-/**
+- * Created by vishal on 4/1/17.
+- * Inner class that watches over the copy progress and publish progress after certain
+- * interval. We wouldn't want to interrupt copy loops by writing too much callbacks, and thus
+- * possibly delaying the copy process.
+- */
+-
+-
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-
+-import com.amaze.filemanager.services.ProgressHandler;
+-
+-public class CopyWatcherUtil {
+-
+-    Handler handler;
+-    HandlerThread handlerThread;
+-    ProgressHandler progressHandler;
+-    Long totalSize;
+-
+-    // position of byte in total byte size to be copied
+-    public static long POSITION = 0L;
+-
+-    /**
+-     *
+-     * @param progressHandler to publish progress after certain delay
+-     * @param totalSize total size of copy operation on files, so we know when to halt the watcher
+-     */
+-    public CopyWatcherUtil(ProgressHandler progressHandler, long totalSize) {
+-        this.progressHandler = progressHandler;
+-        this.totalSize = totalSize;
+-        POSITION= 0l;
+-
+-        handlerThread = new HandlerThread("copy_watcher");
+-        handlerThread.start();
+-        handler = new Handler(handlerThread.getLooper());
+-    }
+-
+-    /**
+-     * Watches over the copy progress without interrupting the worker
+-     * {@link GenericCopyThread#thread} thread.
+-     * Method frees up all the resources and worker threads after copy operation completes.
+-     */
+-    public void watch() {
+-        final Runnable runnable = new Runnable() {
+-            @Override
+-            public void run() {
+-
+-                // we don't have a file name yet, wait for copy to start
+-                if (progressHandler.getFileName()==null) handler.postDelayed(this, 1000);
+-
+-                progressHandler.addWrittenLength(POSITION);
+-                if (POSITION == totalSize) {
+-                    // copy complete, free up resources
+-                    handler.removeCallbacks(this);
+-                    handlerThread.quit();
+-                    return;
+-                }
+-                handler.postDelayed(this, 1000);
+-            }
+-        };
+-
+-        handler.postDelayed(runnable, 1000);
+-    }
+-}
+diff --git a/src/main/java/com/amaze/filemanager/utils/GenericCopyThread.java b/src/main/java/com/amaze/filemanager/utils/GenericCopyThread.java
+index 227c29f8c..cc931307f 100644
+--- a/src/main/java/com/amaze/filemanager/utils/GenericCopyThread.java
++++ b/src/main/java/com/amaze/filemanager/utils/GenericCopyThread.java
+@@ -142,7 +142,7 @@ public class GenericCopyThread implements Runnable {
+                     byteBuffer.put(buffer[i]);
+                 }
+ 
+-                CopyWatcherUtil.POSITION+=count;
++                ServiceWatcherUtil.POSITION+=count;
+             }
+         } while (count!=-1);
+     }
+@@ -155,7 +155,7 @@ public class GenericCopyThread implements Runnable {
+         while (inByteBuffer.hasRemaining()) {
+ 
+             outByteBuffer.put(inByteBuffer.get());
+-            CopyWatcherUtil.POSITION++;
++            ServiceWatcherUtil.POSITION++;
+         }
+     }
+ 
+@@ -170,7 +170,7 @@ public class GenericCopyThread implements Runnable {
+                     bufferedOutputStream.write(buffer[i]);
+                 }
+ 
+-                CopyWatcherUtil.POSITION+=count;
++                ServiceWatcherUtil.POSITION+=count;
+             }
+         } while (count!=-1);
+         bufferedOutputStream.flush();
+@@ -191,7 +191,7 @@ public class GenericCopyThread implements Runnable {
+                 for (int i=0; i<length; i++) {
+                     bufferedOutputStream.write(buffer[i]);
+                 }
+-                CopyWatcherUtil.POSITION+=length;
++                ServiceWatcherUtil.POSITION+=length;
+             }
+         } while (length==0);
+         bufferedOutputStream.flush();
+diff --git a/src/main/java/com/amaze/filemanager/utils/PreferenceUtils.java b/src/main/java/com/amaze/filemanager/utils/PreferenceUtils.java
+index 9917da8b1..3ba307479 100644
+--- a/src/main/java/com/amaze/filemanager/utils/PreferenceUtils.java
++++ b/src/main/java/com/amaze/filemanager/utils/PreferenceUtils.java
+@@ -16,6 +16,7 @@ public class PreferenceUtils {
+     public static final String KEY_ACCENT = "accent_skin";
+     public static final String KEY_ICON_SKIN = "icon_skin";
+     public static final String KEY_CURRENT_TAB = "current_tab";
++    public static final String KEY_ROOT = "rootmode";
+ 
+     public static final int DEFAULT_PRIMARY = 4;
+     public static final int DEFAULT_ACCENT = 1;
+diff --git a/src/main/java/com/amaze/filemanager/utils/ServiceWatcherUtil.java b/src/main/java/com/amaze/filemanager/utils/ServiceWatcherUtil.java
+new file mode 100644
+index 000000000..46aa08e3a
+--- /dev/null
++++ b/src/main/java/com/amaze/filemanager/utils/ServiceWatcherUtil.java
+@@ -0,0 +1,124 @@
++package com.amaze.filemanager.utils;
++
++/**
++ * Created by vishal on 4/1/17.
++ * Inner class that watches over the copy progress and publish progress after certain
++ * interval. We wouldn't want to interrupt copy loops by writing too much callbacks, and thus
++ * possibly delaying the copy process.
++ */
++
++
++import android.app.NotificationManager;
++import android.content.Context;
++import android.content.Intent;
++import android.os.Handler;
++import android.os.HandlerThread;
++import android.support.v4.app.NotificationCompat;
++
++import com.amaze.filemanager.R;
++import com.amaze.filemanager.activities.BaseActivity;
++import com.amaze.filemanager.services.ProgressHandler;
++
++public class ServiceWatcherUtil {
++
++    Handler handler;
++    HandlerThread handlerThread;
++    ProgressHandler progressHandler;
++    long totalSize;
++
++    // position of byte in total byte size to be copied
++    public static long POSITION = 0L;
++
++    /**
++     *
++     * @param progressHandler to publish progress after certain delay
++     * @param totalSize total size of copy operation on files, so we know when to halt the watcher
++     */
++    public ServiceWatcherUtil(ProgressHandler progressHandler, long totalSize) {
++        this.progressHandler = progressHandler;
++        this.totalSize = totalSize;
++        POSITION = 0l;
++
++        handlerThread = new HandlerThread("copy_watcher");
++        handlerThread.start();
++        handler = new Handler(handlerThread.getLooper());
++    }
++
++    /**
++     * Watches over the copy progress without interrupting the worker
++     * {@link GenericCopyThread#thread} thread.
++     * Method frees up all the resources and worker threads after copy operation completes.
++     */
++    public void watch() {
++        final Runnable runnable = new Runnable() {
++            @Override
++            public void run() {
++
++                // we don't have a file name yet, wait for copy to start
++                if (progressHandler.getFileName()==null) handler.postDelayed(this, 1000);
++
++                progressHandler.addWrittenLength(POSITION);
++                if (POSITION == totalSize || progressHandler.getCancelled()) {
++                    // copy complete, free up resources
++                    // we've finished the work or copy cancelled
++                    handler.removeCallbacks(this);
++                    handlerThread.quit();
++                    return;
++                }
++                handler.postDelayed(this, 1000);
++            }
++        };
++
++        handler.postDelayed(runnable, 1000);
++    }
++
++    /**
++     * Convenient method to check whether another service is working in background
++     * If a service is found working (by checking and maintaining state of {@link BaseActivity#IS_BOUND}
++     * which is further bound to service using {@link android.content.ServiceConnection} for it's state)
++     * then we wait for an interval of 5 secs, before checking on it again
++     *
++     * @param context
++     * @param intent
++     */
++    public static void runService(final Context context, final Intent intent) {
++
++        if (!BaseActivity.IS_BOUND) {
++            // we're not bound, no need to proceed further and waste up resources
++            context.startService(intent);
++            return;
++        }
++
++        final HandlerThread handlerThread = new HandlerThread("service_watcher");
++        handlerThread.start();
++        final Handler handler = new Handler(handlerThread.getLooper());
++        final NotificationManager notificationManager = (NotificationManager)
++                context.getSystemService(Context.NOTIFICATION_SERVICE);
++        NotificationCompat.Builder mBuilder=new NotificationCompat.Builder(context);
++        mBuilder.setContentTitle(context.getString(R.string.waiting_title));
++        mBuilder.setContentText(context.getString(R.string.waiting_content));
++        mBuilder.setAutoCancel(false);
++        mBuilder.setSmallIcon(R.drawable.ic_content_copy_white_36dp);
++        mBuilder.setProgress(0, 0, true);
++        notificationManager.notify(1, mBuilder.build());
++
++        Runnable runnable = new Runnable() {
++            @Override
++            public void run() {
++                if (!BaseActivity.IS_BOUND) {
++
++                    // service is been finished, let's start this one
++                    // and free up resources before returning from here
++                    context.startService(intent);
++                    notificationManager.cancel(1);
++                    handler.removeCallbacks(this);
++                    handlerThread.quit();
++                    return;
++                }
++                handler.postDelayed(this, 5000);
++            }
++        };
++
++        handler.postDelayed(runnable, 5000);
++    }
++}
+diff --git a/src/play/java/com/amaze/filemanager/activities/MainActivity.java b/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+index f3003db5e..c24a05a2f 100644
+--- a/src/play/java/com/amaze/filemanager/activities/MainActivity.java
++++ b/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+@@ -127,6 +127,7 @@ import com.amaze.filemanager.utils.HistoryManager;
+ import com.amaze.filemanager.utils.MainActivityHelper;
+ import com.amaze.filemanager.utils.OpenMode;
+ import com.amaze.filemanager.utils.PreferenceUtils;
++import com.amaze.filemanager.utils.ServiceWatcherUtil;
+ import com.amaze.filemanager.utils.color.ColorUsage;
+ import com.amaze.filemanager.utils.theme.AppTheme;
+ import com.android.volley.VolleyError;
+@@ -1067,7 +1068,8 @@ public class MainActivity extends BaseActivity implements
+                         intent.putParcelableArrayListExtra("FILE_PATHS",arrayList);
+                         intent.putExtra("COPY_DIRECTORY", path);
+                         intent.putExtra("MODE",ma.openMode);
+-                        mainActivity.startService(intent);
++
++                        ServiceWatcherUtil.runService(mainActivity, intent);
+                     } else if (MOVE_PATH!=null){
+ 
+                         arrayList = MOVE_PATH;

@@ -1,0 +1,1491 @@
+package com.drhoffmannstoolsdataloggerreader;
+
+/* USBDataloggerreaderActivity.java (c) 2011-2020 by Markus Hoffmann
+ *
+ * This file is part of USB-Dataloggerreader for Android, (c) by Markus Hoffmann 2011-2020
+ * ============================================================================
+ * USB-Dataloggerreader for Android is free software and comes with 
+ * NO WARRANTY - read the file COPYING for details.
+ */ 
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
+
+import android.app.ActionBar;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.AlertDialog.Builder;
+import android.app.Dialog;
+import android.content.Context;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager.NameNotFoundException;
+import android.graphics.Color;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.os.Bundle;
+import android.os.Environment;
+import android.os.Handler;
+import android.preference.PreferenceManager;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.util.Log;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.View.OnClickListener;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.DatePicker;
+import android.widget.DatePicker.OnDateChangedListener;
+import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.TextView;
+import android.widget.TimePicker;
+import android.widget.TimePicker.OnTimeChangedListener;
+import android.widget.Toast;
+
+/*
+ * vdl120: The Voltcraft DL-120TH tool + eltuxusb (mcclibhid)
+ *
+ *   + write configuration
+ *   + read configuration
+ *   + read log data
+ *   + store log data for plotting
+ *
+ * 
+ * */
+
+
+public class USBDataloggerreaderActivity extends Activity {
+	private static final String TAG = "USBDL";
+	private static boolean usesystime=true;
+	private static boolean do_autoreadout=false;
+	private Button getconfig,writeconfig,savedata;
+	private Button getdata;
+
+	private EditText numconfig,logname,minterval,temphigh,templow,rhhigh,rhlow,presshigh,presslow,delay;
+	private TextView status,numrec,manzdata,mmessage,presstext,rhtext,blinktext;
+	private static OLEDView valuedisplay;
+	private RadioButton celsius,fahrenheit,a10,a20,a30;
+	private RadioGroup radioGroupLCD;
+	private CheckBox alarm,autolog,systime,rollover;
+	private ProgressBar progress1,progress2;
+	private DatePicker datepicker;
+	private TimePicker timepicker;
+	private static PlotView plot;
+	private LinearLayout extrafunctions;
+
+	private static int mProgressStatus = 0;
+	private int msysstatus;
+	private String mfilename;
+
+	private static String mEmailBody;
+
+	private static String mSysMessage;
+	private static int msysstatus2;
+    
+	private byte[] confmessagebuf;
+
+	final static Handler h=new Handler();
+	final static Logger logger=new Logger();
+	final static LoggerData data=logger.data;
+	final static LoggerConfig config=logger.config;
+
+
+        public static String csvsplitter;
+
+	@Override
+	public void onCreate(Bundle savedInstanceState) {
+	    ImageButton shot,batshot,clear;
+
+		super.onCreate(savedInstanceState);
+		setContentView(R.layout.launcher);
+		/* Disable Home Button while on the home screen:
+		 */
+		ActionBar actionBar = getActionBar();
+		//  actionBar.setHomeButtonEnabled(false);
+		actionBar.setDisplayHomeAsUpEnabled(false);
+
+		logger.UsbManager = (UsbManager)getSystemService(Context.USB_SERVICE);
+		logger.mActivity=this;
+
+		getconfig = (Button)findViewById(R.id.getconfig);
+		getdata = (Button)findViewById(R.id.getdata);
+		savedata = (Button)findViewById(R.id.savedata);
+		shot = (ImageButton)findViewById(R.id.shot);
+		batshot = (ImageButton)findViewById(R.id.batshot);
+		clear = (ImageButton)findViewById(R.id.clear);
+
+		writeconfig = (Button)findViewById(R.id.writeconfig);
+		status=(TextView)findViewById(R.id.status);
+		numconfig=(EditText)findViewById(R.id.numconfig);
+		logname=(EditText)findViewById(R.id.logname);
+		minterval=(EditText)findViewById(R.id.interval);
+		templow=(EditText)findViewById(R.id.templow);
+		temphigh=(EditText)findViewById(R.id.temphigh);
+		rhlow=(EditText)findViewById(R.id.rhlow);
+		rhhigh=(EditText)findViewById(R.id.rhhigh);
+		presslow=(EditText)findViewById(R.id.plow);
+		presshigh=(EditText)findViewById(R.id.phigh);
+		delay=(EditText)findViewById(R.id.delay);
+
+		numrec=(TextView)findViewById(R.id.numrec);
+		manzdata=(TextView)findViewById(R.id.anzdata);
+		mmessage=(TextView)findViewById(R.id.message);
+		presstext=(TextView)findViewById(R.id.presstext);
+		rhtext=(TextView)findViewById(R.id.rhtext);
+		blinktext=(TextView)findViewById(R.id.blinktext);
+		valuedisplay=(OLEDView)findViewById(R.id.valuedisplay);
+
+		celsius=(RadioButton)findViewById(R.id.celsius);
+		fahrenheit=(RadioButton)findViewById(R.id.fahrenheit);
+		a10=(RadioButton)findViewById(R.id.led10);
+		a20=(RadioButton)findViewById(R.id.led20);
+		a30=(RadioButton)findViewById(R.id.led30);
+		radioGroupLCD=(RadioGroup)findViewById(R.id.radioGroupLCD);
+		alarm=(CheckBox)findViewById(R.id.alarm);  
+		autolog=(CheckBox)findViewById(R.id.autolog); 
+		systime=(CheckBox)findViewById(R.id.systime); 
+		rollover=(CheckBox)findViewById(R.id.rollover); 
+		extrafunctions=(LinearLayout)findViewById(R.id.extrafunctions); 
+
+		progress1=(ProgressBar)findViewById(R.id.progress1);  
+		progress2=(ProgressBar)findViewById(R.id.progress2);  
+
+		datepicker=(DatePicker)findViewById(R.id.datepicker);  
+		timepicker=(TimePicker)findViewById(R.id.timepicker);  
+		plot=(PlotView) findViewById(R.id.plot); 
+		plot.setXlabel(getResources().getString(R.string.word_samples));
+		valuedisplay.setTextSize(40);
+		valuedisplay.setTextColor(4);
+		systime.setChecked(usesystime);
+
+		datepicker.setEnabled(!usesystime);
+	//	if(usesystime) datepicker.setVisibility(View.GONE);
+	//	else datepicker.setVisibility(View.VISIBLE);
+
+		timepicker.setEnabled(!usesystime);
+		delay.setEnabled(!usesystime);
+
+		/* Für den USBDetector-Broadcast-receiver teilen wir das aktuelle 
+		 * Activity Objekt mit, damit er uns zurueckrufen kann. */
+		USBDetector.god=this;
+		
+		datepicker.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) { SetDate_dialog(USBDetector.god,datepicker);}
+		});
+		timepicker.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) { SetTime_dialog(USBDetector.god,timepicker);}
+		});
+		
+
+
+		getconfig.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) { getconfig();}
+		});
+		systime.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) {
+				usesystime=systime.isChecked();
+				Log.d(TAG,"systime: "+usesystime);
+				datepicker.setEnabled(!usesystime);
+			//	if(usesystime) datepicker.setVisibility(View.GONE);
+			//	else datepicker.setVisibility(View.VISIBLE);
+				timepicker.setEnabled(!usesystime);
+				delay.setEnabled(!usesystime);
+				if(!usesystime) {
+					//aktuelle Zeit reinschreiben und delay aktualisieren.
+					updateTimeoffset();
+				}
+			}
+		});
+		clear.setOnClickListener(new OnClickListener() {	public void onClick(View v) { 
+			showDialog(9);
+		}});
+		shot.setOnClickListener(new OnClickListener() {	public void onClick(View v) { 
+			Lascar.read_actual_value(logger);
+			// make a pause....
+			getconfig();  }});
+		batshot.setOnClickListener(new OnClickListener() {	public void onClick(View v) { 
+			valuedisplay.setText("Bat:"+(float)Math.round(3.6*Lascar.read_battery_value(logger)/700*1000)/1000.0+"V");
+			valuedisplay.invalidate();
+		}});
+
+		writeconfig.setOnClickListener(new OnClickListener() {	public void onClick(View v) {sendConfig();}});
+		getdata.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) { 
+				// Start lengthy operation in a background thread
+				new Thread(new Runnable() {
+					public void run() {
+						getdata(); 
+					}
+				}).start();
+			}
+		});
+		savedata.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) { 
+					new Thread(new Runnable() {
+						public void run() {
+							savedata(); 
+						}
+					}).start();
+				
+			}	
+		});
+		progress2.setVisibility(View.GONE);
+		savedata.setEnabled(false);
+		timepicker.setIs24HourView(true);
+		presshigh.setVisibility(View.GONE);
+		presslow.setVisibility(View.GONE);
+		presstext.setVisibility(View.GONE);
+		extrafunctions.setVisibility(View.GONE);
+
+		timepicker.setOnTimeChangedListener(new OnTimeChangedListener() {
+			public void onTimeChanged(TimePicker arg0, int arg1, int arg2) {
+				Log.d(TAG,"You selected "+arg0.getCurrentHour()+":"+arg0.getCurrentMinute());
+				updateTimeoffset();
+			}
+		}
+				);
+		Calendar cal=Calendar.getInstance();
+		Date dt = new Date();
+
+		cal.set(dt.getYear()+1900, dt.getMonth(),dt.getDate(), dt.getHours(),
+				dt.getMinutes(),dt.getSeconds());
+		timepicker.setCurrentHour(dt.getHours());
+		timepicker.setCurrentMinute(dt.getMinutes());
+		// datepicker.setMinDate(dt.getTime()-24*3600*1000);
+
+		datepicker.init(cal.getTime().getYear()+1900,cal.getTime().getMonth(),cal.getTime().getDay(), 
+				new OnDateChangedListener() {
+
+			@Override
+			public void onDateChanged(DatePicker view, int year,int monthOfYear, int dayOfMonth) {
+				Log.d(TAG,"You selected "+view.getDayOfMonth()+"/"+(view.getMonth()+1)+"/"+view.getYear());
+				updateTimeoffset();
+			}
+		});
+		delay.addTextChangedListener(new TextWatcher() {
+			public void onTextChanged(CharSequence s, int start, int before, int count) {}
+			public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+			public void afterTextChanged(Editable s) {
+				int ds=0;
+				if(s.length()>0) {
+					try {ds=(int)Double.parseDouble(s.toString());}
+					catch (NumberFormatException nfe) {}
+				} 
+				Calendar cal = Calendar.getInstance();
+				Date dt = new Date();
+
+				cal.set(dt.getYear()+1900, dt.getMonth(),dt.getDate(), dt.getHours(),
+						dt.getMinutes(),dt.getSeconds());
+				long ss=cal.getTimeInMillis()/1000;
+				if(ds>0) ss=ss+ds;
+				cal.setTimeInMillis(ss*1000);
+				//timepicker.setCurrentHour(cal.getTime().getHours());
+				//timepicker.setCurrentMinute(cal.getTime().getMinutes());
+				//TODO was machen wir mit den restsekunden zu einer vollen Minute?
+				//datepicker.updateDate(cal.getTime().getYear()+1900, 
+				//		cal.getTime().getMonth(), cal.getTime().getDate());
+			}
+		});
+	}
+
+	public void updateMessage(String s,int n) {
+		msysstatus2=n;
+		mSysMessage=s;
+		h.post(new Runnable() {
+			public void run() {
+				displaymessage(mSysMessage,msysstatus2);
+			}
+		});
+
+	}
+	public void updateStatus(String s,int n) {
+		msysstatus2=n;
+		mSysMessage=s;
+		h.post(new Runnable() {
+			public void run() {
+				displaymessage(mSysMessage,msysstatus2);
+			}
+		});
+
+	}
+
+	public void updateProgress(int i) {
+		mProgressStatus=i;
+		h.post(new Runnable() {
+			public void run() {
+				progress1.setProgress(mProgressStatus);
+				manzdata.setText(""+data.anzdata);
+			}
+		});
+
+	}
+	public void updateStatus(int i) {
+		msysstatus=i;
+		h.post(new Runnable() {
+			public void run() {
+
+				if(msysstatus==Error.OK) displaystatus("OK.",0);
+				else if(msysstatus==Error.ERR) displaymessage("ERROR: transmission timeout.",5);
+				else displaystatus("OK, size="+msysstatus,0);
+			}
+		});
+	}
+
+	@Override
+	public void onPause() {
+		super.onPause();
+		Log.d(TAG,"Pause...");
+	}
+	@Override
+	public void onStop() {
+		super.onStop();
+		Log.d(TAG,"Stop...");
+		if(logger.isconnected) Toast.makeText(getApplicationContext(), getResources().getString(R.string.message_rememberunplug), Toast.LENGTH_LONG).show();
+	}
+	@Override
+	public void onStart() {
+		super.onStart();
+		Log.d(TAG,"Start...");
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+		datepicker.setCalendarViewShown(prefs.getBoolean("show_calendar", true));
+		if(!logger.isconnected) {
+			setdisconnected();
+			logger.checkforUSBdevices();
+			if(logger.isconnected) setconnected();
+		}
+		if(!logger.isconnected) showDialog(1);  /*Show help*/
+	}
+	@Override
+	public void onResume() {
+		super.onResume();
+		Log.d(TAG,"Resume...");
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+		datepicker.setCalendarViewShown(prefs.getBoolean("show_calendar", true));
+
+		/* Wurde Autoreadout eingeschaltet?*/
+		do_autoreadout=prefs.getBoolean("do_autoreadout", false);
+		if(do_autoreadout) {
+			BackgroundService.set_interval(Integer.valueOf(prefs.getString("readoutinterval","60")));
+			BackgroundService.set_uri(prefs.getString("readoutdestination","none://"));
+
+		}
+		/* Wurde der Simulator eingeschaltet?*/
+		boolean na=prefs.getBoolean("simulate", false);
+		if(!na && logger.do_simulate) {
+			Toast.makeText(getBaseContext(), "Action: Logger Simulator detached.", Toast.LENGTH_LONG).show();
+			logger.close();
+			logger.do_simulate=false;
+			setdisconnected();
+		} else if(na) {
+
+			int lt=(int)Double.parseDouble(prefs.getString("select_simumodel", "0"));
+			if(lt!=logger.simulate_type && logger.do_simulate) logger.close();
+			logger.do_simulate=true;
+			logger.simulate_type=lt;
+			logger.checkforUSBdevices();
+			setconnected();
+		}
+		logger.fakeconfigdir=prefs.getBoolean("fakeloggerstorage", false);
+		csvsplitter=prefs.getString("csvsplitter",",");
+		
+		/* Wurde ein Logger bereits an- oder abgesteckt ?*/
+		if(!logger.do_simulate) {
+		  Intent intent = getIntent();
+		  Log.d(TAG, "intent: " + intent);
+		  String action = intent.getAction();
+		  if(UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(action)) {
+		    usb_attached(intent); 
+		  } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+		    usb_detached(intent);
+		  } else if (Intent.ACTION_MEDIA_MOUNTED.equals(action)) {
+		    usb_storage_attached(intent);
+		  } else if (Intent.ACTION_MEDIA_UNMOUNTED.equals(action)) {
+		    usb_storage_detached(intent);
+		  }
+		}
+		
+		/* Jetzt auf jeden Fall nochmal nach MEDIA-Loggern suchen */
+		
+		if(!logger.isconnected) {
+		  logger.search_storage_location();
+		  if(logger.isconnected) setconnected();
+		}
+		
+		/*Die Preferences könnten veraendert worden sein.*/
+		plot.setHistEnable(prefs.getBoolean("histogramkl", false));
+		plot.setEventEnable(prefs.getBoolean("eventkl", false));
+		plot.setLabelEnable(prefs.getBoolean("labelkl", false));
+		printconfig2();
+	}
+
+
+	public void invalidate_config() {
+		savedata.setEnabled(false); /* Config doesnt fit to data, */ 
+		getdata.setEnabled(false);  /* so you must not save it anymore.*/
+		//   isreadconfig=false;
+	}    
+
+	public void displaymessage(String text,int fl) {
+		if(fl==0) mmessage.setTextColor(Color.GREEN);
+		else if(fl==1) mmessage.setTextColor(Color.YELLOW);
+		else if(fl==2) mmessage.setTextColor(Color.YELLOW);
+		else if(fl==3) mmessage.setTextColor(Color.rgb(0xff, 0x7f, 0x00));
+		else if(fl==4) mmessage.setTextColor(Color.MAGENTA);
+		else if(fl==5) mmessage.setTextColor(Color.RED);
+		else if(fl==10) mmessage.setTextColor(Color.rgb(0x00, 0xff, 0xa0));
+		mmessage.setText(text);
+		Log.d(TAG,"Message: "+text);
+	}
+	public void displaystatus(String text,int fl) {
+		if(fl==0) status.setTextColor(Color.GREEN);
+		else if(fl==1) status.setTextColor(Color.YELLOW);
+		else if(fl==2) status.setTextColor(Color.YELLOW);
+		else if(fl==3) status.setTextColor(Color.rgb(0xff, 0x7f, 0x00));
+		else if(fl==4) status.setTextColor(Color.MAGENTA);
+		else if(fl==5) status.setTextColor(Color.RED);
+		else if(fl==10) status.setTextColor(Color.rgb(0x00, 0xff, 0xa0));
+		status.setText(text);
+		Log.d(TAG,"Status: "+text);
+	}
+	/* This can be called whenever a new USB Device was attached... */
+
+	public void usb_attached(Intent intent) {
+	  /*A (new) logger has been connected..*/ 
+	  UsbDevice device=(UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+	  logger.filterdevice(device);
+	              /* TODO */
+	              /* Erzwinge ein neueinlesen der Config, da 
+	               * die Calibration bei Lascar loggern verloren geht.*/
+	  getdata.setEnabled(false);
+	  if(!logger.isconnected) {
+	    setdisconnected();
+	    logger.checkforUSBdevices();
+	    if(logger.isconnected) setconnected();
+	  }	
+	}
+        public void usb_detached(Intent intent) {
+	  UsbDevice device=(UsbDevice) intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+	  if(logger.Device!=null && logger.Device.equals(device)) {
+	    // setDevice(null);
+	    setdisconnected();
+	  }
+        }
+	/* This can be called whenever a new USB DStorage device was attached... */
+	public void usb_storage_attached(Intent intent) {
+	  if(!logger.isconnected) {
+	    displaymessage("MEDIA mount detected...",4);
+	    logger.Path=intent.getDataString();
+	    displaystatus(logger.Path,4);
+	    if(logger.Path!=null) {
+	      setdisconnected();
+	      displaystatus(logger.Path,4);
+	      logger.check_media_logger();
+	      if(logger.isconnected) setconnected();
+	    }
+  	  }
+	}
+	public void usb_storage_detached(Intent intent) {
+	  if(logger.isconnected && logger.protocol==Logger.PROTO_FILE
+	     && logger.Path.equals(intent.getDataString())) {
+	     setdisconnected();
+	  }
+        }
+	
+	
+	
+	
+	public void setconnected() {
+		displaymessage("Device attached. Protocol="+logger.protocol,10);
+		getconfig.setEnabled(true);
+		writeconfig.setEnabled(true);
+
+		getdata.setEnabled(false);
+		logger.isreadconfig=false;
+
+		if(do_autoreadout) {
+			BackgroundService.set_logger(logger);
+			Log.d(TAG,"Start background service ");
+			startService(new Intent(this, BackgroundService.class));
+		}
+	}
+	/* Handle a Device disconnect event... */
+	public void setdisconnected() {
+		displaymessage("Device detached.",3);
+		displaystatus(" - ",10);
+		getdata.setEnabled(false);
+		getconfig.setEnabled(false);
+		writeconfig.setEnabled(false);
+		extrafunctions.setVisibility(View.GONE);
+		logger.close();
+		stopService(new Intent(this, BackgroundService.class));
+		BackgroundService.set_logger(null);
+	}
+
+
+	@Override
+	public void onDestroy() {
+		super.onDestroy();
+		logger.close();
+		Log.d(TAG,"Destroy...");
+	}
+
+	@Override
+	public boolean onCreateOptionsMenu(final Menu menu) {
+		super.onCreateOptionsMenu(menu);
+		MenuInflater inflater = getMenuInflater();
+		inflater.inflate(R.menu.menu, menu);
+		return true;
+	}
+	@Override
+	public boolean onOptionsItemSelected(final MenuItem item) {
+		switch (item.getItemId())  {
+		case R.id.vdl_options_preferences:
+			startActivity(new Intent(this, PreferencesActivity.class));
+			return true;
+		case R.id.vdl_options_loggersettings:
+			startActivity(new Intent(this, LoggerPreferencesActivity.class));
+			return true;
+		case R.id.vdl_options_about:
+			startActivity(new Intent(this, InfoActivity.class));
+			// showDialog(0);
+			return true;
+		case R.id.vdl_options_help:
+			showDialog(1);
+			return true;
+		case R.id.vdl_options_statistics:
+			Dialog dialog = Tools.scrollableDialog(this,getResources().getString(R.string.menu_statistics),logger.getStatistics());
+			dialog.show();
+			return true;              
+		case R.id.vdl_options_finish:
+			finish();
+			return true;
+		case R.id.vdl_options_saveconfig:
+			saveconfig();
+			return true;
+		case R.id.vdl_options_loadconfig:
+			loadconfig();
+			return true;
+		case R.id.vdl_options_plottool:
+			startActivity(new Intent(this, PlottoolActivity.class));
+			return true;
+		case R.id.vdl_options_tabletool:
+			startActivity(new Intent(this, TabletoolActivity.class));
+			return true;
+		default: 
+			return super.onOptionsItemSelected(item);
+		}
+	}
+
+	private static String[] mFileList;
+	private static String mChosenFile;
+
+
+	private void loadFileList(){
+		File mConfigPath= new File(getApplicationContext().getFilesDir().getAbsolutePath());
+
+		if(mConfigPath.exists()){
+			FilenameFilter filter = new FilenameFilter(){
+				public boolean accept(File dir, String filename){
+					File sel = new File(dir, filename);
+					return filename.contains(LoggerConfig.FTYPE_CONFIG) || sel.isDirectory();
+				}
+			};
+			mFileList = mConfigPath.list(filter);
+		} else {
+			Log.d(TAG,"Path not found!");
+			mFileList= new String[0];
+		}
+	}
+
+
+	@Override
+	protected Dialog onCreateDialog(final int id) {
+		Dialog dialog = null;
+		if(id==10) {
+			dialog = Tools.scrollableDialog(this,"",String.format(getResources().getString(R.string.quality_warning),(int)100*data.quality/Math.max(1,data.anzdata)));
+		} else if(id==9) {
+			AlertDialog.Builder builder = new Builder(this);
+			builder.setTitle(getResources().getString(R.string.word_warning));
+			builder.setMessage(getResources().getString(R.string.message_willclear));
+
+			builder.setPositiveButton(getResources().getString(R.string.word_procceed), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					Lascar.erase_data(logger);
+					// make a pause....
+					getconfig(); 
+				} }); 
+			builder.setNeutralButton(getResources().getString(R.string.word_cancel), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					displaymessage("clear canceled.",1);
+
+				} }); 
+			dialog = builder.create();
+			dialog.setCanceledOnTouchOutside(false);
+		}  else if(id==6) {
+			AlertDialog.Builder builder = new Builder(this);
+			builder.setTitle(getResources().getString(R.string.word_warning));
+			builder.setMessage(getResources().getString(R.string.message_notsaved));
+
+			builder.setPositiveButton(getResources().getString(R.string.word_procceed), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					confmessagebuf = build_conf();
+					if(confmessagebuf!=null) realsendconfig();
+				} }); 
+			builder.setNeutralButton(getResources().getString(R.string.word_cancel), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					displaymessage("Send-Config canceled.",1);
+					progress2.setVisibility(View.GONE);
+				} }); 
+			dialog = builder.create();
+			dialog.setCanceledOnTouchOutside(false);
+		} else if(id==5) {
+			AlertDialog.Builder builder = new Builder(this);
+			builder.setTitle(getResources().getString(R.string.word_attention));
+			builder.setMessage(getResources().getString(R.string.message_notread));
+
+			builder.setPositiveButton(getResources().getString(R.string.word_procceed), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					realsendconfig();
+				} }); 
+			builder.setNeutralButton(getResources().getString(R.string.word_cancel), new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					displaymessage("Send-Config canceled.",1);
+					progress2.setVisibility(View.GONE);
+				} }); 
+			dialog = builder.create();
+			dialog.setCanceledOnTouchOutside(false);
+
+		} else  if(id==4) {
+			dialog = Tools.scrollableDialog(this,"",getResources().getString(R.string.hardware_nottested));
+		}  else if(id==3) {
+			dialog = Tools.scrollableDialog(this,"",getResources().getString(R.string.hardware_notsupported));
+		} else if(id==1) {
+			dialog = Tools.scrollableDialog(this,"",getResources().getString(R.string.helpdialog));
+		} else if(id==0) {
+			dialog = Tools.scrollableDialog(this,"",getResources().getString(R.string.aboutdialog)+
+					getResources().getString(R.string.impressum));
+		} else if(id>=1000) {                               /*Allgemeine Logger-Mitteilung*/
+			AlertDialog.Builder builder = new Builder(this);
+			builder.setTitle(getResources().getString(R.string.word_loggermessage));
+			builder.setMessage(config.mglobal_message);
+			builder.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+				public void onClick(DialogInterface dialog, int which) {
+					//           			   confmessagebuf = build_conf();
+					//           			   if(confmessagebuf!=null) realsendconfig();
+				} });  
+			dialog = builder.create();
+			dialog.setCanceledOnTouchOutside(true);
+		}  else {
+			AlertDialog.Builder builder = new Builder(this);
+			builder.setTitle("Select configuration:");
+			if(mFileList == null){
+				dialog = builder.create();
+				return dialog;
+			}
+			builder.setItems(mFileList, new DialogInterface.OnClickListener(){
+				public void onClick(DialogInterface dialog, int which){
+					mChosenFile = mFileList[which];
+					//you can do stuff with the file here too
+					Log.d(TAG,"File chosen: "+mChosenFile);
+					loadconffile(mChosenFile);
+
+
+				}
+			});
+			dialog = builder.show();
+		}       
+		return dialog;
+	}
+
+    
+	/*Zusätzliche Einstellmöglichkeit beim Draufklicken auf den Datepicker*/
+	
+	static void SetDate_dialog(final Context mContext, final DatePicker dp2){
+
+		final Dialog dialog = new Dialog(mContext);
+		dialog.setTitle("Select Date");
+		LinearLayout ll = new LinearLayout(mContext);
+		ll.setOrientation(LinearLayout.VERTICAL);
+		
+		final DatePicker dp = new DatePicker(mContext);
+		dp.setSpinnersShown(true);
+		dp.setCalendarViewShown(false);
+		dp.updateDate(dp2.getYear(), dp2.getMonth(), dp2.getDayOfMonth());
+		
+		ll.addView(dp);
+		Button b1 = new Button(mContext);
+		b1.setText(R.string.word_ok);
+		b1.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) {
+				dp2.updateDate(dp.getYear(), dp.getMonth(), dp.getDayOfMonth());
+				dialog.dismiss();
+			}
+		});        
+		ll.addView(b1);
+		Button b2 = new Button(mContext);
+		b2.setText(R.string.word_cancel);
+		b2.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) {
+				dialog.dismiss();
+			}
+		});
+		ll.addView(b2);
+		dialog.setContentView(ll);        
+		dialog.show();        
+}
+	/*Zusätzliche Einstellmöglichkeit beim Draufklicken auf den Timepicker
+	 * Bei kleinen Bildschirmen im Scrollview geht es sonst nicht, bzw nur durch Doppelklick und mit
+	 * Tastatur.*/
+
+	static void SetTime_dialog(final Context mContext, final TimePicker tp2){
+
+		final Dialog dialog = new Dialog(mContext);
+		dialog.setTitle("Select Time");
+		LinearLayout ll = new LinearLayout(mContext);
+		ll.setOrientation(LinearLayout.VERTICAL);
+		
+		final TimePicker tp = new TimePicker(mContext);
+		tp.setIs24HourView(true);
+		tp.setCurrentHour(tp2.getCurrentHour());
+		tp.setCurrentMinute(tp2.getCurrentMinute());
+		
+		ll.addView(tp);
+		Button b1 = new Button(mContext);
+		b1.setText(R.string.word_ok);
+		b1.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) {	
+  			  tp2.setCurrentHour(tp.getCurrentHour());
+			  tp2.setCurrentMinute(tp.getCurrentMinute());
+			  dialog.dismiss();
+			}
+		});        
+		ll.addView(b1);
+		Button b2 = new Button(mContext);
+		b2.setText(R.string.word_cancel);
+		b2.setOnClickListener(new OnClickListener() {
+			public void onClick(View v) {
+				dialog.dismiss();
+			}
+		});
+		ll.addView(b2);
+		dialog.setContentView(ll);        
+		dialog.show();        
+}
+
+
+
+	private int dialogi=0;
+
+	private void loadconfig() {
+		loadFileList();
+		mChosenFile="";
+		/* When data has not been saved yet, display a warning !*/
+		showDialog(20+dialogi++);
+	}
+	/* Lade Konfigurationsfile.
+	 * Aus irgendeinem Grund gab es einen Absturz, wo wahrscheinlich sep nur 1 lang ist, also kein "="
+	 * in der Zeile gefunden wurde....
+	 * 
+	 * */
+	private void loadconffile(String filename) {
+		int ret=config.load(this, filename);
+		if(ret==-1) displaymessage("ERROR while loading Config from file "+filename+".",5);
+		else        displaymessage("Config loaded from file "+filename+".",0);
+		printconfig2();
+		invalidate_config();
+	}
+
+	private void saveconfig() {  
+		/* When data has not been saved yet, display a warning !*/
+		configfrominput();
+		mfilename=config.getname()+LoggerConfig.FTYPE_CONFIG;
+		config.save(this);
+		h.post(new Runnable() {
+			public void run() {
+				progress1.setProgress(100);
+				Toast.makeText(getApplicationContext(), "File "+mfilename+" saved.", Toast.LENGTH_LONG).show();
+				displaymessage("Config saved to File "+mfilename,0);
+			}
+		});
+	}
+
+
+
+
+	/*Read configuration from device
+	 * */
+	private void getconfig() {
+		progress2.setVisibility(View.VISIBLE);
+		int ret=logger.get_config(); 
+		if(ret==Error.ERR)  displaymessage("ERROR: Get config failed. transmission timeout.",5);
+		else if(ret==Error.ERR_BAD) displaymessage("ERROR: Config bad.",5);
+		else if(ret==Error.OK || ret==Error.WARN_NOTSUP || ret==Error.WARN_NOTTESTED|| ret>0) displaystatus(logger.get_status(),0);
+		if(ret==Error.WARN_NOTSUP) showDialog(3);  /*Notsupported/Not tested Message*/ 
+		else if(ret==Error.WARN_NOTTESTED) showDialog(4);  /*Notsupported/Not tested Message*/ 
+		printconfig2();
+		plot.setXRange(0,config.num_data_rec);
+		if(logger.loggertype==Logger.LTYP_TEMP ||logger.loggertype==Logger.LTYP_TH) plot.setUnit("Temperature ["+(config.temp_is_fahrenheit==0?"°C":"°F")+"]");
+		else if(logger.loggertype==Logger.LTYP_VOLT) plot.setUnit("Voltage ["+config.getunit()+"]");
+		else if(logger.loggertype==Logger.LTYP_CURR) plot.setUnit("Current ["+config.getunit()+"]");
+		else if(logger.loggertype==Logger.LTYP_GAS) plot.setUnit("Gas concentration ["+config.getunit()+"]");
+		plot.setAutoGridX();
+
+		if((config.flag_bits&Lascar.SENSOR_FAIL)==Lascar.SENSOR_FAIL) config.mglobal_message=config.mglobal_message+getResources().getString(R.string.message_sensorerror);
+		if((config.flag_bits&Lascar.BATTERY_FAIL)==Lascar.BATTERY_FAIL)   config.mglobal_message=config.mglobal_message+getResources().getString(R.string.message_batterycritical);
+		else if((config.flag_bits&Lascar.BATTERY_LOW)==Lascar.BATTERY_LOW) config.mglobal_message=config.mglobal_message+getResources().getString(R.string.message_batterylow);
+
+		if(config.num_data_rec>0) getdata.setEnabled(true);
+
+		if(config.mglobal_message.length()>0) showDialog(1000+dialogi++);
+
+		progress2.setVisibility(View.GONE);
+		savedata.setEnabled(false);
+	}
+	/**********************************************************/
+
+
+	private void getdata() {
+		/*Lese die Maximalanzahl Daten nochmal ein, der User könnte Sie geaendert haben*/
+		if(logger.protocol==Logger.PROTO_HID) {
+			config.num_data_conf=(int)Double.parseDouble(numconfig.getText().toString());
+			if(alarm.isChecked()) config.flag_bits2&=~1; else config.flag_bits2|=1;
+		}
+
+		if(config.num_data_rec==0) {
+			data.clear();
+			h.post(new Runnable() {
+				public void run() {
+					displaymessage(getResources().getString(R.string.message_nodata),1); 
+					Toast.makeText(getApplicationContext(), getResources().getString(R.string.message_nodata), Toast.LENGTH_LONG).show();
+				}
+			});
+			return;
+		}
+		h.post(new Runnable() {
+			public void run() {
+				displaymessage(getResources().getString(R.string.message_receiving),0); 
+			}
+		});
+		logger.get_data();
+		data.set_interval(config.interval);
+		if(logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_THP) data.calc_events();
+		h.post(new Runnable() {
+			public void run() { 
+				manzdata.setText(""+data.anzdata);
+				displaymessage(getResources().getString(R.string.message_receivedall),0);
+				savedata.setEnabled(data.anzdata>0);
+				DataContent pdata=new DataContent(data,logger.loggertype);
+				pdata.analyze();
+				plot.setData(pdata);
+				plot.setAutoRange();
+				plot.setAutoGrid();
+
+				plot.postInvalidate();
+				progress1.setProgress(100);
+				if(data.quality>0) {
+					showDialog(10);
+				}
+			}
+		});
+	}
+	private void savedata() {
+		FileOutputStream fos=null;
+		OutputStreamWriter osw=null;
+		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+
+		String endung=prefs.getString("select_fileformat", "dat");
+
+		String filename="VDL"+logger.loggertype+"-"+config.getname()+"-"+
+				String.format(Locale.US,"%04d-%02d-%02d-%02d-%02d",config.time_year,(int)(config.time_mon&0xff),(int)(config.time_mday&0xff),
+						(int)(config.time_hour&0xff),(int)(config.time_min&0xff))+"."+endung;
+
+		h.post(new Runnable() {
+			public void run() {
+				displaymessage(getResources().getString(R.string.message_saving),0);
+			}
+		});
+		boolean append=!prefs.getBoolean("check_a", true);
+		Calendar cal = Calendar.getInstance();
+		cal.set(config.time_year, (int)(config.time_mon&0xff)-1, (int)(config.time_mday&0xff), (int)(config.time_hour&0xff), (int)(config.time_min&0xff), (int)(config.time_sec&0xff));
+		long ss=cal.getTimeInMillis()/1000;
+
+		/* Header für das Datenfile erstellen
+		 * 
+		 * */
+
+		String titlestring="generated by "+getPackageName()+" V."+applicationVersion()+" "+
+				getResources().getString(R.string.word_copyrmeldung);
+		String infostring="["+String.format(Locale.US,"%04d-%02d-%02d %02d:%02d:%02d",config.time_year,(int)(config.time_mon&0xff),
+				(int)(config.time_mday&0xff),(int)(config.time_hour&0xff),(int)(config.time_min&0xff),
+				(int)(config.time_sec&0xff))+"] "+config.num_data_rec+" points @ "+config.interval+" sec.";
+		String loggerinfostring=logger.Manufacturer+"-"+logger.Product+"/"+logger.loggertype+" #"+logger.Serial_id+" blocktype="+config.block_type
+				+" Session: "+config.getname();
+		String calibrationinfostring="A="+data.calibration_Avalue+" B="+data.calibration_Bvalue+" "+
+				"A2="+data.calibration_A2value+" B2="+data.calibration_B2value+" "+
+				"M="+config.calibration_Mvalue+" C="+config.calibration_Cvalue;
+		String separator=" ";
+		if(endung.equalsIgnoreCase("csv")) separator=prefs.getString("select_csvseparator",", ");
+		String legende="UNIX time [s]"+separator;
+		if(logger.loggertype==Logger.LTYP_VOLT) 
+			legende=legende+"Voltage ["+config.getunit()+"]"
+					+separator+separator+separator;
+		else if(logger.loggertype==Logger.LTYP_CURR) 
+			legende=legende+"Current ["+config.getunit()+"]"
+					+separator+separator+separator;
+		else {
+			legende=legende+"Temperature ["+((config.temp_is_fahrenheit&1)>0?"°F":"°C")+"]"+
+					separator;
+			if(logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_THP) {
+				legende=legende+"Humidity [%]"+separator;
+				if(logger.loggertype==Logger.LTYP_THP) legende=legende+"Pressure [hPa]"+separator;
+				else legende=legende+separator;            			
+			} else legende=legende+separator+separator;
+		}
+		legende=legende+"Date"+separator+"Time";
+		/*Weil gewünscht hier noch Taupunkt und Wassergehalt:*/
+		if(logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_THP) {
+			legende=legende+separator+"Dew Point ["+((config.temp_is_fahrenheit&1)>0?"°F":"°C")+"]"+separator+"Water content [g/m³]";
+		}
+
+		String settingsinfo="";
+		String statistics="";
+		String eventstat="";
+		if(logger.loggertype==Logger.LTYP_THP) 
+			settingsinfo+=String.format(Locale.US,"# Pressure limits: [%.2f:%.2f] hPa\n",config.thresh_press_low,config.thresh_press_high);
+		if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH) 
+			settingsinfo+=String.format(Locale.US,"# Humidity limits: [%.1f:%.1f] %%\n",config.thresh_rh_low,config.thresh_rh_high);
+		if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_TEMP) 
+			settingsinfo+=String.format(Locale.US,"# Temperature limits: [%.1f:%.1f] %s\n",config.thresh_temp_low,config.thresh_temp_high,
+					((config.temp_is_fahrenheit&1)>0?"°F":"°C"));
+		if(logger.loggertype==Logger.LTYP_VOLT || logger.loggertype==Logger.LTYP_CURR)
+			settingsinfo+=String.format(Locale.US,"# Limits: [%f:%f] %s\n",config.thresh_temp_low,config.thresh_temp_high,config.getunit());
+
+		if(config.start==1) settingsinfo+=String.format(Locale.US,"# Start delay=%d sec\n",config.time_delay);
+
+		/*Datenstatistik erstellen
+		 * */
+		{
+			int duration=data.anzdata*config.interval;
+			int d=duration;
+			int s=d%60;
+			d=(d-s)/60;
+			int m=d%60;
+			d=(d-m)/60;
+			int h=d%24;
+			d=(d-h)/24;
+
+			statistics=statistics+"# Time range: ["+ss+":"+(ss+duration)+"] "+String.format(Locale.US,"%dd%02d:%02d:%02d",d,h,m,s)+"\n";
+		}
+
+		float tmin=9999,tmax=-9999,t;
+		for(int i=0;i<data.anzdata;i++) {
+			t=data.get_temp(i);
+			tmin=Math.min(tmin,t);
+			tmax=Math.max(tmax,t);
+		}
+		if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_TEMP) 
+			statistics=statistics+String.format(Locale.US,"# Temperature range: [%.1f:%.1f] %s\n",
+					tmin,tmax,((config.temp_is_fahrenheit&1)>0?"°F":"°C"));
+		else if(logger.loggertype==Logger.LTYP_VOLT || logger.loggertype==Logger.LTYP_CURR) 
+			statistics=statistics+String.format(Locale.US,"# Range: [%f:%f] %s\n",tmin,tmax,config.getunit());;
+			if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH) {
+				float rhmin=9999,rhmax=-9999,r;
+				for(int i=0;i<data.anzdata;i++) {
+					r=data.get_rh(i);
+					rhmin=Math.min(rhmin,r);
+					rhmax=Math.max(rhmax,r);
+				} 
+				statistics=statistics+String.format(Locale.US,"# Humidity range:    [%.1f:%.1f] %%\n",
+						rhmin,rhmax);	
+				/* Events zusammenfassen   */
+
+				if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH) {
+					if(data.eventliste!=null && data.eventliste.size()>0) {
+						eventstat+="# Detected "+data.eventliste.size()+" Events:\n";
+						Lueftungsevent a;
+						for(int i=0;i<data.eventliste.size();i++) {
+							a=data.eventliste.get(i);
+							eventstat+="# "+i+": "+Physics.timestamp2datetime_short(ss+config.interval*a.idx)+
+									" for "+Physics.gerundet(config.interval*(a.idx2-a.idx)/60,1)+" minutes.\n";
+						}
+						eventstat+="# \n";
+					}
+				}
+
+			}
+			if(logger.loggertype==Logger.LTYP_THP) {
+				float pmin=9999,pmax=-9999;
+				for(int i=0;i<data.anzdata;i++) {
+					pmin=Math.min(pmin,data.p[i]);
+					pmax=Math.max(pmax,data.p[i]);
+				} 
+				statistics=statistics+String.format(Locale.US,"# Pressure range:    [%.2f:%.2f] hPa\n",
+						logger.raw2p((short)pmin),logger.raw2p((short)pmax));
+
+			}
+			if(eventstat.length()>0) statistics+=eventstat;
+
+			/*Falls Daten als Email gesendet werden, hier die Begleitinformationen zum Anhang
+			 * */
+			mEmailBody=loggerinfostring+"\n"+
+					"fileformat="+prefs.getString("select_fileformat", "dat")+"\n"+
+					infostring+"\n"+settingsinfo+"\n"+statistics+"\n";
+			File file=null;
+			try {
+
+				/*Das ist nur fuer interne Daten...*/
+				//    		fos=openFileOutput(filename,MODE_APPEND|MODE_WORLD_READABLE);
+				// 		osw=new OutputStreamWriter(fos);
+				/* Hier jetzt ein externe von aussen lesbares verzeichnis*/
+				File dirdata=Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+				dirdata.mkdirs();
+
+				file=new File(dirdata,filename);
+				fos=new FileOutputStream(file,append);
+				osw=new OutputStreamWriter(fos);
+
+				if(endung.equalsIgnoreCase("xml")) {
+					osw.write("<?xml version=\"1.0\" encoding=\"utf-8\" ?>\n"+
+							"<metadata>\n");
+					osw.write("  <link href=\"https://play.google.com/store/apps/details?id=com.drhoffmannstoolsdataloggerreader\">\n");
+					osw.write("    <text>"+titlestring+"</text>\n");
+					osw.write("  </link>\n");
+					osw.write("  <time>"+String.format(Locale.US,"%04d-%02d-%02dT%02d:%02d:%02dZ",config.time_year,(int)(config.time_mon&0xff),
+							(int)(config.time_mday&0xff),(int)(config.time_hour&0xff),(int)(config.time_min&0xff),
+							(int)(config.time_sec&0xff))+"</time>\n");
+					osw.write("  <datalogger>\n");
+					osw.write("    <device>"+loggerinfostring+"</device>\n");
+					osw.write("    <Sampletime>"+config.interval+"</Sampletime>\n");
+					osw.write("    <serial>"+logger.Serial_id+"</serial>\n");
+					osw.write("  <calibration>"+calibrationinfostring+"</calibration>\n");
+					osw.write("  </datalogger>\n");
+					osw.write("  <filename>"+filename+"</filename>\n");
+					osw.write("</metadata>\n");
+					osw.write("<log>\n");
+					osw.write("  <name>"+config.getname()+"</name>\n");
+					osw.write("  <subset>"+infostring+"</subset>\n");
+					osw.write("  <legend>"+legende+"</legend>\n");
+
+				} else if(endung.equalsIgnoreCase("csv")) {
+					osw.write(legende+"\n"); /*erste Zeile ist legende*/
+				} else {
+					osw.write("# "+titlestring+"\n");
+					osw.write("# loggertype:  "+loggerinfostring+"\n");
+					osw.write("# Rawinput="+config.rawinputreading+" flagbits="+config.flag_bits+"\n");
+					osw.write("# Calibration: "+calibrationinfostring+"\n");
+					osw.write("# fileformat="+prefs.getString("select_fileformat", "dat")+" append="+append+"\n");
+					osw.write(settingsinfo);
+					osw.write("# Statistics:\n"+statistics);
+					// Anzahl Schwellenüberschreitungen
+					// ANzahl Lüftungsevents, Taupunkt Min/Max, Wassergehalt min/max
+					// Evtl Histogramm
+					osw.write("# "+infostring+"\n");
+					osw.write("# "+legende+"\n#\n");
+				}	
+				int i;
+
+				String dateS,timeS;
+				for(i=0;i<data.anzdata;i++) {
+					cal = Calendar.getInstance();
+					cal.setTimeInMillis(ss*1000);
+					dateS=String.format(Locale.US,"%02d.%02d.%04d", 
+							cal.getTime().getDate(),
+							(cal.getTime().getMonth()+1),
+							(cal.getTime().getYear()+1900));
+					timeS=String.format(Locale.US,"%02d:%02d:%02d",
+							cal.getTime().getHours(),
+							cal.getTime().getMinutes(),
+							cal.getTime().getSeconds());
+					if(endung.equalsIgnoreCase("xml")) {
+						osw.write("  <sample timestamp=\""+ss+"\">\n");
+						osw.write("    <channel num=\"1\">\n");
+						osw.write("      <rawdata>"+data.temp[i]+"</rawdata>\n");
+						osw.write("      <value>"+data.get_temp(i)+"</value>\n");
+						if(logger.loggertype==Logger.LTYP_THP || logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_TEMP) {
+							osw.write("      <temperature>"+data.get_temp(i)+"</temperature>\n");
+							osw.write("      <unit>"+((config.temp_is_fahrenheit&1)>0?"°F":"°C")+"</unit>\n");
+						} else osw.write("      <unit>"+config.getunit()+"</unit>\n");
+						osw.write("    </channel>\n");
+						if(logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_THP) {
+							osw.write("    <channel num=\"2\">\n");
+							osw.write("      <rawdata>"+data.rh[i]+"</rawdata>\n");
+							osw.write("      <value>"+data.get_rh(i)+"</value>\n");
+							osw.write("      <humidity>"+data.get_rh(i)+"</humidity>\n");
+							osw.write("      <unit>%</unit>\n");
+							osw.write("    </channel>\n");
+							osw.write("    <dewpoint>"+Physics.taupunkt(data.get_temp(i),data.get_rh(i))+"</dewpoint>\n");
+							osw.write("    <water>"+Physics.water(data.get_temp(i),data.get_rh(i))+"</water>\n");
+						}
+						if(logger.loggertype==Logger.LTYP_THP) {
+							osw.write("    <channel num=\"3\">\n");
+							osw.write("      <rawdata>"+data.p[i]+"</rawdata>\n");
+							osw.write("      <value>"+logger.raw2p(data.p[i])+"</value>\n");
+							osw.write("      <pressure>"+logger.raw2p(data.p[i])+"</pressure>\n");
+							osw.write("      <unit>hPa</unit>\n");
+							osw.write("    </channel>\n");
+						} 
+
+						osw.write("    <time>"+dateS+"T"+timeS+"Z</time>\n");
+						osw.write("  </sample>\n");
+					} else {
+						osw.write(""+ss+separator+Physics.gerundet(data.get_temp(i),5)+separator);
+						if(logger.loggertype==Logger.LTYP_THP) {
+							osw.write(Physics.gerundet(data.get_rh(i),2)+separator+
+									logger.raw2p(data.p[i])+separator);
+						} else if(logger.loggertype==Logger.LTYP_TH) {
+							osw.write(Physics.gerundet(data.get_rh(i),2)+separator+"0"+separator);
+						} else osw.write("0"+separator+"0"+separator);
+						osw.write(dateS+separator+timeS);
+						if(logger.loggertype==Logger.LTYP_TH || logger.loggertype==Logger.LTYP_THP) {
+							if((config.temp_is_fahrenheit&1)>0) osw.write(separator+
+									Physics.gerundet(Physics.celsius2fahr(Physics.taupunkt((float)Physics.fahr2celsius(data.get_temp(i)),data.get_rh(i))),2)
+									+separator+
+									Physics.gerundet(Physics.water((float)Physics.fahr2celsius(data.get_temp(i)),data.get_rh(i)),2)
+									);
+							else osw.write(separator+Physics.gerundet(Physics.taupunkt(data.get_temp(i),data.get_rh(i)),2)+
+									separator+Physics.gerundet(Physics.water(data.get_temp(i),data.get_rh(i)),2));
+						}
+						osw.write("\n");
+					}
+					ss+=config.interval;
+					mProgressStatus=i*100/data.anzdata;
+					h.post(new Runnable() {
+						public void run() {
+							progress1.setProgress(mProgressStatus);
+						}
+					});
+				}
+				if(endung.equalsIgnoreCase("xml")) {
+					osw.write("</log>\n");
+				} else if(endung.equalsIgnoreCase("csv")) {
+					osw.write("# "+titlestring+"\n");
+					osw.write("# loggertype:  "+loggerinfostring+"\n");
+					osw.write("# Calibration: "+calibrationinfostring+"\n");
+					osw.write("# Rawinput="+config.rawinputreading+" flagbits="+config.flag_bits+"\n");
+					osw.write(settingsinfo);
+					osw.write("# "+infostring+"\n");
+				}
+
+				data.issaved=true;
+			} catch (Throwable thr) {
+				// FilenotFound oder IOException
+				Log.e(TAG,"open/save. ",thr);
+				mfilename=file.getAbsolutePath();
+				mfilename+=" : "+mfilename+" : "+thr.toString();
+				h.post(new Runnable() {
+					public void run() {
+						progress1.setProgress(100);
+						Toast.makeText(getApplicationContext(), "ERROR saving "+mfilename+".", Toast.LENGTH_LONG).show();
+						displaymessage("ERROR saving file "+mfilename+". ",5);
+					}
+				});
+			} finally {
+				if(osw!=null) {try {osw.close();} catch (IOException e) {Log.e(TAG,"osw.close ",e);}}
+				if(fos!=null) {try {fos.close();} catch (IOException e) {Log.e(TAG,"fos.close ",e);}}
+				if(data.issaved) {
+					mfilename=filename;
+					h.post(new Runnable() {
+						public void run() {
+							progress1.setProgress(100);
+							File f=new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),mfilename);
+							Toast.makeText(getApplicationContext(), "File "+f.getAbsolutePath()+" saved.", Toast.LENGTH_LONG).show();
+							displaymessage("Saved data to file "+f.getAbsolutePath()+".",0);
+
+							SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+							boolean dosendemail=prefs.getBoolean("do_sendemail", false);
+							if(dosendemail) {
+								String recipient=prefs.getString("recipient", "dr.markus.hoffmann@gmx.de");
+								String subject="Data from "+getPackageName()+" V."+applicationVersion();
+								Tools.sendEmail(progress1.getContext(),recipient,subject, mEmailBody, mfilename);
+							}
+						}
+					});
+				}
+			}
+	}
+	private void updateTimeoffset() {
+		int year=datepicker.getYear();
+		int mon=datepicker.getMonth();  /*0=Jan, 1=Feb ....*/
+		int mday=datepicker.getDayOfMonth();
+		int hour=timepicker.getCurrentHour();
+		int min=timepicker.getCurrentMinute();
+		int sec=0;
+		Log.d(TAG,"Eingestellter Monat ist: "+mon);
+		Calendar cal = Calendar.getInstance();
+		cal.set(year,mon,mday,hour,min,sec);
+		long ss1=cal.getTimeInMillis()/1000;
+		Date dt = new Date();
+		long ss2=dt.getTime()/1000;
+		Log.d(TAG,"Timestamp ist: "+ss2);
+		long d=(int)(ss1-ss2);
+		if(d<0) {
+			d=0;
+			delay.setTextColor(Color.RED);
+		} else {
+			delay.setTextColor(Color.WHITE);
+		}
+		delay.setText(""+d);
+		Log.d(TAG,"Berechneter Time-Offset: "+d+" Sekunden");
+	}
+	private void configfrominput(){
+		if(logger.protocol!=Logger.PROTO_ELV) config.num_data_conf=(int)Double.parseDouble(numconfig.getText().toString());
+		config.interval=(int)Double.parseDouble(minterval.getText().toString());
+		if(usesystime) {
+			Date dt = new Date();
+			config.time_year=dt.getYear()+1900;
+			config.time_mon=(byte) (dt.getMonth()+1);
+			config.time_mday=(byte)dt.getDate();
+			config.time_hour=(byte)dt.getHours();
+			config.time_min=(byte)dt.getMinutes();
+			config.time_sec=(byte)dt.getSeconds();
+			config.time_offset=0;
+		} else {
+			config.time_year=datepicker.getYear();
+			config.time_mon=(byte)(datepicker.getMonth()+1);  /* +1 korrigiert MH 04/2013*/
+			config.time_mday=(byte)datepicker.getDayOfMonth();
+			config.time_hour=(byte)(int)timepicker.getCurrentHour();
+			config.time_min=(byte)(int)timepicker.getCurrentMinute();
+			config.time_sec=0;
+			config.time_offset=(long)Double.parseDouble(delay.getText().toString());
+		}
+		config.thresh_temp_low  = (float)Double.parseDouble(templow.getText().toString());
+		config.thresh_temp_high  =(float)Double.parseDouble(temphigh.getText().toString());
+		config.temp_is_fahrenheit=(byte)(fahrenheit.isChecked()?1:0);
+		if(logger.protocol!=Logger.PROTO_ELV) {
+			config.led_conf=(byte) ((alarm.isChecked()?0x80:0)+
+					(a10.isChecked()?10:0)+
+					(a20.isChecked()?20:0)+
+					(a30.isChecked()?30:0));
+			config.start=(byte)(autolog.isChecked()?2:1);
+		} else {
+			if(alarm.isChecked()) config.flag_bits2&=~1; else config.flag_bits2|=1;
+		}
+		if(logger.loggertype==Logger.LTYP_TH ||logger.loggertype==Logger.LTYP_THP  ) {
+			config.thresh_rh_low  = (float) Double.parseDouble(rhlow.getText().toString());
+			config.thresh_rh_high  = (float) Double.parseDouble(rhhigh.getText().toString());
+		}
+		if(logger.loggertype==Logger.LTYP_THP) {
+			config.thresh_press_high  = (float) Double.parseDouble(presshigh.getText().toString());
+			config.thresh_press_low  = (float) Double.parseDouble(presslow.getText().toString());
+		}
+		String n=logname.getText().toString();
+		config.setname(n);
+		invalidate_config();
+	}
+
+	private byte[] build_conf() {
+		configfrominput();
+		if(logger.do_repair) {
+			displaystatus("Create repair block blocktype="+config.block_type,4);
+			displaymessage("Create repair block blocktype="+config.block_type,4);
+		}
+		if(logger.protocol==Logger.PROTO_VOLTCRAFT_WEATHER && config.interval<60) {
+			displaymessage("Config WARNING: Sample rate will be set to 1 Minute.",2);
+		}  
+		if(logger.protocol==Logger.PROTO_ELV && config.interval<10) {
+			displaymessage("WARNING: Sample rate is low (<10s). Logger might or might not work correctly.",2);
+		}  
+		int e=logger.chk_conf();
+		if(e==Error.OK) return logger.build_conf();
+		if(e==Error.ERR_CNONAME) displaymessage("Config ERROR: no Name!",5);
+		else if(e==Error.ERR_CNAME) displaymessage("Config ERROR: Name too long! only 16 chars.",5);
+		else if(e==Error.ERR_ILLNAME) displaymessage("Config ERROR: Name contains illegal characters.",5);
+		else if(e==Error.ERR_NUMDATA) {
+			if(logger.loggertype==Logger.LTYP_THP) 
+				displaymessage("Config ERROR: num data. [0:"+logger.memory_size/6+"]",5);
+			else if(logger.loggertype==Logger.LTYP_TH) 
+				displaymessage("Config ERROR: num data. [0:"+logger.memory_size/4+"]",5);
+			else displaymessage("Config ERROR: num data. [0:"+logger.memory_size/2+"]",5);
+		} else if(e==Error.ERR_INTERVAL) displaymessage("Config ERROR: interval.",5);
+		return null;
+	}
+
+	private void sendConfig() {
+		if (logger.isconnected) {
+			displaymessage("Send-Config...",0);
+			progress2.setVisibility(View.VISIBLE);
+			/* When data has not been saved yet, display a warning !*/
+			if(!data.issaved && data.anzdata>0) showDialog(6);  /* Handle real request*/
+			else {
+				confmessagebuf = build_conf();
+				if(confmessagebuf!=null) {
+					/* Wenn alte config noch nicht gelesen war, warnung ausgeben*/
+					if(!logger.isreadconfig || !logger.isreaddata) showDialog(5);  /* Handle real request*/
+					else realsendconfig();
+				}
+			}
+		} else Log.d(TAG, "connection problem ");
+	}
+
+	/*Konfiguriere den Logger für Messung/Datennahme*/
+
+	private void realsendconfig() {
+		writeconfig.setEnabled(false);
+		new Thread(new Runnable() {
+			public void run() {
+				int ret=logger.send_config(confmessagebuf);
+				if(ret==0) {
+					h.post(new Runnable() {
+						public void run() {	
+							progress2.setVisibility(View.GONE);
+							writeconfig.setEnabled(true);
+							displaymessage(getResources().getString(R.string.message_sendconfigdone),0);
+							if(logger.protocol!=Logger.PROTO_ELV && logger.protocol!=Logger.PROTO_HID && config.start==1) Toast.makeText(getApplicationContext(), 
+									getResources().getString(R.string.message_datennahme2), Toast.LENGTH_LONG).show();
+							if(logger.protocol==Logger.PROTO_ELV && config.time_offset>0) Toast.makeText(getApplicationContext(),String.format(
+									getResources().getString(R.string.message_datennahme1),config.time_offset), Toast.LENGTH_LONG).show();
+						}});
+				} else if(ret==Error.ERR) {
+					h.post(new Runnable() {
+						public void run() {
+							progress2.setVisibility(View.GONE);
+							writeconfig.setEnabled(true);
+							displaymessage("ERROR: Send-Config failed!",5);
+						}
+					});
+				}
+			}
+		}).start();
+
+	}
+
+	/*Aktualisiere Eingabefelder*/
+
+	private void printconfig2() {
+		if(logger.has_startbutton()) autolog.setVisibility(View.VISIBLE);
+		else autolog.setVisibility(View.GONE);
+		if(logger.has_rollover()) rollover.setVisibility(View.VISIBLE);
+		else rollover.setVisibility(View.GONE);
+
+		if(logger.protocol==Logger.PROTO_HID) {
+			numconfig.setVisibility(View.VISIBLE);
+			numconfig.setText(""+config.num_data_conf);
+			a10.setVisibility(View.GONE);
+			a20.setVisibility(View.GONE);
+			a30.setVisibility(View.GONE);
+			blinktext.setVisibility(View.GONE);
+			radioGroupLCD.setVisibility(View.GONE);
+			if(logger.config.rawinputreading==0) valuedisplay.setVisibility(View.GONE);
+			else {
+				valuedisplay.setVisibility(View.VISIBLE);
+				valuedisplay.setText(""+Freetec.raw2temp(logger.config.rawinputreading)+
+						String.format(Locale.US,"C,%d%%,%dm", 
+								(logger.config.rawinputreading&0xff00)>>8,
+								logger.config.rawinputreading&0xff));
+			}
+			delay.setVisibility(View.GONE);
+			extrafunctions.setVisibility(View.GONE);
+			alarm.setChecked(false);
+		} else if(logger.protocol==Logger.PROTO_ELV) {
+			numconfig.setVisibility(View.GONE);
+			a10.setVisibility(View.GONE);
+			a20.setVisibility(View.GONE);
+			a30.setVisibility(View.GONE);
+			blinktext.setVisibility(View.GONE);
+
+			radioGroupLCD.setVisibility(View.VISIBLE);
+			if(logger.config.rawinputreading==0) valuedisplay.setVisibility(View.GONE);
+			else {
+			  valuedisplay.setVisibility(View.VISIBLE);
+			  valuedisplay.setText(""+(float)Math.round(1000.0*(float)logger.raw2t((short)logger.config.rawinputreading))/1000.0+" "+logger.config.getunit());
+			}
+			delay.setVisibility(View.VISIBLE);
+			delay.setText(""+config.time_offset);
+			systime.setText(getResources().getString(R.string.use_systime2));
+			alarm.setChecked((config.flag_bits2&1)==0);
+			if(config.block_type==6) extrafunctions.setVisibility(View.VISIBLE);
+			else extrafunctions.setVisibility(View.GONE);
+		} else if(logger.protocol==Logger.PROTO_CP210X) {
+			numconfig.setVisibility(View.VISIBLE);
+			a10.setVisibility(View.VISIBLE);
+			a20.setVisibility(View.VISIBLE);
+			a30.setVisibility(View.VISIBLE);
+			blinktext.setVisibility(View.VISIBLE);
+			numconfig.setText(""+config.num_data_conf);
+			a10.setChecked((((int)config.led_conf) & 0x1f)==10);
+			a20.setChecked((((int)config.led_conf) & 0x1f)==20);
+			a30.setChecked((((int)config.led_conf) & 0x1f)==30);
+			autolog.setChecked((config.start&255)==2);
+			delay.setVisibility(View.GONE);
+			radioGroupLCD.setVisibility(View.VISIBLE);
+			valuedisplay.setVisibility(View.GONE);
+			extrafunctions.setVisibility(View.GONE);
+			systime.setText(getResources().getString(R.string.use_systime));
+			alarm.setChecked((((int)config.led_conf) & 0x80)==0x80);
+			
+		} else {
+			numconfig.setVisibility(View.VISIBLE);
+			a10.setVisibility(View.VISIBLE);
+			a20.setVisibility(View.VISIBLE);
+			a30.setVisibility(View.VISIBLE);
+			blinktext.setVisibility(View.VISIBLE);
+			numconfig.setText(""+config.num_data_conf);
+			a10.setChecked((((int)config.led_conf) & 0x1f)==10);
+			a20.setChecked((((int)config.led_conf) & 0x1f)==20);
+			a30.setChecked((((int)config.led_conf) & 0x1f)==30);
+			autolog.setChecked((config.start&255)==2);
+			delay.setVisibility(View.GONE);
+
+			radioGroupLCD.setVisibility(View.GONE);
+			valuedisplay.setVisibility(View.GONE);
+			extrafunctions.setVisibility(View.GONE);
+			systime.setText(getResources().getString(R.string.use_systime));
+			alarm.setChecked((((int)config.led_conf) & 0x80)==0x80);
+		}
+		numrec.setText(""+config.num_data_rec+" ("+Physics.duration(config.num_data_rec,config.interval)+")");
+		manzdata.setText(""+data.anzdata);
+		minterval.setText(""+config.interval);
+		logname.setText(""+config.getname());
+		celsius.setChecked((((int)config.temp_is_fahrenheit) & 1)==0);
+		fahrenheit.setChecked((((int)config.temp_is_fahrenheit) & 1)!=0);
+
+		datepicker.updateDate(config.time_year&0xffff, (config.time_mon & 255)-1, config.time_mday & 255);
+		timepicker.setCurrentHour((int) config.time_hour & 255);
+		timepicker.setCurrentMinute((int) config.time_min & 255);
+		temphigh.setText(""+config.thresh_temp_high);
+		templow.setText(""+config.thresh_temp_low);
+		if(logger.loggertype==Logger.LTYP_TH ||logger.loggertype==Logger.LTYP_THP) {
+			rhhigh.setVisibility(View.VISIBLE);
+			rhlow.setVisibility(View.VISIBLE);
+			rhhigh.setText(""+config.thresh_rh_high);
+			rhlow.setText(""+config.thresh_rh_low);
+			rhtext.setVisibility(View.VISIBLE);
+		} else {
+			rhhigh.setVisibility(View.GONE);
+			rhlow.setVisibility(View.GONE);
+			rhtext.setVisibility(View.GONE);
+		}
+		if(logger.loggertype==Logger.LTYP_THP) {
+			presshigh.setVisibility(View.VISIBLE);
+			presslow.setVisibility(View.VISIBLE);
+			presstext.setVisibility(View.VISIBLE);
+			presshigh.setText(""+config.thresh_press_high);
+			presslow.setText(""+config.thresh_press_low);
+		} else {
+			presshigh.setVisibility(View.GONE);
+			presslow.setVisibility(View.GONE);
+			presstext.setVisibility(View.GONE);
+		}
+	}
+
+	private String applicationVersion() {
+		try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+		catch (NameNotFoundException x)  { return "unknown"; }
+	}
+
+}

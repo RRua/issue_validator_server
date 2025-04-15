@@ -1,0 +1,279 @@
+diff --git a/app/src/main/java/com/commit451/gitlab/adapter/CommitsAdapter.java b/app/src/main/java/com/commit451/gitlab/adapter/CommitsAdapter.java
+index a75eb2b4..2acd8f70 100644
+--- a/app/src/main/java/com/commit451/gitlab/adapter/CommitsAdapter.java
++++ b/app/src/main/java/com/commit451/gitlab/adapter/CommitsAdapter.java
+@@ -1,70 +1,58 @@
+ package com.commit451.gitlab.adapter;
+ 
+-import android.content.Context;
+-import android.text.format.DateUtils;
+-import android.view.LayoutInflater;
++import android.content.Intent;
++import android.support.v7.widget.RecyclerView;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.BaseAdapter;
+-import android.widget.TextView;
+ 
++import com.commit451.gitlab.DiffActivity;
+ import com.commit451.gitlab.R;
+ import com.commit451.gitlab.model.DiffLine;
+ import com.commit451.gitlab.tools.Repository;
+-import com.commit451.gitlab.views.CompoundTextView;
+-import com.squareup.picasso.Picasso;
++import com.commit451.gitlab.viewHolders.CommitViewHolder;
+ 
+-import java.util.ArrayList;
+ import java.util.List;
+ 
+-import fr.tkeunebr.gravatar.Gravatar;
+-
+-public class CommitsAdapter extends BaseAdapter {
+-
+-	private ArrayList<DiffLine> commits;
+-	private LayoutInflater inflater;
+-	
+-	public CommitsAdapter(Context context, List<DiffLine> commits) {
+-		this.commits = new ArrayList<DiffLine>(commits);
+-		
+-		if(context != null) {
+-			inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+-		}
+-	}
+-	
+-	@Override
+-	public int getCount() {
+-		return commits.size();
+-	}
+-	
+-	@Override
+-	public DiffLine getItem(int position) {
+-		return commits.get(position);
+-	}
+-	
+-	@Override
+-	public long getItemId(int position) {
+-		return position;
+-	}
+-	
+-	@Override
+-	public View getView(int position, View convertView, ViewGroup parent) {
+-		if(convertView == null) convertView = inflater.inflate(R.layout.list_item, parent, false);
+-
+-        final TextView title = (TextView) convertView.findViewById(R.id.title);
+-		final CompoundTextView summary = (CompoundTextView) convertView.findViewById(R.id.summary);
+-		final TextView custom = (TextView) convertView.findViewById(R.id.custom);
+-		
+-		title.setText(commits.get(position).getTitle());
+-        summary.setText(commits.get(position).getAuthorName());
+-		custom.setText(DateUtils.getRelativeTimeSpanString(commits.get(position).getCreatedAt().getTime()));
+-		
+-		float percent = Repository.displayWidth / 720f;
+-		int size = (int) (40f * percent);
+-
+-        String url = Gravatar.init().with(commits.get(position).getAuthorEmail()).size(size).build();
+-        Picasso.with(convertView.getContext()).load(url).into(summary);
+-		
+-		return convertView;
+-	}
++/**
++ * Created by Jawn on 7/28/2015.
++ */
++public class CommitsAdapter extends RecyclerView.Adapter<CommitViewHolder> {
++
++    private List<DiffLine> mValues;
++
++    public DiffLine getValueAt(int position) {
++        return mValues.get(position);
++    }
++
++    public CommitsAdapter(List<DiffLine> items) {
++        mValues = items;
++    }
++
++    private final View.OnClickListener onProjectClickListener = new View.OnClickListener() {
++        @Override
++        public void onClick(View v) {
++            int position = (int) v.getTag(R.id.list_position);
++            Repository.selectedCommit = getValueAt(position);
++            v.getContext().startActivity(new Intent(v.getContext(), DiffActivity.class));
++        }
++    };
++
++    @Override
++    public CommitViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
++        CommitViewHolder holder = CommitViewHolder.create(parent);
++        holder.itemView.setOnClickListener(onProjectClickListener);
++        return holder;
++    }
++
++    @Override
++    public void onBindViewHolder(final CommitViewHolder holder, int position) {
++        DiffLine commit = getValueAt(position);
++        holder.bind(commit);
++        holder.itemView.setTag(R.id.list_position, position);
++    }
++
++    @Override
++    public int getItemCount() {
++        return mValues.size();
++    }
+ }
+diff --git a/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java b/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
+index a3e015f6..35e537f8 100644
+--- a/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
++++ b/app/src/main/java/com/commit451/gitlab/fragments/CommitsFragment.java
+@@ -1,19 +1,15 @@
+ package com.commit451.gitlab.fragments;
+ 
+-import android.content.Intent;
+ import android.os.Bundle;
+ import android.support.design.widget.Snackbar;
+ import android.support.v4.app.Fragment;
+ import android.support.v4.widget.SwipeRefreshLayout;
++import android.support.v7.widget.LinearLayoutManager;
++import android.support.v7.widget.RecyclerView;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.ViewGroup;
+-import android.widget.AdapterView;
+-import android.widget.AdapterView.OnItemClickListener;
+-import android.widget.HeaderViewListAdapter;
+-import android.widget.ListView;
+ 
+-import com.commit451.gitlab.DiffActivity;
+ import com.commit451.gitlab.R;
+ import com.commit451.gitlab.adapter.CommitsAdapter;
+ import com.commit451.gitlab.model.DiffLine;
+@@ -28,9 +24,9 @@ import retrofit.Callback;
+ import retrofit.RetrofitError;
+ import retrofit.client.Response;
+ 
+-public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRefreshListener, OnItemClickListener {
++public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRefreshListener {
+ 
+-	@Bind(R.id.fragmentList) ListView listView;
++	@Bind(R.id.list) RecyclerView listView;
+     @Bind(R.id.swipe_layout) SwipeRefreshLayout swipeLayout;
+ 	
+ 	public CommitsFragment() {}
+@@ -39,9 +35,8 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+ 		View view = inflater.inflate(R.layout.fragment_commits, container, false);
+ 		ButterKnife.bind(this, view);
+-		
+-		listView.setOnItemClickListener(this);
+ 
++		listView.setLayoutManager(new LinearLayoutManager(getActivity()));
+         swipeLayout.setOnRefreshListener(this);
+ 
+ 		if(Repository.selectedProject != null)
+@@ -78,21 +73,27 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 		
+ 		Repository.getService().getCommits(Repository.selectedProject.getId(), Repository.selectedBranch.getName(), commitsCallback);
+ 	}
++
++	public boolean onBackPressed() {
++		return false;
++	}
+ 	
+ 	private Callback<List<DiffLine>> commitsCallback = new Callback<List<DiffLine>>() {
+ 		
+ 		@Override
+ 		public void success(List<DiffLine> commits, Response resp) {
+-			if(swipeLayout != null && swipeLayout.isRefreshing())
+-                swipeLayout.setRefreshing(false);
++            if (swipeLayout == null) {
++                return;
++            }
++            swipeLayout.setRefreshing(false);
+ 			
+-			if(commits.size() > 0)
++			if(commits.size() > 0) {
+ 				Repository.newestCommit = commits.get(0);
+-			else
++			}
++			else {
+ 				Repository.newestCommit = null;
+-			
+-			CommitsAdapter commitsAdapter = new CommitsAdapter(getActivity(), commits);
+-			listView.setAdapter(commitsAdapter);
++			}
++			listView.setAdapter(new CommitsAdapter(commits));
+ 		}
+ 		
+ 		@Override
+@@ -107,14 +108,4 @@ public class CommitsFragment extends Fragment implements SwipeRefreshLayout.OnRe
+ 			listView.setAdapter(null);
+ 		}
+ 	};
+-	
+-	public boolean onBackPressed() {
+-		return false;
+-	}
+-	
+-	@Override
+-	public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+-		Repository.selectedCommit = ((CommitsAdapter) ((HeaderViewListAdapter) listView.getAdapter()).getWrappedAdapter()).getItem(position - 1);
+-		startActivity(new Intent(getActivity(), DiffActivity.class));
+-	}
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/commit451/gitlab/viewHolders/CommitViewHolder.java b/app/src/main/java/com/commit451/gitlab/viewHolders/CommitViewHolder.java
+new file mode 100644
+index 00000000..6ee52424
+--- /dev/null
++++ b/app/src/main/java/com/commit451/gitlab/viewHolders/CommitViewHolder.java
+@@ -0,0 +1,52 @@
++package com.commit451.gitlab.viewHolders;
++
++import android.support.v7.widget.RecyclerView;
++import android.text.format.DateUtils;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.TextView;
++
++import com.commit451.gitlab.R;
++import com.commit451.gitlab.model.DiffLine;
++import com.commit451.gitlab.tools.Repository;
++import com.commit451.gitlab.views.CompoundTextView;
++import com.squareup.picasso.Picasso;
++
++import butterknife.Bind;
++import butterknife.ButterKnife;
++import fr.tkeunebr.gravatar.Gravatar;
++
++/**
++ * Files, yay!
++ * Created by Jawn on 6/11/2015.
++ */
++public class CommitViewHolder extends RecyclerView.ViewHolder {
++
++    public static CommitViewHolder create(ViewGroup parent) {
++        View view = LayoutInflater.from(parent.getContext())
++                .inflate(R.layout.item_commit, parent, false);
++        return new CommitViewHolder(view);
++    }
++
++    @Bind(R.id.title) TextView title;
++    @Bind(R.id.summary) CompoundTextView summary;
++    @Bind(R.id.custom) TextView custom;
++
++    public CommitViewHolder(View view) {
++        super(view);
++        ButterKnife.bind(this, view);
++    }
++
++    public void bind(DiffLine commit) {
++        title.setText(commit.getTitle());
++        summary.setText(commit.getAuthorName());
++        custom.setText(DateUtils.getRelativeTimeSpanString(commit.getCreatedAt().getTime()));
++
++        float percent = Repository.displayWidth / 720f;
++        int size = (int) (40f * percent);
++
++        String url = Gravatar.init().with(commit.getAuthorEmail()).size(size).build();
++        Picasso.with(itemView.getContext()).load(url).into(summary);
++    }
++}

@@ -1,0 +1,450 @@
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/Events.java b/app/src/main/java/com/innodroid/mongobrowser/Events.java
+index 9701013..3512aa2 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/Events.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/Events.java
+@@ -27,10 +27,6 @@ public class Events {
+         EventBus.getDefault().post(new AddDocument());
+     }
+ 
+-    public static void postRefreshDocumentList() {
+-        EventBus.getDefault().post(new RefreshDocumentList());
+-    }
+-
+     public static void postDocumentSelected(String content) {
+         EventBus.getDefault().post(new DocumentSelected(content));
+     }
+@@ -111,9 +107,6 @@ public class Events {
+     public static class ConnectionDeleted {
+     }
+ 
+-    public static class RefreshDocumentList {
+-    }
+-
+     public static class Connected {
+         public long ConnectionId;
+ 
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/BaseListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/BaseListFragment.java
+new file mode 100644
+index 0000000..024e28a
+--- /dev/null
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/BaseListFragment.java
+@@ -0,0 +1,42 @@
++package com.innodroid.mongobrowser.ui;
++
++import android.os.Bundle;
++import android.support.v4.app.Fragment;
++import android.support.v4.widget.SwipeRefreshLayout;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.ListView;
++
++import com.innodroid.mongobrowser.Constants;
++import com.innodroid.mongobrowser.R;
++
++import butterknife.Bind;
++import butterknife.ButterKnife;
++import de.greenrobot.event.EventBus;
++
++public abstract class BaseListFragment extends BaseFragment implements SwipeRefreshLayout.OnRefreshListener {
++    @Bind(android.R.id.list) ListView mList;
++    @Bind(R.id.list_swipe_refresh) SwipeRefreshLayout mSwipeRefresh;
++
++    protected boolean mActivateOnClick;
++
++    @Override
++    public void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++
++        mActivateOnClick = getArguments().getBoolean(Constants.ARG_ACTIVATE_ON_CLICK);
++    }
++
++    @Override
++    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
++        View view = super.onCreateView(R.layout.fragment_generic_list, inflater, container, savedInstanceState);
++
++        mSwipeRefresh.setOnRefreshListener(this);
++
++        return view;
++    }
++
++    @Override
++    public abstract void onRefresh();
++}
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
+index a3f02f9..003ef9a 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
+@@ -3,12 +3,10 @@ package com.innodroid.mongobrowser.ui;
+ 
+ import java.util.ArrayList;
+ 
+-import android.app.Activity;
+ import android.os.Bundle;
+ import android.preference.PreferenceManager;
++import android.support.annotation.NonNull;
+ import android.support.v4.app.DialogFragment;
+-import android.support.v4.app.ListFragment;
+-import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -16,7 +14,6 @@ import android.view.MenuItem;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.ListView;
+-import android.widget.TextView;
+ 
+ import com.innodroid.mongobrowser.Events;
+ import com.innodroid.mongobrowser.util.MongoHelper;
+@@ -29,13 +26,10 @@ import com.innodroid.mongobrowser.util.UiUtils;
+ import butterknife.Bind;
+ import butterknife.OnItemClick;
+ 
+-public class CollectionListFragment extends BaseFragment {
+-	@Bind(android.R.id.list) ListView mList;
+-
++public class CollectionListFragment extends BaseListFragment {
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+ 
+     private long mConnectionId;
+-	private boolean mActivateOnClick;
+     private MongoCollectionAdapter mAdapter;
+     private int mActivatedPosition = ListView.INVALID_POSITION;
+ 
+@@ -56,7 +50,6 @@ public class CollectionListFragment extends BaseFragment {
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
+-		mActivateOnClick = getArguments().getBoolean(Constants.ARG_ACTIVATE_ON_CLICK);
+         mConnectionId = getArguments().getLong(Constants.ARG_CONNECTION_ID);
+ 		setHasOptionsMenu(true);
+ 
+@@ -67,11 +60,11 @@ public class CollectionListFragment extends BaseFragment {
+ 
+ 	@Override
+ 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-		View view = super.onCreateView(R.layout.fragment_generic_list, inflater, container, savedInstanceState);
++		View view = super.onCreateView(inflater, container, savedInstanceState);
+ 
+ 		if (mAdapter == null) {
+ 			mAdapter = new MongoCollectionAdapter(getActivity());
+-			reloadList();
++			onRefresh();
+ 		}
+ 
+ 		mList.setAdapter(mAdapter);
+@@ -88,14 +81,15 @@ public class CollectionListFragment extends BaseFragment {
+ 	}
+ 
+ 	public void onEvent(Events.DocumentCreated e) {
+-		reloadList();
++		onRefresh();
+ 	}
+ 
+ 	public void onEvent(Events.DocumentDeleted e) {
+-		reloadList();
++		onRefresh();
+ 	}
+ 
+-	public void reloadList() {
++	@Override
++	public void onRefresh() {
+     	new LoadNamesTask().execute();
+ 	}
+ 
+@@ -220,6 +214,7 @@ public class CollectionListFragment extends BaseFragment {
+ 
+ 		@Override
+ 		protected void safeOnPostExecute(String[] result) {
++			mSwipeRefresh.setRefreshing(false);
+ 			mAdapter.loadItems(result);
+ 			new LoadCountsTask().execute(result);
+ 		}
+@@ -303,7 +298,7 @@ public class CollectionListFragment extends BaseFragment {
+ 
+ 		@Override
+ 		protected void safeOnPostExecute(String result) {
+-			reloadList();
++			onRefresh();
+ 		}
+ 
+ 		@Override
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
+index ba95ffc..49cc507 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
+@@ -4,6 +4,7 @@ import android.app.Activity;
+ import android.content.Intent;
+ import android.database.Cursor;
+ import android.os.Bundle;
++import android.support.annotation.NonNull;
+ import android.support.v4.app.ListFragment;
+ import android.support.v4.app.LoaderManager.LoaderCallbacks;
+ import android.support.v4.content.CursorLoader;
+@@ -27,9 +28,7 @@ import butterknife.Bind;
+ import butterknife.OnItemClick;
+ import de.greenrobot.event.EventBus;
+ 
+-public class ConnectionListFragment extends BaseFragment implements LoaderCallbacks<Cursor> {
+-    @Bind(android.R.id.list) ListView mList;
+-
++public class ConnectionListFragment extends BaseListFragment implements LoaderCallbacks<Cursor> {
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+ 
+     private MongoConnectionAdapter mAdapter;
+@@ -61,11 +60,11 @@ public class ConnectionListFragment extends BaseFragment implements LoaderCallba
+ 
+     @Override
+     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-        View view = super.onCreateView(R.layout.fragment_generic_list, inflater, container, savedInstanceState);
++        View view = super.onCreateView(inflater, container, savedInstanceState);
+ 
+         if (mAdapter == null) {
+             mAdapter = new MongoConnectionAdapter(getActivity(), null, true);
+-            getLoaderManager().initLoader(0, null, this);
++            onRefresh();
+         }
+ 
+         mList.setAdapter(mAdapter);
+@@ -81,6 +80,11 @@ public class ConnectionListFragment extends BaseFragment implements LoaderCallba
+         return view;
+     }
+ 
++    @Override
++    public void onRefresh() {
++        getLoaderManager().initLoader(0, null, this);
++    }
++
+     @Override
+     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+     	inflater.inflate(R.menu.connection_list_menu, menu);
+@@ -131,6 +135,7 @@ public class ConnectionListFragment extends BaseFragment implements LoaderCallba
+ 	}
+ 
+ 	public void onLoadFinished(Loader<Cursor> loader, Cursor cursor) {
++        mSwipeRefresh.setRefreshing(false);
+ 		mAdapter.swapCursor(cursor);
+ 		
+ 		if (mSelectAfterLoad > 0)
+@@ -142,7 +147,7 @@ public class ConnectionListFragment extends BaseFragment implements LoaderCallba
+ 	}
+ 
+ 	public void onLoaderReset(Loader<Cursor> loader) {
+-		mAdapter.swapCursor(null);
++        mAdapter.swapCursor(null);
+ 	}
+ 
+ 	private void selectItem(Cursor cursor, long id) {
+@@ -158,16 +163,12 @@ public class ConnectionListFragment extends BaseFragment implements LoaderCallba
+ 		} while (cursor.moveToNext());
+ 		
+ 		cursor.moveToPosition(original);
+-		
+-		setActivatedPosition(pos);
++
++        setActivatedPosition(pos);
+ 	}
+ 
+ 	public void reloadAndSelect(long id) {
+ 		mSelectAfterLoad = id;
+ 		getLoaderManager().initLoader(0, null, this);		
+ 	}
+-
+-	public int getConnectionCount() {
+-		return mAdapter.getCount();
+-	}
+ }
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentEditFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentEditFragment.java
+deleted file mode 100644
+index aebe899..0000000
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentEditFragment.java
++++ /dev/null
+@@ -1,90 +0,0 @@
+-package com.innodroid.mongobrowser.ui;
+-
+-import android.app.Activity;
+-import android.os.Bundle;
+-import android.view.LayoutInflater;
+-import android.view.Menu;
+-import android.view.MenuInflater;
+-import android.view.MenuItem;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.widget.EditText;
+-
+-import com.innodroid.mongobrowser.Events;
+-import com.innodroid.mongobrowser.util.MongoHelper;
+-import com.innodroid.mongobrowser.Constants;
+-import com.innodroid.mongobrowser.R;
+-import com.innodroid.mongobrowser.util.SafeAsyncTask;
+-
+-import butterknife.Bind;
+-
+-public class DocumentEditFragment extends BaseFragment {
+-	@Bind(R.id.document_edit_content) EditText mContentEdit;
+-
+-	private String mCollectionName;
+-
+-    public DocumentEditFragment() {
+-    }
+-
+-    @Override
+-    public void onCreate(Bundle savedInstanceState) {
+-    	super.onCreate(savedInstanceState);
+-
+-    	mCollectionName = getArguments().getString(Constants.ARG_COLLECTION_NAME);
+-
+-    	setHasOptionsMenu(true);
+-    }
+-    
+-    @Override
+-    public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-    	View view = super.onCreateView(R.layout.fragment_document_edit, inflater, container, savedInstanceState);
+-
+-    	String json = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
+-    	mContentEdit.setText(json);
+-		getActivity().setProgressBarIndeterminateVisibility(false);
+-
+-        return view;
+-    }
+-    
+-    @Override
+-    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+-    	inflater.inflate(R.menu.document_edit_menu, menu);
+-    }    
+-
+-    @Override
+-    public boolean onOptionsItemSelected(MenuItem item) {
+-    	switch (item.getItemId()) {
+-    		case R.id.menu_document_edit_save:
+-    			new SaveDocumentTask().execute(mContentEdit.getText().toString());
+-    			return true;
+-    		default:
+-    	    	return super.onOptionsItemSelected(item);    		
+-    	}
+-    }
+-    
+-    public class SaveDocumentTask extends SafeAsyncTask<String, Void, String> {
+-    	public SaveDocumentTask() {
+-			super(getActivity());
+-		}
+-
+-		@Override
+-		protected String safeDoInBackground(String... content) {
+-			return MongoHelper.saveDocument(mCollectionName, content[0]);
+-		}
+-		
+-		@Override
+-		protected void safeOnPostExecute(String result) {			
+-			Events.postDocumentEdited(result);
+-		}
+-
+-		@Override
+-		protected String getErrorTitle() {
+-			return "Failed to Save";
+-		}
+-		
+-		@Override
+-		protected String getProgressMessage() {
+-			return "Saving";
+-		}
+-    }
+-}
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
+index a195699..5bab82a 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
+@@ -1,15 +1,13 @@
+ package com.innodroid.mongobrowser.ui;
+ 
+ 
+-import android.app.Activity;
+ import android.content.DialogInterface;
+ import android.content.DialogInterface.OnClickListener;
+ import android.database.Cursor;
+ import android.os.Bundle;
+ import android.preference.PreferenceManager;
++import android.support.annotation.NonNull;
+ import android.support.v4.app.DialogFragment;
+-import android.support.v4.app.ListFragment;
+-import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -20,7 +18,6 @@ import android.widget.ListView;
+ import android.widget.Toast;
+ 
+ import com.innodroid.mongobrowser.Events;
+-import com.innodroid.mongobrowser.data.MongoConnectionAdapter;
+ import com.innodroid.mongobrowser.util.MongoHelper;
+ import com.innodroid.mongobrowser.Constants;
+ import com.innodroid.mongobrowser.R;
+@@ -37,9 +34,7 @@ import java.net.UnknownHostException;
+ import butterknife.Bind;
+ import butterknife.OnItemClick;
+ 
+-public class DocumentListFragment extends BaseFragment {
+-	@Bind(android.R.id.list) ListView mList;
+-
++public class DocumentListFragment extends BaseListFragment {
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+     private static final String STATE_QUERY_ID = "query_id";
+     private static final String STATE_QUERY_NAME = "query_name";
+@@ -52,7 +47,6 @@ public class DocumentListFragment extends BaseFragment {
+     private String mQueryText;
+     private MongoDocumentAdapter mAdapter;
+     private int mActivatedPosition = ListView.INVALID_POSITION;
+-	private boolean mActivateOnClick;
+     private int mStart = 0;
+     private int mTake = 5;
+ 
+@@ -92,13 +86,11 @@ public class DocumentListFragment extends BaseFragment {
+ 
+ 	@Override
+ 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-		View view = super.onCreateView(R.layout.fragment_generic_list, inflater, container, savedInstanceState);
+-
+-		mActivateOnClick = getArguments().getBoolean(Constants.ARG_ACTIVATE_ON_CLICK);
++		View view = super.onCreateView(inflater, container, savedInstanceState);
+ 
+ 		if (mAdapter == null) {
+ 			mAdapter = new MongoDocumentAdapter(getActivity());
+-			new LoadNextDocumentsTask(false).execute();
++			onRefresh();
+ 		}
+ 
+ 		mList.setAdapter(mAdapter);
+@@ -114,6 +106,13 @@ public class DocumentListFragment extends BaseFragment {
+ 		return view;
+ 	}
+ 
++	@Override
++	public void onRefresh() {
++		mStart = 0;
++		mAdapter.removeAll();
++		new LoadNextDocumentsTask(false).execute();
++	}
++
+ 	@Override
+     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+     	inflater.inflate(R.menu.document_list_menu, menu);
+@@ -156,9 +155,6 @@ public class DocumentListFragment extends BaseFragment {
+     		case R.id.menu_document_list_delete:
+     			dropCollection();
+     			return true;
+-    		case R.id.menu_document_list_refresh:
+-    			Events.postRefreshDocumentList();
+-    			return true;
+     		default:
+     	    	return super.onOptionsItemSelected(item);
+         }
+@@ -417,6 +413,8 @@ public class DocumentListFragment extends BaseFragment {
+ 
+ 		@Override
+ 		protected void safeOnPostExecute(String[] results) {
++			mSwipeRefresh.setRefreshing(false);
++
+ 			mAdapter.addAll(results);
+ 			
+ 			if (results.length < mTake)

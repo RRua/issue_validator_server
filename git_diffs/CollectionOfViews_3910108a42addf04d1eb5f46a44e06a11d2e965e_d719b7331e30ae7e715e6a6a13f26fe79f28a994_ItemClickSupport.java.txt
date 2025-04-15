@@ -1,0 +1,729 @@
+M	gradlew
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/MainActivity.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/MainActivity.kt
+index b5cf121..cf7613e 100644
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/MainActivity.kt
++++ b/app/src/main/java/com/exner/tools/fototimerresearch2/MainActivity.kt
+@@ -80,16 +80,18 @@ class MainActivity : AppCompatActivity() {
+     fun FotoTimerTopBar(navController: NavHostController, currentDestination: NavDestination?) {
+         var currentTitle = "Foto Timer"
+         var inProcessList = false
+-        var inSettings = false
++        var inProcessDetails = false
+ 
+         // some state checking - probably lame
+         if (currentDestination != null) {
+             if (currentDestination.route == ProcessList.route) {
+                 inProcessList = true
+             }
++            if (currentDestination.route!!.startsWith(ProcessDetails.route)) {
++                inProcessDetails = true
++            }
+             if (currentDestination.route == Settings.route) {
+                 currentTitle = "Settings"
+-                inSettings = true
+             }
+         }
+ 
+@@ -105,9 +107,23 @@ class MainActivity : AppCompatActivity() {
+             },
+             actions = {
+                 if (inProcessList) {
+-                    IconButton(onClick = { /*TODO*/ }) {
++                    IconButton(onClick = {
++                        navController.navigate(ProcessEdit.route)
++                    }) {
+                         Icon(imageVector = Icons.Filled.Add, contentDescription = "Add Process")
+                     }
++                } else if (inProcessDetails) {
++                    val processId =
++                        navController.currentBackStackEntry?.arguments?.getString("processId")
++                    if (null != processId) {
++                        val editRoute = ProcessEdit.route + "/${processId}"
++                        IconButton(onClick = { navController.navigate(editRoute) }) {
++                            Icon(
++                                imageVector = ProcessEdit.icon,
++                                contentDescription = ProcessEdit.contentDescription
++                            )
++                        }
++                    }
+                 }
+                 IconButton(onClick = {
+                     navController.navigate(Settings.route) {
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/NewEditProcessActivity.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/NewEditProcessActivity.kt
+deleted file mode 100644
+index 16b9e0c..0000000
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/NewEditProcessActivity.kt
++++ /dev/null
+@@ -1,196 +0,0 @@
+-package com.exner.tools.fototimerresearch2
+-
+-import android.content.Intent
+-import android.os.Bundle
+-import android.view.View.INVISIBLE
+-import android.view.View.VISIBLE
+-import android.widget.Button
+-import androidx.activity.viewModels
+-import androidx.appcompat.app.AppCompatActivity
+-import androidx.preference.PreferenceManager
+-import com.exner.tools.fototimerresearch2.data.model.FotoTimerProcessViewModel
+-import com.exner.tools.fototimerresearch2.data.model.FotoTimerProcessViewModelFactory
+-import com.exner.tools.fototimerresearch2.data.persistence.FotoTimerProcess
+-import com.exner.tools.fototimerresearch2.databinding.ActivityNewProcessBinding
+-import com.exner.tools.fototimerresearch2.sound.SoundStuff
+-import com.exner.tools.fototimerresearch2.ui.models.FotoTimerProcessArrayAdapter
+-import kotlinx.serialization.json.Json
+-
+-class NewEditProcessActivity : AppCompatActivity() {
+-    private lateinit var binding: ActivityNewProcessBinding
+-
+-    private val fotoTimerProcessViewModel: FotoTimerProcessViewModel by viewModels {
+-        FotoTimerProcessViewModelFactory((application as FotoTimerApplication).repository)
+-    }
+-
+-    public override fun onCreate(savedInstanceState: Bundle?) {
+-        super.onCreate(savedInstanceState)
+-        binding = ActivityNewProcessBinding.inflate(layoutInflater)
+-        val view = binding.root
+-        setContentView(view)
+-
+-        // setup the Spinner for goto ID
+-        val allProcesses = FotoTimerProcessArrayAdapter(this, R.layout.spinner_item)
+-        fotoTimerProcessViewModel.allProcesses.observe(this) { processes ->
+-            processes.forEach {
+-                allProcesses.add(it)
+-            }
+-        }
+-        allProcesses.setDropDownViewResource(R.layout.spinner_dropdown_item)
+-        binding.spinnerGotoId.adapter = allProcesses
+-
+-        // get some defaults from the app's settings
+-        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this /* Activity context */)
+-        val processTimeDefault = sharedPreferences.getString("preference_process_time", "30")?.toLongOrNull() ?: 30
+-        val intervalTimeDefault = sharedPreferences.getString("preference_interval_time", "10")?.toLongOrNull() ?: 10
+-        val leadInTimeDefault = sharedPreferences.getString("preference_lead_in_time", "0")?.toIntOrNull() ?: 0
+-        val pauseTimeDefault = sharedPreferences.getString("preference_pause_time", "5")?.toIntOrNull() ?: 5
+-
+-        // set defaults in the UI (they may be overwritten later if this is edit)
+-        binding.editProcessTime.setText(sharedPreferences.getString("preference_process_time", "30"))
+-        binding.editIntervalTime.setText(sharedPreferences.getString("preference_interval_time", "10"))
+-        binding.switchSoundStart.isChecked = ("none" != sharedPreferences.getString("preference_process_start_default_sound", "none"))
+-        binding.switchSoundEnd.isChecked = ("none" != sharedPreferences.getString("preference_process_end_default_sound", "none"))
+-        binding.switchSoundInterval.isChecked = ("none" != sharedPreferences.getString("preference_interval_default_sound", "none"))
+-        binding.switchSoundMetronome.isChecked = ("none" != sharedPreferences.getString("preference_metronome_sound", "none"))
+-        binding.editLeadInTime.setText(sharedPreferences.getString("preference_lead_in_time", "0"))
+-        binding.editGotoPauseTime.setText(sharedPreferences.getString("preference_pause_time", "5"))
+-
+-        // new or edit?
+-        val processId = intent.getLongExtra("PROCESS_ID", -1)
+-        if (processId >= 0) {
+-            // a valid process, so this is edit, not new!
+-            val process = fotoTimerProcessViewModel.getProcessById(processId)
+-            if (process != null) {
+-                binding.editProcessName.setText(process.name)
+-                binding.editProcessTime.setText(process.processTime.toString())
+-                binding.editIntervalTime.setText(process.intervalTime.toString())
+-                binding.switchSoundStart.isChecked = process.hasSoundStart
+-                binding.switchSoundEnd.isChecked = process.hasSoundEnd
+-                binding.switchSoundInterval.isChecked = process.hasSoundInterval
+-                binding.switchSoundMetronome.isChecked = process.hasSoundMetronome
+-                binding.switchLeadIn.isChecked = process.hasLeadIn
+-                binding.editLeadInTime.setText((process.leadInSeconds ?: leadInTimeDefault).toString())
+-                binding.switchChain.isChecked = process.hasAutoChain
+-                binding.switchChainPause.isChecked = process.hasPauseBeforeChain ?: false
+-                binding.editGotoPauseTime.setText((process.pauseTime ?: pauseTimeDefault).toString())
+-                if ((process.gotoId != null) && (process.gotoId > 0)) {
+-                    for (i in 0..binding.spinnerGotoId.count) {
+-                        if (process.gotoId == binding.spinnerGotoId.getItemIdAtPosition(i)) {
+-                            binding.spinnerGotoId.setSelection(i)
+-                            break
+-                        }
+-                    }
+-                }
+-                hideAndShow()
+-            }
+-        }
+-
+-        // listeners
+-        // save button
+-        val button = findViewById<Button>(R.id.button_save)
+-        button.setOnClickListener {
+-            // create process, using default values where fields make no sense
+-            val replyIntent = Intent()
+-
+-            val processName = binding.editProcessName.text.toString()
+-            val processTime: Long = binding.editProcessTime.text.toString().toLongOrNull() ?: processTimeDefault
+-            val intervalTime: Long = binding.editIntervalTime.text.toString().toLongOrNull() ?: intervalTimeDefault
+-            val hasSoundStart = binding.switchSoundStart.isChecked
+-            val soundStartId: Long = SoundStuff.SOUND_ID_PROCESS_START
+-            val hasSoundEnd = binding.switchSoundEnd.isChecked
+-            val soundEndId: Long = SoundStuff.SOUND_ID_PROCESS_END
+-            val hasSoundInterval = binding.switchSoundInterval.isChecked
+-            val soundIntervalId: Long = SoundStuff.SOUND_ID_INTERVAL
+-            val hasSoundMetronome = binding.switchSoundMetronome.isChecked
+-            val hasLeadIn = binding.switchLeadIn.isChecked
+-            val leadInSeconds = binding.editLeadInTime.text.toString().toIntOrNull() ?: leadInTimeDefault
+-            val hasAutoChain = binding.switchChain.isChecked
+-            val hasPauseBeforeChain = binding.switchChainPause.isChecked
+-            val pauseTime = binding.editGotoPauseTime.text.toString().toIntOrNull() ?: pauseTimeDefault
+-            val gotoId: Long = binding.spinnerGotoId.selectedItemId ?: -1
+-            val fotoTimerProcess = FotoTimerProcess(
+-                processName,
+-                processTime,
+-                intervalTime,
+-                hasSoundStart,
+-                soundStartId,
+-                hasSoundEnd,
+-                soundEndId,
+-                hasSoundInterval,
+-                soundIntervalId,
+-                hasSoundMetronome,
+-                hasLeadIn,
+-                leadInSeconds,
+-                hasAutoChain,
+-                hasPauseBeforeChain,
+-                pauseTime,
+-                gotoId
+-            )
+-            val jsonRepresentation =
+-                Json.encodeToString(FotoTimerProcess.serializer(), fotoTimerProcess)
+-            replyIntent.putExtra(EXTRA_REPLY, jsonRepresentation)
+-            setResult(RESULT_OK, replyIntent)
+-
+-            finish()
+-        }
+-
+-        // sound start switch
+-        binding.switchSoundStart.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-        // sound end switch
+-        binding.switchSoundEnd.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-        // sound interval switch
+-        binding.switchSoundInterval.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-        // lead-in switch
+-        binding.switchLeadIn.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-        // auto-goto switch
+-        binding.switchChain.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-        // auto-goto pause before switch
+-        binding.switchChainPause.setOnCheckedChangeListener { _, _ ->
+-            hideAndShow()
+-        }
+-    }
+-
+-    companion object {
+-        const val EXTRA_REPLY = "com.exner.tools.fototimerresearch2.REPLY"
+-    }
+-
+-    private fun hideAndShow() {
+-        // hide and/or show elements based on process settings
+-        if (binding.switchLeadIn.isChecked) {
+-            binding.lblLeadInTime.visibility = VISIBLE
+-            binding.editLeadInTime.visibility = VISIBLE
+-        } else {
+-            binding.lblLeadInTime.visibility = INVISIBLE
+-            binding.editLeadInTime.visibility = INVISIBLE
+-        }
+-        if (binding.switchChain.isChecked) {
+-            binding.switchChainPause.visibility = VISIBLE
+-            if (binding.switchChainPause.isChecked) {
+-                binding.lblChainPauseTime.visibility = VISIBLE
+-                binding.editGotoPauseTime.visibility = VISIBLE
+-            } else {
+-                binding.lblChainPauseTime.visibility = INVISIBLE
+-                binding.editGotoPauseTime.visibility = INVISIBLE
+-            }
+-            binding.lblGotoId.visibility = VISIBLE
+-            binding.spinnerGotoId.visibility = VISIBLE
+-        } else {
+-            binding.switchChainPause.visibility = INVISIBLE
+-            binding.lblChainPauseTime.visibility = INVISIBLE
+-            binding.editGotoPauseTime.visibility = INVISIBLE
+-            binding.lblGotoId.visibility = INVISIBLE
+-            binding.spinnerGotoId.visibility = INVISIBLE
+-        }
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerDestinations.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerDestinations.kt
+index f824f6f..8390dc8 100644
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerDestinations.kt
++++ b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerDestinations.kt
+@@ -1,6 +1,7 @@
+ package com.exner.tools.fototimerresearch2.ui
+ 
+ import androidx.compose.material.icons.Icons
++import androidx.compose.material.icons.filled.Edit
+ import androidx.compose.material.icons.filled.List
+ import androidx.compose.material.icons.filled.Settings
+ import androidx.compose.material.icons.filled.Star
+@@ -24,6 +25,12 @@ object ProcessDetails : FotoTimerDestinations {
+     override val contentDescription = "Process Details"
+ }
+ 
++object ProcessEdit : FotoTimerDestinations {
++    override val icon = Icons.Filled.Edit
++    override val route = "edit"
++    override val contentDescription = "Edit Process"
++}
++
+ object Settings : FotoTimerDestinations {
+     override val icon = Icons.Filled.Settings
+     override val route = "settings"
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerProcessEdit.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerProcessEdit.kt
+new file mode 100644
+index 0000000..0ce3668
+--- /dev/null
++++ b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/FotoTimerProcessEdit.kt
+@@ -0,0 +1,73 @@
++package com.exner.tools.fototimerresearch2.ui
++
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.material3.Button
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.platform.LocalContext
++import androidx.preference.PreferenceManager
++import com.exner.tools.fototimerresearch2.data.model.FotoTimerProcessViewModel
++import com.exner.tools.fototimerresearch2.data.persistence.FotoTimerProcess
++
++lateinit var process: FotoTimerProcess
++
++@Composable
++fun FotoTimerProcessEdit(fotoTimerProcessViewModel: FotoTimerProcessViewModel, processId: String?) {
++
++    val uid = processId?.toLong() ?: -1
++    val ftProcess: FotoTimerProcess
++    var tmpProcess: FotoTimerProcess? = null
++
++    // read the process, if it exists
++    if (uid >= 0) {
++        tmpProcess = fotoTimerProcessViewModel.getProcessById(uid)
++    }
++    // do we need to build one?
++    if (null != tmpProcess) {
++        ftProcess = tmpProcess
++    } else {
++        // build one
++        val context = LocalContext.current
++        val sharedSettings = PreferenceManager.getDefaultSharedPreferences(context)
++        ftProcess = FotoTimerProcess(
++            "New Process",
++            sharedSettings.getLong("preference_process_time", 30L),
++            sharedSettings.getLong("preference_interval_time", 10L),
++            false,
++            1,
++            false,
++            2,
++            false,
++            3,
++            false,
++            false,
++            sharedSettings.getInt("preference_lead_in_time", 5),
++            false,
++            false,
++            sharedSettings.getInt("preference_pause_time", 0),
++            -1L
++        )
++    }
++    // while we're here, let's get the name of the next process, if any
++    val tmpGotoProcess = ftProcess.gotoId?.let { fotoTimerProcessViewModel.getProcessById(it) }
++
++    // OK, now display the thing for editing
++    Column(modifier = Modifier.fillMaxSize()) {
++        Text(text = ftProcess.name)
++        Text(text = "${ftProcess.processTime} / ${ftProcess.intervalTime}")
++        Text(text = "Then goes on to ${tmpGotoProcess?.name}")
++        Spacer(modifier = Modifier.fillMaxSize())
++        Button(onClick = { /*TODO*/ }) {
++            Text(
++                text = "Save Process",
++                style = MaterialTheme.typography.headlineSmall,
++                modifier = Modifier.fillMaxWidth()
++            )
++        }
++    }
++}
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/helpers/ItemClickSupport.java b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/helpers/ItemClickSupport.java
+deleted file mode 100644
+index 528514f..0000000
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/helpers/ItemClickSupport.java
++++ /dev/null
+@@ -1,108 +0,0 @@
+-package com.exner.tools.fototimerresearch2.ui.helpers;
+-
+-import android.view.View;
+-
+-import androidx.recyclerview.widget.RecyclerView;
+-
+-import com.exner.tools.fototimerresearch2.R;
+-
+-/*
+-  Source: http://www.littlerobots.nl/blog/Handle-Android-RecyclerView-Clicks/
+-  USAGE:
+-
+-  ItemClickSupport.addTo(mRecyclerView).setOnItemClickListener(new ItemClickSupport.OnItemClickListener() {
+-      @Override
+-      public void onItemClicked(RecyclerView recyclerView, int position, View v) {
+-          // do it
+-      }
+-  });
+-
+-*/
+-public class ItemClickSupport {
+-    private final RecyclerView mRecyclerView;
+-    private OnItemClickListener mOnItemClickListener;
+-    private OnItemLongClickListener mOnItemLongClickListener;
+-    private View.OnClickListener mOnClickListener = new View.OnClickListener() {
+-        @Override
+-        public void onClick(View v) {
+-            if (mOnItemClickListener != null) {
+-                RecyclerView.ViewHolder holder = mRecyclerView.getChildViewHolder(v);
+-                mOnItemClickListener.onItemClicked(mRecyclerView, holder.getAdapterPosition(), v);
+-            }
+-        }
+-    };
+-    private View.OnLongClickListener mOnLongClickListener = new View.OnLongClickListener() {
+-        @Override
+-        public boolean onLongClick(View v) {
+-            if (mOnItemLongClickListener != null) {
+-                RecyclerView.ViewHolder holder = mRecyclerView.getChildViewHolder(v);
+-                return mOnItemLongClickListener.onItemLongClicked(mRecyclerView, holder.getAdapterPosition(), v);
+-            }
+-            return false;
+-        }
+-    };
+-    private RecyclerView.OnChildAttachStateChangeListener mAttachListener
+-            = new RecyclerView.OnChildAttachStateChangeListener() {
+-        @Override
+-        public void onChildViewAttachedToWindow(View view) {
+-            if (mOnItemClickListener != null) {
+-                view.setOnClickListener(mOnClickListener);
+-            }
+-            if (mOnItemLongClickListener != null) {
+-                view.setOnLongClickListener(mOnLongClickListener);
+-            }
+-        }
+-
+-        @Override
+-        public void onChildViewDetachedFromWindow(View view) {
+-
+-        }
+-    };
+-
+-    private ItemClickSupport(RecyclerView recyclerView) {
+-        mRecyclerView = recyclerView;
+-        mRecyclerView.setTag(R.id.item_click_support, this);
+-        mRecyclerView.addOnChildAttachStateChangeListener(mAttachListener);
+-    }
+-
+-    public static ItemClickSupport addTo(RecyclerView view) {
+-        ItemClickSupport support = (ItemClickSupport) view.getTag(R.id.item_click_support);
+-        if (support == null) {
+-            support = new ItemClickSupport(view);
+-        }
+-        return support;
+-    }
+-
+-    public static ItemClickSupport removeFrom(RecyclerView view) {
+-        ItemClickSupport support = (ItemClickSupport) view.getTag(R.id.item_click_support);
+-        if (support != null) {
+-            support.detach(view);
+-        }
+-        return support;
+-    }
+-
+-    public ItemClickSupport setOnItemClickListener(OnItemClickListener listener) {
+-        mOnItemClickListener = listener;
+-        return this;
+-    }
+-
+-    public ItemClickSupport setOnItemLongClickListener(OnItemLongClickListener listener) {
+-        mOnItemLongClickListener = listener;
+-        return this;
+-    }
+-
+-    private void detach(RecyclerView view) {
+-        view.removeOnChildAttachStateChangeListener(mAttachListener);
+-        view.setTag(R.id.item_click_support, null);
+-    }
+-
+-    public interface OnItemClickListener {
+-
+-        void onItemClicked(RecyclerView recyclerView, int position, View v);
+-    }
+-
+-    public interface OnItemLongClickListener {
+-
+-        boolean onItemLongClicked(RecyclerView recyclerView, int position, View v);
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessArrayAdapter.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessArrayAdapter.kt
+deleted file mode 100644
+index efb020c..0000000
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessArrayAdapter.kt
++++ /dev/null
+@@ -1,43 +0,0 @@
+-package com.exner.tools.fototimerresearch2.ui.models
+-
+-import android.app.Activity
+-import android.content.Context
+-import com.exner.tools.fototimerresearch2.data.persistence.FotoTimerProcess
+-import android.widget.ArrayAdapter
+-import android.view.ViewGroup
+-import android.widget.LinearLayout
+-import android.view.LayoutInflater
+-import android.view.View
+-import android.widget.TextView
+-
+-class FotoTimerProcessArrayAdapter(
+-    private val context: Activity,
+-    private val resource: Int
+-) : ArrayAdapter<FotoTimerProcess?>(
+-    context, resource
+-) {
+-    override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+-        val rowView: TextView = if (convertView == null) {
+-            TextView(getContext())
+-        } else {
+-            convertView as TextView
+-        }
+-        val item = getItem(position)
+-        rowView.text = item?.name ?: "No name"
+-
+-        return rowView
+-    }
+-
+-    override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+-        val rowView: TextView = if (convertView == null) {
+-            TextView(getContext())
+-        } else {
+-            convertView as TextView
+-        }
+-        val item = getItem(position)
+-        rowView.text = item?.name ?: "No name"
+-
+-        return rowView
+-    }
+-
+-}
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessListAdapter.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessListAdapter.kt
+deleted file mode 100644
+index a9db4fa..0000000
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/models/FotoTimerProcessListAdapter.kt
++++ /dev/null
+@@ -1,69 +0,0 @@
+-package com.exner.tools.fototimerresearch2.ui.models
+-
+-import android.view.LayoutInflater
+-import android.view.View
+-import android.view.ViewGroup
+-import android.widget.TextView
+-import androidx.recyclerview.widget.DiffUtil
+-import androidx.recyclerview.widget.ListAdapter
+-import androidx.recyclerview.widget.RecyclerView
+-import com.exner.tools.fototimerresearch2.R
+-import com.exner.tools.fototimerresearch2.data.persistence.FotoTimerProcess
+-
+-/*
+- * See https://guides.codepath.com/android/using-the-recyclerview for some hints how this was done
+- */
+-
+-class FotoTimerProcessListAdapter :
+-    ListAdapter<FotoTimerProcess, FotoTimerProcessListAdapter.ProcessViewHolder>(
+-        ProcessComparator()
+-    ) {
+-
+-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ProcessViewHolder {
+-        return ProcessViewHolder.create(parent)
+-    }
+-
+-    override fun onBindViewHolder(holder: ProcessViewHolder, position: Int) {
+-        val current = getItem(position)
+-        holder.bind(current)
+-    }
+-
+-    class ProcessViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+-        private val processIdView: TextView = itemView.findViewById(R.id.processIdView)
+-        private val processNameView: TextView = itemView.findViewById(R.id.processNameView)
+-        private val processTimeView: TextView = itemView.findViewById(R.id.processTimeView)
+-
+-        fun bind(fotoTimerProcess: FotoTimerProcess) {
+-            processIdView.text = fotoTimerProcess.uid.toString()
+-            processNameView.text = fotoTimerProcess.name
+-            val timeString =
+-                fotoTimerProcess.processTime.toString() + "/" + fotoTimerProcess.intervalTime.toString()
+-            processTimeView.text = timeString
+-        }
+-
+-        companion object {
+-            fun create(parent: ViewGroup): ProcessViewHolder {
+-                val view: View = LayoutInflater.from(parent.context)
+-                    .inflate(R.layout.recyclerview_item, parent, false)
+-                return ProcessViewHolder(view)
+-            }
+-        }
+-    }
+-
+-    class ProcessComparator :
+-        DiffUtil.ItemCallback<FotoTimerProcess>() {
+-        override fun areItemsTheSame(
+-            oldItem: FotoTimerProcess,
+-            newItem: FotoTimerProcess
+-        ): Boolean {
+-            return oldItem === newItem
+-        }
+-
+-        override fun areContentsTheSame(
+-            oldItem: FotoTimerProcess,
+-            newItem: FotoTimerProcess
+-        ): Boolean {
+-            return oldItem.uid == newItem.uid
+-        }
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/process/ProcessDetailDescription.kt b/app/src/main/java/com/exner/tools/fototimerresearch2/ui/process/ProcessDetailDescription.kt
+deleted file mode 100644
+index 37d1e66..0000000
+--- a/app/src/main/java/com/exner/tools/fototimerresearch2/ui/process/ProcessDetailDescription.kt
++++ /dev/null
+@@ -1,125 +0,0 @@
+-package com.exner.tools.fototimerresearch2.ui.process
+-
+-import android.content.res.Configuration
+-import androidx.compose.foundation.layout.*
+-import androidx.compose.material3.ElevatedButton
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Surface
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.res.dimensionResource
+-import androidx.compose.ui.tooling.preview.Preview
+-import androidx.compose.ui.unit.dp
+-import com.exner.tools.fototimerresearch2.R
+-import com.exner.tools.fototimerresearch2.data.persistence.FotoTimerProcess
+-
+-@Composable
+-fun ProcessDetailDescription(process: FotoTimerProcess) {
+-    Surface {
+-        Column(
+-            Modifier
+-                .padding(dimensionResource(id = R.dimen.normal_padding))
+-                .fillMaxSize()
+-        ) {
+-            ProcessName(process.name)
+-            ProcessLeadIn(hasLeadIn = process.hasLeadIn, leadInSeconds = process.leadInSeconds)
+-            ProcessTimes(process.processTime, process.intervalTime)
+-            Spacer(modifier = Modifier.weight(1f))
+-            ElevatedButton(onClick = { /*TODO*/ }, Modifier.fillMaxWidth()) {
+-                Text(
+-                    text = "Start Process",
+-                    style = MaterialTheme.typography.bodyLarge,
+-                    modifier = Modifier.padding(24.dp)
+-                )
+-            }
+-        }
+-    }
+-}
+-
+-@Composable
+-private fun ProcessName(name: String) {
+-    Text(
+-        text = name,
+-        style = MaterialTheme.typography.headlineMedium,
+-        modifier = Modifier
+-            .fillMaxWidth()
+-            .padding(horizontal = dimensionResource(R.dimen.margin_small))
+-            .wrapContentWidth(Alignment.CenterHorizontally)
+-    )
+-}
+-
+-@Composable
+-private fun ProcessLeadIn(hasLeadIn: Boolean, leadInSeconds: Int?) {
+-    if (hasLeadIn && null != leadInSeconds) {
+-        Text(
+-            text = "Process has a $leadInSeconds second lead-in.",
+-            style = MaterialTheme.typography.bodyLarge
+-        )
+-    }
+-}
+-
+-@Composable
+-private fun ProcessTimes(processTime: Long, intervalTime: Long) {
+-    Text(
+-        text = "Total Process time is $processTime seconds, with intervals evey $intervalTime seconds.",
+-        style = MaterialTheme.typography.bodyLarge
+-    )
+-}
+-
+-@Preview
+-@Composable
+-private fun PDDPreview() {
+-    MaterialTheme {
+-        ProcessDetailDescription(
+-            FotoTimerProcess(
+-                "Test Process",
+-                30,
+-                10,
+-                false,
+-                0,
+-                false,
+-                0,
+-                false,
+-                0,
+-                false,
+-                true,
+-                5,
+-                false,
+-                false,
+-                0,
+-                0,
+-                0
+-            )
+-        )
+-    }
+-}
+-
+-@Preview(uiMode = Configuration.UI_MODE_NIGHT_YES)
+-@Composable
+-private fun PDDNPreview() {
+-    MaterialTheme {
+-        ProcessDetailDescription(
+-            FotoTimerProcess(
+-                "Test Process",
+-                30,
+-                10,
+-                false,
+-                0,
+-                false,
+-                0,
+-                false,
+-                0,
+-                false,
+-                false,
+-                0,
+-                false,
+-                false,
+-                0,
+-                0,
+-                0
+-            )
+-        )
+-    }
+-}

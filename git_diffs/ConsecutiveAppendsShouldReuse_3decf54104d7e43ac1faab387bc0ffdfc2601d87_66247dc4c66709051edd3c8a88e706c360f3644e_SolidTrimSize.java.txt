@@ -1,0 +1,2813 @@
+diff --git a/app/src/main/java/ch/bailu/aat/map/mapsforge/MapsForgeTileLayerStack.java b/app/src/main/java/ch/bailu/aat/map/mapsforge/MapsForgeTileLayerStack.java
+index 481b072c..8b1735fe 100644
+--- a/app/src/main/java/ch/bailu/aat/map/mapsforge/MapsForgeTileLayerStack.java
++++ b/app/src/main/java/ch/bailu/aat/map/mapsforge/MapsForgeTileLayerStack.java
+@@ -10,10 +10,12 @@ import ch.bailu.aat.map.MapContext;
+ import ch.bailu.aat.map.layer.MapLayerInterface;
+ import ch.bailu.aat.map.tile.TileProvider;
+ import ch.bailu.aat.map.tile.source.CachedSource;
++import ch.bailu.aat.map.tile.source.MapsForgeSource;
+ import ch.bailu.aat.map.tile.source.Source;
+ import ch.bailu.aat.preferences.SolidEnableTileCache;
+ import ch.bailu.aat.preferences.SolidMapTileStack;
+ import ch.bailu.aat.preferences.SolidPreset;
++import ch.bailu.aat.preferences.SolidRenderTheme;
+ import ch.bailu.aat.services.ServiceContext;
+ 
+ public class MapsForgeTileLayerStack implements MapLayerInterface {
+@@ -42,17 +44,23 @@ public class MapsForgeTileLayerStack implements MapLayerInterface {
+     private void init(ServiceContext sc) {
+         for (Source s: SolidMapTileStack.SOURCES) {
+             Source source = s;
+-            if (s == Source.MAPSFORGE) {
+-                source =
+-                        new SolidEnableTileCache(
+-                                sc.getContext(),
+-                                CachedSource.CACHED_MAPSFORGE).getSource();
++            if (s == MapsForgeSource.MAPSFORGE) {
++                String theme =
++                        new SolidRenderTheme(sc.getContext()).getValueAsString();
++
++                if (new SolidEnableTileCache.MapsForge(sc.getContext()).isEnabled()) {
++                    source = new CachedSource(new MapsForgeSource(theme));
++                } else {
++                    source = new MapsForgeSource(theme);
++                }
+ 
+             } else if (s == Source.ELEVATION_HILLSHADE) {
+-                source =
+-                        new SolidEnableTileCache(
+-                                sc.getContext(),
+-                                CachedSource.CACHED_ELEVATION_HILLSHADE).getSource();
++
++                if (new SolidEnableTileCache.Hillshade(sc.getContext()).isEnabled()) {
++                    source = CachedSource.CACHED_ELEVATION_HILLSHADE;
++                } else {
++                    source = Source.ELEVATION_HILLSHADE;
++                }
+             }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/map/tile/source/CachedSource.java b/app/src/main/java/ch/bailu/aat/map/tile/source/CachedSource.java
+index 51178e7a..3510a03e 100644
+--- a/app/src/main/java/ch/bailu/aat/map/tile/source/CachedSource.java
++++ b/app/src/main/java/ch/bailu/aat/map/tile/source/CachedSource.java
+@@ -14,14 +14,13 @@ public class CachedSource extends Source {
+         source = s;
+     }
+ 
+-    @Override
+     public String getName() {
+         return "Cached" + source.getName();
+     }
+ 
+     @Override
+     public String getID(Tile aTile, Context context) {
+-        return genID(aTile, getName());
++        return "Cached" + source.getID(aTile, context);
+     }
+ 
+     @Override
+@@ -61,6 +60,6 @@ public class CachedSource extends Source {
+ 
+ //    public final static CachedSource CACHED_ELEVATION_COLOR = new CachedSource(Source.ELEVATION_COLOR);
+     public final static CachedSource CACHED_ELEVATION_HILLSHADE = new CachedSource(Source.ELEVATION_HILLSHADE);
+-    public final static CachedSource CACHED_MAPSFORGE = new CachedSource(Source.MAPSFORGE);
++    //public final static CachedSource CACHED_MAPSFORGE = new CachedSource(Source.MAPSFORGE);
+ }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/map/tile/source/DownloadSource.java b/app/src/main/java/ch/bailu/aat/map/tile/source/DownloadSource.java
+index 02500328..afdfbedd 100644
+--- a/app/src/main/java/ch/bailu/aat/map/tile/source/DownloadSource.java
++++ b/app/src/main/java/ch/bailu/aat/map/tile/source/DownloadSource.java
+@@ -46,7 +46,6 @@ public class DownloadSource extends Source {
+     }
+ 
+ 
+-    @Override
+     public String getName() {
+         return name;
+     }
+@@ -54,8 +53,7 @@ public class DownloadSource extends Source {
+ 
+     @Override
+     public String getID(Tile tile, Context context) {
+-        return AppDirectory.getTileFile(tile,
+-                getTileRelativeFilename(tile), context).getAbsolutePath();
++        return AppDirectory.getTileFile(getTileRelativeFilename(tile), context).getAbsolutePath();
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/ch/bailu/aat/map/tile/source/MapsForgeSource.java b/app/src/main/java/ch/bailu/aat/map/tile/source/MapsForgeSource.java
+new file mode 100644
+index 00000000..1770b88d
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/map/tile/source/MapsForgeSource.java
+@@ -0,0 +1,64 @@
++package ch.bailu.aat.map.tile.source;
++
++import android.content.Context;
++
++import org.mapsforge.core.model.Tile;
++import org.mapsforge.map.rendertheme.InternalRenderTheme;
++
++import java.io.File;
++
++import ch.bailu.aat.services.cache.MapsForgeTileObject;
++import ch.bailu.aat.services.cache.ObjectHandle;
++
++public class MapsForgeSource extends Source {
++    public final static Source MAPSFORGE = new MapsForgeSource(InternalRenderTheme.DEFAULT.name());
++
++    public static final String NAME = "MapsForge";
++    private final String themeFile;
++    private final String idName;
++
++
++    public MapsForgeSource(String xmlThemeFileName) {
++        themeFile = xmlThemeFileName;
++        idName = "MF_" + new File(themeFile).getName().replace(".xml", "");
++    }
++
++    public String getName() {
++        return NAME;
++    }
++
++    @Override
++    public String getID(Tile t, Context x) {
++        return genID(t, idName);
++    }
++
++    @Override
++    public int getMinimumZoomLevel() {
++        return 0;
++    }
++
++    @Override
++    public int getMaximumZoomLevel() {
++        return 18;
++    }
++
++    @Override
++    public boolean isTransparent() {
++        return false;
++    }
++
++    @Override
++    public int getAlpha() {
++        return OPAQUE;
++    }
++
++    @Override
++    public int getPaintFlags() {
++        return 0;
++    }
++
++    @Override
++    public ObjectHandle.Factory getFactory(Tile t) {
++        return  new MapsForgeTileObject.Factory(t, themeFile);
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/map/tile/source/Source.java b/app/src/main/java/ch/bailu/aat/map/tile/source/Source.java
+index 8f30328d..810dd185 100644
+--- a/app/src/main/java/ch/bailu/aat/map/tile/source/Source.java
++++ b/app/src/main/java/ch/bailu/aat/map/tile/source/Source.java
+@@ -5,7 +5,6 @@ import android.content.Context;
+ import org.mapsforge.core.model.Tile;
+ 
+ import ch.bailu.aat.services.cache.ElevationColorTile;
+-import ch.bailu.aat.services.cache.MapsForgeTileObject;
+ import ch.bailu.aat.services.cache.NewHillshade;
+ import ch.bailu.aat.services.cache.ObjectHandle;
+ 
+@@ -30,59 +29,17 @@ public abstract class Source {
+ 
+     }
+ 
+-    public final static Source MAPSFORGE =
+ 
+-            new Source() {
+-
+-                @Override
+-                public String getName() {
+-                    return "MapsForge";
+-                }
+-
+-                @Override
+-                public String getID(Tile t, Context x) {
+-                    return genID(t, MapsForgeTileObject.class.getSimpleName());
+-                }
+-
+-                @Override
+-                public int getMinimumZoomLevel() {
+-                    return 0;
+-                }
+-
+-                @Override
+-                public int getMaximumZoomLevel() {
+-                    return 18;
+-                }
+-
+-                @Override
+-                public boolean isTransparent() {
+-                    return false;
+-                }
+-
+-                @Override
+-                public int getAlpha() {
+-                    return OPAQUE;
+-                }
+-
+-                @Override
+-                public int getPaintFlags() {
+-                    return 0;
+-                }
+-
+-                @Override
+-                public ObjectHandle.Factory getFactory(Tile t) {
+-                    return  new MapsForgeTileObject.Factory(t);
+-                }
+ 
+-            };
+ 
+ 
+     public final static Source ELEVATION_HILLSHADE =
+             new Source() {
+ 
+-                @Override
++                public static final String NAME ="Hillshade";
++
+                 public String getName() {
+-                    return "Hillshade";
++                    return NAME;
+                 }
+ 
+                 @Override
+@@ -126,7 +83,6 @@ public abstract class Source {
+     public final static Source ELEVATION_COLOR =
+             new Source() {
+ 
+-                @Override
+                 public String getName() {
+                     return "ElevationColor";
+                 }
+diff --git a/app/src/main/java/ch/bailu/aat/menus/RemoveTilesMenu.java b/app/src/main/java/ch/bailu/aat/menus/RemoveTilesMenu.java
+new file mode 100644
+index 00000000..9c125ecf
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/menus/RemoveTilesMenu.java
+@@ -0,0 +1,89 @@
++package ch.bailu.aat.menus;
++
++
++import android.app.Activity;
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
++
++import java.io.File;
++
++import ch.bailu.aat.R;
++import ch.bailu.aat.services.ServiceContext;
++import ch.bailu.aat.services.tileremover.SelectedTileDirectoryInfo;
++import ch.bailu.aat.util.ui.AppDialog;
++import ch.bailu.aat.util.ui.AppLog;
++
++public class RemoveTilesMenu extends AbsMenu {
++
++    private MenuItem removeScanned, removeAll;
++
++    private final ServiceContext scontext;
++    private final Activity acontext;
++
++    private final SelectedTileDirectoryInfo info;
++
++    public RemoveTilesMenu(ServiceContext sc, Activity ac) {
++        acontext = ac;
++        scontext = sc;
++
++        info = sc.getTileRemoverService().getInfo();
++
++
++    }
++
++
++
++
++
++    @Override
++    public void inflate(Menu menu) {
++        if (info.index == 0) {
++            removeScanned = menu.add("Remove old tiles*");
++            removeAll = menu.add("Clear entire cache*");
++        } else {
++            removeScanned = menu.add("Remove old tiles in *" + info.name);
++            removeAll = menu.add("Clear cache in *" + info.name);
++
++        }
++    }
++
++
++    @Override
++    public void inflateWithHeader(ContextMenu menu) {
++        menu.setHeaderTitle(info.name);
++        menu.setHeaderIcon(R.drawable.user_trash_inverse);
++        inflate(menu);
++    }
++
++    @Override
++    public void prepare(Menu menu) {
++
++    }
++
++    @Override
++    public boolean onItemClick(MenuItem item) {
++        if (item == removeScanned) {
++            scontext.lock();
++            scontext.getTileRemoverService().getState().remove();
++            scontext.free();
++
++        } else if (item == removeAll) {
++            new AppDialog() {
++                @Override
++                protected void onPositiveClick() {
++                    scontext.lock();
++                    scontext.getTileRemoverService().getState().removeAll();
++                    scontext.free();
++                    AppLog.i(scontext.getContext(), "Removed* " + info.directory.getAbsolutePath());
++                }
++            }.displayYesNoDialog(
++                    acontext,
++                    "Empty cache*",
++                    "Remove all files in* " + info.directory.getAbsolutePath());
++        }
++
++        return false;
++    }
++
++}
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidEnableTileCache.java b/app/src/main/java/ch/bailu/aat/preferences/SolidEnableTileCache.java
+index 9ccc0429..fb9d9356 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidEnableTileCache.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidEnableTileCache.java
+@@ -3,17 +3,14 @@ package ch.bailu.aat.preferences;
+ import android.content.Context;
+ 
+ import ch.bailu.aat.map.tile.source.CachedSource;
++import ch.bailu.aat.map.tile.source.MapsForgeSource;
+ import ch.bailu.aat.map.tile.source.Source;
+ 
+-public class SolidEnableTileCache extends SolidBoolean {
+-    private final CachedSource source;
++public abstract class SolidEnableTileCache extends SolidBoolean {
+ 
+-    public SolidEnableTileCache(Context c, CachedSource s) {
++    public SolidEnableTileCache(Context c, String key) {
+         super(Storage.global(c),
+-                SolidEnableTileCache.class.getSimpleName() + s.getSource().getName());
+-
+-        source = s;
+-
++                SolidEnableTileCache.class.getSimpleName() + key);
+     }
+ 
+ 
+@@ -24,17 +21,16 @@ public class SolidEnableTileCache extends SolidBoolean {
+     }
+ 
+ 
+-    public Source getSourceCached() {
+-        return source;
+-    }
++    public static class Hillshade extends SolidEnableTileCache {
+ 
+-    public Source getSourceNotCached() {
+-        return source.getSource();
++        public Hillshade(Context c) {
++            super(c,Source.ELEVATION_HILLSHADE.getName());
++        }
+     }
+ 
+-
+-    public Source getSource() {
+-        if (isEnabled()) return getSourceCached();
+-        return getSourceNotCached();
++    public static class MapsForge extends SolidEnableTileCache {
++        public MapsForge(Context c) {
++            super(c, MapsForgeSource.NAME);
++        }
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidMapTileStack.java b/app/src/main/java/ch/bailu/aat/preferences/SolidMapTileStack.java
+index f871db0d..d979cec9 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidMapTileStack.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidMapTileStack.java
+@@ -4,6 +4,7 @@ import android.content.Context;
+ 
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.map.tile.source.DownloadSource;
++import ch.bailu.aat.map.tile.source.MapsForgeSource;
+ import ch.bailu.aat.map.tile.source.Source;
+ 
+ 
+@@ -15,7 +16,7 @@ public class SolidMapTileStack extends SolidCheckList {
+ 
+ 
+     public final static Source[] SOURCES = new Source[] {
+-            Source.MAPSFORGE,
++            MapsForgeSource.MAPSFORGE,
+             DownloadSource.MAPNIK,
+             Source.ELEVATION_COLOR,
+             Source.ELEVATION_HILLSHADE,
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidRenderTheme.java b/app/src/main/java/ch/bailu/aat/preferences/SolidRenderTheme.java
+index cc02f929..335268a1 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidRenderTheme.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidRenderTheme.java
+@@ -5,6 +5,7 @@ import android.content.Context;
+ import org.mapsforge.map.rendertheme.ExternalRenderTheme;
+ import org.mapsforge.map.rendertheme.InternalRenderTheme;
+ import org.mapsforge.map.rendertheme.XmlRenderTheme;
++import org.mapsforge.map.rendertheme.rule.RenderTheme;
+ 
+ import java.io.File;
+ import java.io.FileFilter;
+@@ -27,7 +28,12 @@ public class SolidRenderTheme extends SolidFile {
+ 
+ 
+     public XmlRenderTheme getValueAsRenderTheme() {
+-        String name = getValueAsString();
++        return toRenderTheme(getValueAsString());
++    }
++
++
++    public static XmlRenderTheme toRenderTheme(String name) {
++
+         XmlRenderTheme theme = InternalRenderTheme.DEFAULT;
+ 
+         if (name.equals(InternalRenderTheme.DEFAULT.toString())) {
+@@ -42,6 +48,7 @@ public class SolidRenderTheme extends SolidFile {
+             }
+         }
+         return theme;
++
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidTrimSize.java b/app/src/main/java/ch/bailu/aat/preferences/SolidTrimSize.java
+index 9dae51c7..57f73abb 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidTrimSize.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidTrimSize.java
+@@ -3,66 +3,33 @@ package ch.bailu.aat.preferences;
+ import android.content.Context;
+ 
+ import ch.bailu.aat.R;
++import ch.bailu.aat.util.fs.JFile;
+ 
+ public class SolidTrimSize extends SolidIndexList {
+ 
+-    public final static long KB=1024;
+-    public final static long MB=KB*KB;
+-    public final static long GB=KB*MB;
+-
+-    public final static String sKB="KB";
+-    public final static String sMB="MB";
+-    public final static String sGB="GB";
+-    public final static String sB="B";
+-
+-
+-
+     private static class Entry {
+         public final long size;
+         public final String text;
+ 
+         private Entry(long s) {
+             size = s;
+-            text = buildSizeText(new StringBuilder(10), size).toString();
++            text = JFile.reportFileSize(new StringBuilder(), size).toString();
+         }
+     }
+ 
+-    public static StringBuilder buildSizeText(StringBuilder b, long size) {
+-        if (size >= GB) {
+-            b.append(size/GB);
+-            b.append(' ');
+-            b.append(sGB);
+-
+-        } else if (size >= MB) {
+-            b.append(size/MB);
+-            b.append(' ');
+-            b.append(sMB);
+ 
+-        } else if (size >= KB) {
+-            b.append(size/KB);
+-            b.append(' ');
+-            b.append(sKB);
+-
+-        } else {
+-            b.append(size);
+-            b.append(' ');
+-            b.append(sB);
+-
+-        }
+-        return b;
+-    }
+ 
+ 
+     private static final Entry[] entries = {
+-            new Entry(16 * GB),
+-            new Entry(8 * GB),
+-            new Entry(4 * GB),
+-            new Entry(2 * GB),
+-            new Entry(1 * GB),
+-            new Entry(500 * MB),
+-            new Entry(200 * MB),
+-            new Entry(100 * MB),
+-            new Entry(50 * MB),
++            new Entry(16 * JFile.GB),
++            new Entry(8 * JFile.GB),
++            new Entry(4 * JFile.GB),
++            new Entry(2 * JFile.GB),
++            new Entry(1 * JFile.GB),
++            new Entry(500 * JFile.MB),
++            new Entry(200 * JFile.MB),
++            new Entry(100 * JFile.MB),
++            new Entry(50 * JFile.MB),
+     };
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/cache/CachedTileObject.java b/app/src/main/java/ch/bailu/aat/services/cache/CachedTileObject.java
+index 6ef5a470..0d53f23e 100644
+--- a/app/src/main/java/ch/bailu/aat/services/cache/CachedTileObject.java
++++ b/app/src/main/java/ch/bailu/aat/services/cache/CachedTileObject.java
+@@ -113,6 +113,7 @@ public class CachedTileObject extends TileObject {
+                     toString());
+ 
+ 
++
+             if (
+                     mapTile.zoomLevel <= MIN_SAVE_ZOOM_LEVEL &&
+                     id.equals(sourceID) &&
+@@ -201,29 +202,16 @@ public class CachedTileObject extends TileObject {
+             generated = gen;
+         }
+ 
+-        @Override
+         public String getName() {
+             return generated.getName();
+         }
+ 
+         @Override
+         public String getID(Tile tile, Context context) {
+-            return AppDirectory.getTileFile(tile,
+-                    getTileRelativeFilename(tile), context).getAbsolutePath();
++            final String relativePath = generated.getID(tile, context) + EXT;
++            return AppDirectory.getTileFile(relativePath, context).getAbsolutePath();
+         }
+ 
+-        private String getTileRelativeFilename(final Tile tile) {
+-            final StringBuilder sb = new StringBuilder();
+-            sb.append(getName());
+-            sb.append('/');
+-            sb.append(tile.zoomLevel);
+-            sb.append('/');
+-            sb.append(tile.tileX);
+-            sb.append('/');
+-            sb.append(tile.tileY);
+-            sb.append(EXT);
+-            return sb.toString();
+-        }
+ 
+         @Override
+         public int getMinimumZoomLevel() {
+diff --git a/app/src/main/java/ch/bailu/aat/services/cache/MapsForgeTileObject.java b/app/src/main/java/ch/bailu/aat/services/cache/MapsForgeTileObject.java
+index 7bedcc36..b81e8d59 100644
+--- a/app/src/main/java/ch/bailu/aat/services/cache/MapsForgeTileObject.java
++++ b/app/src/main/java/ch/bailu/aat/services/cache/MapsForgeTileObject.java
+@@ -5,7 +5,9 @@ import android.graphics.Bitmap;
+ import org.mapsforge.core.graphics.TileBitmap;
+ import org.mapsforge.core.model.Tile;
+ import org.mapsforge.map.model.common.Observer;
++import org.mapsforge.map.rendertheme.XmlRenderTheme;
+ 
++import ch.bailu.aat.preferences.SolidRenderTheme;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.util.AppBroadcaster;
+ import ch.bailu.aat.util.graphic.SyncTileBitmap;
+@@ -16,17 +18,20 @@ public class MapsForgeTileObject extends TileObject implements Observer {
+ 
+     private final SyncTileBitmap bitmap = new SyncTileBitmap();
+ 
++    private final XmlRenderTheme renderTheme;
+ 
+-    public MapsForgeTileObject(String id, ServiceContext sc, Tile t) {
++    public MapsForgeTileObject(String id, ServiceContext sc, Tile t, XmlRenderTheme theme) {
+         super(id);
+         scontext = sc;
+         tile = t;
++        renderTheme = theme;
++
+         sc.getRenderService().lockToCache(this);
+         retreiveBitmap();
+     }
+ 
+     private void retreiveBitmap() {
+-        TileBitmap b = scontext.getRenderService().getTile(tile);
++        TileBitmap b = scontext.getRenderService().getTile(tile, renderTheme);
+ 
+         if (b != null) {
+             bitmap.set(b);
+@@ -95,14 +100,17 @@ public class MapsForgeTileObject extends TileObject implements Observer {
+ 
+     public static class Factory extends ObjectHandle.Factory {
+         private final Tile mapTile;
++        private final XmlRenderTheme renderTheme;
++
++        public Factory(Tile t, String theme) {
+ 
+-        public Factory(Tile t) {
++            renderTheme = SolidRenderTheme.toRenderTheme(theme);
+             mapTile=t;
+         }
+ 
+         @Override
+         public ObjectHandle factory(String id, ServiceContext sc) {
+-            return  new MapsForgeTileObject(id, sc, mapTile);
++            return  new MapsForgeTileObject(id, sc, mapTile, renderTheme);
+         }
+ 
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/render/RenderService.java b/app/src/main/java/ch/bailu/aat/services/render/RenderService.java
+index b1b9aa4e..d5e6e6ed 100644
+--- a/app/src/main/java/ch/bailu/aat/services/render/RenderService.java
++++ b/app/src/main/java/ch/bailu/aat/services/render/RenderService.java
+@@ -4,12 +4,12 @@ import android.content.SharedPreferences;
+ 
+ import org.mapsforge.core.graphics.TileBitmap;
+ import org.mapsforge.core.model.Tile;
++import org.mapsforge.map.rendertheme.XmlRenderTheme;
+ 
+ import java.io.File;
+ import java.util.ArrayList;
+ 
+ import ch.bailu.aat.preferences.SolidMapsForgeDirectory;
+-import ch.bailu.aat.preferences.SolidRenderTheme;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ import ch.bailu.aat.services.cache.MapsForgeTileObject;
+@@ -20,7 +20,6 @@ public class RenderService  extends VirtualService
+     private final Cache cache = new Cache();
+ 
+     private final SolidMapsForgeDirectory sdirectory;
+-    private final SolidRenderTheme stheme;
+ 
+     private MapList mapList;
+     private RendererList rendererList;
+@@ -30,9 +29,8 @@ public class RenderService  extends VirtualService
+         super(sc);
+ 
+         sdirectory = new SolidMapsForgeDirectory(sc.getContext());
+-        stheme = new SolidRenderTheme(sc.getContext());
+ 
+-        rendererList = new RendererList(cache, stheme.getValueAsRenderTheme());
++        rendererList = new RendererList(cache);
+ 
+ 
+         mapList = new MapList(sdirectory.getValueAsFile());
+@@ -42,9 +40,9 @@ public class RenderService  extends VirtualService
+ 
+ 
+ 
+-    public TileBitmap getTile(Tile tile) {
++    public TileBitmap getTile(Tile tile, XmlRenderTheme theme) {
+         ArrayList<File> files = mapList.getFiles(tile);
+-        return rendererList.getTile(files, tile);
++        return rendererList.getTile(files, tile, theme);
+     }
+ 
+ 
+@@ -75,10 +73,5 @@ public class RenderService  extends VirtualService
+         if (sdirectory.hasKey(key)) {
+             mapList = new MapList(sdirectory.getValueAsFile());
+         }
+-
+-        else if (stheme.hasKey(key)) {
+-            rendererList.destroy();
+-            rendererList = new RendererList(cache, stheme.getValueAsRenderTheme());
+-        }
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/render/Renderer.java b/app/src/main/java/ch/bailu/aat/services/render/Renderer.java
+index cb9bd181..83703329 100644
+--- a/app/src/main/java/ch/bailu/aat/services/render/Renderer.java
++++ b/app/src/main/java/ch/bailu/aat/services/render/Renderer.java
+@@ -33,10 +33,10 @@ public class Renderer extends RendererBase<RendererJob> {
+     private final MapWorkerPool mapWorkerPool;
+     private final RenderThemeFuture renderThemeFuture;
+ 
+-    public Renderer(RenderThemeFuture rt, TileCache cache, ArrayList<File> files) {
++    public Renderer(XmlRenderTheme t, TileCache cache, ArrayList<File> files) {
+         super(cache, new Model()); // TODO: move model to context
+ 
+-        renderThemeFuture = rt;
++        renderThemeFuture = createTheme(t);
+ 
+         if (files.size()==1) {
+             mapDataStore = new MapFile(files.get(0));
+@@ -75,10 +75,19 @@ public class Renderer extends RendererBase<RendererJob> {
+     }
+ 
+ 
++    private static RenderThemeFuture createTheme(XmlRenderTheme t) {
++        RenderThemeFuture theme = new RenderThemeFuture(
++                AndroidGraphicFactory.INSTANCE,   // TODO: move to context
++                t,
++                new Model().displayModel);        // TODO: move to context
++        new Thread(theme).start();
++        return theme;
++    }
+ 
+     public void destroy() {
+         mapWorkerPool.stop();
+         mapDataStore.close();
++        renderThemeFuture.decrementRefCount();
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/render/RendererList.java b/app/src/main/java/ch/bailu/aat/services/render/RendererList.java
+index c9285d61..0e988617 100644
+--- a/app/src/main/java/ch/bailu/aat/services/render/RendererList.java
++++ b/app/src/main/java/ch/bailu/aat/services/render/RendererList.java
+@@ -2,11 +2,8 @@ package ch.bailu.aat.services.render;
+ 
+ import org.mapsforge.core.graphics.TileBitmap;
+ import org.mapsforge.core.model.Tile;
+-import org.mapsforge.map.android.graphics.AndroidGraphicFactory;
+ import org.mapsforge.map.layer.cache.TileCache;
+-import org.mapsforge.map.model.Model;
+ import org.mapsforge.map.rendertheme.XmlRenderTheme;
+-import org.mapsforge.map.rendertheme.rule.RenderThemeFuture;
+ 
+ import java.io.File;
+ import java.util.ArrayList;
+@@ -18,33 +15,31 @@ public class RendererList {
+ 
+     private final ArrayList<Entry> renderer = new ArrayList(LIMIT);
+     private final TileCache cache;
+-    private final RenderThemeFuture theme;
+ 
+-    public RendererList(TileCache c, XmlRenderTheme xmlTheme) {
+-
+-        AppLog.d(this, xmlTheme.toString());
++    public RendererList(TileCache c) {
+ 
+         cache = c;
+-        theme = new RenderThemeFuture(
+-                AndroidGraphicFactory.INSTANCE,   // TODO: move to context
+-                xmlTheme,
+-                new Model().displayModel);        // TODO: move to context
+-        new Thread(theme).start();
++
+     }
+ 
+ 
+     private class Entry {
+         public final Renderer renderer;
++        public final XmlRenderTheme theme;
+         public final ArrayList<File> files;
+         private long stamp;
+ 
+ 
+-        public Entry(ArrayList<File> f) {
++        public Entry(ArrayList<File> f, XmlRenderTheme t) {
++            theme = t;
+             files = f;
+             renderer = new Renderer(theme, cache, files);
+             use();
+         }
+ 
++
++
++
+         public void use() {
+             stamp = System.currentTimeMillis();
+         }
+@@ -69,12 +64,16 @@ public class RendererList {
+             }
+             return false;
+         }
++
++        public boolean hasSameTheme(XmlRenderTheme t) {
++            return theme.equals(t);
++        }
+     }
+ 
+ 
+-    public TileBitmap getTile(ArrayList<File> files, Tile tile) {
++    public TileBitmap getTile(ArrayList<File> files, Tile tile, XmlRenderTheme theme) {
+         if (files.size() > 0) {
+-            Renderer r = get(files);
++            Renderer r = get(files, theme);
+             if (r != null) {
+                 return r.getTile(tile);
+             }
+@@ -83,25 +82,25 @@ public class RendererList {
+     }
+ 
+ 
+-    private Renderer get(ArrayList<File> files) {
++    private Renderer get(ArrayList<File> files, XmlRenderTheme theme) {
+ 
+         for (Entry e: renderer) {
+-            if (e.hasSameFiles(files)) {
++            if (e.hasSameTheme(theme) && e.hasSameFiles(files)) {
+                 return e.renderer;
+             }
+         }
+ 
+         AppLog.d(this, "add_w renderer");
+-        Entry e = add(files);
++        Entry e = add(files, theme);
+         e.use();
+         return e.renderer;
+     }
+ 
+-    private Entry add(ArrayList<File> files) {
++    private Entry add(ArrayList<File> files, XmlRenderTheme theme) {
+         if (renderer.size() == LIMIT) {
+             removeOldest();
+         }
+-        Entry e = new Entry(files);
++        Entry e = new Entry(files, theme);
+         renderer.add(e);
+         return e;
+     }
+@@ -127,6 +126,5 @@ public class RendererList {
+             e.renderer.destroy();
+         }
+         renderer.clear();
+-        theme.decrementRefCount();
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/SelectedTileDirectoryInfo.java b/app/src/main/java/ch/bailu/aat/services/tileremover/SelectedTileDirectoryInfo.java
+new file mode 100644
+index 00000000..69768e88
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/SelectedTileDirectoryInfo.java
+@@ -0,0 +1,25 @@
++package ch.bailu.aat.services.tileremover;
++
++import java.io.File;
++
++public class SelectedTileDirectoryInfo {
++
++    public final String name;
++
++    public final File baseDirectory;
++    public final File directory;
++
++
++    public final int index;
++    public final int scannedFiles;
++
++
++    public SelectedTileDirectoryInfo(File bd, File d, String n, int i) {
++        name = n;
++        baseDirectory = bd;
++        directory = d;
++        index = i;
++        scannedFiles = 0;
++    }
++}
++
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaries.java b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaries.java
+index fce32104..3b1f38d7 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaries.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaries.java
+@@ -3,79 +3,118 @@ package ch.bailu.aat.services.tileremover;
+ import android.content.Context;
+ 
+ import java.io.File;
++import java.io.IOException;
++import java.util.ArrayList;
+ 
+ import ch.bailu.aat.R;
+ 
+ public class SourceSummaries {
+-
+-
+     public final static int SUMMARY_SIZE = 20;
+-    private final SourceSummary[] mapSummaries = new SourceSummary[SUMMARY_SIZE];
+ 
++    private final ArrayList<SourceSummary>
++            sourceSummaries = new ArrayList<>(SUMMARY_SIZE);
+ 
+-    public void reset(Context c) {
+-        for(int i = 0; i< mapSummaries.length; i++) {
+-            mapSummaries[i] = new SourceSummary();
+-        }
+-        mapSummaries[0].setName(c.getString(R.string.p_trim_total));
++    private final static SourceSummary NULL_SUMMARY = new SourceSummary("NULL");
++
++    public SourceSummaries(Context c) {
++        reset(c);
+     }
+ 
+-    public void setName(int s, String name) {
+-        mapSummaries[s].setName(name);
++    private void reset(Context c) {
++        sourceSummaries.clear();
++        sourceSummaries.add(new SourceSummary(c.getString(R.string.p_trim_total)));
+     }
+ 
+-    public void addFile(int s, TileFile file) {
+-        long length = file.length();
+-        mapSummaries[0].addFile(length);
+-        mapSummaries[s].addFile(length);
++    public void rescanKeep(Context c, File tileCacheDirectory) throws IOException {
++        ArrayList<SourceSummary> old = new ArrayList<>(sourceSummaries);
++
++        rescan(c, tileCacheDirectory);
++        replaceFromList(old);
+     }
+ 
+-    public void resetToRemove() {
+-        for (SourceSummary mapSummary : mapSummaries) {
+-            mapSummary.clear_rm();
++    private void replaceFromList(ArrayList<SourceSummary> list) {
++        for (int index=0; index < size(); index++) {
++            int foundIndex = findInList(list, get(index).getName());
++
++            if (foundIndex > -1) {
++                sourceSummaries.set(index, list.get(foundIndex));
++            }
+         }
+     }
+ 
+-    public void addFileToRemove(TileFile f) {
+-        final long l = f.length();
++    public int findIndex(String name) {
++        return findInList(sourceSummaries, name);
++    }
++
+ 
+-        mapSummaries[0].addFileToRemove(f.length());
+-        mapSummaries[f.getSource()].addFileToRemove(l);
++    private static int findInList(ArrayList<SourceSummary> old, String name) {
++        for (int i=0; i<old.size(); i++) {
++            if (old.get(i).getName().equals(name)) return i;
++        }
++        return -1;
+     }
+ 
+ 
+-    public void addFileRemoved(TileFile f) {
+-        final long length = f.length();
++    public void rescan(Context c, File tileCacheDirectory) throws IOException {
++        tileCacheDirectory = tileCacheDirectory.getCanonicalFile();
++
++        reset(c);
+ 
+-        mapSummaries[0].addFileRemoved(length);
+-        mapSummaries[f.getSource()].addFileRemoved(length);
++        File[] files = tileCacheDirectory.listFiles();
++
++        if (files != null) {
++            for (File file: files) {
++                if (TileScanner.doDirectory(file)) {
++                    sourceSummaries.add(new SourceSummary(file.getName()));
++                }
++
++            }
++        }
+     }
+ 
+-     public long getNewSize(int i) {
+-        return mapSummaries[i].newSize;
++
++    public void addFile(TileFile file) {
++        long length = file.length();
++
++        get(0).addFile(length);
++        get(file.getSource()).addFile(length);
+     }
+ 
+ 
+-    public SourceSummaryInterface[] getMapSummary() {
+-        return mapSummaries;
++    public void resetToRemove() {
++        for (SourceSummary summary : sourceSummaries) {
++            summary.clear_rm();
++        }
+     }
+ 
+-    public long getRemoveCount() {
+-        return mapSummaries[0].countToRemove;
++    public void addFileToRemove(TileFile f) {
++        final long l = f.length();
++
++        get(0).addFileToRemove(f.length());
++        get(f.getSource()).addFileToRemove(l);
+     }
+ 
+ 
+-    public int hashCode(int i) {
+-        return mapSummaries[i].hashCode();
++    public void addFileRemoved(TileFile f) {
++        final long length = f.length();
++
++        get(0).addFileRemoved(length);
++        get(f.getSource()).addFileRemoved(length);
+     }
+ 
++    public SourceSummary get(int index) {
++        if (index < sourceSummaries.size())
++            return sourceSummaries.get(index);
+ 
+-    public File toFile(File tileDirectory, TileFile t) {
+-        return t.toFile(new File(tileDirectory, getMapDirectory(t.getSource())));
++        return NULL_SUMMARY;
+     }
+ 
+-    public String getMapDirectory(int source) {
+-        return mapSummaries[source].getName();
++    public int size() {
++        return sourceSummaries.size();
+     }
+ 
++
++    public File toFile(File baseDirectory, TileFile t) {
++        return t.toFile(new File(baseDirectory, get(t.getSource()).getName()));
++    }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummary.java b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummary.java
+index 2d61e99c..1684560d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummary.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummary.java
+@@ -1,55 +1,47 @@
+ package ch.bailu.aat.services.tileremover;
+ 
+-import ch.bailu.aat.util.ui.AppLog;
+-import ch.bailu.aat.preferences.SolidTrimSize;
++import ch.bailu.aat.util.fs.JFile;
+ 
+ public class SourceSummary implements SourceSummaryInterface {
+-    private String name = "";
+-    private int hash;
+-    public long size, count, size_rm, countToRemove, newSize, count_new;
++    private final String name;
++    public int count, countToRemove, countNew;
++    public long size, sizeToRemove, sizeNew;
+ 
+ 
+-
+-    public void clear_all() {
+-        setName("");
+-        clear();
+-        clear_rm();
+-    }
+-
+-    public void log() {
+-        AppLog.d(this, name + " "+ count + " "+ size / (1024*1024) + "MB");
++    public SourceSummary(String n) {
++        name = n;
+     }
+ 
+ 
+     public void addFile(long length) {
+         size += length;
+-        newSize += length;
++        sizeNew += length;
+         count++;
+-        count_new++;
++        countNew++;
+     }
+ 
+     public void addFileToRemove(long length) {
+-        size_rm += length;
++        sizeToRemove += length;
+         countToRemove++;
+ 
+-        newSize -= length;
+-        count_new --;
++        sizeNew -= length;
++        countNew--;
+     }
+ 
+ 
+     public void addFileRemoved(long length) {
+         size -= length;
+-        size_rm -= length;
++        sizeToRemove -= length;
+ 
+         count --;
+         countToRemove--;
+     }
+ 
+     public void clear_rm() {
+-        newSize = size;
+-        count_new = count;
++        sizeNew = size;
++        countNew = count;
+ 
+-        size_rm = 0;
++        sizeToRemove = 0;
+         countToRemove = 0;
+     }
+ 
+@@ -59,23 +51,9 @@ public class SourceSummary implements SourceSummaryInterface {
+         clear_rm();
+     }
+ 
+-
+-    public synchronized void setName(String n) {
+-        name = n;
+-        hash = name.hashCode();
+-    }
+-
+-
+     @Override
+     public int hashCode() {
+-        return hash;
+-    }
+-
+-
+-
+-    @Override
+-    public synchronized boolean isValid() {
+-        return name.length()>0;
++        return name.hashCode();
+     }
+ 
+     @Override
+@@ -83,23 +61,21 @@ public class SourceSummary implements SourceSummaryInterface {
+         return name;
+     }
+ 
+-
+-
+     @Override
+     public StringBuilder buildReport(StringBuilder builder) {
+         builder.append(count);
+         builder.append('-');
+         builder.append(countToRemove);
+         builder.append('=');
+-        builder.append(count_new);
++        builder.append(countNew);
+ 
+         builder.append('\n');
+ 
+-        SolidTrimSize.buildSizeText(builder, size);
++        JFile.reportFileSize(builder, (double)size);
+         builder.append('-');
+-        SolidTrimSize.buildSizeText(builder, size_rm);
++        JFile.reportFileSize(builder, (double)sizeToRemove);
+         builder.append('=');
+-        SolidTrimSize.buildSizeText(builder, newSize);
++        JFile.reportFileSize(builder, (double)sizeNew);
+ 
+         return builder;
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaryInterface.java b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaryInterface.java
+index 43e67984..3017b82b 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaryInterface.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/SourceSummaryInterface.java
+@@ -1,9 +1,6 @@
+ package ch.bailu.aat.services.tileremover;
+ 
+ public interface SourceSummaryInterface {
+-    boolean isValid();
+-
+     String getName();
+-
+     StringBuilder buildReport(StringBuilder builder);
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/State.java b/app/src/main/java/ch/bailu/aat/services/tileremover/State.java
+index 62edf6b7..215acad0 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/State.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/State.java
+@@ -2,11 +2,22 @@ package ch.bailu.aat.services.tileremover;
+ 
+ public interface State {
+ 
++    /** start scanning **/
+     void scan();
++
++    /** chancel **/
+     void stop();
++
++    /** set to initial state **/
+     void reset();
+-    void resetAndRescan();
++
++    /** start removing **/
+     void remove();
++
++    /** rebuild list of files to remove
++     * (trim settings have been changed) **/
+     void rescan();
+ 
++    /** remove all tiles in selected directory **/
++    void removeAll();
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
+index 9b5b288e..23bb79f7 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
+@@ -4,21 +4,24 @@ import android.content.Context;
+ 
+ import java.io.File;
+ 
++import ch.bailu.aat.preferences.SolidTrimIndex;
+ import ch.bailu.aat.services.ServiceContext;
++import ch.bailu.aat.util.AppBroadcaster;
+ 
+ public class StateMachine implements State {
+ 
+     private State state;
+ 
+     public TilesList list = null;
+-    public final SourceSummaries summaries = new SourceSummaries();
++    public final SourceSummaries summaries;
+ 
+-    public File tileDirectory;
++    public File baseDirectory;
+ 
+     public final Context context;
+ 
+ 
+     public StateMachine(ServiceContext sc) {
++        summaries = new SourceSummaries(sc.getContext());
+         context = sc.getContext();
+         set(new StateUnscanned(this));
+     }
+@@ -43,11 +46,6 @@ public class StateMachine implements State {
+         state.reset();
+     }
+ 
+-    @Override
+-    public synchronized void resetAndRescan() {
+-        state.resetAndRescan();
+-    }
+-
+     @Override
+     public synchronized void remove() {
+         state.remove();
+@@ -56,6 +54,11 @@ public class StateMachine implements State {
+     @Override
+     public synchronized void rescan() { state.rescan(); }
+ 
++    @Override
++    public synchronized void removeAll() {
++        state.removeAll();
++    }
++
+ 
+     public synchronized void setFromClass(Class s) {
+         if (s == StateRemoved.class) {
+@@ -75,7 +78,40 @@ public class StateMachine implements State {
+ 
+         } else if (s == StateScan.class) {
+             set(new StateScan(this));
++
++        } else if (s == StateRemoveAll.class) {
++            set(new StateRemoveAll(this));
++        }
++
++    }
++
++    public SelectedTileDirectoryInfo getInfo() {
++        int index = new SolidTrimIndex(context).getValue();
++
++        String name = summaries.get(index).getName();
++
++        File subDirectory = baseDirectory;
++        if (index > 0) subDirectory = new File(baseDirectory, name);
++
++        return new SelectedTileDirectoryInfo(baseDirectory, subDirectory, name, index);
++    }
++
++
++
++    private static final long LIMIT = 100;
++    private long stamp;
++
++    public void broadcastLimited(String msg) {
++        long stamp = System.currentTimeMillis();
++
++        if (stamp - this.stamp > LIMIT) {
++            this.stamp = stamp;
++            broadcast(msg);
+         }
++    }
+ 
++    public void broadcast(String msg) {
++        AppBroadcaster.broadcast(context, msg);
+     }
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemove.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemove.java
+index 685fc200..22fd1ed4 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemove.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemove.java
+@@ -4,25 +4,19 @@ import java.io.File;
+ import java.util.Iterator;
+ 
+ import ch.bailu.aat.util.AppBroadcaster;
++import ch.bailu.aat.util.fs.JFile;
+ import ch.bailu.aat.util.ui.AppLog;
+ 
+ public class StateRemove implements State, Runnable {
+-    private static final int BROADCAST_INTERVAL =5;
+-    private int broadcast_count = 0;
+-
+     private final StateMachine state;
+     private Class nextState = StateRemoved.class;
+ 
+ 
+     public StateRemove(StateMachine s) {
+         state = s;
+-
+         new Thread(this).start();
+     }
+ 
+-
+-
+-
+     @Override
+     public void scan() {}
+ 
+@@ -38,19 +32,14 @@ public class StateRemove implements State, Runnable {
+     }
+ 
+     @Override
+-    public void resetAndRescan() {
+-        nextState = StateScan.class;
+-    }
++    public void remove() {}
+ 
+     @Override
+-    public void remove() {
+-
+-    }
++    public void removeAll() {}
+ 
+     @Override
+-    public void rescan() {
++    public void rescan() {}
+ 
+-    }
+ 
+     @Override
+     public void run() {
+@@ -59,43 +48,35 @@ public class StateRemove implements State, Runnable {
+ 
+         while (iterator.hasNext() && keepUp()) {
+             final TileFile t = iterator.next();
+-            final File f = state.summaries.toFile(state.tileDirectory, t);
++            final File f = state.summaries.toFile(state.baseDirectory, t);
+ 
+-            broadcast();
+             delete(f, t);
+         }
+ 
+         state.list.resetToRemove();
+-        if(keepUp()) broadcast();
++
++        if (keepUp()) {
++            JFile.deleteEmptiyDirectoriesRecursive(state.baseDirectory);
++            state.broadcast(AppBroadcaster.TILE_REMOVER_REMOVE);
++        }
++
+         state.setFromClass(nextState);
+     }
+ 
+     private boolean delete(File f, TileFile t) {
+-        if (f.delete()) {
++        if (JFile.delete(f)) {
+             state.summaries.addFileRemoved(t);
++            state.broadcastLimited( AppBroadcaster.TILE_REMOVER_REMOVE);
+             return true;
+         }
+ 
+-
+         AppLog.d(this, "Failed to delete: " + f.toString());
+         return false;
+     }
+ 
+ 
+-    private void broadcastIntervalled() {
+-        if (broadcast_count <= 0) {
+-            broadcast_count = BROADCAST_INTERVAL;
+-            broadcast();
+-        } else {
+-            broadcast_count--;
+-        }
+-    }
+-
+     private boolean keepUp() {
+         return (nextState == StateRemoved.class);
+     }
+ 
+-    private void broadcast() {
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_REMOVE);
+-    }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoveAll.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoveAll.java
+new file mode 100644
+index 00000000..6ebe06e3
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoveAll.java
+@@ -0,0 +1,117 @@
++package ch.bailu.aat.services.tileremover;
++
++
++import java.io.File;
++
++import ch.bailu.aat.util.AppBroadcaster;
++import ch.bailu.aat.util.fs.JFile;
++import ch.bailu.aat.util.ui.AppLog;
++
++public class StateRemoveAll implements State, Runnable{
++
++    private final StateMachine state;
++    private Class nextState = StateRemoved.class;
++
++
++
++    public StateRemoveAll(StateMachine s) {
++        state = s;
++
++        new Thread(this).start();
++    }
++
++    @Override
++    public void stop() {
++        nextState = StateUnscanned.class;
++    }
++
++
++    @Override
++    public void reset() {
++        nextState = StateUnscanned.class;
++    }
++
++
++    @Override
++    public void scan() {}
++
++
++    @Override
++    public void remove() {}
++
++    @Override
++    public void rescan() {}
++
++    @Override
++    public void removeAll() {}
++
++    @Override
++    public void run() {
++        SelectedTileDirectoryInfo info = state.getInfo();
++
++        TileScanner scanner = new TileScanner(info.directory) {
++            int sourceIndex=0;
++
++            @Override
++            protected boolean doSourceContainer(File dir) {
++                return keepUp();
++            }
++
++            @Override
++            protected boolean doZoomContainer(File dir) {
++                sourceIndex = state.summaries.findIndex(source);
++                return keepUp();
++            }
++
++            @Override
++            protected boolean doXContainer(File dir) {
++                return keepUp();
++            }
++
++            @Override
++            protected boolean doYContainer(File dir) {
++                return keepUp();
++            }
++
++            @Override
++            protected void doFile(File file) {
++                delete(file, new TileFile(sourceIndex, zoom, x, y, file));
++            }
++        };
++
++        if (info.index == 0) {
++            scanner.scanSourceContainer();
++        } else {
++            scanner.scanZoomContainer();
++        }
++
++        if (keepUp()) {
++            JFile.deleteEmptiyDirectoriesRecursive(info.directory);
++            broadcast();
++        }
++
++        state.setFromClass(nextState);
++    }
++
++
++
++    private boolean delete(File f, TileFile t) {
++        if (JFile.delete(f)) {
++            state.summaries.addFileRemoved(t);
++            state.broadcastLimited( AppBroadcaster.TILE_REMOVER_REMOVE);
++            return true;
++        }
++
++        AppLog.d(this, "Failed to delete: " + f.toString());
++        return false;
++    }
++
++
++    private boolean keepUp() {
++        return (nextState == StateRemoved.class);
++    }
++
++    private void broadcast() {
++        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_REMOVE);
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
+index 1f950211..18e91fa2 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
+@@ -1,8 +1,14 @@
+ package ch.bailu.aat.services.tileremover;
+ 
+-import ch.bailu.aat.util.AppBroadcaster;
++public class StateRemoved extends StateUnscanned {
++    public StateRemoved(StateMachine s) {
++        super(s);
++    }
++}
+ 
+-public class StateRemoved implements State {
++
++/*    implements
++} State {
+     private final StateMachine state;
+ 
+ 
+@@ -22,9 +28,7 @@ public class StateRemoved implements State {
+     }
+ 
+     @Override
+-    public void stop() {
+-
+-    }
++    public void stop() {}
+ 
+ 
+     @Override
+@@ -33,17 +37,12 @@ public class StateRemoved implements State {
+     }
+ 
+     @Override
+-    public void resetAndRescan() {
+-        state.set(new StateScan(state));
+-    }
++    public void remove() {}
+ 
+     @Override
+-    public void remove() {
+-
+-    }
++    public void removeAll() {}
+ 
+     @Override
+-    public void rescan() {
+-
+-    }
++    public void rescan() {}
+ }
++*/
+\ No newline at end of file
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
+index cb6a0602..e3d72410 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
+@@ -14,13 +14,11 @@ public class StateScan implements State, Runnable {
+ 
+     public StateScan(StateMachine s) {
+         state = s;
+-        state.tileDirectory = new SolidTileCacheDirectory(s.context).getValueAsFile();
++        state.baseDirectory = new SolidTileCacheDirectory(s.context).getValueAsFile();
+ 
+         state.list = new TilesList();
+-
+-        state.summaries.reset(s.context);
+-
+         new Thread(this).start();
++
+     }
+ 
+ 
+@@ -32,7 +30,6 @@ public class StateScan implements State, Runnable {
+     @Override
+     public void stop() {
+         nextState = StateUnscanned.class;
+-
+     }
+ 
+     @Override
+@@ -42,22 +39,23 @@ public class StateScan implements State, Runnable {
+ 
+ 
+     @Override
+-    public void resetAndRescan() {
+-        nextState = StateScan.class;
+-    }
++    public void remove() {}
+ 
+     @Override
+-    public void remove() {}
++    public void removeAll() {
++        nextState = StateRemoveAll.class;
++    }
+ 
+     @Override
+     public void rescan() {}
+ 
++
+     @Override
+     public void run() {
+-        scanRootDirectoryTree(state.tileDirectory);
++        scanSourceContainer(state.baseDirectory);
+ 
+         if(keepUp()) {
+-            broadcast();
++            state.broadcast(AppBroadcaster.TILE_REMOVER_SCAN);
+         }
+         state.list.log();
+         state.setFromClass(nextState);
+@@ -69,24 +67,19 @@ public class StateScan implements State, Runnable {
+         return (nextState == StateScanForRemoval.class);
+     }
+ 
+-    private void broadcast() {
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_SCAN);
+-    }
+ 
++    private void scanSourceContainer(File sourceContainer) {
++        try {
++            sourceContainer = sourceContainer.getCanonicalFile();
+ 
++            state.summaries.rescan(state.context, sourceContainer);
+ 
++            for (int summaryIndex=1; summaryIndex< state.summaries.size(); summaryIndex++) {
++                String sourceName = state.summaries.get(summaryIndex).getName();
+ 
+-    private void scanRootDirectoryTree(File file) {
+-        try {
+-            scanRootDirectories(file, state.summaries);
+-            for (int i=1; i< SourceSummaries.SUMMARY_SIZE; i++) {
+-                String name = state.summaries.getMapSummary()[i].getName();
+-
+-                if (name != null && name.length()>0 ) {
+-                    File directory = new File(file.getCanonicalFile(), name);
+-                    if (doDirectory(directory) && keepUp()) {
+-                        scanMapDirectory(directory, i);
+-                    }
++                if (sourceName != null && sourceName.length()>0 ) {
++                    File zoomContainer = new File(sourceContainer, sourceName);
++                    scanZoomContainer(zoomContainer, summaryIndex);
+                 } else {
+                     break;
+                 }
+@@ -97,99 +90,40 @@ public class StateScan implements State, Runnable {
+         }
+     }
+ 
+-    private void scanMapDirectory(File directory, int summary) {
+ 
+-        final File[] files = directory.listFiles();
++    private void scanZoomContainer(File zoomContainer, final int summaryIndex) {
++        new TileScanner(zoomContainer) {
+ 
++            @Override
++            protected boolean doSourceContainer(File dir) {
++                return keepUp();
+ 
+-
+-
+-        if (files != null) {
+-            for (File file : files) {
+-                if (doDirectory(file) && keepUp()) {
+-                    try {
+-                        scanZoomDirectory(file, summary);
+-                    } catch (NumberFormatException e) {
+-                    }
+-                }
+             }
+-        }
+-
+-    }
+ 
+-    private void scanZoomDirectory(File directory, int summary)
+-            throws  NumberFormatException {
+-        final File[] files = directory.listFiles();
+-
+-        final short zoom = TileFile.getZoom(directory);
+-
+-        if (files != null) {
+-            for (File file: files) {
+-                if (doDirectory(file) && keepUp() ) {
+-                    broadcast();
+-                    scanTileDirectory(file, zoom, summary);
+-                }
++            @Override
++            protected boolean doZoomContainer(File dir) {
++                return keepUp();
+             }
+-        }
+-    }
+ 
+-    private void scanTileDirectory(File directory, short zoom, int summary)
+-            throws NumberFormatException{
+-
+-        final File[] files = directory.listFiles();
+-        final int x = TileFile.getX(directory);
+-
+-        if (files != null) {
+-            for (File file : files) {
+-                processFile(file, zoom, x, summary);
++            @Override
++            protected boolean doXContainer(File dir) {
++                return keepUp();
+             }
+-        }
+-    }
+-
+-    public static void scanRootDirectories(File tileCacheDirectory, SourceSummaries summaries) throws IOException {
+-        tileCacheDirectory = tileCacheDirectory.getCanonicalFile();
+-
+-        final File[] files = tileCacheDirectory.listFiles();
+ 
+-        if (files != null) {
+-            int f = 0;
+-            int summaryIndex = 1;
+ 
+-            while (f < files.length && summaryIndex < SourceSummaries.SUMMARY_SIZE) {
+-                if (doDirectory(files[f])) {
+-                    summaries.setName(summaryIndex, files[f].getName());
+-                    summaryIndex++;
+-                }
+-
+-                f++;
++            @Override
++            protected boolean doYContainer(File dir) {
++                state.broadcastLimited(AppBroadcaster.TILE_REMOVER_SCAN);
++                return keepUp();
+             }
+-        }
+-    }
+-
+-    private static boolean doDirectory(File file) {
+-        return file.isDirectory() && !file.isHidden() && isReal(file);
+-    }
+ 
+ 
+-    private static boolean isReal(File file) {
+-        try {
+-            final String c = file.getCanonicalPath();
+-            final String a = file.getAbsolutePath();
+-
+-            return c.equals(a);
+-
+-        } catch (IOException e) {
+-            return false;
+-        }
+-    }
+-
+-
+-
+-    private void processFile(File file, short zoom, int x, int summary) {
+-        try {
+-            final TileFile tile = new TileFile(summary, zoom, x, file);
+-            state.list.add(tile);
+-            state.summaries.addFile(summary, tile);
+-        } catch (NumberFormatException e) {}
++            @Override
++            protected void doFile(File file) {
++                TileFile tile = new TileFile(summaryIndex, zoom, x, file);
++                state.list.add(tile);
++                state.summaries.addFile(tile);
++            }
++        }.scanZoomContainer();
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanForRemoval.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanForRemoval.java
+index b4f83b00..9bcafe32 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanForRemoval.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanForRemoval.java
+@@ -59,14 +59,11 @@ public class StateScanForRemoval implements State, Runnable {
+ 
+ 
+     @Override
+-    public void resetAndRescan() {
+-        nextState = StateScan.class;
+-    }
++    public void remove() {}
+ 
+     @Override
+-    public void remove() {
++    public void removeAll() { nextState = StateRemoveAll.class; }
+ 
+-    }
+ 
+     @Override
+     public void rescan() {
+@@ -78,36 +75,13 @@ public class StateScanForRemoval implements State, Runnable {
+     public void run() {
+         final Iterator<TileFile> iterator = state.list.iterator();
+ 
+-        int c=0;
+-
+-
+-        TileFile old = null;
+-        while (iterator.hasNext()) {
++        while (iterator.hasNext() && keepUp()) {
+             TileFile file = iterator.next();
+ 
+-
+-            if (old != null) {
+-                if (old.lastModified() > file.lastModified())
+-                    AppLog.d(this, "wrong order");
+-            }
+-
+-            old = file;
+-
+-            if (c > 0) {
+-                c--;
+-            } else if (keepUp()){
+-                c=500;
+-                broadcast();
+-            } else {
+-                AppLog.d(this, "not keep up");
+-                break;
+-            }
+-
+             if (passFilter(file)) {
+                 if (passDirectory(file)) addFile(file);
+-
++                state.broadcastLimited(AppBroadcaster.TILE_REMOVER_SCAN);
+             } else {
+-                AppLog.d(this, "not pass");
+                 break;
+             }
+ 
+@@ -145,7 +119,7 @@ public class StateScanForRemoval implements State, Runnable {
+ 
+ 
+     private boolean passSize() {
+-        return state.summaries.getNewSize(trimSummaryIndex) > trimSize;
++        return state.summaries.get(trimSummaryIndex).sizeNew > trimSize;
+     }
+ 
+     private boolean passAge(TileFile file) {
+@@ -156,7 +130,4 @@ public class StateScanForRemoval implements State, Runnable {
+         return (nextState == StateScanned.class);
+     }
+ 
+-    private void broadcast() {
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_SCAN);
+-    }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanned.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanned.java
+index c30f09a0..54b7ca0a 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanned.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScanned.java
+@@ -7,8 +7,7 @@ public class StateScanned implements State {
+ 
+     public StateScanned(StateMachine s) {
+         state = s;
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_STOPPED);
+-
++        state.broadcast(AppBroadcaster.TILE_REMOVER_STOPPED);
+     }
+ 
+ 
+@@ -23,6 +22,7 @@ public class StateScanned implements State {
+         state.set(new StateScanForRemoval(state));
+     }
+ 
++
+     @Override
+     public void stop() {}
+ 
+@@ -31,16 +31,18 @@ public class StateScanned implements State {
+         state.set(new StateUnscanned(state));
+     }
+ 
+-    @Override
+-    public void resetAndRescan() {
+-        state.set(new StateScan(state));
+-    }
++
+ 
+     @Override
+     public void remove() {
+-        if (state.summaries.getRemoveCount() > 0) {
++        if (state.summaries.get(0).countToRemove > 0) {
+             state.set(new StateRemove(state));
+         }
+     }
+ 
++    @Override
++    public void removeAll() {
++        state.set(new StateRemoveAll(state));
++    }
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScannedPartial.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScannedPartial.java
+index 0ff3eea1..5c30b8f0 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScannedPartial.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScannedPartial.java
+@@ -11,7 +11,7 @@ public class StateScannedPartial implements State {
+ 
+         state.list.resetToRemove();
+         state.summaries.resetToRemove();
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_STOPPED);
++        state.broadcast(AppBroadcaster.TILE_REMOVER_STOPPED);
+     }
+ 
+ 
+@@ -35,12 +35,10 @@ public class StateScannedPartial implements State {
+         state.set(new StateUnscanned(state));
+     }
+ 
+-    @Override
+-    public void resetAndRescan() {
+-        state.set(new StateScan(state));
+-    }
+ 
+     @Override
+     public void remove() {}
+ 
++    @Override
++    public void removeAll() {state.set(new StateRemoveAll(state));}
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
+index ba0f84fe..ff75966b 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
+@@ -12,45 +12,39 @@ public class StateUnscanned implements State {
+ 
+     public StateUnscanned(StateMachine s) {
+         state = s;
+-
+-        state.list = null;
+-        state.summaries.reset(s.context);
+-        state.tileDirectory = new SolidTileCacheDirectory(s.context).getValueAsFile();
+-        try {
+-            StateScan.scanRootDirectories(state.tileDirectory, state.summaries);
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        }
+-
+-        AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_STOPPED);
++        reset();
+     }
+ 
+-
+-
+     @Override
+     public void scan() {
+         state.set(new StateScan(state));
+     }
+ 
+     @Override
+-    public void stop() {
+-
+-    }
++    public void stop() {}
+ 
+     @Override
+-    public void reset() {}
+-
+-    @Override
+-    public void resetAndRescan() {
++    public void reset() {
++        state.list = null;
++        state.baseDirectory = new SolidTileCacheDirectory(state.context).getValueAsFile();
++        try {
++            state.summaries.rescanKeep(state.context, state.baseDirectory);
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
+ 
++        state.broadcast(AppBroadcaster.TILE_REMOVER_STOPPED);
+     }
+ 
++
+     @Override
+-    public void remove() {
++    public void remove() { state.set(new StateScan(state));}
+ 
++    @Override
++    public void removeAll() {
++        state.set(new StateRemoveAll(state));
+     }
+ 
+     @Override
+-    public void rescan() {
+-    }
++    public void rescan() {}
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/TileFile.java b/app/src/main/java/ch/bailu/aat/services/tileremover/TileFile.java
+index dee8791d..1ae8c5e2 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/TileFile.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/TileFile.java
+@@ -28,13 +28,39 @@ public class TileFile {
+     }
+ 
+ 
+-    public TileFile(int summary, short zoom, int x, File file) {
++    public static TileFile toTileFile(File file, int source) {
++
++        try {
++            File pX = file.getParentFile();
++
++            if (pX != null) {
++                File pZoom = pX.getParentFile();
++
++                if (pZoom != null) {
++                    int x = getX(pX);
++                    short zoom = getZoom(pZoom);
++
++                    return new TileFile(source, zoom, x, file);
++                }
++            }
++        } catch (NumberFormatException e) {
++            return null;
++        }
++        return null;
++
++    }
++
++    public TileFile(int summary, short zoom, int x, int y, File file) {
+         this.source = summary;
+         this.zoom = zoom;
+         this.x = x;
+-        this.y = getY(file);
+-        this.age = file.lastModified();
+-        this.size = file.length();
++        this.y = y;
++        age = file.lastModified();
++        size = file.length();
++    }
++
++    public TileFile(int summary, short zoom, int x, File file) {
++        this(summary, zoom, x, getY(file), file);
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java b/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
+index 38a3d6e4..c9d620e6 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
+@@ -75,7 +75,13 @@ public class TileRemoverService extends VirtualService {
+     }
+ 
+ 
+-    public SourceSummaryInterface[] getSummaries() {
+-        return state.summaries.getMapSummary();
++    public SelectedTileDirectoryInfo getInfo() {
++       return state.getInfo();
++    }
++
++
++
++    public SourceSummaries getSummaries() {
++        return state.summaries;
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/TileScanner.java b/app/src/main/java/ch/bailu/aat/services/tileremover/TileScanner.java
+new file mode 100644
+index 00000000..1885e177
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/TileScanner.java
+@@ -0,0 +1,144 @@
++package ch.bailu.aat.services.tileremover;
++
++import java.io.File;
++import java.io.FilenameFilter;
++import java.io.IOException;
++
++import ch.bailu.aat.util.ui.AppLog;
++
++public abstract class TileScanner {
++
++    private final File root;
++
++    protected String source;
++    protected short zoom;
++    protected int x,y;
++    protected String ext;
++
++    public TileScanner(File r) {
++        root = r;
++    }
++
++    public void scanZoomContainer() {
++        source = root.getName();
++        scanZoomContainer(root);
++    }
++
++    public void scanSourceContainer() {
++        scanSourceContainer(root);
++    }
++
++
++    private void scanSourceContainer(File dir) {
++        if (doDirectory(dir) && doSourceContainer(dir)) {
++
++            dir.list(new FilenameFilter() {
++                @Override
++                public boolean accept(File d, String name) {
++                    source = name;
++                    scanZoomContainer(new File(d, name));
++                    return false;
++                }
++            });
++        }
++    }
++
++    protected abstract boolean doSourceContainer(File dir);
++
++
++    private void scanZoomContainer(File dir) {
++        if (doDirectory(dir) && doZoomContainer(dir)) {
++            dir.list(new FilenameFilter() {
++                @Override
++                public boolean accept(File d, String name) {
++                        try {
++                            zoom = Short.decode(name);
++                            scanXContainer(new File(d, name));
++
++                        } catch (NumberFormatException e) {
++                            AppLog.d(e, d.getName());
++                        }
++
++                    return false;
++                }
++            });
++        }
++    }
++
++    protected abstract boolean doZoomContainer(File dir);
++
++
++    private void scanXContainer(File dir) {
++        if (doDirectory(dir) && doXContainer(dir)) {
++            dir.list(new FilenameFilter() {
++                @Override
++                public boolean accept(File d, String name) {
++                    try {
++                        x = Integer.decode(name);
++                        scanYContainer(new File(d, name));
++
++                    } catch (NumberFormatException e) {
++                        AppLog.d(e, d.getName());
++                    }
++                    return false;
++                }
++            });
++        }
++    }
++
++    protected abstract boolean doXContainer(File dir);
++
++
++    private void scanYContainer(File dir) {
++        if (doDirectory(dir) && doYContainer(dir)) {
++            dir.list(new FilenameFilter() {
++                @Override
++                public boolean accept(File d, String name) {
++                        try {
++                            String[] parts = name.split("\\.");
++
++                            if (parts.length==2) {
++                                y = Integer.decode(parts[0]);
++                                ext = parts[1];
++
++                                scanFile(new File(d, name));
++                            }
++
++
++                        } catch (NumberFormatException e) {
++                            AppLog.d(e, d.getName());
++                    }
++                    return false;
++                }
++            });
++        }
++    }
++
++    protected abstract boolean doYContainer(File dir);
++
++
++    private void scanFile(File file) {
++        if (file.isFile())
++            doFile(file);
++    }
++
++    protected abstract void doFile(File file);
++
++
++    public static boolean doDirectory(File file) {
++        return file.isDirectory() && !file.isHidden() && isReal(file);
++    }
++
++
++    private static boolean isReal(File file) {
++        try {
++            final String c = file.getCanonicalPath();
++            final String a = file.getAbsolutePath();
++
++            return c.equals(a);
++
++        } catch (IOException e) {
++            return false;
++        }
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java b/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
+index ca981334..0cf2994d 100644
+--- a/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
++++ b/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
+@@ -47,31 +47,15 @@ public class AppDirectory  {
+     public static final String DIR_IMPORT = "import/";
+     
+     public static final String DIR_NOMINATIM = "nominatim/";
+-    //public static final String DIR_NOMINATIM_DRAFT = "nominatim/draft";
+-    
++
+     public static final String DIR_OVERPASS = "overpass/";
+-    //public static final String DIR_OVERPASS_DRAFT = "overpass/draft/";
+-    
++
+     
+     public static final String DIR_TEST = "test/";
+     
+     
+     
+-    public static final String DIR_OSM_FEATURES = "osm_features/";
+-    public static final String DIR_OSM_FEATURES_PREPARSED = "osm_features/preparsed/";
+-    public static final String DIR_OSM_FEATURES_IMAGES = "osm_features/images/";
+-//    public static final String DIR_OSM_FEATURES_ICONS = "osm_features/icons/";
+ 
+-    public static final String FILE_OSM_FEATURES_INDEX = "index.html";
+-    
+-    public static File getMapFeatureIndex(Context c) {
+-        return new File(
+-                AppDirectory.getDataDirectory(c,  AppDirectory.DIR_OSM_FEATURES), 
+-                AppDirectory.FILE_OSM_FEATURES_INDEX
+-                );
+-                
+-    }
+-    
+     
+     public static final String DIR_CACHE = "cache/";
+     public static final String FILE_CACHE_DB="summary.db";
+@@ -96,8 +80,8 @@ public class AppDirectory  {
+ 
+     
+     /////////////////////////////////////////////////////////////////////////////////////////////////
+-    public static File getTileFile(Tile tile, String tilePath, Context context) {
+-        return new File(getTileCacheDirectory(context), tilePath);
++    public static File getTileFile(String tilePath, Context context) {
++        return new File(getTileCacheDirectory(context),tilePath);
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/util/fs/JFile.java b/app/src/main/java/ch/bailu/aat/util/fs/JFile.java
+index 38dc9903..48387fb3 100644
+--- a/app/src/main/java/ch/bailu/aat/util/fs/JFile.java
++++ b/app/src/main/java/ch/bailu/aat/util/fs/JFile.java
+@@ -1,8 +1,62 @@
+ package ch.bailu.aat.util.fs;
+ 
+ import java.io.File;
++import java.text.DecimalFormat;
+ 
+ public class JFile {
++    public final static long KB=1024;
++    public final static long MB=1024*KB;
++    public final static long GB=1024*MB;
++
++    public final static DecimalFormat dec = new DecimalFormat("0.00");
++
++    public final static long[] ldivider = {
++            1, KB, MB, GB
++    };
++
++    public final static double[] ddivider = {
++            1, KB, MB, GB
++    };
++
++    public final static String[] unit = {
++            "B", "K", "M", "G",
++    };
++
++
++    public static StringBuilder reportFileSize(StringBuilder out, double size) {
++
++
++        int i = ddivider.length;
++
++        while (i>0) {
++            i--;
++            if (Math.abs(size) >= ddivider[i])
++                break;
++        }
++
++
++        out.append(dec.format(size / ddivider[i]));
++        out.append(unit[i]);
++        return out;
++    }
++
++
++
++    public static StringBuilder reportFileSize(StringBuilder out, long size) {
++        int i = ldivider.length;
++
++        while (i>0) {
++            i--;
++            if (Math.abs(size) >= ldivider[i])
++                break;
++        }
++
++        out.append(size/ ldivider[i]);
++        out.append(unit[i]);
++        return out;
++    }
++
++
+ 
+     public static boolean canOnlyRead(File f) {
+         return canWrite(f) == false && canRead(f) == true;
+@@ -24,4 +78,32 @@ public class JFile {
+         }
+     }
+ 
++
++    public static boolean delete(File f) {
++        try {
++            return f.delete();
++        } catch (SecurityException e){
++            return false;
++        }
++    }
++
++    public static void deleteEmptiyDirectoriesRecursive(File dir) {
++        if (dir.isDirectory()) {
++            for (File child : dir.listFiles())
++                deleteEmptiyDirectoriesRecursive(child);
++
++            delete(dir);
++        }
++    }
++
++    public static void deleteRecursive(File fileOrDirectory) {
++        if (fileOrDirectory.isDirectory())
++            for (File child : fileOrDirectory.listFiles())
++                deleteRecursive(child);
++
++
++        delete(fileOrDirectory);
++    }
++
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/views/preferences/MapTilePreferencesView.java b/app/src/main/java/ch/bailu/aat/views/preferences/MapTilePreferencesView.java
+index 27e853f7..84b359c0 100644
+--- a/app/src/main/java/ch/bailu/aat/views/preferences/MapTilePreferencesView.java
++++ b/app/src/main/java/ch/bailu/aat/views/preferences/MapTilePreferencesView.java
+@@ -5,6 +5,7 @@ import android.content.Context;
+ 
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.map.tile.source.CachedSource;
++import ch.bailu.aat.map.tile.source.MapsForgeSource;
+ import ch.bailu.aat.map.tile.source.Source;
+ import ch.bailu.aat.preferences.SolidEnableTileCache;
+ import ch.bailu.aat.preferences.SolidMapsForgeDirectory;
+@@ -30,24 +31,20 @@ public class MapTilePreferencesView extends VerticalScrollView {
+         add(new SolidIndexListView(new SolidTileSize(context)));
+         add(new SolidExtendetDirectoryView(acontext, new SolidTileCacheDirectory(context)));
+ 
+-        add(new TitleView(context, Source.MAPSFORGE.getName()));
++        add(new TitleView(context, MapsForgeSource.NAME));
+         add(new SolidExtendetDirectoryView(acontext, new SolidMapsForgeDirectory(context)));
+         add(new SolidStringView(new SolidRenderTheme(context)));
+-        add(new SolidEnableTileCacheView(
+-                acontext,
+-                new SolidEnableTileCache(context, CachedSource.CACHED_MAPSFORGE)));
++        add(new SolidCheckBox(new SolidEnableTileCache.MapsForge(context)));
+ 
+         add(new TitleView(context, Source.ELEVATION_HILLSHADE.getName()));
+-        add(new SolidEnableTileCacheView(
+-                acontext,
+-                new SolidEnableTileCache(context, CachedSource.CACHED_ELEVATION_HILLSHADE)));
++        add(new SolidCheckBox(new SolidEnableTileCache.Hillshade(context)));
+ 
+         add(new TitleView(context, "Trim tile caches*"));
+         add(new SolidIndexListView(new SolidTrimMode(context)));
+         add(new SolidIndexListView(new SolidTrimSize(context)));
+         add(new SolidIndexListView(new SolidTrimDate(context)));
+ 
+-        tileRemover = new TileRemoverView(scontext);
++        tileRemover = new TileRemoverView(scontext, acontext);
+         add(tileRemover);
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/views/preferences/SolidEnableTileCacheView.java b/app/src/main/java/ch/bailu/aat/views/preferences/SolidEnableTileCacheView.java
+index e10ab6da..f090a92f 100644
+--- a/app/src/main/java/ch/bailu/aat/views/preferences/SolidEnableTileCacheView.java
++++ b/app/src/main/java/ch/bailu/aat/views/preferences/SolidEnableTileCacheView.java
+@@ -12,7 +12,7 @@ import ch.bailu.aat.preferences.SolidTileCacheDirectory;
+ import ch.bailu.aat.util.ui.AppDialog;
+ import ch.bailu.aat.util.ui.AppLog;
+ import ch.bailu.aat.views.ImageButtonView;
+-
++/*
+ public class SolidEnableTileCacheView extends LinearLayout {
+ 
+     private final Activity acontext;
+@@ -39,7 +39,7 @@ public class SolidEnableTileCacheView extends LinearLayout {
+         public SolidEmptyCacheButton(final SolidEnableTileCache s) {
+             super(s.getContext(), R.drawable.user_trash_inverse);
+ 
+-            final String name = s.getSourceNotCached().getName();
++            final String name = s.getKey();
+             final File file = getCacheDirectory(name);
+ 
+             setOnClickListener(new OnClickListener() {
+@@ -79,3 +79,4 @@ public class SolidEnableTileCacheView extends LinearLayout {
+     }
+ 
+ }
++*/
+\ No newline at end of file
+diff --git a/app/src/main/java/ch/bailu/aat/views/tileremover/ClearCacheView.java b/app/src/main/java/ch/bailu/aat/views/tileremover/ClearCacheView.java
+new file mode 100644
+index 00000000..719c2bcf
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/views/tileremover/ClearCacheView.java
+@@ -0,0 +1,43 @@
++package ch.bailu.aat.views.tileremover;
++
++import android.app.Activity;
++import android.view.View;
++
++import java.io.File;
++
++import ch.bailu.aat.R;
++import ch.bailu.aat.preferences.SolidTileCacheDirectory;
++import ch.bailu.aat.util.ui.AppDialog;
++import ch.bailu.aat.util.ui.AppLog;
++import ch.bailu.aat.views.ImageButtonView;
++/*
++public class ClearCacheView  extends ImageButtonView {
++
++
++        public ClearCacheView(final Activity acontext, String cacheName) {
++            super(acontext, R.drawable.user_trash_inverse);
++
++            final File file = getCacheDirectory(cacheName);
++
++            setOnClickListener(new OnClickListener() {
++                @Override
++                public void onClick(View v) {
++
++
++                }
++            });
++        }
++
++
++
++
++        public File getCacheDirectory(String name) {
++            return new File(
++                    new SolidTileCacheDirectory(getContext()).getValueAsFile(),
++                    name);
++        }
++
++
++    }
++
++*/
+\ No newline at end of file
+diff --git a/app/src/main/java/ch/bailu/aat/views/tileremover/TileRemoverView.java b/app/src/main/java/ch/bailu/aat/views/tileremover/TileRemoverView.java
+index 6a0bda99..23606a43 100644
+--- a/app/src/main/java/ch/bailu/aat/views/tileremover/TileRemoverView.java
++++ b/app/src/main/java/ch/bailu/aat/views/tileremover/TileRemoverView.java
+@@ -1,5 +1,6 @@
+ package ch.bailu.aat.views.tileremover;
+ 
++import android.app.Activity;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -8,6 +9,7 @@ import android.view.View;
+ import android.widget.LinearLayout;
+ 
+ import ch.bailu.aat.R;
++import ch.bailu.aat.menus.RemoveTilesMenu;
+ import ch.bailu.aat.util.AppBroadcaster;
+ import ch.bailu.aat.preferences.SolidTileCacheDirectory;
+ import ch.bailu.aat.services.ServiceContext;
+@@ -21,24 +23,26 @@ public class TileRemoverView
+         implements View.OnClickListener, SharedPreferences.OnSharedPreferenceChangeListener {
+ 
+ 
+-    private TilesSummaryView summaryView;
++    private TileSummariesView summaryView;
+     private BusyButton scan, remove;
+ 
+     private final SolidTileCacheDirectory sdirectory;
+ 
+     private final ServiceContext scontext;
++    private final Activity acontext;
+ 
+ 
+ 
+-    public TileRemoverView(ServiceContext sc) {
++    public TileRemoverView(ServiceContext sc, Activity ac) {
+         super(sc.getContext());
+ 
+         setOrientation(HORIZONTAL);
+-        scontext=sc;
++        scontext = sc;
++        acontext = ac;
+ 
+         sdirectory = new SolidTileCacheDirectory(getContext());
+ 
+-        addW(createFilterLayout(getContext()));
++        addW(createFilterLayout(ac));
+         addView(createControlBar(getContext()));
+ 
+     }
+@@ -51,8 +55,8 @@ public class TileRemoverView
+         v.setLayoutParams(l);
+     }
+ 
+-    private View createFilterLayout(Context context) {
+-        summaryView = new TilesSummaryView(context);
++    private View createFilterLayout(Activity acontext) {
++        summaryView = new TileSummariesView(acontext);
+         return summaryView;
+     }
+ 
+@@ -142,9 +146,8 @@ public class TileRemoverView
+                 tr.getState().scan();
+             } else if (v == remove && remove.isWaiting()) {
+                 tr.getState().stop();
+-            } else if (v == remove) {
+-                tr.getState().remove();
+-
++            } else if (v == remove) { // show menu
++                new RemoveTilesMenu(scontext, acontext).showAsDialog(scontext.getContext());
+             }
+ 
+             scontext.free();
+@@ -160,7 +163,7 @@ public class TileRemoverView
+         if (scontext.lock()) {
+             final TileRemoverService tr = scontext.getTileRemoverService();
+             if (sdirectory.hasKey(key)) {
+-                tr.getState().resetAndRescan();
++                tr.getState().reset();
+             } else if (key.contains("SolidTrim")) {
+                 tr.getState().rescan();
+             }
+diff --git a/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummariesView.java b/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummariesView.java
+new file mode 100644
+index 00000000..386ac393
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummariesView.java
+@@ -0,0 +1,61 @@
++package ch.bailu.aat.views.tileremover;
++
++import android.app.Activity;
++import android.widget.RadioGroup;
++
++import java.util.ArrayList;
++
++import ch.bailu.aat.preferences.SolidTrimIndex;
++import ch.bailu.aat.services.tileremover.SourceSummaries;
++
++public class TileSummariesView extends RadioGroup  {
++
++    private final ArrayList<TileSummaryView> views = new ArrayList<>(SourceSummaries.SUMMARY_SIZE);
++    private final StringBuilder builder = new StringBuilder(100);
++
++
++    public TileSummariesView(Activity a) {
++        super(a);
++        setOrientation(VERTICAL);
++    }
++
++
++    public void updateInfo(final SourceSummaries summaries) {
++
++        if (summaries.size() != views.size()) {
++            int selected = new SolidTrimIndex(getContext()).getValue();
++
++
++            // remove views
++            for (int i = views.size() - 1; i >= summaries.size(); i--) {
++                views.get(i).destroy();
++                views.remove(i);
++            }
++
++
++            // add views
++            for (int i = views.size(); i < summaries.size(); i++) {
++                views.add(new TileSummaryView(this, i));
++                views.get(i).select(selected);
++            }
++
++
++            // update title
++            for (int i = 0; i< summaries.size() && i < views.size(); i++) {
++                views.get(i).setTitle(summaries.get(i).getName());
++            }
++
++            if (selected >= summaries.size()) {
++                views.get(0).select();
++                new SolidTrimIndex(getContext()).setValue(0);
++            }
++        }
++
++        if (summaries.size() == views.size()) {
++            // update text
++            for (int i = 0; i < views.size(); i++) {
++                views.get(i).displaySummaryReport(builder, summaries.get(i));
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummaryView.java b/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummaryView.java
+new file mode 100644
+index 00000000..ef04ebcc
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/views/tileremover/TileSummaryView.java
+@@ -0,0 +1,63 @@
++package ch.bailu.aat.views.tileremover;
++
++
++import android.view.View;
++import android.widget.RadioButton;
++import android.widget.RadioGroup;
++import android.widget.TextView;
++
++import ch.bailu.aat.preferences.SolidTrimIndex;
++import ch.bailu.aat.services.tileremover.SourceSummaryInterface;
++
++public class TileSummaryView implements View.OnClickListener {
++    private final RadioButton radioButton;
++    private final TextView textView;
++    private final RadioGroup parent;
++
++    public TileSummaryView(RadioGroup p, int id) {
++        parent = p;
++
++        radioButton = new RadioButton(p.getContext());
++        radioButton.setId(id);
++        radioButton.setOnClickListener(this);
++
++        textView = new TextView(p.getContext());
++
++        p.addView(radioButton);
++        p.addView(textView);
++    }
++
++    public void destroy() {
++        parent.removeView(radioButton);
++        parent.removeView(textView);
++    }
++
++    public void setTitle(String title) {
++        radioButton.setText(title);
++    }
++
++
++    public StringBuilder displaySummaryReport(StringBuilder builder, SourceSummaryInterface summary) {
++        builder.setLength(0);
++        textView.setText(summary.buildReport(builder).toString());
++
++        return builder;
++    }
++
++
++    public void select() {
++        radioButton.toggle();
++    }
++
++    public void select(int selected) {
++        if (radioButton.getId() == selected) {
++            select();
++        }
++    }
++
++
++    @Override
++    public void onClick(View v) {
++        new SolidTrimIndex(parent.getContext()).setValue(v.getId());
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/views/tileremover/TilesSummaryView.java b/app/src/main/java/ch/bailu/aat/views/tileremover/TilesSummaryView.java
+deleted file mode 100644
+index e8998c7f..00000000
+--- a/app/src/main/java/ch/bailu/aat/views/tileremover/TilesSummaryView.java
++++ /dev/null
+@@ -1,79 +0,0 @@
+-package ch.bailu.aat.views.tileremover;
+-
+-import android.content.Context;
+-import android.view.View;
+-import android.widget.RadioButton;
+-import android.widget.RadioGroup;
+-import android.widget.TextView;
+-
+-import ch.bailu.aat.util.ui.AppTheme;
+-import ch.bailu.aat.preferences.SolidTrimIndex;
+-import ch.bailu.aat.services.tileremover.SourceSummaries;
+-import ch.bailu.aat.services.tileremover.SourceSummaryInterface;
+-
+-public class TilesSummaryView extends RadioGroup implements View.OnClickListener {
+-
+-    private final RadioButton[] radioButtons = new RadioButton[SourceSummaries.SUMMARY_SIZE];
+-    private final TextView[] textViews = new TextView[SourceSummaries.SUMMARY_SIZE];
+-
+-    private final StringBuilder builder = new StringBuilder(100);
+-
+-
+-    public TilesSummaryView(Context context) {
+-        super(context);
+-        setOrientation(VERTICAL);
+-    }
+-
+-
+-    public void updateInfo(final SourceSummaryInterface[] ts) {
+-        for (int i = 0; i < ts.length; i++) {
+-            if (ts[i].isValid()) {
+-                if (textViews[i] == null) {
+-                    addViews(i, ts[i].getName());
+-                }
+-                updateInfo(textViews[i], ts[i]);
+-            } else if (textViews[i] != null) {
+-                removeViews(i);
+-            }
+-        }
+-    }
+-
+-
+-    private void addViews(int i, String name) {
+-        radioButtons[i] = new RadioButton(getContext());
+-        AppTheme.themify(radioButtons[i]);
+-        radioButtons[i].setText(name);
+-
+-        radioButtons[i].setOnClickListener(this);
+-        radioButtons[i].setId(i);
+-
+-        addView(radioButtons[i]);
+-
+-        if (i == new SolidTrimIndex(getContext()).getValue()) {
+-            radioButtons[i].setChecked(true);
+-        }
+-
+-        textViews[i] = new TextView(getContext());
+-        addView(textViews[i]);
+-    }
+-
+-
+-    private void removeViews(int i) {
+-        removeView(textViews[i]);
+-        textViews[i] = null;
+-
+-        removeView(radioButtons[i]);
+-        radioButtons[i] = null;
+-    }
+-
+-
+-    private void updateInfo(TextView sv, SourceSummaryInterface ts) {
+-        builder.setLength(0);
+-        sv.setText(ts.buildReport(builder).toString());
+-    }
+-
+-    @Override
+-    public void onClick(View v) {
+-        new SolidTrimIndex(getContext()).setValue(v.getId());
+-    }
+-}

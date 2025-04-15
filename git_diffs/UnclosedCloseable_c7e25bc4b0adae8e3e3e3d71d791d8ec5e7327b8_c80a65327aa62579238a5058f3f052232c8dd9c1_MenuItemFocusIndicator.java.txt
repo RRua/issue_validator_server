@@ -1,0 +1,403 @@
+diff --git a/core/src/com/agateau/pixelwheels/utils/DrawUtils.java b/core/src/com/agateau/pixelwheels/utils/DrawUtils.java
+index 7c00cf88..51a387d3 100644
+--- a/core/src/com/agateau/pixelwheels/utils/DrawUtils.java
++++ b/core/src/com/agateau/pixelwheels/utils/DrawUtils.java
+@@ -18,6 +18,8 @@
+  */
+ package com.agateau.pixelwheels.utils;
+ 
++import com.badlogic.gdx.graphics.Color;
++import com.badlogic.gdx.graphics.g2d.Batch;
+ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+ import com.badlogic.gdx.math.Vector2;
+ 
+@@ -33,4 +35,12 @@ public class DrawUtils {
+         renderer.line(x - radius, y, x + radius, y);
+         renderer.line(x, y - radius, x, y + radius);
+     }
++
++    public static float setBatchAlpha(Batch batch, float alpha) {
++        Color color = batch.getColor();
++        float old = color.a;
++        color.a = alpha;
++        batch.setColor(color);
++        return old;
++    }
+ }
+diff --git a/core/src/com/agateau/ui/menu/ButtonMenuItem.java b/core/src/com/agateau/ui/menu/ButtonMenuItem.java
+index 517a3375..59c9335b 100644
+--- a/core/src/com/agateau/ui/menu/ButtonMenuItem.java
++++ b/core/src/com/agateau/ui/menu/ButtonMenuItem.java
+@@ -19,6 +19,7 @@
+ package com.agateau.ui.menu;
+ 
+ import com.agateau.ui.Scene2dUtils;
++import com.badlogic.gdx.graphics.g2d.Batch;
+ import com.badlogic.gdx.math.Rectangle;
+ import com.badlogic.gdx.scenes.scene2d.Actor;
+ import com.badlogic.gdx.scenes.scene2d.InputEvent;
+@@ -32,7 +33,7 @@ import com.badlogic.gdx.scenes.scene2d.utils.ClickListener;
+ public class ButtonMenuItem extends TextButton implements MenuItem {
+     private final Rectangle mRect = new Rectangle();
+ 
+-    private final MenuItemFocusIndicator mFocusIndicator;
++    private final FocusIndicator mFocusIndicator;
+ 
+     public ButtonMenuItem(Menu menu, String text) {
+         this(menu, text, menu.getSkin());
+@@ -40,7 +41,7 @@ public class ButtonMenuItem extends TextButton implements MenuItem {
+ 
+     public ButtonMenuItem(Menu menu, String text, Skin skin) {
+         super(text, skin);
+-        mFocusIndicator = new MenuItemFocusIndicator(this, menu);
++        mFocusIndicator = new FocusIndicator(menu);
+ 
+         addListener(new ClickListener() {
+             @Override
+@@ -103,4 +104,16 @@ public class ButtonMenuItem extends TextButton implements MenuItem {
+     public void setFocused(boolean focused) {
+         mFocusIndicator.setFocused(focused);
+     }
++
++    @Override
++    public void act(float delta) {
++        super.act(delta);
++        mFocusIndicator.act(delta);
++    }
++
++    @Override
++    public void draw(Batch batch, float parentAlpha) {
++        super.draw(batch, parentAlpha);
++        mFocusIndicator.draw(batch, getX(), getY(), getWidth(), getHeight());
++    }
+ }
+diff --git a/core/src/com/agateau/ui/menu/FocusIndicator.java b/core/src/com/agateau/ui/menu/FocusIndicator.java
+index fa1956f0..9f06fc9a 100644
+--- a/core/src/com/agateau/ui/menu/FocusIndicator.java
++++ b/core/src/com/agateau/ui/menu/FocusIndicator.java
+@@ -18,53 +18,42 @@
+  */
+ package com.agateau.ui.menu;
+ 
+-import com.agateau.utils.AgcMathUtils;
+-import com.badlogic.gdx.math.Rectangle;
+-import com.badlogic.gdx.scenes.scene2d.Touchable;
+-import com.badlogic.gdx.scenes.scene2d.actions.Actions;
+-import com.badlogic.gdx.scenes.scene2d.ui.Image;
++import com.agateau.pixelwheels.utils.DrawUtils;
++import com.badlogic.gdx.graphics.g2d.Batch;
++import com.badlogic.gdx.math.MathUtils;
+ 
+-public abstract class FocusIndicator {
++class FocusIndicator {
+     private static final float IN_ANIMATION_DURATION = 0.1f;
+     private static final float OUT_ANIMATION_DURATION = 0.4f;
+-    private final Menu mMenu;
+-    private final Image mImage;
++    private final Menu.MenuStyle mMenuStyle;
+ 
+-    public FocusIndicator(Menu menu) {
+-        mMenu = menu;
+-        mImage = new Image(menu.getMenuStyle().focus) {
+-            @Override
+-            public void act(float delta) {
+-                super.act(delta);
+-                if (getColor().a > 0) {
+-                    updateBounds();
+-                }
+-            }
+-        };
+-        mImage.setTouchable(Touchable.disabled);
+-        mImage.setColor(1, 1, 1, 0);
+-        menu.getStage().addActor(mImage);
++    private boolean mFocused = false;
++    private float mAlpha = 0;
++
++    FocusIndicator(Menu menu) {
++        mMenuStyle = menu.getMenuStyle();
+     }
+ 
+-    public void setFocused(boolean focused) {
+-        mImage.clearActions();
+-        if (focused) {
+-            updateBounds();
+-            mImage.addAction(Actions.alpha(1, IN_ANIMATION_DURATION));
+-        } else {
+-            mImage.addAction(Actions.alpha(0, OUT_ANIMATION_DURATION));
++    public void act(float delta) {
++        if (mFocused && mAlpha < 1) {
++            mAlpha += delta / IN_ANIMATION_DURATION;
++        } else if (!mFocused && mAlpha > 0) {
++            mAlpha -= delta / OUT_ANIMATION_DURATION;
+         }
++        mAlpha = MathUtils.clamp(mAlpha, 0, 1);
+     }
+ 
+-    public void updateBounds() {
+-        float padding = mMenu.getMenuStyle().focusPadding;
+-        Rectangle rect = getBoundsRectangle();
+-        AgcMathUtils.adjustRectangle(rect, padding);
+-        mImage.setBounds(rect.x, rect.y, rect.width, rect.height);
++    public void draw(Batch batch, float x, float y, float width, float height) {
++        if (mAlpha == 0) {
++            return;
++        }
++        int padding = mMenuStyle.focusPadding;
++        float oldA = DrawUtils.setBatchAlpha(batch, batch.getColor().a * mAlpha);
++        mMenuStyle.focus.draw(batch, x - padding, y - padding, width + 2 * padding, height + 2 * padding);
++        DrawUtils.setBatchAlpha(batch, oldA);
+     }
+ 
+-    /**
+-     * Must return the bounds of the focused area, in stage coordinates
+-     */
+-    abstract protected Rectangle getBoundsRectangle();
++    public void setFocused(boolean focused) {
++        mFocused = focused;
++    }
+ }
+diff --git a/core/src/com/agateau/ui/menu/GridMenuItem.java b/core/src/com/agateau/ui/menu/GridMenuItem.java
+index 928b2fb3..86bd7c42 100644
+--- a/core/src/com/agateau/ui/menu/GridMenuItem.java
++++ b/core/src/com/agateau/ui/menu/GridMenuItem.java
+@@ -25,7 +25,6 @@ import com.badlogic.gdx.graphics.Color;
+ import com.badlogic.gdx.graphics.g2d.Batch;
+ import com.badlogic.gdx.math.MathUtils;
+ import com.badlogic.gdx.math.Rectangle;
+-import com.badlogic.gdx.math.Vector2;
+ import com.badlogic.gdx.scenes.scene2d.Actor;
+ import com.badlogic.gdx.scenes.scene2d.InputEvent;
+ import com.badlogic.gdx.scenes.scene2d.InputListener;
+@@ -52,28 +51,6 @@ public class GridMenuItem<T> extends Widget implements MenuItem {
+     private float mItemWidth = 0;
+     private float mItemHeight = 0;
+ 
+-    private static class GridFocusIndicator<T> extends FocusIndicator {
+-        private final int mIndex;
+-        private final GridMenuItem<T> mItem;
+-
+-        public GridFocusIndicator(int index, GridMenuItem<T> item, Menu menu) {
+-            super(menu);
+-            mItem = item;
+-            mIndex = index;
+-        }
+-
+-        private final Vector2 mTmp = new Vector2();
+-        @Override
+-        protected Rectangle getBoundsRectangle() {
+-            Rectangle rect = mItem.getRectangleForIndex(mIndex);
+-            mTmp.set(rect.x, rect.y);
+-            mItem.getActor().localToStageCoordinates(mTmp);
+-            rect.x = mTmp.x;
+-            rect.y = mTmp.y;
+-            return rect;
+-        }
+-    }
+-
+     public interface ItemRenderer<T> {
+         /**
+          * Returns a rectangle relative to the bottom-left corner of the grid
+@@ -179,7 +156,7 @@ public class GridMenuItem<T> extends Widget implements MenuItem {
+     public void setItems(Array<T> items) {
+         mItems = items;
+         while (mFocusIndicators.size < mItems.size) {
+-            GridFocusIndicator<T> indicator = new GridFocusIndicator<T>(mFocusIndicators.size, this, mMenu);
++            FocusIndicator indicator = new FocusIndicator(mMenu);
+             mFocusIndicators.add(indicator);
+         }
+         setCurrentIndex(items.size > 0 ? 0 : -1);
+@@ -237,6 +214,14 @@ public class GridMenuItem<T> extends Widget implements MenuItem {
+         updateHeight();
+     }
+ 
++    @Override
++    public void act(float delta) {
++        super.act(delta);
++        for (FocusIndicator focusIndicator : mFocusIndicators) {
++            focusIndicator.act(delta);
++        }
++    }
++
+     @Override
+     public void draw(Batch batch, float parentAlpha) {
+         if (mRenderer == null) {
+@@ -257,9 +242,13 @@ public class GridMenuItem<T> extends Widget implements MenuItem {
+ 
+         for (int idx = 0; idx < mItems.size; idx++) {
+             T item = mItems.get(idx);
++            Rectangle rect = mRenderer.getItemRectangle(mItemWidth, mItemHeight, item);
++
++            FocusIndicator focusIndicator = mFocusIndicators.get(idx);
++            focusIndicator.draw(batch, getX() + x + rect.x, getY() + y + rect.y, rect.width, rect.height);
++
+             if (idx == mSelectedIndex) {
+                 int padding = mMenu.getMenuStyle().focusPadding;
+-                Rectangle rect = mRenderer.getItemRectangle(mItemWidth, mItemHeight, item);
+                 mStyle.selected.draw(batch, getX() + x + rect.x - padding, getY() + y + rect.y - padding,
+                         rect.width + 2 * padding, rect.height + 2 * padding);
+             }
+diff --git a/core/src/com/agateau/ui/menu/MenuItemFocusIndicator.java b/core/src/com/agateau/ui/menu/MenuItemFocusIndicator.java
+deleted file mode 100644
+index fc7d6f1f..00000000
+--- a/core/src/com/agateau/ui/menu/MenuItemFocusIndicator.java
++++ /dev/null
+@@ -1,42 +0,0 @@
+-/*
+- * Copyright 2018 Aurélien Gâteau <mail@agateau.com>
+- *
+- * This file is part of Pixel Wheels.
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+- * use this file except in compliance with the License.
+- *
+- * You may obtain a copy of the License at
+- *
+- *   http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+- * License for the specific language governing permissions and limitations
+- * under the License.
+- */
+-package com.agateau.ui.menu;
+-
+-import com.badlogic.gdx.math.Rectangle;
+-import com.badlogic.gdx.math.Vector2;
+-
+-class MenuItemFocusIndicator extends FocusIndicator {
+-    private final MenuItem mItem;
+-
+-    public MenuItemFocusIndicator(MenuItem item, Menu menu) {
+-        super(menu);
+-        mItem = item;
+-    }
+-
+-    private final Vector2 mTmp = new Vector2();
+-    @Override
+-    protected Rectangle getBoundsRectangle() {
+-        Rectangle rect = mItem.getFocusRectangle();
+-        mTmp.set(rect.x, rect.y);
+-        mItem.getActor().localToStageCoordinates(mTmp);
+-        rect.x = mTmp.x;
+-        rect.y = mTmp.y;
+-        return rect;
+-    }
+-}
+diff --git a/core/src/com/agateau/ui/menu/RangeMenuItem.java b/core/src/com/agateau/ui/menu/RangeMenuItem.java
+index ba785bd2..89cad272 100644
+--- a/core/src/com/agateau/ui/menu/RangeMenuItem.java
++++ b/core/src/com/agateau/ui/menu/RangeMenuItem.java
+@@ -40,7 +40,7 @@ abstract class RangeMenuItem extends AnchorGroup implements MenuItem {
+     private final Button mLeftButton;
+     private final Button mRightButton;
+     private final Rectangle mRect = new Rectangle();
+-    private final MenuItemFocusIndicator mFocusIndicator;
++    private final FocusIndicator mFocusIndicator;
+     private final RangeMenuItemStyle mStyle;
+     private Actor mMainActor;
+ 
+@@ -53,7 +53,7 @@ abstract class RangeMenuItem extends AnchorGroup implements MenuItem {
+ 
+     public RangeMenuItem(Menu menu) {
+         mMenu = menu;
+-        mFocusIndicator = new MenuItemFocusIndicator(this, menu);
++        mFocusIndicator = new FocusIndicator(menu);
+         mStyle = menu.getSkin().get(RangeMenuItemStyle.class);
+ 
+         mLeftButton = createButton(mStyle.decIcon, menu.getSkin());
+@@ -101,10 +101,17 @@ abstract class RangeMenuItem extends AnchorGroup implements MenuItem {
+         super.layout();
+     }
+ 
++    @Override
++    public void act(float delta) {
++        super.act(delta);
++        mFocusIndicator.act(delta);
++    }
++
+     @Override
+     public void draw(Batch batch, float parentAlpha) {
+         mStyle.frame.draw(batch, getX(), getY(), getWidth(), getHeight());
+         super.draw(batch, parentAlpha);
++        mFocusIndicator.draw(batch, getX(), getY(), getWidth(), getHeight());
+     }
+ 
+     /**
+diff --git a/core/src/com/agateau/ui/menu/SwitchMenuItem.java b/core/src/com/agateau/ui/menu/SwitchMenuItem.java
+index 47e72b34..6836a6a9 100644
+--- a/core/src/com/agateau/ui/menu/SwitchMenuItem.java
++++ b/core/src/com/agateau/ui/menu/SwitchMenuItem.java
+@@ -35,7 +35,7 @@ import com.badlogic.gdx.utils.Align;
+ public class SwitchMenuItem extends Actor implements MenuItem {
+     private static final float SWITCH_SPEED = 10;
+     private final Rectangle mFocusRectangle = new Rectangle();
+-    private final MenuItemFocusIndicator mFocusIndicator;
++    private final FocusIndicator mFocusIndicator;
+ 
+     private BitmapFont mFont;
+     private SwitchMenuItemStyle mStyle;
+@@ -51,7 +51,7 @@ public class SwitchMenuItem extends Actor implements MenuItem {
+ 
+     public SwitchMenuItem(Menu menu) {
+         super();
+-        mFocusIndicator = new MenuItemFocusIndicator(this, menu);
++        mFocusIndicator = new FocusIndicator(menu);
+         setTouchable(Touchable.enabled);
+ 
+         mFont = menu.getSkin().get("default-font", BitmapFont.class);
+@@ -139,6 +139,7 @@ public class SwitchMenuItem extends Actor implements MenuItem {
+     @Override
+     public void act(float delta) {
+         super.act(delta);
++        mFocusIndicator.act(delta);
+         if (mChecked && mXOffset < 1) {
+             mXOffset = Math.min(1, mXOffset + delta * SWITCH_SPEED);
+         } else if (!mChecked && mXOffset > 0) {
+@@ -150,6 +151,8 @@ public class SwitchMenuItem extends Actor implements MenuItem {
+     public void draw(Batch batch, float parentAlpha) {
+         mStyle.frame.draw(batch, getX(), getY(), getWidth(), getHeight());
+ 
++        mFocusIndicator.draw(batch, getX(), getY(), getWidth(), getHeight());
++
+         // Draw handle
+         Drawable handle = mStyle.handle;
+         float padding = mStyle.framePadding;
+diff --git a/core/src/com/agateau/ui/menu/TabMenuItem.java b/core/src/com/agateau/ui/menu/TabMenuItem.java
+index 4acb6b8a..a16b776c 100644
+--- a/core/src/com/agateau/ui/menu/TabMenuItem.java
++++ b/core/src/com/agateau/ui/menu/TabMenuItem.java
+@@ -36,7 +36,7 @@ import com.badlogic.gdx.utils.Array;
+  * An item to create tabbed content in a menu
+  */
+ public class TabMenuItem extends Actor implements MenuItem {
+-    private final MenuItemFocusIndicator mFocusIndicator;
++    private final FocusIndicator mFocusIndicator;
+     private final Menu mMenu;
+     private final GlyphLayout mGlyphLayout = new GlyphLayout();
+ 
+@@ -70,7 +70,7 @@ public class TabMenuItem extends Actor implements MenuItem {
+ 
+     public TabMenuItem(Menu menu) {
+         mMenu = menu;
+-        mFocusIndicator = new MenuItemFocusIndicator(this, menu);
++        mFocusIndicator = new FocusIndicator(menu);
+         mFont = menu.getSkin().get("default-font", BitmapFont.class);
+         mStyle = menu.getSkin().get(TabMenuItemStyle.class);
+ 
+@@ -170,6 +170,7 @@ public class TabMenuItem extends Actor implements MenuItem {
+     @Override
+     public void act(float delta) {
+         super.act(delta);
++        mFocusIndicator.act(delta);
+     }
+ 
+     @Override
+@@ -178,6 +179,7 @@ public class TabMenuItem extends Actor implements MenuItem {
+             return;
+         }
+ 
++        mFocusIndicator.draw(batch, getX(), getY(), getWidth(), getHeight());
+         drawFrame(batch);
+         drawHandle(batch);
+         drawText(batch);

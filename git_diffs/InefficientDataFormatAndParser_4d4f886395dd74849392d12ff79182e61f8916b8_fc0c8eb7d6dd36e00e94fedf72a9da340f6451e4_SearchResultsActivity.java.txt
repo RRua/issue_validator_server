@@ -1,0 +1,655 @@
+diff --git a/app/src/main/java/com/confinement/diconfinement/DefinitionsFinder.java b/app/src/main/java/com/confinement/diconfinement/DefinitionsFinder.java
+new file mode 100644
+index 0000000..ef4dcba
+--- /dev/null
++++ b/app/src/main/java/com/confinement/diconfinement/DefinitionsFinder.java
+@@ -0,0 +1,108 @@
++package com.confinement.diconfinement;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.res.Resources;
++import android.os.Build;
++import android.text.Html;
++import android.text.SpannableString;
++
++import androidx.annotation.RequiresApi;
++import com.google.gson.Gson;
++import com.google.gson.reflect.TypeToken;
++import org.w3c.dom.Document;
++import org.w3c.dom.Element;
++import org.w3c.dom.Node;
++import org.w3c.dom.NodeList;
++import java.io.InputStream;
++import java.lang.reflect.Type;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++import javax.xml.parsers.DocumentBuilder;
++import javax.xml.parsers.DocumentBuilderFactory;
++
++public class DefinitionsFinder {
++
++    static Boolean addDefinitionsToList(ArrayList<SpannableString> list, String userQuery, NodeList definitionsList, int definitionsNumber) {
++        boolean previousDefinitionsFound = false;
++        for (int i = 0; i<definitionsNumber; i++)
++        {
++            if(definitionsList.item(i).getNodeType() == Node.ELEMENT_NODE)
++            {
++                final Element definition = (Element) definitionsList.item(i);
++
++                String wordOfDictionnary = definition.getAttribute(FileUtils.wordAttribute);
++
++                if (wordOfDictionnary != null && wordOfDictionnary.equalsIgnoreCase(userQuery)){
++                    previousDefinitionsFound = true;
++                    String def = definition.getElementsByTagName(Globals.defXml).item(0).getTextContent();
++                    String nature = definition.getElementsByTagName(Globals.natureXml).item(0).getTextContent();
++                    String[] stringArray = def.split("\n");
++                    list.add(new SpannableString(Html.fromHtml(nature)));
++                    Pattern p = Pattern.compile(Globals.regexpPattern);
++                    for (int cpt=0; cpt<stringArray.length; cpt++) {
++                        Matcher m = p.matcher(stringArray[cpt]);
++                        DisplayUtils.removeUnwantedCharacters(stringArray, cpt, m);
++                        list.add(new SpannableString(DisplayUtils.trimTrailingWhitespace(Html.fromHtml(stringArray[cpt]))));
++                    }
++                } else if (!wordOfDictionnary.equalsIgnoreCase(userQuery) && previousDefinitionsFound){
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    static boolean hasDefinitions(Resources resources, String userQuery, ArrayList<SpannableString> list) {
++        if (userQuery == null || userQuery.isEmpty()) {
++            return false;
++        }
++        userQuery = userQuery.toLowerCase();
++        Integer file = FileUtils.filetoSearch(userQuery);
++        if (file != null) {
++            InputStream is = resources.openRawResource(file);
++            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
++            DocumentBuilder db;
++            Document dictionnaryXml;
++            try {
++                db = dbf.newDocumentBuilder();
++                dictionnaryXml = db.parse(is);
++            } catch (Exception e) {
++                e.printStackTrace();
++                return false;
++            }
++            final Element dictionnaryRacine = dictionnaryXml.getDocumentElement();
++            final NodeList definitionsList = dictionnaryRacine.getChildNodes();
++            final int definitionsNumber = definitionsList.getLength();
++
++            Boolean definitionsAdded = addDefinitionsToList(list, userQuery, definitionsList, definitionsNumber);
++            return definitionsAdded;
++        }
++        return false;
++    }
++
++    static ArrayList<SpannableString> getSharedPrefDefinition(Context context, String searchedWord) {
++        SharedPreferences sharedPreferences = context.getSharedPreferences(Globals.preferenceFile, Context.MODE_PRIVATE);
++        String serializedObject = sharedPreferences.getString(FileUtils.normalizeString(searchedWord), null);
++        ArrayList<SpannableString> definition = null, defPref = null;
++        if (serializedObject != null) {
++            Gson gsonBis = new Gson();
++            Type type = new TypeToken<List<SpannableString>>(){}.getType();
++            defPref = gsonBis.fromJson(serializedObject, type);
++            definition = new ArrayList<>(defPref);
++        }
++        return definition;
++    }
++
++    @RequiresApi(api = Build.VERSION_CODES.KITKAT)
++    static String getNextOrPreviousSavedWord(int index, Context context) {
++        ArrayList<String> savedWordsString = FileUtils.retrieveSavedWords(context);
++        if (index >= 0 && index < savedWordsString.size()) {
++            ArrayList<SpannableString> savedWords = FileUtils.sortAndConvertToSpannableList(savedWordsString);
++            return String.valueOf(savedWords.get(index));
++        }
++        return null;
++    }
++}
+diff --git a/app/src/main/java/com/confinement/diconfinement/FileUtils.java b/app/src/main/java/com/confinement/diconfinement/FileUtils.java
+index 8e8aa29..8e86fe2 100644
+--- a/app/src/main/java/com/confinement/diconfinement/FileUtils.java
++++ b/app/src/main/java/com/confinement/diconfinement/FileUtils.java
+@@ -1,6 +1,9 @@
+ package com.confinement.diconfinement;
+ 
++import android.app.SearchManager;
++import android.content.ComponentName;
+ import android.content.Context;
++import android.content.Intent;
+ import android.os.Build;
+ import android.text.SpannableString;
+ 
+@@ -152,8 +155,7 @@ class FileUtils  {
+     }
+ 
+     @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+-    static ArrayList<SpannableString> retrieveSavedWords(Context context) {
+-        ArrayList<SpannableString> savedWordsListSorted = new ArrayList<>();
++    static ArrayList<String> retrieveSavedWords(Context context) {
+         ArrayList<String> savedWordsString = new ArrayList<>();
+ 
+         FileInputStream savedWordsInptStrm;
+@@ -161,22 +163,21 @@ class FileUtils  {
+             savedWordsInptStrm = context.openFileInput(Globals.savedWordsFileName);
+         } catch (FileNotFoundException e) {
+             e.printStackTrace();
+-            return savedWordsListSorted;
++            return savedWordsString;
+         }
+         if (savedWordsInptStrm == null) {
+-            return savedWordsListSorted;
++            return savedWordsString;
+         }
+ 
+         InputStreamReader savedWrdsInptStrmRdr =
+                 new InputStreamReader(savedWordsInptStrm, StandardCharsets.UTF_8);
+         try (BufferedReader savedWordsReader = new BufferedReader(savedWrdsInptStrmRdr)) {
+             readSavedWordsList(savedWordsString, savedWordsReader);
+-            SortAndConvertToSpannableList(savedWordsListSorted, savedWordsString);
+         } catch (IOException e) {
+             e.printStackTrace();
+         }
+ 
+-        return savedWordsListSorted;
++        return savedWordsString;
+     }
+ 
+     private static void readSavedWordsList(ArrayList<String> savedWordsString, BufferedReader reader) throws IOException {
+@@ -188,7 +189,8 @@ class FileUtils  {
+         }
+     }
+ 
+-    private static void SortAndConvertToSpannableList(ArrayList<SpannableString> savedWordsList, ArrayList<String> savedWordsString) {
++    static ArrayList<SpannableString> sortAndConvertToSpannableList(ArrayList<String> savedWordsString) {
++        ArrayList<SpannableString> savedWordsList = new ArrayList<>();
+         if (savedWordsString.size() != 0) {
+             Collections.sort(savedWordsString, new Comparator<String>() {
+                 @Override
+@@ -202,6 +204,7 @@ class FileUtils  {
+                 savedWordsList.add(new SpannableString(word));
+             }
+         }
++        return savedWordsList;
+     }
+ 
+     static void initFirstWordDicoHashMap(Context applicationContext) {
+@@ -237,4 +240,23 @@ class FileUtils  {
+ 
+         }
+     }
++
++    static Intent createSearchIntent(SpannableString savedWord, int position) {
++        Intent intent = new Intent();
++        intent.setAction(Intent.ACTION_SEARCH);
++        intent.putExtra(SearchManager.QUERY,savedWord.toString());
++        intent.setComponent(new ComponentName(Globals.packageName, Globals.packageName + ".SearchResultsActivity"));
++        intent.putExtra("position", position);
++        return intent;
++    }
++
++    static String normalizeString(String stringToNormalize) {
++        if (stringToNormalize != null) {
++            return stringToNormalize.toLowerCase();
++        }
++        return null;
++    }
++
++
++
+ }
+diff --git a/app/src/main/java/com/confinement/diconfinement/Globals.java b/app/src/main/java/com/confinement/diconfinement/Globals.java
+index 826068f..df527ad 100644
+--- a/app/src/main/java/com/confinement/diconfinement/Globals.java
++++ b/app/src/main/java/com/confinement/diconfinement/Globals.java
+@@ -1,6 +1,10 @@
+ package com.confinement.diconfinement;
++import android.text.SpannableString;
++
+ import androidx.appcompat.app.AppCompatActivity;
+ import java.io.InputStream;
++import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.TreeSet;
+ 
+ public class Globals extends AppCompatActivity {
+@@ -12,11 +16,9 @@ public class Globals extends AppCompatActivity {
+     static final String defXml = "def";
+     static final String natureXml = "nature";
+     static final String columnSuggestion = "wordSuggestion";
+-
++    static final String preferenceFile = "preferenceFile";
+     static final Integer suggestionsMaxLength = 3;
+-
+     static String savedWordsFileName = "savedWords";
+-
+     static String packageName = "com.confinement.diconfinement";
+     static TreeSet<String> getDicoWords(InputStream is) {
+         if (dicoWords == null) {
+diff --git a/app/src/main/java/com/confinement/diconfinement/MainActivity.java b/app/src/main/java/com/confinement/diconfinement/MainActivity.java
+index a4cf0a7..f0105f8 100644
+--- a/app/src/main/java/com/confinement/diconfinement/MainActivity.java
++++ b/app/src/main/java/com/confinement/diconfinement/MainActivity.java
+@@ -1,7 +1,6 @@
+ package com.confinement.diconfinement;
+ 
+ import android.app.SearchManager;
+-import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.ContextWrapper;
+ import android.content.Intent;
+@@ -61,7 +60,7 @@ public class MainActivity extends AppCompatActivity {
+                 top = (v == null) ? 0 : (v.getTop() - listView.getPaddingTop());
+                 SpannableString savedWord = (SpannableString) obj;
+                 if (savedWord != null) {
+-                    Intent intent = createSearchIntent(savedWord);
++                    Intent intent = FileUtils.createSearchIntent(savedWord, position);
+                     startActivity(intent);
+                 }
+             }
+@@ -76,7 +75,10 @@ public class MainActivity extends AppCompatActivity {
+                         displaySpinner(toolbar, listView, progressBar);
+                     }
+                 });
+-                FileUtils.initFirstWordDicoHashMap(getApplicationContext());
++                Context context = getApplicationContext();
++                FileUtils.initFirstWordDicoHashMap(context);
++                //Method to put in sharedPref saved words which are not in it (Only possible if words saved before version < 3.0)
++                SharedPref.putSavedWordsInSharedPref(getResources(),context, FileUtils.retrieveSavedWords(context));
+                 runOnUiThread(new Runnable() {
+                     @Override
+                     public void run() {
+@@ -88,6 +90,7 @@ public class MainActivity extends AppCompatActivity {
+     }
+ 
+ 
++
+     private void hideSpinner(ProgressBar progressBar, Toolbar toolbar, ListView listView) {
+         progressBar.setVisibility(View.GONE);
+         TextView loadingText = findViewById(R.id.loadingTextView);
+@@ -109,13 +112,6 @@ public class MainActivity extends AppCompatActivity {
+     }
+ 
+ 
+-    private Intent createSearchIntent(SpannableString savedWord) {
+-        Intent intent = new Intent();
+-        intent.setAction(Intent.ACTION_SEARCH);
+-        intent.putExtra(SearchManager.QUERY,savedWord.toString());
+-        intent.setComponent(new ComponentName(Globals.packageName, Globals.packageName + ".SearchResultsActivity"));
+-        return intent;
+-    }
+ 
+     @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+     @Override
+@@ -130,8 +126,9 @@ public class MainActivity extends AppCompatActivity {
+ 
+     @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+     private void displaySavedWords(ListView listView) {
+-        ArrayList<SpannableString> savedWords = FileUtils.retrieveSavedWords(getApplicationContext());
+-        listView.setAdapter(new WordsSavedAdapter(this, savedWords));
++        ArrayList<String> savedWords = FileUtils.retrieveSavedWords(getApplicationContext());
++        ArrayList<SpannableString> savedWordsSorted = FileUtils.sortAndConvertToSpannableList(savedWords);
++        listView.setAdapter(new WordsSavedAdapter(this, savedWordsSorted));
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/confinement/diconfinement/OnSwipeTouchListener.java b/app/src/main/java/com/confinement/diconfinement/OnSwipeTouchListener.java
+new file mode 100644
+index 0000000..b4f4f98
+--- /dev/null
++++ b/app/src/main/java/com/confinement/diconfinement/OnSwipeTouchListener.java
+@@ -0,0 +1,50 @@
++package com.confinement.diconfinement;
++
++import android.content.Context;
++import android.view.GestureDetector;
++import android.view.MotionEvent;
++import android.view.View;
++
++public class OnSwipeTouchListener implements View.OnTouchListener {
++
++
++    private final GestureDetector gestureDetector;
++
++    public OnSwipeTouchListener(Context context) {
++        gestureDetector = new GestureDetector(context, new GestureListener());
++    }
++
++    public boolean onTouch(View v, MotionEvent event) {
++        return gestureDetector.onTouchEvent(event);
++    }
++
++    public void onSwipeLeft() {
++    }
++
++    public void onSwipeRight() {
++    }
++
++    private final class GestureListener extends GestureDetector.SimpleOnGestureListener {
++        private static final int SWIPE_DISTANCE_THRESHOLD = 100;
++        private static final int SWIPE_VELOCITY_THRESHOLD = 100;
++
++        @Override
++        public boolean onDown(MotionEvent e) {
++            return true;
++        }
++
++        @Override
++        public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
++            float distanceX = e2.getX() - e1.getX();
++            float distanceY = e2.getY() - e1.getY();
++            if (Math.abs(distanceX) > Math.abs(distanceY) && Math.abs(distanceX) > SWIPE_DISTANCE_THRESHOLD && Math.abs(velocityX) > SWIPE_VELOCITY_THRESHOLD) {
++                if (distanceX > 0)
++                    onSwipeRight();
++                else
++                    onSwipeLeft();
++                return true;
++            }
++            return false;
++        }
++    }
++}
+diff --git a/app/src/main/java/com/confinement/diconfinement/SearchResultsActivity.java b/app/src/main/java/com/confinement/diconfinement/SearchResultsActivity.java
+index 8ab18ac..9499bba 100644
+--- a/app/src/main/java/com/confinement/diconfinement/SearchResultsActivity.java
++++ b/app/src/main/java/com/confinement/diconfinement/SearchResultsActivity.java
+@@ -8,39 +8,35 @@ import android.content.Intent;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.text.Html;
+ import android.text.SpannableString;
+ import android.view.Menu;
+ import android.view.MenuItem;
+ import android.widget.ArrayAdapter;
+ import android.widget.ListView;
+ import android.widget.SearchView;
+-
+ import androidx.annotation.RequiresApi;
+ import androidx.appcompat.app.AppCompatActivity;
+ import androidx.appcompat.widget.Toolbar;
+-
+-import org.w3c.dom.Document;
+-import org.w3c.dom.Element;
+-import org.w3c.dom.Node;
+-import org.w3c.dom.NodeList;
+-
+ import java.io.File;
+-import java.io.InputStream;
+ import java.util.ArrayList;
+-import java.util.regex.Matcher;
+-import java.util.regex.Pattern;
+-
+-import javax.xml.parsers.DocumentBuilder;
+-import javax.xml.parsers.DocumentBuilderFactory;
++import java.util.List;
+ 
+ public class SearchResultsActivity extends AppCompatActivity {
+ 
+     private String searchedWord;
+     private Menu searchResultsMenu;
+     private boolean needsSave;
+-
+     private Menu menu;
++    private Integer position;
++    private List<SpannableString> definitions;
++
++    public List<SpannableString> getDefinitions() {
++        return definitions;
++    }
++
++    public void setDefinitions(List<SpannableString> definitions) {
++        this.definitions = definitions;
++    }
+ 
+     public Menu getMenu() {
+         return menu;
+@@ -49,37 +45,6 @@ public class SearchResultsActivity extends AppCompatActivity {
+     public void setMenu(Menu menu) {
+         this.menu = menu;
+     }
+-    private String packageName = "com.confinement.diconfinement";
+-
+-    static Boolean addDefinitionsToList(ArrayList<SpannableString> list, String userQuery, NodeList definitionsList, int definitionsNumber) {
+-        boolean previousDefinitionsFound = false;
+-        for (int i = 0; i<definitionsNumber; i++)
+-        {
+-            if(definitionsList.item(i).getNodeType() == Node.ELEMENT_NODE)
+-            {
+-                final Element definition = (Element) definitionsList.item(i);
+-
+-                String wordOfDictionnary = definition.getAttribute(FileUtils.wordAttribute);
+-
+-                if (wordOfDictionnary != null && wordOfDictionnary.equalsIgnoreCase(userQuery)){
+-                    previousDefinitionsFound = true;
+-                    String def = definition.getElementsByTagName(Globals.defXml).item(0).getTextContent();
+-                    String nature = definition.getElementsByTagName(Globals.natureXml).item(0).getTextContent();
+-                    String[] stringArray = def.split("\n");
+-                    list.add(new SpannableString(Html.fromHtml(nature)));
+-                    Pattern p = Pattern.compile(Globals.regexpPattern);
+-                    for (int cpt=0; cpt<stringArray.length; cpt++) {
+-                        Matcher m = p.matcher(stringArray[cpt]);
+-                        DisplayUtils.removeUnwantedCharacters(stringArray, cpt, m);
+-                        list.add(new SpannableString(DisplayUtils.trimTrailingWhitespace(Html.fromHtml(stringArray[cpt]))));
+-                    }
+-                } else if (!wordOfDictionnary.equalsIgnoreCase(userQuery) && previousDefinitionsFound){
+-                    return true;
+-                }
+-            }
+-        }
+-        return null;
+-    }
+ 
+     private String getSearchedWord() {
+         return this.searchedWord;
+@@ -89,6 +54,23 @@ public class SearchResultsActivity extends AppCompatActivity {
+         this.searchedWord = word;
+     }
+ 
++    private void setPosition(Integer position) {
++        this.position = position;
++    }
++
++    private Integer getPosition() {
++        return this.position;
++    }
++
++    private boolean getNeedsSave() {
++        return this.needsSave;
++    }
++    private void setNeedsSave(boolean needsSave) {
++        this.needsSave=needsSave;
++    }
++
++
++
+     @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+     @Override
+     public boolean onCreateOptionsMenu(Menu menu) {
+@@ -190,6 +172,7 @@ public class SearchResultsActivity extends AppCompatActivity {
+     private void removeWordFromSavedList(File filesDir) {
+         String wordToRemove = getSearchedWord();
+         FileUtils.removeFromFile(filesDir, wordToRemove);
++        SharedPref.removeWordFromSharedPref(wordToRemove, getApplicationContext());
+         DisplayUtils.displayToast(getApplicationContext(), Globals.wordUnsaved);
+         setNeedsSave(true);
+         setIconAlpha(true);
+@@ -198,11 +181,13 @@ public class SearchResultsActivity extends AppCompatActivity {
+     @RequiresApi(api = Build.VERSION_CODES.KITKAT)
+     private void addWordToSavedList(File filesDir, String wordToSave) {
+         FileUtils.writeToFile(filesDir, wordToSave);
++        SharedPref.addWordToSharedPref(wordToSave, getApplicationContext(), getDefinitions());
+         DisplayUtils.displayToast(getApplicationContext(), Globals.wordSaved);
+         setNeedsSave(false);
+         setIconAlpha(false);
+     }
+ 
++
+     @Override
+     protected void onNewIntent(Intent intent) {
+         handleIntent(intent);
+@@ -211,7 +196,8 @@ public class SearchResultsActivity extends AppCompatActivity {
+     private ArrayList<SpannableString> handleIntent(Intent intent) {
+         ArrayList<SpannableString> list = new ArrayList<>();
+         if (Intent.ACTION_SEARCH.equals(intent.getAction())) {
+-            if (hasDefinitions(intent, list)) return list;
++            String userQuery = intent.getStringExtra(SearchManager.QUERY);
++            if (DefinitionsFinder.hasDefinitions(getResources(),userQuery, list)) return list;
+         }
+         list.add(new SpannableString(Globals.userQueryNotInDict));
+         return list;
+@@ -221,16 +207,39 @@ public class SearchResultsActivity extends AppCompatActivity {
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+         setContentView(R.layout.searchable_activity);
+-        ListView listView = findViewById(R.id.view_list);
+-        ArrayList<SpannableString> definition = handleIntent(getIntent());
+-        ArrayAdapter adapter = new ArrayAdapter<>(this,
+-                R.layout.textview, definition);
++        final ListView listView = findViewById(R.id.view_list);
++        String searchedWord = null;
+         setSearchedWord("");
+-        if (getIntent() != null) {
+-            setTitle(getIntent().getStringExtra(SearchManager.QUERY));
+-            setSearchedWord(getIntent().getStringExtra(SearchManager.QUERY));
++        if (getIntent() != null){
++            searchedWord = getIntent().getStringExtra(SearchManager.QUERY);
++            setTitle(searchedWord);
++            setSearchedWord(searchedWord);
+         }
++        //Check if word is not already stored in shared preferences. If not search in dictionnnary.
++        ArrayList<SpannableString> definition = DefinitionsFinder.getSharedPrefDefinition(getApplicationContext(), searchedWord);
++        if (definition == null) {
++            definition = handleIntent(getIntent());
++        }
++
++        setPosition(getIntent().getIntExtra("position", 0));
++        ArrayAdapter adapter = new ArrayAdapter<>(this,
++                R.layout.textview, definition);
++        setDefinitions(definition);
+         listView.setAdapter(adapter);
++        listView.setOnTouchListener(new OnSwipeTouchListener(this) {
++            @RequiresApi(api = Build.VERSION_CODES.KITKAT)
++            @Override
++            public void onSwipeLeft() {
++                goToNextOrPreviousDef(listView, getPosition() + 1);
++
++            }
++            @RequiresApi(api = Build.VERSION_CODES.KITKAT)
++            @Override
++            public void onSwipeRight() {
++                goToNextOrPreviousDef(listView, getPosition() - 1);
++            }
++        });
++
+         Toolbar toolbar = findViewById(R.id.toolbar);
+         if (toolbar != null) {
+             toolbar.setNavigationIcon(R.drawable.ic_back);
+@@ -242,41 +251,16 @@ public class SearchResultsActivity extends AppCompatActivity {
+         }
+     }
+ 
+-     boolean hasDefinitions(Intent intent, ArrayList<SpannableString> list) {
+-        String userQuery = intent.getStringExtra(SearchManager.QUERY);
+-        if (userQuery == null || userQuery.isEmpty()) {
+-            return false;
++    @RequiresApi(api = Build.VERSION_CODES.KITKAT)
++    private void goToNextOrPreviousDef(ListView listView, int wordIndex) {
++        String previousSavedWord = DefinitionsFinder.getNextOrPreviousSavedWord(wordIndex, getApplicationContext());
++        if (previousSavedWord != null) {
++            setPosition(wordIndex);
++            setTitle(previousSavedWord);
++            ArrayList<SpannableString> definition = DefinitionsFinder.getSharedPrefDefinition(getApplicationContext(), previousSavedWord);
++            ArrayAdapter adapter = new ArrayAdapter<>(getApplicationContext(), R.layout.textview, definition);
++            listView.setAdapter(adapter);
+         }
+-        userQuery = userQuery.toLowerCase();
+-        Integer file = FileUtils.filetoSearch(userQuery);
+-         if (file != null) {
+-             InputStream is = getResources().openRawResource(file);
+-             DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+-             DocumentBuilder db;
+-             Document dictionnaryXml;
+-             try {
+-                 db = dbf.newDocumentBuilder();
+-                 dictionnaryXml = db.parse(is);
+-             } catch (Exception e) {
+-                 e.printStackTrace();
+-                 return false;
+-             }
+-             final Element dictionnaryRacine = dictionnaryXml.getDocumentElement();
+-             final NodeList definitionsList = dictionnaryRacine.getChildNodes();
+-             final int definitionsNumber = definitionsList.getLength();
+-
+-             Boolean definitionsAdded = addDefinitionsToList(list, userQuery, definitionsList, definitionsNumber);
+-             if (definitionsAdded != null) return definitionsAdded;
+-         }
+-        return false;
+     }
+-
+-    private boolean getNeedsSave() {
+-        return this.needsSave;
+-    }
+-    private void setNeedsSave(boolean needsSave) {
+-        this.needsSave=needsSave;
+-    }
+-
+ }
+ 
+diff --git a/app/src/main/java/com/confinement/diconfinement/SharedPref.java b/app/src/main/java/com/confinement/diconfinement/SharedPref.java
+new file mode 100644
+index 0000000..9f15f21
+--- /dev/null
++++ b/app/src/main/java/com/confinement/diconfinement/SharedPref.java
+@@ -0,0 +1,45 @@
++package com.confinement.diconfinement;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.res.Resources;
++import android.text.SpannableString;
++
++import com.google.gson.Gson;
++
++import java.util.ArrayList;
++import java.util.List;
++
++//Class handling saved words putting them into SharedPreferences
++public class SharedPref {
++
++     static void addWordToSharedPref(String wordToSave, Context context, List<SpannableString> definitions) {
++        SharedPreferences sharedPreferences = context.getSharedPreferences(Globals.preferenceFile, Context.MODE_PRIVATE);
++        Gson gson = new Gson();
++        SharedPreferences.Editor editor = sharedPreferences.edit();
++        String json = gson.toJson(definitions);
++        editor.putString(FileUtils.normalizeString(wordToSave), json);
++        editor.commit();
++    }
++
++    static void removeWordFromSharedPref(String wordToRemove,  Context context) {
++        SharedPreferences sharedPreferences = context.getSharedPreferences(Globals.preferenceFile, Context.MODE_PRIVATE);
++        SharedPreferences.Editor editor = sharedPreferences.edit();
++        editor.remove(FileUtils.normalizeString(wordToRemove));
++        editor.commit();
++    }
++
++    //Method to put in sharedPref word saved by user before version 3.0
++    static void putSavedWordsInSharedPref(Resources resources, Context applicationContext, ArrayList<String> wordsList) {
++        SharedPreferences sharedPreferences = applicationContext.getSharedPreferences(Globals.preferenceFile, Context.MODE_PRIVATE);
++        for (String savedWrd : wordsList) {
++            if ( sharedPreferences.getString(FileUtils.normalizeString(savedWrd), null) == null ) {
++                ArrayList<SpannableString> definitions = new ArrayList<>();
++                DefinitionsFinder.hasDefinitions(resources, savedWrd, definitions);
++                addWordToSharedPref(savedWrd, applicationContext, definitions);
++            }
++        }
++    }
++}
++
++

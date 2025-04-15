@@ -1,0 +1,383 @@
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+index 57f2a83c..494422c2 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporter.java
+@@ -32,6 +32,7 @@ public abstract class DatabaseImporter {
+         _importers.put("FreeOTP", FreeOtpImporter.class);
+         _importers.put("FreeOTP+", FreeOtpPlusImporter.class);
+         _importers.put("Google Authenticator", GoogleAuthImporter.class);
++        _importers.put("Microsoft Authenticator", MicrosoftAuthImporter.class);
+         _importers.put("Steam", SteamImporter.class);
+         _importers.put("TOTP Authenticator", TotpAuthenticatorImporter.class);
+         _importers.put("WinAuth", WinAuthImporter.class);
+@@ -41,6 +42,7 @@ public abstract class DatabaseImporter {
+         _appImporters.put("FreeOTP", FreeOtpImporter.class);
+         _appImporters.put("FreeOTP+", FreeOtpPlusImporter.class);
+         _appImporters.put("Google Authenticator", GoogleAuthImporter.class);
++        _appImporters.put("Microsoft Authenticator", MicrosoftAuthImporter.class);
+         _appImporters.put("Steam", SteamImporter.class);
+         _appImporters.put("TOTP Authenticator", TotpAuthenticatorImporter.class);
+     }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java
+index 9df0be86..f330ead9 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/DatabaseImporterEntryException.java
+@@ -13,6 +13,11 @@ public class DatabaseImporterEntryException extends Exception {
+         _text = text;
+     }
+ 
++    public DatabaseImporterEntryException(String message, String text) {
++        super(message);
++        _text = text;
++    }
++
+     public String getText() {
+         return _text;
+     }
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
+index 89a3a24b..c4d8377e 100644
+--- a/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/GoogleAuthImporter.java
+@@ -2,26 +2,17 @@ package com.beemdevelopment.aegis.importers;
+ 
+ import android.content.Context;
+ import android.database.Cursor;
+-import android.database.sqlite.SQLiteDatabase;
+-import android.database.sqlite.SQLiteException;
+ 
+-import com.beemdevelopment.aegis.vault.VaultEntry;
+ import com.beemdevelopment.aegis.encoding.Base32;
+ import com.beemdevelopment.aegis.encoding.EncodingException;
+ import com.beemdevelopment.aegis.otp.HotpInfo;
+ import com.beemdevelopment.aegis.otp.OtpInfo;
+ import com.beemdevelopment.aegis.otp.OtpInfoException;
+ import com.beemdevelopment.aegis.otp.TotpInfo;
+-import com.topjohnwu.superuser.ShellUtils;
++import com.beemdevelopment.aegis.vault.VaultEntry;
+ 
+-import java.io.File;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+ import java.util.List;
+ 
+-import static android.database.sqlite.SQLiteDatabase.OPEN_READONLY;
+-
+ public class GoogleAuthImporter extends DatabaseImporter {
+     private static final int TYPE_TOTP = 0;
+     private static final int TYPE_HOTP = 1;
+@@ -45,37 +36,9 @@ public class GoogleAuthImporter extends DatabaseImporter {
+ 
+     @Override
+     public State read(FileReader reader) throws DatabaseImporterException {
+-        File file;
+-
+-        try {
+-            // create a temporary copy of the database so that SQLiteDatabase can open it
+-            file = File.createTempFile("google-import-", "", getContext().getCacheDir());
+-            try (FileOutputStream out = new FileOutputStream(file)) {
+-                ShellUtils.pump(reader.getStream(), out);
+-            }
+-        } catch (IOException e) {
+-            throw new DatabaseImporterException(e);
+-        }
+-
+-        try (SQLiteDatabase db = SQLiteDatabase.openDatabase(file.getAbsolutePath(), null, OPEN_READONLY, null)) {
+-            try (Cursor cursor = db.rawQuery("SELECT * FROM accounts", null)) {
+-                List<Entry> entries = new ArrayList<>();
+-
+-                if (cursor.moveToFirst()) {
+-                    do {
+-                        Entry entry = new Entry(cursor);
+-                        entries.add(entry);
+-                    } while(cursor.moveToNext());
+-                }
+-
+-                return new State(entries);
+-            }
+-        } catch (SQLiteException e) {
+-            throw new DatabaseImporterException(e);
+-        } finally {
+-            // always delete the temporary file
+-            file.delete();
+-        }
++        SqlImporterHelper helper = new SqlImporterHelper(getContext());
++        List<Entry> entries = helper.read(Entry.class, reader.getStream(), "accounts");
++        return new State(entries);
+     }
+ 
+     public static class State extends DatabaseImporter.State {
+@@ -131,27 +94,7 @@ public class GoogleAuthImporter extends DatabaseImporter {
+         }
+     }
+ 
+-    private static String getString(Cursor cursor, String columnName) {
+-        return getString(cursor, columnName, null);
+-    }
+-
+-    private static String getString(Cursor cursor, String columnName, String def) {
+-        String res = cursor.getString(cursor.getColumnIndex(columnName));
+-        if (res == null) {
+-            return def;
+-        }
+-        return res;
+-    }
+-
+-    private static int getInt(Cursor cursor, String columnName) {
+-        return cursor.getInt(cursor.getColumnIndex(columnName));
+-    }
+-
+-    private static long getLong(Cursor cursor, String columnName) {
+-        return cursor.getLong(cursor.getColumnIndex(columnName));
+-    }
+-
+-    private static class Entry {
++    private static class Entry extends SqlImporterHelper.Entry {
+         private int _type;
+         private String _secret;
+         private String _email;
+@@ -159,11 +102,12 @@ public class GoogleAuthImporter extends DatabaseImporter {
+         private long _counter;
+ 
+         public Entry(Cursor cursor) {
+-            _type = getInt(cursor, "type");
+-            _secret = getString(cursor, "secret");
+-            _email = getString(cursor, "email", "");
+-            _issuer = getString(cursor, "issuer", "");
+-            _counter = getLong(cursor, "counter");
++            super(cursor);
++            _type = SqlImporterHelper.getInt(cursor, "type");
++            _secret = SqlImporterHelper.getString(cursor, "secret");
++            _email = SqlImporterHelper.getString(cursor, "email", "");
++            _issuer = SqlImporterHelper.getString(cursor, "issuer", "");
++            _counter = SqlImporterHelper.getLong(cursor, "counter");
+         }
+ 
+         public int getType() {
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/MicrosoftAuthImporter.java b/app/src/main/java/com/beemdevelopment/aegis/importers/MicrosoftAuthImporter.java
+new file mode 100644
+index 00000000..33af0eae
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/MicrosoftAuthImporter.java
+@@ -0,0 +1,126 @@
++package com.beemdevelopment.aegis.importers;
++
++import android.content.Context;
++import android.database.Cursor;
++
++import com.beemdevelopment.aegis.encoding.Base32;
++import com.beemdevelopment.aegis.encoding.Base64;
++import com.beemdevelopment.aegis.encoding.EncodingException;
++import com.beemdevelopment.aegis.otp.OtpInfo;
++import com.beemdevelopment.aegis.otp.OtpInfoException;
++import com.beemdevelopment.aegis.otp.TotpInfo;
++import com.beemdevelopment.aegis.vault.VaultEntry;
++
++import java.util.List;
++
++public class MicrosoftAuthImporter extends DatabaseImporter {
++    private static final String _subPath = "databases/PhoneFactor";
++    private static final String _pkgName = "com.azure.authenticator";
++
++    private static final int TYPE_TOTP = 0;
++    private static final int TYPE_MICROSOFT = 1;
++
++    public MicrosoftAuthImporter(Context context) {
++        super(context);
++    }
++
++    @Override
++    protected String getAppPkgName() {
++        return _pkgName;
++    }
++
++    @Override
++    protected String getAppSubPath() {
++        return _subPath;
++    }
++
++    @Override
++    public State read(FileReader reader) throws DatabaseImporterException {
++        SqlImporterHelper helper = new SqlImporterHelper(getContext());
++        List<Entry> entries = helper.read(Entry.class, reader.getStream(), "accounts");
++        return new State(entries);
++    }
++
++    public static class State extends DatabaseImporter.State {
++        private List<Entry> _entries;
++
++        private State(List<Entry> entries) {
++            super(false);
++            _entries = entries;
++        }
++
++        @Override
++        public Result convert() {
++            Result result = new Result();
++
++            for (Entry sqlEntry : _entries) {
++                try {
++                    int type = sqlEntry.getType();
++                    if (type == TYPE_TOTP || type == TYPE_MICROSOFT) {
++                        VaultEntry entry = convertEntry(sqlEntry);
++                        result.addEntry(entry);
++                    }
++                } catch (DatabaseImporterEntryException e) {
++                    result.addError(e);
++                }
++            }
++
++            return result;
++        }
++
++        private static VaultEntry convertEntry(Entry entry) throws DatabaseImporterEntryException {
++            try {
++                byte[] secret;
++                int digits = 6;
++
++                switch (entry.getType()) {
++                    case TYPE_TOTP:
++                        secret = Base32.decode(entry.getSecret());
++                        break;
++                    case TYPE_MICROSOFT:
++                        digits = 8;
++                        secret = Base64.decode(entry.getSecret());
++                        break;
++                    default:
++                        throw new DatabaseImporterEntryException(String.format("Unsupported OTP type: %d", entry.getType()), entry.toString());
++                }
++
++                OtpInfo info = new TotpInfo(secret, "SHA1", digits, 30);
++                return new VaultEntry(info, entry.getUserName(), entry.getIssuer());
++            } catch (EncodingException | OtpInfoException e) {
++                throw new DatabaseImporterEntryException(e, entry.toString());
++            }
++        }
++    }
++
++    private static class Entry extends SqlImporterHelper.Entry {
++        private int _type;
++        private String _secret;
++        private String _issuer;
++        private String _userName;
++
++        public Entry(Cursor cursor) {
++            super(cursor);
++            _type = SqlImporterHelper.getInt(cursor, "account_type");
++            _secret = SqlImporterHelper.getString(cursor, "oath_secret_key");
++            _issuer = SqlImporterHelper.getString(cursor, "name");
++            _userName = SqlImporterHelper.getString(cursor, "username");
++        }
++
++        public int getType() {
++            return _type;
++        }
++
++        public String getSecret() {
++            return _secret;
++        }
++
++        public String getIssuer() {
++            return _issuer;
++        }
++
++        public String getUserName() {
++            return _userName;
++        }
++    }
++}
+diff --git a/app/src/main/java/com/beemdevelopment/aegis/importers/SqlImporterHelper.java b/app/src/main/java/com/beemdevelopment/aegis/importers/SqlImporterHelper.java
+new file mode 100644
+index 00000000..15abc0c1
+--- /dev/null
++++ b/app/src/main/java/com/beemdevelopment/aegis/importers/SqlImporterHelper.java
+@@ -0,0 +1,89 @@
++package com.beemdevelopment.aegis.importers;
++
++import android.content.Context;
++import android.database.Cursor;
++import android.database.sqlite.SQLiteDatabase;
++import android.database.sqlite.SQLiteException;
++
++import com.topjohnwu.superuser.ShellUtils;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.lang.reflect.InvocationTargetException;
++import java.util.ArrayList;
++import java.util.List;
++
++import static android.database.sqlite.SQLiteDatabase.OPEN_READONLY;
++
++public class SqlImporterHelper {
++    private Context _context;
++
++    public SqlImporterHelper(Context context) {
++        _context = context;
++    }
++
++    public <T extends Entry> List<T> read(Class<T> type, InputStream inStream, String table) throws DatabaseImporterException {
++        File file;
++
++        try {
++            // create a temporary copy of the database so that SQLiteDatabase can open it
++            file = File.createTempFile("db-import-", "", _context.getCacheDir());
++            try (FileOutputStream out = new FileOutputStream(file)) {
++                ShellUtils.pump(inStream, out);
++            }
++        } catch (IOException e) {
++            throw new DatabaseImporterException(e);
++        }
++
++        try (SQLiteDatabase db = SQLiteDatabase.openDatabase(file.getAbsolutePath(), null, OPEN_READONLY, null)) {
++            try (Cursor cursor = db.rawQuery(String.format("SELECT * FROM %s", table), null)) {
++                List<T> entries = new ArrayList<>();
++
++                if (cursor.moveToFirst()) {
++                    do {
++                        T entry = type.getDeclaredConstructor(Cursor.class).newInstance(cursor);
++                        entries.add(entry);
++                    } while (cursor.moveToNext());
++                }
++
++                return entries;
++            } catch (InstantiationException | IllegalAccessException
++                    | NoSuchMethodException | InvocationTargetException e) {
++                throw new RuntimeException(e);
++            }
++        } catch (SQLiteException e) {
++            throw new DatabaseImporterException(e);
++        } finally {
++            // always delete the temporary file
++            file.delete();
++        }
++    }
++
++    public static String getString(Cursor cursor, String columnName) {
++        return cursor.getString(cursor.getColumnIndex(columnName));
++    }
++
++    public static String getString(Cursor cursor, String columnName, String def) {
++        String res = cursor.getString(cursor.getColumnIndex(columnName));
++        if (res == null) {
++            return def;
++        }
++        return res;
++    }
++
++    public static int getInt(Cursor cursor, String columnName) {
++        return cursor.getInt(cursor.getColumnIndex(columnName));
++    }
++
++    public static long getLong(Cursor cursor, String columnName) {
++        return cursor.getLong(cursor.getColumnIndex(columnName));
++    }
++
++    public static abstract class Entry {
++        public Entry (Cursor cursor) {
++
++        }
++    }
++}

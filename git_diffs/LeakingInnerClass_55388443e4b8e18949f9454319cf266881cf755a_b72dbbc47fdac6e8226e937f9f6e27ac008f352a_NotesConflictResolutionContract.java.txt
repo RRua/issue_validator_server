@@ -1,0 +1,3562 @@
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/ApplicationComponent.java b/app/src/main/java/com/bytesforge/linkasanote/ApplicationComponent.java
+index 8736865..948bf20 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/ApplicationComponent.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/ApplicationComponent.java
+@@ -24,8 +24,6 @@ import com.bytesforge.linkasanote.laano.links.conflictresolution.LinksConflictRe
+ import com.bytesforge.linkasanote.laano.notes.NotesPresenterModule;
+ import com.bytesforge.linkasanote.laano.notes.addeditnote.AddEditNoteComponent;
+ import com.bytesforge.linkasanote.laano.notes.addeditnote.AddEditNotePresenterModule;
+-import com.bytesforge.linkasanote.laano.notes.conflictresolution.NotesConflictResolutionComponent;
+-import com.bytesforge.linkasanote.laano.notes.conflictresolution.NotesConflictResolutionPresenterModule;
+ import com.bytesforge.linkasanote.manageaccounts.ManageAccountsComponent;
+ import com.bytesforge.linkasanote.manageaccounts.ManageAccountsPresenterModule;
+ import com.bytesforge.linkasanote.settings.SettingsFragment;
+@@ -67,7 +65,5 @@ public interface ApplicationComponent {
+             FavoritesConflictResolutionPresenterModule favoritesConflictResolutionPresenterModule);
+     LinksConflictResolutionComponent getLinksConflictResolutionComponent(
+             LinksConflictResolutionPresenterModule favoritesConflictResolutionPresenterModule);
+-    NotesConflictResolutionComponent getNotesConflictResolutionComponent(
+-            NotesConflictResolutionPresenterModule notesConflictResolutionPresenterModule);
+     AboutComponent getAboutComponent(AboutPresenterModule module);
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java b/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
+index a1a0c73..e503e6a 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
+@@ -200,6 +200,7 @@ public final class Favorite implements Comparable<Favorite>, Item {
+         return state.isDuplicated();
+     }
+ 
++    @Override
+     public boolean isConflicted() {
+         return state.isConflicted();
+     }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Item.java b/app/src/main/java/com/bytesforge/linkasanote/data/Item.java
+index 98a0273..4c630d0 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Item.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Item.java
+@@ -16,6 +16,7 @@ public interface Item {
+     long getRowId();
+     @Nullable String getETag();
+     boolean isDuplicated();
++    boolean isConflicted();
+     boolean isDeleted();
+     boolean isSynced();
+     @NonNull String getId();
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Link.java b/app/src/main/java/com/bytesforge/linkasanote/data/Link.java
+index 8dab08e..4d73de1 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Link.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Link.java
+@@ -225,6 +225,7 @@ public final class Link implements Comparable<Link>, Item {
+         return state.isDuplicated();
+     }
+ 
++    @Override
+     public boolean isConflicted() {
+         return state.isConflicted();
+     }
+@@ -275,6 +276,12 @@ public final class Link implements Comparable<Link>, Item {
+         return notes;
+     }
+ 
++    public int getNotesSize() {
++        if (notes == null) return 0;
++
++        return notes.size();
++    }
++
+     @Nullable
+     public List<Tag> getTags() {
+         return tags;
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Note.java b/app/src/main/java/com/bytesforge/linkasanote/data/Note.java
+index 7208a58..5bbbe9b 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Note.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Note.java
+@@ -207,6 +207,7 @@ public final class Note implements Comparable<Note>, Item {
+         return state.isDuplicated();
+     }
+ 
++    @Override
+     public boolean isConflicted() {
+         return state.isConflicted();
+     }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java b/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
+index d228518..301f160 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
+@@ -2,6 +2,8 @@ package com.bytesforge.linkasanote.data;
+ 
+ import android.content.ContentValues;
+ import android.database.Cursor;
++import android.os.Parcel;
++import android.os.Parcelable;
+ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+ import android.util.Log;
+@@ -18,11 +20,11 @@ import java.io.Serializable;
+ import static com.google.common.base.Preconditions.checkNotNull;
+ import static java.lang.System.currentTimeMillis;
+ 
+-public final class Tag implements Serializable, Comparable<Tag> {
++public final class Tag implements Serializable, Parcelable, Comparable<Tag> {
+ 
+     private static final String TAG = Tag.class.getSimpleName();
+ 
+-    // NOTE: tag is saved to the other containers, so it has no version
++    // NOTE: tag is a part of the other containers, so it itself has no version information
+     private static final String JSON_PROPERTY_NAME = "name";
+ 
+     private final long created;
+@@ -39,6 +41,35 @@ public final class Tag implements Serializable, Comparable<Tag> {
+         this.name = name;
+     }
+ 
++    protected Tag(Parcel in) {
++        created = in.readLong();
++        name = in.readString();
++    }
++
++    public static final Creator<Tag> CREATOR = new Creator<Tag>() {
++
++        @Override
++        public Tag createFromParcel(Parcel in) {
++            return new Tag(in);
++        }
++
++        @Override
++        public Tag[] newArray(int size) {
++            return new Tag[size];
++        }
++    };
++
++    @Override
++    public int describeContents() {
++        return super.hashCode();
++    }
++
++    @Override
++    public void writeToParcel(Parcel dest, int flags) {
++        dest.writeLong(created);
++        dest.writeString(name);
++    }
++
+     public static Tag from(Cursor cursor) {
+         long created = cursor.getLong(cursor.getColumnIndexOrThrow(
+                 LocalContract.TagEntry.COLUMN_NAME_CREATED));
+@@ -62,7 +93,7 @@ public final class Tag implements Serializable, Comparable<Tag> {
+             return new Tag(name);
+         } catch (JSONException e) {
+             Log.v(TAG, "Exception while processing Tag JSON object");
+-            return new Tag(null);
++            return new Tag((String) null);
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/DataSource.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/DataSource.java
+index 5264b17..5a53ad6 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/DataSource.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/DataSource.java
+@@ -18,6 +18,7 @@ public interface DataSource {
+     void deleteAllLinks();
+     void deleteLink(@NonNull String linkId);
+     Single<Boolean> isConflictedLinks();
++    Single<Boolean> autoResolveLinkConflict(@NonNull String linkId);
+ 
+     Observable<Favorite> getFavorites();
+     Single<Favorite> getFavorite(@NonNull String favoriteId);
+@@ -25,6 +26,7 @@ public interface DataSource {
+     void deleteAllFavorites();
+     void deleteFavorite(@NonNull String favoriteId);
+     Single<Boolean> isConflictedFavorites();
++    Single<Boolean> autoResolveFavoriteConflict(@NonNull String favoriteId);
+ 
+     Observable<Note> getNotes();
+     Single<Note> getNote(@NonNull String noteId);
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/Repository.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/Repository.java
+index 1e4781f..8561b9d 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/Repository.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/Repository.java
+@@ -28,7 +28,6 @@ public class Repository implements DataSource {
+     private final DataSource localDataSource;
+     private final DataSource cloudDataSource;
+ 
+-    // TODO: change to links
+     @VisibleForTesting
+     @Nullable
+     Map<String, Link> cachedLinks;
+@@ -92,7 +91,6 @@ public class Repository implements DataSource {
+     @Override
+     public Single<Link> getLink(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         if (!isKeyValidUuid(linkId)) {
+             throw new InvalidParameterException("getLink() called with invalid UUID");
+         }
+@@ -101,7 +99,6 @@ public class Repository implements DataSource {
+ 
+     public Single<Link> getLink(@NonNull String linkId, boolean forceCacheUpdate) {
+         checkNotNull(linkId);
+-
+         if (forceCacheUpdate) return getAndCacheLocalLink(linkId);
+ 
+         final Link cachedLink = getCachedLink(linkId);
+@@ -133,7 +130,6 @@ public class Repository implements DataSource {
+     @Nullable
+     private Link getCachedLink(@NonNull String id) {
+         checkNotNull(id);
+-
+         if (cachedLinks != null && !cachedLinks.isEmpty()) {
+             return cachedLinks.get(id);
+         }
+@@ -143,7 +139,6 @@ public class Repository implements DataSource {
+     @Override
+     public void saveLink(@NonNull Link link) {
+         checkNotNull(link);
+-
+         localDataSource.saveLink(link); // blocking operation
+         cloudDataSource.saveLink(link);
+ 
+@@ -179,7 +174,6 @@ public class Repository implements DataSource {
+     @Override
+     public void deleteLink(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         localDataSource.deleteLink(linkId); // blocking
+         cloudDataSource.deleteLink(linkId);
+ 
+@@ -193,6 +187,15 @@ public class Repository implements DataSource {
+         return localDataSource.isConflictedLinks();
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveLinkConflict(@NonNull String linkId) {
++        checkNotNull(linkId);
++        return localDataSource.autoResolveLinkConflict(linkId)
++                .doOnSuccess(success -> {
++                    if (success) linkCacheIsDirty = true;
++                });
++    }
++
+     // TODO: implement cache invalidation for one specific item
+     public void refreshLinks() {
+         linkCacheIsDirty = true;
+@@ -200,7 +203,6 @@ public class Repository implements DataSource {
+ 
+     public void deleteCachedLink(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         if (cachedLinks == null) {
+             cachedLinks = new LinkedHashMap<>();
+         }
+@@ -239,7 +241,6 @@ public class Repository implements DataSource {
+     @Override
+     public Single<Favorite> getFavorite(@NonNull String favoriteId) {
+         checkNotNull(favoriteId);
+-
+         if (!isKeyValidUuid(favoriteId)) {
+             throw new InvalidParameterException("getFavorite() called with invalid UUID");
+         }
+@@ -248,7 +249,6 @@ public class Repository implements DataSource {
+ 
+     public Single<Favorite> getFavorite(@NonNull String favoriteId, boolean forceCacheUpdate) {
+         checkNotNull(favoriteId);
+-
+         if (forceCacheUpdate) return getAndCacheLocalFavorite(favoriteId);
+ 
+         final Favorite cachedFavorite = getCachedFavorite(favoriteId);
+@@ -280,7 +280,6 @@ public class Repository implements DataSource {
+     @Nullable
+     private Favorite getCachedFavorite(@NonNull String id) {
+         checkNotNull(id);
+-
+         if (cachedFavorites != null && !cachedFavorites.isEmpty()) {
+             return cachedFavorites.get(id);
+         }
+@@ -290,7 +289,6 @@ public class Repository implements DataSource {
+     @Override
+     public void saveFavorite(@NonNull Favorite favorite) {
+         checkNotNull(favorite);
+-
+         localDataSource.saveFavorite(favorite); // blocking operation
+         cloudDataSource.saveFavorite(favorite);
+ 
+@@ -326,7 +324,6 @@ public class Repository implements DataSource {
+     @Override
+     public void deleteFavorite(@NonNull String favoriteId) {
+         checkNotNull(favoriteId);
+-
+         localDataSource.deleteFavorite(favoriteId); // blocking
+         cloudDataSource.deleteFavorite(favoriteId);
+ 
+@@ -338,6 +335,15 @@ public class Repository implements DataSource {
+         return localDataSource.isConflictedFavorites();
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveFavoriteConflict(@NonNull String favoriteId) {
++        checkNotNull(favoriteId);
++        return localDataSource.autoResolveFavoriteConflict(favoriteId)
++                .doOnSuccess(success -> {
++                    if (success) favoriteCacheIsDirty = true; // OPTIMIZATION: reload the one item only
++                });
++    }
++
+     // TODO: implement cache invalidation for one specific item
+     public void refreshFavorites() {
+         favoriteCacheIsDirty = true;
+@@ -345,7 +351,6 @@ public class Repository implements DataSource {
+ 
+     public void deleteCachedFavorite(@NonNull String favoriteId) {
+         checkNotNull(favoriteId);
+-
+         if (cachedFavorites == null) {
+             cachedFavorites = new LinkedHashMap<>();
+         }
+@@ -384,7 +389,6 @@ public class Repository implements DataSource {
+     @Override
+     public Single<Note> getNote(@NonNull String noteId) {
+         checkNotNull(noteId);
+-
+         if (!isKeyValidUuid(noteId)) {
+             throw new InvalidParameterException("getNote() called with invalid UUID");
+         }
+@@ -393,7 +397,6 @@ public class Repository implements DataSource {
+ 
+     public Single<Note> getNote(@NonNull String noteId, boolean forceCacheUpdate) {
+         checkNotNull(noteId);
+-
+         if (forceCacheUpdate) return getAndCacheLocalNote(noteId);
+ 
+         final Note cachedNote = getCachedNote(noteId);
+@@ -425,7 +428,6 @@ public class Repository implements DataSource {
+     @Nullable
+     private Note getCachedNote(@NonNull String id) {
+         checkNotNull(id);
+-
+         if (cachedNotes != null && !cachedNotes.isEmpty()) {
+             return cachedNotes.get(id);
+         }
+@@ -435,7 +437,6 @@ public class Repository implements DataSource {
+     @Override
+     public void saveNote(@NonNull Note note) {
+         checkNotNull(note);
+-
+         // TODO: chain with cloud save and make both async
+         localDataSource.saveNote(note); // blocking operation
+         cloudDataSource.saveNote(note);
+@@ -472,7 +473,6 @@ public class Repository implements DataSource {
+     @Override
+     public void deleteNote(@NonNull String noteId) {
+         checkNotNull(noteId);
+-
+         localDataSource.deleteNote(noteId); // blocking
+         cloudDataSource.deleteNote(noteId);
+ 
+@@ -493,7 +493,6 @@ public class Repository implements DataSource {
+ 
+     public void deleteCachedNote(@NonNull String noteId) {
+         checkNotNull(noteId);
+-
+         if (cachedNotes == null) {
+             cachedNotes = new LinkedHashMap<>();
+         }
+@@ -521,7 +520,6 @@ public class Repository implements DataSource {
+     @Override
+     public Single<Tag> getTag(@NonNull String tagName) {
+         checkNotNull(tagName);
+-
+         final Tag cachedTag = getCachedTag(tagName);
+         if (cachedTag != null) {
+             return Single.just(cachedTag);
+@@ -537,7 +535,6 @@ public class Repository implements DataSource {
+     @Nullable
+     private Tag getCachedTag(@NonNull String name) {
+         checkNotNull(name);
+-
+         if (cachedTags == null || cachedTags.isEmpty()) {
+             return null;
+         } else {
+@@ -548,7 +545,6 @@ public class Repository implements DataSource {
+     @Override
+     public void saveTag(@NonNull Tag tag) {
+         checkNotNull(tag);
+-
+         localDataSource.saveTag(tag);
+         if (cachedTags == null) {
+             cachedTags = new LinkedHashMap<>();
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
+index 6a53439..e0082b7 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
+@@ -209,6 +209,11 @@ public class CloudDataSource implements DataSource {
+         return null;
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveLinkConflict(@NonNull String linkId) {
++        throw new RuntimeException("autoResolveLinkConflict() was called but this operation cannot be applied to the cloud");
++    }
++
+     // Favorites
+ 
+     @Override
+@@ -348,6 +353,11 @@ public class CloudDataSource implements DataSource {
+         return null;
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveFavoriteConflict(@NonNull String favoriteId) {
++        throw new RuntimeException("autoResolveFavoriteConflict() was called but this operation cannot be applied to the cloud");
++    }
++
+     // Notes
+ 
+     @Override
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
+index 4545096..9d43d23 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
+@@ -62,7 +62,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void saveLink(@NonNull final Link link) {
+         checkNotNull(link);
+-
+         long rowId = localLinks.save(link).blockingGet();
+         if (rowId <= 0) {
+             Log.e(TAG, "Link was not saved [" + link.getId() + "]");
+@@ -77,7 +76,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void deleteLink(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         SyncState state;
+         try {
+             state = localLinks.getSyncState(linkId).blockingGet();
+@@ -103,6 +101,12 @@ public class LocalDataSource implements DataSource {
+         return localLinks.isConflicted();
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveLinkConflict(@NonNull String linkId) {
++        checkNotNull(linkId);
++        return localLinks.autoResolveConflict(linkId);
++    }
++
+     // Favorites
+ 
+     @Override
+@@ -119,7 +123,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void saveFavorite(@NonNull final Favorite favorite) {
+         checkNotNull(favorite);
+-
+         long rowId = localFavorites.save(favorite).blockingGet();
+         if (rowId <= 0) {
+             Log.e(TAG, "Favorite was not saved [" + favorite.getId() + "]");
+@@ -134,7 +137,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void deleteFavorite(@NonNull String favoriteId) {
+         checkNotNull(favoriteId);
+-
+         SyncState state;
+         try {
+             state = localFavorites.getSyncState(favoriteId).blockingGet();
+@@ -160,6 +162,12 @@ public class LocalDataSource implements DataSource {
+         return localFavorites.isConflicted();
+     }
+ 
++    @Override
++    public Single<Boolean> autoResolveFavoriteConflict(@NonNull String favoriteId) {
++        checkNotNull(favoriteId);
++        return localFavorites.autoResolveConflict(favoriteId);
++    }
++
+     // Notes
+ 
+     @Override
+@@ -176,7 +184,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void saveNote(@NonNull final Note note) {
+         checkNotNull(note);
+-
+         long rowId = localNotes.save(note).blockingGet();
+         if (rowId <= 0) {
+             Log.e(TAG, "Note was not saved [" + note.getId() + "]");
+@@ -191,7 +198,6 @@ public class LocalDataSource implements DataSource {
+     @Override
+     public void deleteNote(@NonNull String noteId) {
+         checkNotNull(noteId);
+-
+         SyncState state;
+         try {
+             state = localNotes.getSyncState(noteId).blockingGet();
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
+index f240495..7a7999d 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
+@@ -6,6 +6,7 @@ import android.content.Context;
+ import android.database.Cursor;
+ import android.net.Uri;
+ import android.support.annotation.NonNull;
++import android.util.Log;
+ 
+ import com.bytesforge.linkasanote.data.Item;
+ import com.bytesforge.linkasanote.data.ItemFactory;
+@@ -23,6 +24,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+ public class LocalFavorites<T extends Item> implements LocalItem<T> {
+ 
++    private static final String TAG = LocalFavorites.class.getSimpleName();
++
+     private static final Uri FAVORITE_URI = LocalContract.FavoriteEntry.buildUri();
+ 
+     private final Context context;
+@@ -199,11 +202,11 @@ public class LocalFavorites<T extends Item> implements LocalItem<T> {
+         return LocalDataSource.isConflicted(contentResolver, FAVORITE_URI);
+     }
+ 
+-    private Single<Integer> getNextDuplicated(final String favoriteName) {
++    private Single<Integer> getNextDuplicated(final String duplicatedKey) {
+         final String[] columns = new String[]{
+                 "MAX(" + LocalContract.FavoriteEntry.COLUMN_NAME_DUPLICATED + ") + 1"};
+         final String selection = LocalContract.FavoriteEntry.COLUMN_NAME_NAME + " = ?";
+-        final String[] selectionArgs = {favoriteName};
++        final String[] selectionArgs = {duplicatedKey};
+ 
+         return Single.fromCallable(() -> {
+             try (Cursor cursor = Provider.rawQuery(context,
+@@ -218,10 +221,10 @@ public class LocalFavorites<T extends Item> implements LocalItem<T> {
+     }
+ 
+     @Override
+-    public Single<T> getMain(final String favoriteName) {
++    public Single<T> getMain(final String duplicatedKey) {
+         final String selection = LocalContract.FavoriteEntry.COLUMN_NAME_NAME + " = ?" +
+                 " AND " + LocalContract.FavoriteEntry.COLUMN_NAME_DUPLICATED + " = ?";
+-        final String[] selectionArgs = {favoriteName, "0"};
++        final String[] selectionArgs = {duplicatedKey, "0"};
+ 
+         return Single.fromCallable(() -> {
+             try (Cursor cursor = Provider.rawQuery(context,
+@@ -237,4 +240,23 @@ public class LocalFavorites<T extends Item> implements LocalItem<T> {
+             }
+         }).flatMap(this::buildFavorite);
+     }
++
++    @Override
++    public Single<Boolean> autoResolveConflict(final String favoriteId) {
++        return get(favoriteId)
++                .map(favorite -> {
++                    if (!favorite.isDuplicated()) {
++                        Log.e(TAG, "autoResolveConflict() was called on the Favorite which is not duplicated [" + favoriteId + "]");
++                        return !favorite.isConflicted();
++                    }
++                    try {
++                        getMain(favorite.getDuplicatedKey()).blockingGet();
++                        return false;
++                    } catch (NoSuchElementException e) {
++                        SyncState state = new SyncState(SyncState.State.SYNCED);
++                        int numRows = update(favoriteId, state).blockingGet();
++                        return numRows == 1;
++                    }
++                });
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalItem.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalItem.java
+index 8872d9d..038f469 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalItem.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalItem.java
+@@ -27,5 +27,6 @@ public interface LocalItem<T> {
+     Observable<SyncState> getSyncStates();
+     Observable<String> getIds();
+     Single<Boolean> isConflicted();
+-    Single<T> getMain(final String itemName);
++    Single<T> getMain(final String duplicatedKey);
++    Single<Boolean> autoResolveConflict(final String linkId);
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalLinks.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalLinks.java
+index 0120240..dbc2c0f 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalLinks.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalLinks.java
+@@ -6,6 +6,7 @@ import android.content.Context;
+ import android.database.Cursor;
+ import android.net.Uri;
+ import android.support.annotation.NonNull;
++import android.util.Log;
+ 
+ import com.bytesforge.linkasanote.data.Item;
+ import com.bytesforge.linkasanote.data.ItemFactory;
+@@ -24,6 +25,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+ public class LocalLinks<T extends Item> implements LocalItem<T> {
+ 
++    private static final String TAG = LocalLinks.class.getSimpleName();
++
+     private static final Uri LINK_URI = LocalContract.LinkEntry.buildUri();
+ 
+     private final Context context;
+@@ -155,10 +158,12 @@ public class LocalLinks<T extends Item> implements LocalItem<T> {
+     }
+ 
+     @Override
++    // TODO: return Boolean for the update & delete like this one
+     public Single<Integer> update(final String linkId, final SyncState state) {
+         return Single.fromCallable(() -> {
+             ContentValues values = state.getContentValues();
+             Uri uri = LocalContract.LinkEntry.buildUriWith(linkId);
++            // TODO: add check if syncState parts are not equal to the requested state
+             return contentResolver.update(uri, values, null, null);
+         });
+     }
+@@ -225,10 +230,10 @@ public class LocalLinks<T extends Item> implements LocalItem<T> {
+     }
+ 
+     @Override
+-    public Single<T> getMain(final String linkName) {
++    public Single<T> getMain(final String duplidatedKey) {
+         final String selection = LocalContract.LinkEntry.COLUMN_NAME_LINK + " = ?" +
+                 " AND " + LocalContract.LinkEntry.COLUMN_NAME_DUPLICATED + " = ?";
+-        final String[] selectionArgs = {linkName, "0"};
++        final String[] selectionArgs = {duplidatedKey, "0"};
+ 
+         return Single.fromCallable(() -> {
+             try (Cursor cursor = Provider.rawQuery(context,
+@@ -244,4 +249,23 @@ public class LocalLinks<T extends Item> implements LocalItem<T> {
+             }
+         }).flatMap(this::buildLink);
+     }
++
++    @Override
++    public Single<Boolean> autoResolveConflict(final String linkId) {
++        return get(linkId)
++                .map(link -> {
++                    if (!link.isDuplicated()) {
++                        Log.e(TAG, "autoResolveConflict() was called on the Link which is not duplicated [" + linkId + "]");
++                        return !link.isConflicted();
++                    }
++                    try {
++                        getMain(link.getDuplicatedKey()).blockingGet();
++                        return false;
++                    } catch (NoSuchElementException e) {
++                        SyncState state = new SyncState(SyncState.State.SYNCED);
++                        int numRows = update(linkId, state).blockingGet();
++                        return numRows == 1;
++                    }
++                });
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalNotes.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalNotes.java
+index 214cec1..32e7763 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalNotes.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalNotes.java
+@@ -10,7 +10,6 @@ import android.support.annotation.NonNull;
+ import com.bytesforge.linkasanote.data.Item;
+ import com.bytesforge.linkasanote.data.ItemFactory;
+ import com.bytesforge.linkasanote.data.Tag;
+-import com.bytesforge.linkasanote.data.source.Provider;
+ import com.bytesforge.linkasanote.sync.SyncState;
+ 
+ import java.util.List;
+@@ -140,11 +139,7 @@ public class LocalNotes<T extends Item> implements LocalItem<T> {
+ 
+     @Override
+     public Single<Long> saveDuplicated(final T note) {
+-        return getNextDuplicated(note.getDuplicatedKey())
+-                .flatMap(duplicated -> {
+-                    SyncState state = new SyncState(note.getETag(), duplicated);
+-                    return Single.just(factory.build(note, state));
+-                }).flatMap(this::save);
++        throw new RuntimeException("saveDuplicated(): there is no Conflict Resolution implementation available for the Notes");
+     }
+ 
+     @Override
+@@ -199,42 +194,13 @@ public class LocalNotes<T extends Item> implements LocalItem<T> {
+         return LocalDataSource.isConflicted(contentResolver, NOTE_URI);
+     }
+ 
+-    private Single<Integer> getNextDuplicated(final String noteName) {
+-        final String[] columns = new String[]{
+-                "MAX(" + LocalContract.NoteEntry.COLUMN_NAME_DUPLICATED + ") + 1"};
+-        final String selection = LocalContract.NoteEntry.COLUMN_NAME_NOTE + " = ?";
+-        final String[] selectionArgs = {noteName};
+-
+-        return Single.fromCallable(() -> {
+-            try (Cursor cursor = Provider.rawQuery(context,
+-                    LocalContract.NoteEntry.TABLE_NAME,
+-                    columns, selection, selectionArgs, null)) {
+-                if (cursor.moveToLast()) {
+-                    return cursor.getInt(0);
+-                }
+-                return 0;
+-            }
+-        });
++    @Override
++    public Single<T> getMain(final String duplicatedKey) {
++        throw new RuntimeException("getMain(): there is no Conflict Resolution implementation available for the Notes");
+     }
+ 
+     @Override
+-    public Single<T> getMain(final String noteName) {
+-        final String selection = LocalContract.NoteEntry.COLUMN_NAME_NOTE + " = ?" +
+-                " AND " + LocalContract.NoteEntry.COLUMN_NAME_DUPLICATED + " = ?";
+-        final String[] selectionArgs = {noteName, "0"};
+-
+-        return Single.fromCallable(() -> {
+-            try (Cursor cursor = Provider.rawQuery(context,
+-                    LocalContract.NoteEntry.TABLE_NAME,
+-                    LocalContract.NoteEntry.NOTE_COLUMNS,
+-                    selection, selectionArgs, null)) {
+-                if (cursor == null) {
+-                    return null; // NOTE: NullPointerException
+-                } else if (!cursor.moveToLast()) {
+-                    throw new NoSuchElementException("The requested note was not found");
+-                }
+-                return factory.from(cursor);
+-            }
+-        }).flatMap(this::buildNote);
++    public Single<Boolean> autoResolveConflict(String noteId) {
++        throw new RuntimeException("autoResolveConflict(): there is no Conflict Resolution implementation available for the Notes");
+     }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/FilterType.java b/app/src/main/java/com/bytesforge/linkasanote/laano/FilterType.java
+index b5f8c8c..6a36978 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/FilterType.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/FilterType.java
+@@ -7,5 +7,6 @@ public enum FilterType {
+     LINK,
+     FAVORITE,
+     NOTE,
+-    NO_TAGS
++    NO_TAGS,
++    UNBOUND
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoUiManager.java b/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoUiManager.java
+index d0d6877..02cba47 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoUiManager.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoUiManager.java
+@@ -126,6 +126,9 @@ public class LaanoUiManager {
+             case NO_TAGS:
+                 normalTitle = resources.getString(R.string.filter_no_tags);
+                 break;
++            case UNBOUND:
++                normalTitle = resources.getString(R.string.filter_unbound);
++                break;
+             default:
+                 throw new IllegalArgumentException("Unexpected filtering type [" + filterType.name() + "]");
+         }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/TagsBindingAdapter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/TagsBindingAdapter.java
+index f1891fd..fdcf2f7 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/TagsBindingAdapter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/TagsBindingAdapter.java
+@@ -25,7 +25,7 @@ public class TagsBindingAdapter {
+ 
+     @BindingAdapter({"android:text"})
+     public static void showNoteTags(TextView view, List<Tag> tags) {
+-        if (view == null || tags == null) return;
++        if (view == null || tags == null || tags.isEmpty()) return;
+ 
+         // NOTE: it's to prevent the view to be changed from empty to filled when adapter rebind the item
+         if (tagsViewWidths.get(view.getId()) > 0) {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesContract.java
+index 87898d7..9a0eb14 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesContract.java
+@@ -1,5 +1,6 @@
+ package com.bytesforge.linkasanote.laano.favorites;
+ 
++import android.content.Intent;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+@@ -18,6 +19,7 @@ public interface FavoritesContract {
+ 
+         void setViewModel(@NonNull FavoritesContract.ViewModel viewModel);
+         boolean isActive();
++        void onActivityResult(int requestCode, int resultCode, Intent data);
+ 
+         void showAddFavorite();
+         void showEditFavorite(@NonNull String favoriteId);
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesFragment.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesFragment.java
+index b5f5c97..a95a321 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesFragment.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesFragment.java
+@@ -255,6 +255,9 @@ public class FavoritesFragment extends BaseFragment implements FavoritesContract
+ 
+         MenuItem filterNoTagsMenuItem = menu.findItem(R.id.filter_no_tags);
+         filterNoTagsMenuItem.setVisible(false);
++
++        MenuItem filterUnboundMenuItem = menu.findItem(R.id.filter_unbound);
++        filterUnboundMenuItem.setVisible(false);
+         popupMenu.show();
+     }
+ 
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesPresenter.java
+index d38f65f..f3de682 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesPresenter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesPresenter.java
+@@ -6,6 +6,7 @@ import com.bytesforge.linkasanote.data.source.Repository;
+ import com.bytesforge.linkasanote.laano.FilterType;
+ import com.bytesforge.linkasanote.laano.LaanoFragmentPagerAdapter;
+ import com.bytesforge.linkasanote.laano.LaanoUiManager;
++import com.bytesforge.linkasanote.laano.favorites.conflictresolution.FavoritesConflictResolutionDialog;
+ import com.bytesforge.linkasanote.laano.links.LinksPresenter;
+ import com.bytesforge.linkasanote.laano.notes.NotesPresenter;
+ import com.bytesforge.linkasanote.settings.Settings;
+@@ -143,7 +144,25 @@ public final class FavoritesPresenter implements FavoritesContract.Presenter {
+         if (viewModel.isActionMode()) {
+             onFavoriteSelected(favoriteId);
+         } else if (isConflicted) {
+-            view.showConflictResolution(favoriteId);
++            repository.autoResolveFavoriteConflict(favoriteId)
++                    .subscribeOn(schedulerProvider.computation())
++                    .observeOn(schedulerProvider.ui())
++                    .subscribe(success -> {
++                        if (success) {
++                            view.onActivityResult(
++                                    FavoritesFragment.REQUEST_FAVORITE_CONFLICT_RESOLUTION,
++                                    FavoritesConflictResolutionDialog.RESULT_OK, null);
++                        } else {
++                            view.showConflictResolution(favoriteId);
++                        }
++                    }, throwable -> {
++                        if (throwable instanceof NullPointerException) {
++                            viewModel.showDatabaseErrorSnackbar();
++                        } else {
++                            // NOTE: if there is any problem show it in the dialog
++                            view.showConflictResolution(favoriteId);
++                        }
++                    });
+         } else if (Settings.GLOBAL_ITEM_CLICK_SELECT_FILTER) {
+             int position = getPosition(favoriteId);
+             boolean selected = viewModel.toggleSingleSelection(position);
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesViewModel.java
+index 505a751..4f756f4 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesViewModel.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/FavoritesViewModel.java
+@@ -146,6 +146,12 @@ public class FavoritesViewModel extends BaseObservable implements FavoritesContr
+         return defaultState;
+     }
+ 
++    @Override
++    public void notifyChange() {
++        snackbarId = null;
++        super.notifyChange();
++    }
++
+     @Override
+     public void setPresenter(@NonNull FavoritesContract.Presenter presenter) {
+         this.presenter = checkNotNull(presenter);
+@@ -184,7 +190,6 @@ public class FavoritesViewModel extends BaseObservable implements FavoritesContr
+     public void enableActionMode() {
+         selectedIds.clear();
+         actionMode.set(true);
+-        snackbarId = null; // TODO: get rid of this workaround
+         notifyChange();
+     }
+ 
+@@ -192,7 +197,6 @@ public class FavoritesViewModel extends BaseObservable implements FavoritesContr
+     public void disableActionMode() {
+         selectedIds.clear();
+         actionMode.set(false);
+-        snackbarId = null;
+         presenter.selectFavoriteFilter();
+         notifyChange();
+     }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionContract.java
+index c968410..4af815a 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionContract.java
+@@ -8,8 +8,6 @@ import com.bytesforge.linkasanote.BasePresenter;
+ import com.bytesforge.linkasanote.BaseView;
+ import com.bytesforge.linkasanote.data.Favorite;
+ 
+-import io.reactivex.Single;
+-
+ public interface FavoritesConflictResolutionContract {
+ 
+     interface View extends BaseView<Presenter> {
+@@ -38,6 +36,8 @@ public interface FavoritesConflictResolutionContract {
+         String getLocalName();
+         void activateButtons();
+         void deactivateButtons();
++        void showProgressOverlay();
++        void hideProgressOverlay();
+     }
+ 
+     interface Presenter extends BasePresenter {
+@@ -47,6 +47,5 @@ public interface FavoritesConflictResolutionContract {
+         void onCloudRetryClick();
+         void onLocalUploadClick();
+         void onCloudDownloadClick();
+-        Single<Boolean> autoResolve();
+     }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionDialog.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionDialog.java
+index dcc7a6b..8f1c904 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionDialog.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionDialog.java
+@@ -15,8 +15,6 @@ import com.bytesforge.linkasanote.LaanoApplication;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.databinding.DialogFavoriteConflictResolutionBinding;
+ 
+-import java.util.NoSuchElementException;
+-
+ import javax.inject.Inject;
+ 
+ import static com.google.common.base.Preconditions.checkNotNull;
+@@ -99,18 +97,6 @@ public class FavoritesConflictResolutionDialog extends DialogFragment implements
+     @NonNull
+     @Override
+     public Dialog onCreateDialog(Bundle savedInstanceState) {
+-        // TODO: move this check outside of the dialog creation
+-        try {
+-            boolean conflictResolved = presenter.autoResolve().blockingGet();
+-            if (conflictResolved) {
+-                setShowsDialog(false);
+-                finishActivity();
+-                return new Dialog(getContext());
+-            }
+-        } catch (NullPointerException | NoSuchElementException e) {
+-            cancelActivity();
+-            return new Dialog(getContext());
+-        }
+         Context context = getActivity();
+         LayoutInflater inflater = LayoutInflater.from(context);
+         DialogFavoriteConflictResolutionBinding binding = DataBindingUtil.inflate(
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionPresenter.java
+index d6a5d96..06700be 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionPresenter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionPresenter.java
+@@ -1,12 +1,14 @@
+ package com.bytesforge.linkasanote.laano.favorites.conflictresolution;
+ 
+ import android.support.annotation.NonNull;
++import android.util.Log;
+ 
+ import com.bytesforge.linkasanote.data.Favorite;
+ import com.bytesforge.linkasanote.data.source.Repository;
+ import com.bytesforge.linkasanote.data.source.cloud.CloudItem;
+ import com.bytesforge.linkasanote.data.source.local.LocalFavorites;
+ import com.bytesforge.linkasanote.laano.favorites.FavoriteId;
++import com.bytesforge.linkasanote.settings.Settings;
+ import com.bytesforge.linkasanote.sync.SyncState;
+ import com.bytesforge.linkasanote.sync.files.JsonFile;
+ import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+@@ -24,7 +26,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
+ public final class FavoritesConflictResolutionPresenter implements
+         FavoritesConflictResolutionContract.Presenter {
+ 
++    private static final String TAG = FavoritesConflictResolutionPresenter .class.getSimpleName();
++
+     private final Repository repository; // NOTE: for cache control
++    private final Settings settings;
+     private final LocalFavorites<Favorite> localFavorites;
+     private final CloudItem<Favorite> cloudFavorites;
+     private final FavoritesConflictResolutionContract.View view;
+@@ -41,12 +46,13 @@ public final class FavoritesConflictResolutionPresenter implements
+ 
+     @Inject
+     FavoritesConflictResolutionPresenter(
+-            Repository repository, LocalFavorites<Favorite> localFavorites,
+-            CloudItem<Favorite> cloudFavorites,
++            Repository repository, Settings settings,
++            LocalFavorites<Favorite> localFavorites, CloudItem<Favorite> cloudFavorites,
+             FavoritesConflictResolutionContract.View view,
+             FavoritesConflictResolutionContract.ViewModel viewModel,
+             BaseSchedulerProvider schedulerProvider, @FavoriteId String favoriteId) {
+         this.repository = repository;
++        this.settings = settings;
+         this.localFavorites = localFavorites;
+         this.cloudFavorites = cloudFavorites;
+         this.view = view;
+@@ -81,26 +87,6 @@ public final class FavoritesConflictResolutionPresenter implements
+         loadLocalFavorite(); // first step, then cloud one will be loaded
+     }
+ 
+-    @Override
+-    public Single<Boolean> autoResolve() {
+-        return Single.fromCallable(() -> {
+-            Favorite favorite = localFavorites.get(favoriteId).blockingGet();
+-            if (favorite.isDuplicated()) {
+-                try {
+-                    localFavorites.getMain(favorite.getName()).blockingGet();
+-                } catch (NoSuchElementException e) {
+-                    SyncState state = new SyncState(SyncState.State.SYNCED);
+-                    int numRows = localFavorites.update(favoriteId, state).blockingGet();
+-                    if (numRows == 1) {
+-                        repository.refreshFavorites();
+-                        return true;
+-                    }
+-                }
+-            }
+-            return false;
+-        });
+-    }
+-
+     private void loadLocalFavorite() {
+         localDisposable.clear();
+         Disposable disposable = localFavorites.get(favoriteId)
+@@ -108,7 +94,8 @@ public final class FavoritesConflictResolutionPresenter implements
+                 .observeOn(schedulerProvider.ui())
+                 .subscribe(favorite -> {
+                     if (!favorite.isConflicted()) {
+-                        repository.refreshFavorites(); // NOTE: maybe there is a problem with cache
++                        // NOTE: to make sure that there is no problem with the cache
++                        repository.refreshFavorites();
+                         view.finishActivity();
+                     } else {
+                         populateLocalFavorite(favorite);
+@@ -129,14 +116,14 @@ public final class FavoritesConflictResolutionPresenter implements
+         checkNotNull(favorite);
+         if (favorite.isDuplicated()) {
+             viewModel.populateCloudFavorite(favorite);
+-            localFavorites.getMain(favorite.getName())
++            localFavorites.getMain(favorite.getDuplicatedKey())
+                     .subscribeOn(schedulerProvider.computation())
+                     .observeOn(schedulerProvider.ui())
+                     // NOTE: recursion, but mainFavorite is not duplicated by definition
+                     .subscribe(this::populateLocalFavorite, throwable -> {
+                         if (throwable instanceof NoSuchElementException) {
+-                            // NOTE: main position is empty, so the conflict can be resolved automatically
+-                            // TODO: remove in favor of autoResolve
++                            // NOTE: very bad behaviour, but it's the best choice if it had happened
++                            Log.e(TAG, "Fallback for the auto Favorite conflict resolution was called");
+                             SyncState state = new SyncState(SyncState.State.SYNCED);
+                             int numRows = localFavorites.update(favoriteId, state).blockingGet();
+                             if (numRows == 1) {
+@@ -176,6 +163,7 @@ public final class FavoritesConflictResolutionPresenter implements
+     @Override
+     public void onLocalDeleteClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         if (viewModel.isStateDuplicated()) {
+             localFavorites.getMain(viewModel.getLocalName())
+                     .subscribeOn(schedulerProvider.computation())
+@@ -192,24 +180,20 @@ public final class FavoritesConflictResolutionPresenter implements
+             @NonNull final String mainFavoriteId, @NonNull final String favoriteId) {
+         checkNotNull(mainFavoriteId);
+         checkNotNull(favoriteId);
+-        // DB operation is blocking; Cloud is on computation
+-        cloudFavorites.delete(mainFavoriteId)
++        deleteFavoriteSingle(mainFavoriteId)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localFavorites.delete(mainFavoriteId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedFavorite(mainFavoriteId);
++                .map(success -> {
++                    if (success) {
+                         SyncState state = new SyncState(SyncState.State.SYNCED);
+                         int numRows = localFavorites.update(favoriteId, state).blockingGet();
+-                        isSuccess = (numRows == 1);
++                        success = (numRows == 1);
+                     }
+-                    if (isSuccess) {
+-                        repository.refreshFavorites();
++                    return success;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
++                        repository.refreshFavorites(); // OPTIMIZATION: reload one item
+                         view.finishActivity();
+                     } else {
+                         view.cancelActivity();
+@@ -219,17 +203,11 @@ public final class FavoritesConflictResolutionPresenter implements
+ 
+     private void deleteFavorite(@NonNull final String favoriteId) {
+         checkNotNull(favoriteId);
+-        cloudFavorites.delete(favoriteId)
++        deleteFavoriteSingle(favoriteId)
+                 .subscribeOn(schedulerProvider.computation())
+                 .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localFavorites.delete(favoriteId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedFavorite(favoriteId);
++                .subscribe(success -> {
++                    if (success) {
+                         view.finishActivity();
+                     } else {
+                         view.cancelActivity();
+@@ -237,9 +215,31 @@ public final class FavoritesConflictResolutionPresenter implements
+                 }, throwable -> view.cancelActivity());
+     }
+ 
++    private Single<Boolean> deleteFavoriteSingle(@NonNull final String favoriteId) {
++        checkNotNull(favoriteId);
++        return cloudFavorites.delete(favoriteId)
++                .map(result -> {
++                    boolean success = false;
++                    if (result.isSuccess()) {
++                        int numRows = localFavorites.delete(favoriteId).blockingGet();
++                        success = (numRows == 1);
++                    } else {
++                        Log.e(TAG, "There was an error while deleting the Favorite from the cloud storage [" + favoriteId + "]");
++                    }
++                    return success;
++                })
++                .doOnSuccess(success -> {
++                    if (success) {
++                        repository.deleteCachedFavorite(favoriteId);
++                        settings.resetFavoriteFilter(favoriteId);
++                    }
++                });
++    }
++
+     @Override
+     public void onCloudDeleteClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         deleteFavorite(favoriteId);
+     }
+ 
+@@ -252,20 +252,23 @@ public final class FavoritesConflictResolutionPresenter implements
+     @Override
+     public void onLocalUploadClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         Favorite favorite = localFavorites.get(favoriteId).blockingGet();
+         cloudFavorites.upload(favorite)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
++                .map(result -> {
++                    boolean success = false;
+                     if (result.isSuccess()) {
+                         JsonFile jsonFile = (JsonFile) result.getData().get(0);
+                         SyncState state = new SyncState(jsonFile.getETag(), SyncState.State.SYNCED);
+-                        int numRows = localFavorites.update(favorite.getId(), state)
+-                                .blockingGet();
+-                        isSuccess = (numRows == 1);
++                        int numRows = localFavorites.update(favorite.getId(), state).blockingGet();
++                        success = (numRows == 1);
+                     }
+-                    if (isSuccess) {
++                    return success;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
+                         repository.refreshFavorites();
+                         view.finishActivity();
+                     } else {
+@@ -277,12 +280,16 @@ public final class FavoritesConflictResolutionPresenter implements
+     @Override
+     public void onCloudDownloadClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         cloudFavorites.download(favoriteId)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(favorite -> {
++                .map(favorite -> {
+                     long rowId = localFavorites.save(favorite).blockingGet();
+-                    if (rowId > 0) {
++                    return rowId > 0;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
+                         repository.refreshFavorites();
+                         view.finishActivity();
+                     } else {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionViewModel.java
+index dc10419..d8bbbcc 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionViewModel.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/favorites/conflictresolution/FavoritesConflictResolutionViewModel.java
+@@ -3,14 +3,19 @@ package com.bytesforge.linkasanote.laano.favorites.conflictresolution;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.databinding.BaseObservable;
++import android.databinding.Bindable;
+ import android.databinding.ObservableBoolean;
+ import android.databinding.ObservableField;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+ 
++import com.bytesforge.linkasanote.BR;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.data.Favorite;
++import com.bytesforge.linkasanote.data.Tag;
++
++import java.util.ArrayList;
+ 
+ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+@@ -33,18 +38,17 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+     private static final String STATE_CLOUD_RETRY_BUTTON = "CLOUD_RETRY_BUTTON";
+ 
+     private static final String STATE_BUTTONS_ACTIVE = "BUTTONS_ACTIVE";
++    private static final String STATE_PROGRESS_OVERLAY = "PROGRESS_OVERLAY";
+ 
+     public final ObservableField<String> localState = new ObservableField<>();
+     public final ObservableField<String> localStatus = new ObservableField<>();
+     public final ObservableField<String> localName = new ObservableField<>();
+-    public final ObservableField<String> localTags = new ObservableField<>();
+     public final ObservableBoolean localDeleteButton = new ObservableBoolean();
+     public final ObservableBoolean localUploadButton = new ObservableBoolean();
+ 
+     public final ObservableField<String> cloudState = new ObservableField<>();
+     public final ObservableField<String> cloudStatus = new ObservableField<>();
+     public final ObservableField<String> cloudName = new ObservableField<>();
+-    public final ObservableField<String> cloudTags = new ObservableField<>();
+     public final ObservableBoolean cloudDeleteButton = new ObservableBoolean();
+     public final ObservableBoolean cloudDownloadButton = new ObservableBoolean();
+     public final ObservableBoolean cloudRetryButton = new ObservableBoolean();
+@@ -58,6 +62,15 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+         resources = context.getResources();
+     }
+ 
++    @Bindable
++    public ArrayList<Tag> localTags;
++
++    @Bindable
++    public ArrayList<Tag> cloudTags;
++
++    @Bindable
++    public boolean progressOverlay;
++
+     @Override
+     public void setInstanceState(@Nullable Bundle savedInstanceState) {
+         if (savedInstanceState == null) {
+@@ -74,19 +87,20 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+         outState.putString(STATE_LOCAL_STATE, localState.get());
+         outState.putString(STATE_LOCAL_STATUS, localStatus.get());
+         outState.putString(STATE_LOCAL_NAME, localName.get());
+-        outState.putString(STATE_LOCAL_TAGS, localTags.get());
++        outState.putParcelableArrayList(STATE_LOCAL_TAGS, localTags);
+         outState.putBoolean(STATE_LOCAL_DELETE_BUTTON, localDeleteButton.get());
+         outState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, localUploadButton.get());
+ 
+         outState.putString(STATE_CLOUD_STATE, cloudState.get());
+         outState.putString(STATE_CLOUD_STATUS, cloudStatus.get());
+         outState.putString(STATE_CLOUD_NAME, cloudName.get());
+-        outState.putString(STATE_CLOUD_TAGS, cloudTags.get());
++        outState.putParcelableArrayList(STATE_CLOUD_TAGS, cloudTags);
+         outState.putBoolean(STATE_CLOUD_DELETE_BUTTON, cloudDeleteButton.get());
+         outState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, cloudDownloadButton.get());
+         outState.putBoolean(STATE_CLOUD_RETRY_BUTTON, cloudRetryButton.get());
+ 
+         outState.putBoolean(STATE_BUTTONS_ACTIVE, buttonsActive.get());
++        outState.putBoolean(STATE_PROGRESS_OVERLAY, progressOverlay);
+     }
+ 
+     @Override
+@@ -96,19 +110,20 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+         localState.set(state.getString(STATE_LOCAL_STATE));
+         localStatus.set(state.getString(STATE_LOCAL_STATUS));
+         localName.set(state.getString(STATE_LOCAL_NAME));
+-        localTags.set(state.getString(STATE_LOCAL_TAGS));
++        localTags = state.getParcelableArrayList(STATE_LOCAL_TAGS);
+         localDeleteButton.set(state.getBoolean(STATE_LOCAL_DELETE_BUTTON));
+         localUploadButton.set(state.getBoolean(STATE_LOCAL_UPLOAD_BUTTON));
+ 
+         cloudState.set(state.getString(STATE_CLOUD_STATE));
+         cloudStatus.set(state.getString(STATE_CLOUD_STATUS));
+         cloudName.set(state.getString(STATE_CLOUD_NAME));
+-        cloudTags.set(state.getString(STATE_CLOUD_TAGS));
++        cloudTags = state.getParcelableArrayList(STATE_CLOUD_TAGS);
+         cloudDeleteButton.set(state.getBoolean(STATE_CLOUD_DELETE_BUTTON));
+         cloudDownloadButton.set(state.getBoolean(STATE_CLOUD_DOWNLOAD_BUTTON));
+         cloudRetryButton.set(state.getBoolean(STATE_CLOUD_RETRY_BUTTON));
+ 
+         buttonsActive.set(state.getBoolean(STATE_BUTTONS_ACTIVE));
++        progressOverlay = state.getBoolean(STATE_PROGRESS_OVERLAY);
+ 
+         notifyChange();
+     }
+@@ -119,19 +134,20 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+         defaultState.putString(STATE_LOCAL_STATE, null);
+         defaultState.putString(STATE_LOCAL_STATUS, resources.getString(R.string.status_loading));
+         defaultState.putString(STATE_LOCAL_NAME, null);
+-        defaultState.putString(STATE_LOCAL_TAGS, null);
++        defaultState.putParcelableArrayList(STATE_LOCAL_TAGS, null);
+         defaultState.putBoolean(STATE_LOCAL_DELETE_BUTTON, false);
+         defaultState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, false);
+ 
+         defaultState.putString(STATE_CLOUD_STATE, null);
+         defaultState.putString(STATE_CLOUD_STATUS, resources.getString(R.string.status_loading));
+         defaultState.putString(STATE_CLOUD_NAME, null);
+-        defaultState.putString(STATE_CLOUD_TAGS, null);
++        defaultState.putParcelableArrayList(STATE_CLOUD_TAGS, null);
+         defaultState.putBoolean(STATE_CLOUD_DELETE_BUTTON, false);
+         defaultState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, false);
+         defaultState.putBoolean(STATE_CLOUD_RETRY_BUTTON, false);
+ 
+         defaultState.putBoolean(STATE_BUTTONS_ACTIVE, false);
++        defaultState.putBoolean(STATE_PROGRESS_OVERLAY, false);
+ 
+         return defaultState;
+     }
+@@ -161,7 +177,7 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+             localDeleteButton.set(true);
+         }
+         localName.set(favorite.getName());
+-        localTags.set(favorite.getTagsAsString());
++        localTags = (ArrayList<Tag>) favorite.getTags();
+         localStatus.set(null);
+         notifyChange(); // NOTE: it is really needed
+     }
+@@ -187,7 +203,7 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+             cloudDownloadButton.set(true);
+         }
+         cloudName.set(favorite.getName());
+-        cloudTags.set(favorite.getTagsAsString());
++        cloudTags = (ArrayList<Tag>) favorite.getTags();
+         cloudStatus.set(null);
+         notifyChange();
+     }
+@@ -249,4 +265,22 @@ public class FavoritesConflictResolutionViewModel extends BaseObservable impleme
+     public void deactivateButtons() {
+         buttonsActive.set(false);
+     }
++
++    // Progress
++
++    @Override
++    public void showProgressOverlay() {
++        if (!progressOverlay) {
++            progressOverlay = true;
++            notifyPropertyChanged(BR.progressOverlay);
++        }
++    }
++
++    @Override
++    public void hideProgressOverlay() {
++        if (progressOverlay) {
++            progressOverlay = false;
++            notifyPropertyChanged(BR.progressOverlay);
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksContract.java
+index c0aca0b..2e6ce89 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksContract.java
+@@ -1,5 +1,6 @@
+ package com.bytesforge.linkasanote.laano.links;
+ 
++import android.content.Intent;
+ import android.net.Uri;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+@@ -19,6 +20,7 @@ public interface LinksContract {
+ 
+         void setViewModel(@NonNull LinksContract.ViewModel viewModel);
+         boolean isActive();
++        void onActivityResult(int requestCode, int resultCode, Intent data);
+ 
+         void showAddLink();
+         void showAddNote(@NonNull String linkId);
+@@ -34,6 +36,7 @@ public interface LinksContract {
+         void openLink(@NonNull Uri uri);
+         void confirmLinksRemoval(int[] selectedIds);
+         void showConflictResolution(@NonNull String linkId);
++        void showConflictResolutionWarning(@NonNull String linkId);
+     }
+ 
+     interface ViewModel extends BaseView<Presenter> {
+@@ -95,5 +98,6 @@ public interface LinksContract {
+         boolean isNoteFilter();
+         void deleteLinks(int[] selectedIds, boolean deleteNotes);
+         boolean isExpandLinks();
++        void setShowConflictResolutionWarning(boolean show);
+     }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksFragment.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksFragment.java
+index 979733c..0291b60 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksFragment.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksFragment.java
+@@ -2,6 +2,7 @@ package com.bytesforge.linkasanote.laano.links;
+ 
+ import android.app.Activity;
+ import android.app.Dialog;
++import android.content.Context;
+ import android.content.Intent;
+ import android.content.res.Resources;
+ import android.net.Uri;
+@@ -23,10 +24,12 @@ import android.view.MenuInflater;
+ import android.view.MenuItem;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.CheckBox;
+ 
+ import com.bytesforge.linkasanote.BaseFragment;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.data.Link;
++import com.bytesforge.linkasanote.databinding.DialogDoNotShowCheckboxBinding;
+ import com.bytesforge.linkasanote.databinding.FragmentLaanoLinksBinding;
+ import com.bytesforge.linkasanote.laano.FilterType;
+ import com.bytesforge.linkasanote.laano.favorites.FavoritesViewModel;
+@@ -199,7 +202,6 @@ public class LinksFragment extends BaseFragment implements LinksContract.View {
+     @Override
+     public void showLinks(@NonNull List<Link> links) {
+         checkNotNull(links);
+-
+         adapter.swapItems(links);
+         viewModel.setLinkListSize(links.size());
+         if (viewModel.isActionMode()) {
+@@ -282,6 +284,9 @@ public class LinksFragment extends BaseFragment implements LinksContract.View {
+         MenuItem filterLinkMenuItem = menu.findItem(R.id.filter_link);
+         filterLinkMenuItem.setVisible(false);
+ 
++        MenuItem filterUnboundMenuItem = menu.findItem(R.id.filter_unbound);
++        filterUnboundMenuItem.setVisible(false);
++
+         MenuItem filterFavoriteMenuItem = menu.findItem(R.id.filter_favorite);
+         boolean isFavoriteFilter = presenter.isFavoriteFilter();
+         filterFavoriteMenuItem.setTitle(
+@@ -357,7 +362,7 @@ public class LinksFragment extends BaseFragment implements LinksContract.View {
+             if (adapter.getItemCount() <= 0) {
+                 finishActionMode();
+             }
+-        } // if
++        }
+     }
+ 
+     @Override
+@@ -389,13 +394,26 @@ public class LinksFragment extends BaseFragment implements LinksContract.View {
+     @Override
+     public void showConflictResolution(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         LinksConflictResolutionDialog dialog =
+                 LinksConflictResolutionDialog.newInstance(linkId);
+         dialog.setTargetFragment(this, REQUEST_LINK_CONFLICT_RESOLUTION);
+         dialog.show(getFragmentManager(), LinksConflictResolutionDialog.DIALOG_TAG);
+     }
+ 
++    @Override
++    public void showConflictResolutionWarning(@NonNull String linkId) {
++        checkNotNull(linkId);
++        LinkConflictResolutionWarningDialog dialog =
++                LinkConflictResolutionWarningDialog.newInstance(linkId);
++        dialog.setTargetFragment(this, LinkConflictResolutionWarningDialog.DIALOG_REQUEST_CODE);
++        dialog.show(getFragmentManager(), LinkConflictResolutionWarningDialog.DIALOG_TAG);
++    }
++
++    // NOTE: callback from AlertDialog
++    public void setShowConflictResolutionWarning(boolean show) {
++        presenter.setShowConflictResolutionWarning(show);
++    }
++
+     public class LinksActionModeCallback implements ActionMode.Callback {
+ 
+         @Override
+@@ -474,4 +492,55 @@ public class LinksFragment extends BaseFragment implements LinksContract.View {
+                     .create();
+         }
+     }
++
++    public static class LinkConflictResolutionWarningDialog extends DialogFragment {
++
++        public static final String ARGUMENT_LINK_ID = "LINK_ID";
++
++        public static final String DIALOG_TAG = "LINK_CONFLICT_RESOLUTION_WARNING";
++        public static final int DIALOG_REQUEST_CODE = 0;
++
++        private String linkId;
++
++        public static LinkConflictResolutionWarningDialog newInstance(@NonNull String linkId) {
++            checkNotNull(linkId);
++            Bundle args = new Bundle();
++            args.putString(ARGUMENT_LINK_ID, linkId);
++            LinkConflictResolutionWarningDialog dialog = new LinkConflictResolutionWarningDialog();
++            dialog.setArguments(args);
++            return dialog;
++        }
++
++        @Override
++        public void onCreate(@Nullable Bundle savedInstanceState) {
++            super.onCreate(savedInstanceState);
++            linkId = getArguments().getString(ARGUMENT_LINK_ID);
++        }
++
++        @NonNull
++        @Override
++        public Dialog onCreateDialog(Bundle savedInstanceState) {
++            Context context = getContext();
++            LayoutInflater inflater = LayoutInflater.from(context);
++            DialogDoNotShowCheckboxBinding binding =
++                    DialogDoNotShowCheckboxBinding.inflate(inflater, null, false);
++            CheckBox checkBox = binding.doNotShowCheckbox;
++
++            return new AlertDialog.Builder(context)
++                    .setView(binding.getRoot())
++                    .setTitle(R.string.links_conflict_resolution_warning_title)
++                    .setMessage(R.string.links_conflict_resolution_warning_message)
++                    .setIcon(R.drawable.ic_warning)
++                    .setPositiveButton(R.string.dialog_button_continue, (dialog, which) -> {
++                        LinksFragment fragment = (LinksFragment) getTargetFragment();
++                        fragment.setShowConflictResolutionWarning(!checkBox.isChecked());
++                        fragment.showConflictResolution(linkId);
++                    })
++                    .setNegativeButton(R.string.dialog_button_cancel, (dialog, which) -> {
++                        LinksFragment fragment = (LinksFragment) getTargetFragment();
++                        fragment.setShowConflictResolutionWarning(!checkBox.isChecked());
++                    })
++                    .create();
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksPresenter.java
+index e1e80b8..bd7fb5c 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksPresenter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksPresenter.java
+@@ -11,6 +11,7 @@ import com.bytesforge.linkasanote.data.source.Repository;
+ import com.bytesforge.linkasanote.laano.FilterType;
+ import com.bytesforge.linkasanote.laano.LaanoFragmentPagerAdapter;
+ import com.bytesforge.linkasanote.laano.LaanoUiManager;
++import com.bytesforge.linkasanote.laano.links.conflictresolution.LinksConflictResolutionDialog;
+ import com.bytesforge.linkasanote.laano.notes.NotesPresenter;
+ import com.bytesforge.linkasanote.settings.Settings;
+ import com.bytesforge.linkasanote.utils.CommonUtils;
+@@ -228,7 +229,29 @@ public final class LinksPresenter implements LinksContract.Presenter {
+         if (viewModel.isActionMode()) {
+             onLinkSelected(linkId);
+         } else if (isConflicted) {
+-            view.showConflictResolution(linkId);
++            repository.autoResolveLinkConflict(linkId)
++                    .subscribeOn(schedulerProvider.computation())
++                    .observeOn(schedulerProvider.ui())
++                    .subscribe(success -> {
++                        if (success) {
++                            view.onActivityResult(
++                                    LinksFragment.REQUEST_LINK_CONFLICT_RESOLUTION,
++                                    LinksConflictResolutionDialog.RESULT_OK, null);
++                        } else {
++                            if (settings.isShowConflictResolutionWarning()) {
++                                view.showConflictResolutionWarning(linkId);
++                            } else {
++                                view.showConflictResolution(linkId);
++                            }
++                        }
++                    }, throwable -> {
++                        if (throwable instanceof NullPointerException) {
++                            viewModel.showDatabaseErrorSnackbar();
++                        } else {
++                            // NOTE: if there is any problem show it in the dialog
++                            view.showConflictResolution(linkId);
++                        }
++                    });
+         } else if (Settings.GLOBAL_ITEM_CLICK_SELECT_FILTER) {
+             int position = getPosition(linkId);
+             boolean selected = viewModel.toggleSingleSelection(position);
+@@ -292,7 +315,6 @@ public final class LinksPresenter implements LinksContract.Presenter {
+     @Override
+     public void onToNotesClick(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         int position = getPosition(linkId);
+         viewModel.setSingleSelection(position, true);
+         settings.setFilterType(NotesPresenter.SETTING_NOTES_FILTER_TYPE, FilterType.LINK);
+@@ -308,7 +330,6 @@ public final class LinksPresenter implements LinksContract.Presenter {
+     @Override
+     public void onToggleClick(@NonNull String linkId) {
+         checkNotNull(linkId);
+-
+         int position = getPosition(linkId);
+         viewModel.toggleLinkVisibility(position);
+         view.linkVisibilityChanged(position);
+@@ -330,36 +351,38 @@ public final class LinksPresenter implements LinksContract.Presenter {
+         for (int selectedId : selectedIds) {
+             viewModel.removeSelection(selectedId);
+             String linkId = view.removeLink(selectedId);
+-            if (deleteNotes) {
+-                repository.getLink(linkId)
+-                        .subscribeOn(schedulerProvider.computation())
+-                        .map(link -> {
+-                            List<Note> notes = link.getNotes();
+-                            if (notes != null) {
+-                                for (Note note : notes) {
+-                                    repository.deleteNote(note.getId());
+-                                }
+-                            }
+-                            return link;
+-                        })
+-                        .observeOn(schedulerProvider.ui())
+-                        .subscribe(
+-                                link -> {
+-                                    String id = link.getId();
+-                                    repository.deleteLink(id);
+-                                    settings.resetLinkFilter(id);
+-                                }, throwable -> viewModel.showDatabaseErrorSnackbar());
+-            } else {
+-                try {
+-                    repository.deleteLink(linkId);
+-                    settings.resetLinkFilter(linkId);
+-                } catch (NullPointerException e) {
+-                    viewModel.showDatabaseErrorSnackbar();
+-                }
+-            }
++            deleteLink(linkId, deleteNotes);
+         }
+     }
+ 
++    private void deleteLink(final @NonNull String linkId, final boolean deleteNotes) {
++        checkNotNull(linkId);
++        repository.getLink(linkId)
++                .subscribeOn(schedulerProvider.computation())
++                .map(link -> {
++                    if (deleteNotes) {
++                        List<Note> notes = link.getNotes();
++                        if (notes != null) {
++                            for (Note note : notes) {
++                                repository.deleteNote(note.getId());
++                            }
++                        }
++                    }
++                    return link;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(
++                        link -> {
++                            String id = link.getId();
++                            repository.deleteLink(id);
++                            settings.resetLinkFilter(id);
++                        }, throwable -> {
++                            if (throwable instanceof NullPointerException) {
++                                viewModel.showDatabaseErrorSnackbar();
++                            } // TODO: force Notes cleanup by linkId if Link has not been found
++                        });
++    }
++
+     @Override
+     public int getPosition(String linkId) {
+         return view.getPosition(linkId);
+@@ -373,7 +396,6 @@ public final class LinksPresenter implements LinksContract.Presenter {
+     @Override
+     public void setFilterType(@NonNull FilterType filterType) {
+         checkNotNull(filterType);
+-
+         settings.setFilterType(SETTING_LINKS_FILTER_TYPE, filterType);
+         if (this.filterType != filterType) {
+             loadLinks(false);
+@@ -470,4 +492,9 @@ public final class LinksPresenter implements LinksContract.Presenter {
+     public void updateTabNormalState() {
+         laanoUiManager.setTabNormalState(TAB, isConflicted());
+     }
++
++    @Override
++    public void setShowConflictResolutionWarning(boolean show) {
++        settings.setShowConflictResolutionWarning(show);
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksViewModel.java
+index 3c03169..f9201ed 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksViewModel.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/LinksViewModel.java
+@@ -151,6 +151,12 @@ public class LinksViewModel extends BaseObservable implements LinksContract.View
+         return defaultState;
+     }
+ 
++    @Override
++    public void notifyChange() {
++        snackbarId = null;
++        super.notifyChange();
++    }
++
+     @Override
+     public void setPresenter(@NonNull LinksContract.Presenter presenter) {
+         this.presenter = checkNotNull(presenter);
+@@ -198,7 +204,6 @@ public class LinksViewModel extends BaseObservable implements LinksContract.View
+     public void enableActionMode() {
+         selectedIds.clear();
+         actionMode.set(true);
+-        snackbarId = null;
+         notifyChange();
+     }
+ 
+@@ -206,7 +211,6 @@ public class LinksViewModel extends BaseObservable implements LinksContract.View
+     public void disableActionMode() {
+         selectedIds.clear();
+         actionMode.set(false);
+-        snackbarId = null;
+         presenter.selectLinkFilter();
+         notifyChange();
+     }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionContract.java
+index 9288cf2..7d34f46 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionContract.java
+@@ -8,8 +8,6 @@ import com.bytesforge.linkasanote.BasePresenter;
+ import com.bytesforge.linkasanote.BaseView;
+ import com.bytesforge.linkasanote.data.Link;
+ 
+-import io.reactivex.Single;
+-
+ public interface LinksConflictResolutionContract {
+ 
+     interface View extends BaseView<Presenter> {
+@@ -35,9 +33,11 @@ public interface LinksConflictResolutionContract {
+         void showDatabaseError();
+         void showCloudLoading();
+         boolean isStateDuplicated();
+-        String getLocalName();
++        String getLocalLink();
+         void activateButtons();
+         void deactivateButtons();
++        void showProgressOverlay();
++        void hideProgressOverlay();
+     }
+ 
+     interface Presenter extends BasePresenter {
+@@ -47,6 +47,5 @@ public interface LinksConflictResolutionContract {
+         void onCloudRetryClick();
+         void onLocalUploadClick();
+         void onCloudDownloadClick();
+-        Single<Boolean> autoResolve();
+     }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionDialog.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionDialog.java
+index 910b736..7f9c2e0 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionDialog.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionDialog.java
+@@ -15,8 +15,6 @@ import com.bytesforge.linkasanote.LaanoApplication;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.databinding.DialogLinkConflictResolutionBinding;
+ 
+-import java.util.NoSuchElementException;
+-
+ import javax.inject.Inject;
+ 
+ import static com.google.common.base.Preconditions.checkNotNull;
+@@ -99,18 +97,6 @@ public class LinksConflictResolutionDialog extends DialogFragment implements
+     @NonNull
+     @Override
+     public Dialog onCreateDialog(Bundle savedInstanceState) {
+-        // TODO: move this check outside of the dialog creation
+-        try {
+-            boolean conflictResolved = presenter.autoResolve().blockingGet();
+-            if (conflictResolved) {
+-                setShowsDialog(false);
+-                finishActivity();
+-                return new Dialog(getContext());
+-            }
+-        } catch (NullPointerException | NoSuchElementException e) {
+-            cancelActivity();
+-            return new Dialog(getContext());
+-        }
+         Context context = getActivity();
+         LayoutInflater inflater = LayoutInflater.from(context);
+         DialogLinkConflictResolutionBinding binding = DataBindingUtil.inflate(
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionPresenter.java
+index 4a4a0ad..fd81603 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionPresenter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionPresenter.java
+@@ -1,16 +1,21 @@
+ package com.bytesforge.linkasanote.laano.links.conflictresolution;
+ 
+ import android.support.annotation.NonNull;
++import android.util.Log;
+ 
+ import com.bytesforge.linkasanote.data.Link;
++import com.bytesforge.linkasanote.data.Note;
+ import com.bytesforge.linkasanote.data.source.Repository;
+ import com.bytesforge.linkasanote.data.source.cloud.CloudItem;
+ import com.bytesforge.linkasanote.data.source.local.LocalLinks;
++import com.bytesforge.linkasanote.data.source.local.LocalNotes;
+ import com.bytesforge.linkasanote.laano.links.LinkId;
++import com.bytesforge.linkasanote.settings.Settings;
+ import com.bytesforge.linkasanote.sync.SyncState;
+ import com.bytesforge.linkasanote.sync.files.JsonFile;
+ import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+ 
++import java.util.List;
+ import java.util.NoSuchElementException;
+ 
+ import javax.inject.Inject;
+@@ -24,9 +29,14 @@ import static com.google.common.base.Preconditions.checkNotNull;
+ public final class LinksConflictResolutionPresenter implements
+         LinksConflictResolutionContract.Presenter {
+ 
++    private static final String TAG = LinksConflictResolutionPresenter.class.getSimpleName();
++
+     private final Repository repository; // NOTE: for cache control
++    private final Settings settings;
+     private final LocalLinks<Link> localLinks;
+     private final CloudItem<Link> cloudLinks;
++    private final LocalNotes<Note> localNotes;
++    private final CloudItem<Note> cloudNotes;
+     private final LinksConflictResolutionContract.View view;
+     private final LinksConflictResolutionContract.ViewModel viewModel;
+     private final BaseSchedulerProvider schedulerProvider;
+@@ -41,13 +51,18 @@ public final class LinksConflictResolutionPresenter implements
+ 
+     @Inject
+     LinksConflictResolutionPresenter(
+-            Repository repository, LocalLinks<Link> localLinks, CloudItem<Link> cloudLinks,
++            Repository repository, Settings settings,
++            LocalLinks<Link> localLinks, CloudItem<Link> cloudLinks,
++            LocalNotes<Note> localNotes, CloudItem<Note> cloudNotes,
+             LinksConflictResolutionContract.View view,
+             LinksConflictResolutionContract.ViewModel viewModel,
+             BaseSchedulerProvider schedulerProvider, @LinkId String linkId) {
+         this.repository = repository;
++        this.settings = settings;
+         this.localLinks = localLinks;
+         this.cloudLinks = cloudLinks;
++        this.localNotes = localNotes;
++        this.cloudNotes = cloudNotes;
+         this.view = view;
+         this.viewModel = viewModel;
+         this.schedulerProvider = schedulerProvider;
+@@ -80,26 +95,6 @@ public final class LinksConflictResolutionPresenter implements
+         loadLocalLink(); // first step, then cloud one will be loaded
+     }
+ 
+-    @Override
+-    public Single<Boolean> autoResolve() {
+-        return Single.fromCallable(() -> {
+-            Link link = localLinks.get(linkId).blockingGet();
+-            if (link.isDuplicated()) {
+-                try {
+-                    localLinks.getMain(link.getName()).blockingGet();
+-                } catch (NoSuchElementException e) {
+-                    SyncState state = new SyncState(SyncState.State.SYNCED);
+-                    int numRows = localLinks.update(linkId, state).blockingGet();
+-                    if (numRows == 1) {
+-                        repository.refreshLinks();
+-                        return true;
+-                    }
+-                }
+-            }
+-            return false;
+-        });
+-    }
+-
+     private void loadLocalLink() {
+         localDisposable.clear();
+         Disposable disposable = localLinks.get(linkId)
+@@ -107,7 +102,8 @@ public final class LinksConflictResolutionPresenter implements
+                 .observeOn(schedulerProvider.ui())
+                 .subscribe(link -> {
+                     if (!link.isConflicted()) {
+-                        repository.refreshLinks(); // NOTE: maybe there is a problem with cache
++                        // NOTE: to make sure that there is no problem with the cache
++                        repository.refreshLinks();
+                         view.finishActivity();
+                     } else {
+                         populateLocalLink(link);
+@@ -128,14 +124,14 @@ public final class LinksConflictResolutionPresenter implements
+         checkNotNull(link);
+         if (link.isDuplicated()) {
+             viewModel.populateCloudLink(link);
+-            localLinks.getMain(link.getName())
++            localLinks.getMain(link.getDuplicatedKey())
+                     .subscribeOn(schedulerProvider.computation())
+                     .observeOn(schedulerProvider.ui())
+                     // NOTE: recursion, but mainLink is not duplicated by definition
+                     .subscribe(this::populateLocalLink, throwable -> {
+                         if (throwable instanceof NoSuchElementException) {
+-                            // NOTE: main position is empty, so the conflict can be resolved automatically
+-                            // TODO: remove in favor of autoResolve
++                            // NOTE: very bad behaviour, but it's the best choice if it had happened
++                            Log.e(TAG, "Fallback for the auto Link conflict resolution was called");
+                             SyncState state = new SyncState(SyncState.State.SYNCED);
+                             int numRows = localLinks.update(linkId, state).blockingGet();
+                             if (numRows == 1) {
+@@ -154,7 +150,7 @@ public final class LinksConflictResolutionPresenter implements
+             if (!viewModel.isCloudPopulated()) {
+                 loadCloudLink();
+             }
+-        } // if
++        }
+     }
+ 
+     private void loadCloudLink() {
+@@ -175,8 +171,9 @@ public final class LinksConflictResolutionPresenter implements
+     @Override
+     public void onLocalDeleteClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         if (viewModel.isStateDuplicated()) {
+-            localLinks.getMain(viewModel.getLocalName())
++            localLinks.getMain(viewModel.getLocalLink())
+                     .subscribeOn(schedulerProvider.computation())
+                     .observeOn(schedulerProvider.ui())
+                     .subscribe(
+@@ -191,23 +188,19 @@ public final class LinksConflictResolutionPresenter implements
+             @NonNull final String mainLinkId, @NonNull final String linkId) {
+         checkNotNull(mainLinkId);
+         checkNotNull(linkId);
+-        // DB operation is blocking; Cloud is on computation
+-        cloudLinks.delete(mainLinkId)
++        deleteLinkSingle(mainLinkId)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localLinks.delete(mainLinkId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedLink(mainLinkId);
++                .map(success -> {
++                    if (success) {
+                         SyncState state = new SyncState(SyncState.State.SYNCED);
+                         int numRows = localLinks.update(linkId, state).blockingGet();
+-                        isSuccess = (numRows == 1);
++                        success = (numRows == 1);
+                     }
+-                    if (isSuccess) {
++                    return success;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
+                         repository.refreshLinks();
+                         view.finishActivity();
+                     } else {
+@@ -217,18 +210,11 @@ public final class LinksConflictResolutionPresenter implements
+     }
+ 
+     private void deleteLink(@NonNull final String linkId) {
+-        checkNotNull(linkId);
+-        cloudLinks.delete(linkId)
++        deleteLinkSingle(checkNotNull(linkId))
+                 .subscribeOn(schedulerProvider.computation())
+                 .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localLinks.delete(linkId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedLink(linkId);
++                .subscribe(success -> {
++                    if (success) {
+                         view.finishActivity();
+                     } else {
+                         view.cancelActivity();
+@@ -236,9 +222,67 @@ public final class LinksConflictResolutionPresenter implements
+                 }, throwable -> view.cancelActivity());
+     }
+ 
++    private Single<Boolean> deleteLinkSingle(@NonNull final String linkId) {
++        return cloudLinks.delete(checkNotNull(linkId))
++                .flatMap(result -> {
++                    if (!result.isSuccess()) {
++                        Log.e(TAG, "There was an error while deleting the Link from the cloud storage [" + linkId + "]");
++                        throw new RuntimeException("Cloud storage: Link removal exception [" + result.getLogMessage() + "]");
++                    }
++                    return localLinks.get(linkId);
++                })
++                .map(link -> {
++                    List<Note> notes = link.getNotes();
++                    if (notes == null) return true;
++
++                    boolean success = true;
++                    for (Note note : notes) {
++                        if (success) {
++                            success = deleteNoteSingle(note.getId()).blockingGet();
++                        } else break;
++                    }
++                    return success;
++                })
++                .map(success -> {
++                    if (success) {
++                        int numRows = localLinks.delete(linkId).blockingGet();
++                        return numRows == 1;
++                    }
++                    return false;
++                })
++                .doOnSuccess(success -> {
++                    if (success) {
++                        repository.deleteCachedLink(linkId);
++                        settings.resetLinkFilter(linkId);
++                    }
++                });
++    }
++
++    private Single<Boolean> deleteNoteSingle(@NonNull final String noteId) {
++        checkNotNull(noteId);
++        return cloudNotes.delete(noteId)
++                .map(result -> {
++                    boolean success = false;
++                    if (result.isSuccess()) {
++                        int numRows = localNotes.delete(noteId).blockingGet();
++                        success = (numRows == 1);
++                    } else {
++                        Log.e(TAG, "There was an error while deleting the Note from the cloud storage [" + noteId + "]");
++                    }
++                    return success;
++                })
++                .doOnSuccess(success -> {
++                    if (success) {
++                        repository.deleteCachedNote(noteId);
++                        settings.resetNoteFilter(noteId);
++                    }
++                });
++    }
++
+     @Override
+     public void onCloudDeleteClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         deleteLink(linkId);
+     }
+ 
+@@ -251,20 +295,24 @@ public final class LinksConflictResolutionPresenter implements
+     @Override
+     public void onLocalUploadClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         Link link = localLinks.get(linkId).blockingGet();
+         cloudLinks.upload(link)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
++                .map(result -> {
++                    boolean success = false;
+                     if (result.isSuccess()) {
+                         JsonFile jsonFile = (JsonFile) result.getData().get(0);
+                         SyncState state = new SyncState(jsonFile.getETag(), SyncState.State.SYNCED);
+                         int numRows = localLinks.update(link.getId(), state)
+                                 .blockingGet();
+-                        isSuccess = (numRows == 1);
++                        success = (numRows == 1);
+                     }
+-                    if (isSuccess) {
++                    return success;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
+                         repository.refreshLinks();
+                         view.finishActivity();
+                     } else {
+@@ -276,12 +324,16 @@ public final class LinksConflictResolutionPresenter implements
+     @Override
+     public void onCloudDownloadClick() {
+         viewModel.deactivateButtons();
++        viewModel.showProgressOverlay();
+         cloudLinks.download(linkId)
+                 .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(link -> {
++                .map(link -> {
+                     long rowId = localLinks.save(link).blockingGet();
+-                    if (rowId > 0) {
++                    return rowId > 0;
++                })
++                .observeOn(schedulerProvider.ui())
++                .subscribe(success -> {
++                    if (success) {
+                         repository.refreshLinks();
+                         view.finishActivity();
+                     } else {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionViewModel.java
+index aeea646..8d4f3ff 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionViewModel.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/links/conflictresolution/LinksConflictResolutionViewModel.java
+@@ -3,14 +3,19 @@ package com.bytesforge.linkasanote.laano.links.conflictresolution;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.databinding.BaseObservable;
++import android.databinding.Bindable;
+ import android.databinding.ObservableBoolean;
+ import android.databinding.ObservableField;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+ 
++import com.bytesforge.linkasanote.BR;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.data.Link;
++import com.bytesforge.linkasanote.data.Tag;
++
++import java.util.ArrayList;
+ 
+ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+@@ -19,32 +24,39 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+ 
+     private static final String STATE_LOCAL_STATE = "LOCAL_STATE";
+     private static final String STATE_LOCAL_STATUS = "LOCAL_STATUS";
++    private static final String STATE_LOCAL_INFO = "LOCAL_INFO";
+     private static final String STATE_LOCAL_NAME = "LOCAL_NAME";
++    private static final String STATE_LOCAL_LINK = "LOCAL_LINK";
+     private static final String STATE_LOCAL_TAGS = "LOCAL_TAGS";
+     private static final String STATE_LOCAL_DELETE_BUTTON = "LOCAL_DELETE_BUTTON";
+     private static final String STATE_LOCAL_UPLOAD_BUTTON = "LOCAL_UPLOAD_BUTTON";
+ 
+     private static final String STATE_CLOUD_STATE = "CLOUD_STATE";
+     private static final String STATE_CLOUD_STATUS = "CLOUD_STATUS";
++    private static final String STATE_CLOUD_INFO = "CLOUD_INFO";
+     private static final String STATE_CLOUD_NAME = "CLOUD_NAME";
++    private static final String STATE_CLOUD_LINK = "CLOUD_LINK";
+     private static final String STATE_CLOUD_TAGS = "CLOUD_TAGS";
+     private static final String STATE_CLOUD_DELETE_BUTTON = "CLOUD_DELETE_BUTTON";
+     private static final String STATE_CLOUD_DOWNLOAD_BUTTON = "CLOUD_DOWNLOAD_BUTTON";
+     private static final String STATE_CLOUD_RETRY_BUTTON = "CLOUD_RETRY_BUTTON";
+ 
+     private static final String STATE_BUTTONS_ACTIVE = "BUTTONS_ACTIVE";
++    private static final String STATE_PROGRESS_OVERLAY = "PROGRESS_OVERLAY";
+ 
+     public final ObservableField<String> localState = new ObservableField<>();
+     public final ObservableField<String> localStatus = new ObservableField<>();
++    public final ObservableField<String> localInfo = new ObservableField<>();
+     public final ObservableField<String> localName = new ObservableField<>();
+-    public final ObservableField<String> localTags = new ObservableField<>();
++    public final ObservableField<String> localLink = new ObservableField<>();
+     public final ObservableBoolean localDeleteButton = new ObservableBoolean();
+     public final ObservableBoolean localUploadButton = new ObservableBoolean();
+ 
+     public final ObservableField<String> cloudState = new ObservableField<>();
+     public final ObservableField<String> cloudStatus = new ObservableField<>();
++    public final ObservableField<String> cloudInfo = new ObservableField<>();
+     public final ObservableField<String> cloudName = new ObservableField<>();
+-    public final ObservableField<String> cloudTags = new ObservableField<>();
++    public final ObservableField<String> cloudLink = new ObservableField<>();
+     public final ObservableBoolean cloudDeleteButton = new ObservableBoolean();
+     public final ObservableBoolean cloudDownloadButton = new ObservableBoolean();
+     public final ObservableBoolean cloudRetryButton = new ObservableBoolean();
+@@ -58,6 +70,15 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+         resources = context.getResources();
+     }
+ 
++    @Bindable
++    public ArrayList<Tag> localTags;
++
++    @Bindable
++    public ArrayList<Tag> cloudTags;
++
++    @Bindable
++    public boolean progressOverlay;
++
+     @Override
+     public void setInstanceState(@Nullable Bundle savedInstanceState) {
+         if (savedInstanceState == null) {
+@@ -73,20 +94,25 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+ 
+         outState.putString(STATE_LOCAL_STATE, localState.get());
+         outState.putString(STATE_LOCAL_STATUS, localStatus.get());
++        outState.putString(STATE_LOCAL_INFO, localInfo.get());
+         outState.putString(STATE_LOCAL_NAME, localName.get());
+-        outState.putString(STATE_LOCAL_TAGS, localTags.get());
++        outState.putString(STATE_LOCAL_LINK, localLink.get());
++        outState.putParcelableArrayList(STATE_LOCAL_TAGS, localTags);
+         outState.putBoolean(STATE_LOCAL_DELETE_BUTTON, localDeleteButton.get());
+         outState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, localUploadButton.get());
+ 
+         outState.putString(STATE_CLOUD_STATE, cloudState.get());
+         outState.putString(STATE_CLOUD_STATUS, cloudStatus.get());
++        outState.putString(STATE_CLOUD_INFO, cloudInfo.get());
+         outState.putString(STATE_CLOUD_NAME, cloudName.get());
+-        outState.putString(STATE_CLOUD_TAGS, cloudTags.get());
++        outState.putString(STATE_CLOUD_LINK, cloudLink.get());
++        outState.putParcelableArrayList(STATE_CLOUD_TAGS, cloudTags);
+         outState.putBoolean(STATE_CLOUD_DELETE_BUTTON, cloudDeleteButton.get());
+         outState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, cloudDownloadButton.get());
+         outState.putBoolean(STATE_CLOUD_RETRY_BUTTON, cloudRetryButton.get());
+ 
+         outState.putBoolean(STATE_BUTTONS_ACTIVE, buttonsActive.get());
++        outState.putBoolean(STATE_PROGRESS_OVERLAY, progressOverlay);
+     }
+ 
+     @Override
+@@ -95,20 +121,25 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+ 
+         localState.set(state.getString(STATE_LOCAL_STATE));
+         localStatus.set(state.getString(STATE_LOCAL_STATUS));
++        localInfo.set(state.getString(STATE_LOCAL_INFO));
+         localName.set(state.getString(STATE_LOCAL_NAME));
+-        localTags.set(state.getString(STATE_LOCAL_TAGS));
++        localLink.set(state.getString(STATE_LOCAL_LINK));
++        localTags = state.getParcelableArrayList(STATE_LOCAL_TAGS);
+         localDeleteButton.set(state.getBoolean(STATE_LOCAL_DELETE_BUTTON));
+         localUploadButton.set(state.getBoolean(STATE_LOCAL_UPLOAD_BUTTON));
+ 
+         cloudState.set(state.getString(STATE_CLOUD_STATE));
+         cloudStatus.set(state.getString(STATE_CLOUD_STATUS));
++        cloudInfo.set(state.getString(STATE_CLOUD_INFO));
+         cloudName.set(state.getString(STATE_CLOUD_NAME));
+-        cloudTags.set(state.getString(STATE_CLOUD_TAGS));
++        cloudLink.set(state.getString(STATE_CLOUD_LINK));
++        cloudTags = state.getParcelableArrayList(STATE_CLOUD_TAGS);
+         cloudDeleteButton.set(state.getBoolean(STATE_CLOUD_DELETE_BUTTON));
+         cloudDownloadButton.set(state.getBoolean(STATE_CLOUD_DOWNLOAD_BUTTON));
+         cloudRetryButton.set(state.getBoolean(STATE_CLOUD_RETRY_BUTTON));
+ 
+         buttonsActive.set(state.getBoolean(STATE_BUTTONS_ACTIVE));
++        progressOverlay = state.getBoolean(STATE_PROGRESS_OVERLAY);
+ 
+         notifyChange();
+     }
+@@ -118,20 +149,25 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+ 
+         defaultState.putString(STATE_LOCAL_STATE, null);
+         defaultState.putString(STATE_LOCAL_STATUS, resources.getString(R.string.status_loading));
++        defaultState.putString(STATE_LOCAL_INFO, null);
+         defaultState.putString(STATE_LOCAL_NAME, null);
+-        defaultState.putString(STATE_LOCAL_TAGS, null);
++        defaultState.putString(STATE_LOCAL_LINK, null);
++        defaultState.putParcelableArrayList(STATE_LOCAL_TAGS, null);
+         defaultState.putBoolean(STATE_LOCAL_DELETE_BUTTON, false);
+         defaultState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, false);
+ 
+         defaultState.putString(STATE_CLOUD_STATE, null);
+         defaultState.putString(STATE_CLOUD_STATUS, resources.getString(R.string.status_loading));
++        defaultState.putString(STATE_CLOUD_INFO, null);
+         defaultState.putString(STATE_CLOUD_NAME, null);
+-        defaultState.putString(STATE_CLOUD_TAGS, null);
++        defaultState.putString(STATE_CLOUD_LINK, null);
++        defaultState.putParcelableArrayList(STATE_CLOUD_TAGS, null);
+         defaultState.putBoolean(STATE_CLOUD_DELETE_BUTTON, false);
+         defaultState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, false);
+         defaultState.putBoolean(STATE_CLOUD_RETRY_BUTTON, false);
+ 
+         defaultState.putBoolean(STATE_BUTTONS_ACTIVE, false);
++        defaultState.putBoolean(STATE_PROGRESS_OVERLAY, false);
+ 
+         return defaultState;
+     }
+@@ -160,8 +196,14 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+             localState.set(resources.getString(R.string.dialog_link_conflict_state_no_conflict));
+             localDeleteButton.set(true);
+         }
++        int notesSize = link.getNotesSize();
++        localInfo.set(resources.getString(
++                R.string.links_conflict_resolution_info,
++                link.isDisabled() ? resources.getString(R.string.status_disabled) : resources.getString(R.string.status_enabled),
++                resources.getQuantityString(R.plurals.count_notes, notesSize, notesSize).toLowerCase()));
+         localName.set(link.getName());
+-        localTags.set(link.getTagsAsString());
++        localLink.set(link.getLink());
++        localTags = (ArrayList<Tag>) link.getTags();
+         localStatus.set(null);
+         notifyChange(); // NOTE: it is really needed
+     }
+@@ -179,15 +221,23 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+         cloudDownloadButton.set(false);
+         activateButtons();
+ 
+-        if (link.isDuplicated()) { // NOTE: from database record
++        if (link.isDuplicated()) { // record from the database
+             cloudState.set(resources.getString(R.string.dialog_link_conflict_state_duplicated));
+             cloudDeleteButton.set(true);
++            int notesSize = link.getNotesSize();
++            cloudInfo.set(resources.getString(
++                    R.string.links_conflict_resolution_info, link.isDisabled()
++                            ? resources.getString(R.string.status_disabled)
++                            : resources.getString(R.string.status_enabled),
++                    resources.getQuantityString(R.plurals.count_notes, notesSize, notesSize).toLowerCase()));
+         } else {
+             cloudState.set(resources.getString(R.string.dialog_link_conflict_state_updated));
+             cloudDownloadButton.set(true);
++            cloudInfo.set(null);
+         }
+         cloudName.set(link.getName());
+-        cloudTags.set(link.getTagsAsString());
++        cloudLink.set(link.getLink());
++        cloudTags = (ArrayList<Tag>) link.getTags();
+         cloudStatus.set(null);
+         notifyChange();
+     }
+@@ -235,8 +285,8 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+     }
+ 
+     @Override
+-    public String getLocalName() {
+-        return localName.get();
++    public String getLocalLink() {
++        return localLink.get();
+     }
+ 
+     @Override
+@@ -249,4 +299,22 @@ public class LinksConflictResolutionViewModel extends BaseObservable implements
+     public void deactivateButtons() {
+         buttonsActive.set(false);
+     }
++
++    // Progress
++
++    @Override
++    public void showProgressOverlay() {
++        if (!progressOverlay) {
++            progressOverlay = true;
++            notifyPropertyChanged(BR.progressOverlay);
++        }
++    }
++
++    @Override
++    public void hideProgressOverlay() {
++        if (progressOverlay) {
++            progressOverlay = false;
++            notifyPropertyChanged(BR.progressOverlay);
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesContract.java
+index b21d599..ce06fbe 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesContract.java
+@@ -30,7 +30,6 @@ public interface NotesContract {
+         int getPosition(String noteId);
+         void scrollToPosition(int position);
+         void confirmNotesRemoval(int[] selectedIds);
+-        void showConflictResolution(@NonNull String noteId);
+     }
+ 
+     interface ViewModel extends BaseView<Presenter> {
+@@ -55,8 +54,6 @@ public interface NotesContract {
+         int getSelectedCount();
+         int[] getSelectedIds();
+         void showDatabaseErrorSnackbar();
+-        void showConflictResolutionSuccessfulSnackbar();
+-        void showConflictResolutionErrorSnackbar();
+         void showProgressOverlay();
+         void hideProgressOverlay();
+ 
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesFragment.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesFragment.java
+index d25fb89..0fe177b 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesFragment.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesFragment.java
+@@ -32,7 +32,6 @@ import com.bytesforge.linkasanote.laano.favorites.FavoritesViewModel;
+ import com.bytesforge.linkasanote.laano.links.LinksViewModel;
+ import com.bytesforge.linkasanote.laano.notes.addeditnote.AddEditNoteActivity;
+ import com.bytesforge.linkasanote.laano.notes.addeditnote.AddEditNoteFragment;
+-import com.bytesforge.linkasanote.laano.notes.conflictresolution.NotesConflictResolutionDialog;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -43,7 +42,6 @@ public class NotesFragment extends BaseFragment implements NotesContract.View {
+ 
+     public static final int REQUEST_ADD_NOTE = 1;
+     public static final int REQUEST_EDIT_NOTE = 2;
+-    public static final int REQUEST_NOTE_CONFLICT_RESOLUTION = 3;
+ 
+     private NotesContract.Presenter presenter;
+     private NotesContract.ViewModel viewModel;
+@@ -212,16 +210,6 @@ public class NotesFragment extends BaseFragment implements NotesContract.View {
+                     adapter.notifyDataSetChanged();
+                 }
+                 break;
+-            case REQUEST_NOTE_CONFLICT_RESOLUTION:
+-                adapter.notifyDataSetChanged();
+-                presenter.updateTabNormalState();
+-                presenter.loadNotes(false);
+-                if (resultCode == NotesConflictResolutionDialog.RESULT_OK) {
+-                    viewModel.showConflictResolutionSuccessfulSnackbar();
+-                } else if (resultCode == NotesConflictResolutionDialog.RESULT_FAILED){
+-                    viewModel.showConflictResolutionErrorSnackbar();
+-                }
+-                break;
+             default:
+                 throw new IllegalStateException("The result received from the unexpected activity");
+         }
+@@ -254,6 +242,9 @@ public class NotesFragment extends BaseFragment implements NotesContract.View {
+                 case R.id.filter_no_tags:
+                     presenter.setFilterType(FilterType.NO_TAGS);
+                     break;
++                case R.id.filter_unbound:
++                    presenter.setFilterType(FilterType.UNBOUND);
++                    break;
+                 case R.id.filter_conflicted:
+                     presenter.setFilterType(FilterType.CONFLICTED);
+                     break;
+@@ -362,16 +353,6 @@ public class NotesFragment extends BaseFragment implements NotesContract.View {
+         presenter.deleteNotes(selectedIds);
+     }
+ 
+-    @Override
+-    public void showConflictResolution(@NonNull String noteId) {
+-        checkNotNull(noteId);
+-
+-        NotesConflictResolutionDialog dialog =
+-                NotesConflictResolutionDialog.newInstance(noteId);
+-        dialog.setTargetFragment(this, REQUEST_NOTE_CONFLICT_RESOLUTION);
+-        dialog.show(getFragmentManager(), NotesConflictResolutionDialog.DIALOG_TAG);
+-    }
+-
+     public class NotesActionModeCallback implements ActionMode.Callback {
+ 
+         @Override
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesPresenter.java
+index 09e7b1e..2f7025d 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesPresenter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesPresenter.java
+@@ -185,6 +185,8 @@ public final class NotesPresenter implements NotesContract.Presenter {
+                             return !Collections.disjoint(favoriteFilterTags, noteTags);
+                         case NO_TAGS:
+                             return note.getTags() == null;
++                        case UNBOUND:
++                            return note.getLinkId() == null;
+                         case ALL:
+                         default:
+                             return true;
+@@ -216,8 +218,6 @@ public final class NotesPresenter implements NotesContract.Presenter {
+     public void onNoteClick(String noteId, boolean isConflicted) {
+         if (viewModel.isActionMode()) {
+             onNoteSelected(noteId);
+-        } else if (isConflicted) {
+-            view.showConflictResolution(noteId);
+         } else if (Settings.GLOBAL_ITEM_CLICK_SELECT_FILTER) {
+             int position = getPosition(noteId);
+             boolean selected = viewModel.toggleSingleSelection(position);
+@@ -362,6 +362,7 @@ public final class NotesPresenter implements NotesContract.Presenter {
+             case ALL:
+             case CONFLICTED:
+             case NO_TAGS:
++            case UNBOUND:
+                 if (this.filterType == filterType) {
+                     return null;
+                 }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesViewModel.java
+index 589289c..43cc47d 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesViewModel.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/NotesViewModel.java
+@@ -50,8 +50,7 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+     private SparseBooleanArray visibleNoteIds;
+     private String searchText;
+ 
+-    public enum SnackbarId {
+-        DATABASE_ERROR, CONFLICT_RESOLUTION_SUCCESSFUL, CONFLICT_RESOLUTION_ERROR};
++    public enum SnackbarId {DATABASE_ERROR};
+ 
+     @Bindable
+     public SnackbarId snackbarId;
+@@ -85,16 +84,6 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+                         .setAction(R.string.snackbar_button_ok, v -> { /* just inform */ })
+                         .show();
+                 break;
+-            case CONFLICT_RESOLUTION_SUCCESSFUL:
+-                Snackbar.make(view,
+-                        R.string.dialog_note_conflict_resolved_success,
+-                        Snackbar.LENGTH_LONG).show();
+-                break;
+-            case CONFLICT_RESOLUTION_ERROR:
+-                Snackbar.make(view,
+-                        R.string.dialog_note_conflict_resolved_error,
+-                        Snackbar.LENGTH_LONG).show();
+-                break;
+             default:
+                 throw new IllegalArgumentException("Unexpected snackbar has been requested");
+         }
+@@ -149,6 +138,12 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+         return defaultState;
+     }
+ 
++    @Override
++    public void notifyChange() {
++        snackbarId = null;
++        super.notifyChange();
++    }
++
+     @Override
+     public void setPresenter(@NonNull NotesContract.Presenter presenter) {
+         this.presenter = checkNotNull(presenter);
+@@ -192,7 +187,6 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+     public void enableActionMode() {
+         selectedIds.clear();
+         actionMode.set(true);
+-        snackbarId = null;
+         notifyChange();
+     }
+ 
+@@ -200,7 +194,6 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+     public void disableActionMode() {
+         selectedIds.clear();
+         actionMode.set(false);
+-        snackbarId = null;
+         presenter.selectNoteFilter();
+         notifyChange();
+     }
+@@ -363,18 +356,6 @@ public class NotesViewModel extends BaseObservable implements NotesContract.View
+         notifyPropertyChanged(BR.snackbarId);
+     }
+ 
+-    @Override
+-    public void showConflictResolutionSuccessfulSnackbar() {
+-        snackbarId = SnackbarId.CONFLICT_RESOLUTION_SUCCESSFUL;
+-        notifyPropertyChanged(BR.snackbarId);
+-    }
+-
+-    @Override
+-    public void showConflictResolutionErrorSnackbar() {
+-        snackbarId = SnackbarId.CONFLICT_RESOLUTION_ERROR;
+-        notifyPropertyChanged(BR.snackbarId);
+-    }
+-
+     // Progress
+ 
+     @Override
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionComponent.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionComponent.java
+deleted file mode 100644
+index c36b557..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionComponent.java
++++ /dev/null
+@@ -1,12 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import com.bytesforge.linkasanote.FragmentScoped;
+-
+-import dagger.Subcomponent;
+-
+-@FragmentScoped
+-@Subcomponent(modules = {NotesConflictResolutionPresenterModule.class})
+-public interface NotesConflictResolutionComponent {
+-
+-    void inject(NotesConflictResolutionDialog notesConflictResolutionDialog);
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionContract.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionContract.java
+deleted file mode 100644
+index 6443e9d..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionContract.java
++++ /dev/null
+@@ -1,52 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import android.os.Bundle;
+-import android.support.annotation.NonNull;
+-import android.support.annotation.Nullable;
+-
+-import com.bytesforge.linkasanote.BasePresenter;
+-import com.bytesforge.linkasanote.BaseView;
+-import com.bytesforge.linkasanote.data.Note;
+-
+-import io.reactivex.Single;
+-
+-public interface NotesConflictResolutionContract {
+-
+-    interface View extends BaseView<Presenter> {
+-
+-        void setViewModel(@NonNull NotesConflictResolutionContract.ViewModel viewModel);
+-        boolean isActive();
+-        void finishActivity();
+-        void cancelActivity();
+-    }
+-
+-    interface ViewModel extends BaseView<Presenter> {
+-
+-        void setInstanceState(@Nullable Bundle savedInstanceState);
+-        void saveInstanceState(@NonNull Bundle outState);
+-        void applyInstanceState(@NonNull Bundle state);
+-
+-        void populateLocalNote(@NonNull Note note);
+-        boolean isLocalPopulated();
+-        void populateCloudNote(@NonNull Note note);
+-        boolean isCloudPopulated();
+-        void showCloudNotFound();
+-        void showCloudDownloadError();
+-        void showDatabaseError();
+-        void showCloudLoading();
+-        boolean isStateDuplicated();
+-        String getLocalName();
+-        void activateButtons();
+-        void deactivateButtons();
+-    }
+-
+-    interface Presenter extends BasePresenter {
+-
+-        void onLocalDeleteClick();
+-        void onCloudDeleteClick();
+-        void onCloudRetryClick();
+-        void onLocalUploadClick();
+-        void onCloudDownloadClick();
+-        Single<Boolean> autoResolve();
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionDialog.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionDialog.java
+deleted file mode 100644
+index 8fe5267..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionDialog.java
++++ /dev/null
+@@ -1,131 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import android.app.Activity;
+-import android.app.Dialog;
+-import android.content.Context;
+-import android.databinding.DataBindingUtil;
+-import android.os.Bundle;
+-import android.support.annotation.NonNull;
+-import android.support.annotation.Nullable;
+-import android.support.v4.app.DialogFragment;
+-import android.support.v7.app.AlertDialog;
+-import android.view.LayoutInflater;
+-
+-import com.bytesforge.linkasanote.LaanoApplication;
+-import com.bytesforge.linkasanote.R;
+-import com.bytesforge.linkasanote.databinding.DialogNoteConflictResolutionBinding;
+-
+-import java.util.NoSuchElementException;
+-
+-import javax.inject.Inject;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-public class NotesConflictResolutionDialog extends DialogFragment implements
+-        NotesConflictResolutionContract.View {
+-
+-    public static final String ARGUMENT_NOTE_ID = "NOTE_ID";
+-
+-    public static final String DIALOG_TAG = "CONFLICT_RESOLUTION";
+-    public static final int RESULT_OK = Activity.RESULT_OK;
+-    public static final int RESULT_FAILED = Activity.RESULT_FIRST_USER;
+-
+-    @Inject
+-    NotesConflictResolutionPresenter presenter;
+-
+-    NotesConflictResolutionContract.ViewModel viewModel;
+-
+-    @Override
+-    public void onResume() {
+-        super.onResume();
+-        presenter.subscribe();
+-    }
+-
+-    @Override
+-    public void onPause() {
+-        super.onPause();
+-        presenter.unsubscribe();
+-    }
+-
+-    @Override
+-    public void setPresenter(@NonNull NotesConflictResolutionContract.Presenter presenter) {
+-        // NOTE: presenter is injected directly to this dialogFragment
+-    }
+-
+-    @Override
+-    public void setViewModel(@NonNull NotesConflictResolutionContract.ViewModel viewModel) {
+-        this.viewModel = checkNotNull(viewModel);
+-    }
+-
+-    @Override
+-    public boolean isActive() {
+-        return isAdded();
+-    }
+-
+-    @Override
+-    public void finishActivity() {
+-        dismiss();
+-        getTargetFragment().onActivityResult(getTargetRequestCode(), RESULT_OK, null);
+-    }
+-
+-    @Override
+-    public void cancelActivity() {
+-        dismiss();
+-        getTargetFragment().onActivityResult(getTargetRequestCode(), RESULT_FAILED, null);
+-    }
+-
+-    public static NotesConflictResolutionDialog newInstance(@NonNull String noteId) {
+-        checkNotNull(noteId);
+-
+-        Bundle args = new Bundle();
+-        args.putString(ARGUMENT_NOTE_ID, noteId);
+-        NotesConflictResolutionDialog dialog = new NotesConflictResolutionDialog();
+-        dialog.setArguments(args);
+-        return dialog;
+-    }
+-
+-    @Override
+-    public void onCreate(@Nullable Bundle savedInstanceState) {
+-        super.onCreate(savedInstanceState);
+-        String noteId = getArguments().getString(ARGUMENT_NOTE_ID);
+-        // Presenter
+-        LaanoApplication application = (LaanoApplication) getActivity().getApplication();
+-        application.getApplicationComponent()
+-                .getNotesConflictResolutionComponent(
+-                        new NotesConflictResolutionPresenterModule(getContext(), this, noteId))
+-                .inject(this);
+-    }
+-
+-    @NonNull
+-    @Override
+-    public Dialog onCreateDialog(Bundle savedInstanceState) {
+-        // TODO: move this check outside of the dialog creation
+-        try {
+-            boolean conflictResolved = presenter.autoResolve().blockingGet();
+-            if (conflictResolved) {
+-                setShowsDialog(false);
+-                finishActivity();
+-                return new Dialog(getContext());
+-            }
+-        } catch (NullPointerException | NoSuchElementException e) {
+-            cancelActivity();
+-            return new Dialog(getContext());
+-        }
+-        Context context = getActivity();
+-        LayoutInflater inflater = LayoutInflater.from(context);
+-        DialogNoteConflictResolutionBinding binding = DataBindingUtil.inflate(
+-                inflater, R.layout.dialog_note_conflict_resolution, null, false);
+-        viewModel.setInstanceState(savedInstanceState);
+-        binding.setPresenter(presenter);
+-        binding.setViewModel((NotesConflictResolutionViewModel) viewModel);
+-        return new AlertDialog.Builder(getContext())
+-                .setView(binding.getRoot())
+-                .create();
+-    }
+-
+-    @Override
+-    public void onSaveInstanceState(Bundle outState) {
+-        super.onSaveInstanceState(outState);
+-        viewModel.saveInstanceState(outState);
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenter.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenter.java
+deleted file mode 100644
+index dfc0bb4..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenter.java
++++ /dev/null
+@@ -1,293 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import android.support.annotation.NonNull;
+-
+-import com.bytesforge.linkasanote.data.Note;
+-import com.bytesforge.linkasanote.data.source.Repository;
+-import com.bytesforge.linkasanote.data.source.cloud.CloudItem;
+-import com.bytesforge.linkasanote.data.source.local.LocalNotes;
+-import com.bytesforge.linkasanote.laano.notes.NoteId;
+-import com.bytesforge.linkasanote.sync.SyncState;
+-import com.bytesforge.linkasanote.sync.files.JsonFile;
+-import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+-
+-import java.util.NoSuchElementException;
+-
+-import javax.inject.Inject;
+-
+-import io.reactivex.Single;
+-import io.reactivex.disposables.CompositeDisposable;
+-import io.reactivex.disposables.Disposable;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-public final class NotesConflictResolutionPresenter implements
+-        NotesConflictResolutionContract.Presenter {
+-
+-    private final Repository repository; // NOTE: for cache control
+-    private final LocalNotes<Note> localNotes;
+-    private final CloudItem<Note> cloudNotes;
+-    private final NotesConflictResolutionContract.View view;
+-    private final NotesConflictResolutionContract.ViewModel viewModel;
+-    private final BaseSchedulerProvider schedulerProvider;
+-
+-    private String noteId;
+-
+-    @NonNull
+-    private final CompositeDisposable localDisposable;
+-
+-    @NonNull
+-    private final CompositeDisposable cloudDisposable;
+-
+-    @Inject
+-    NotesConflictResolutionPresenter(
+-            Repository repository, LocalNotes<Note> localNotes, CloudItem<Note> cloudNotes,
+-            NotesConflictResolutionContract.View view,
+-            NotesConflictResolutionContract.ViewModel viewModel,
+-            BaseSchedulerProvider schedulerProvider, @NoteId String noteId) {
+-        this.repository = repository;
+-        this.localNotes = localNotes;
+-        this.cloudNotes = cloudNotes;
+-        this.view = view;
+-        this.viewModel = viewModel;
+-        this.schedulerProvider = schedulerProvider;
+-        this.noteId = noteId;
+-        localDisposable = new CompositeDisposable();
+-        cloudDisposable = new CompositeDisposable();
+-    }
+-
+-    @Inject
+-    void setupView() {
+-        view.setViewModel(viewModel);
+-        viewModel.setPresenter(this);
+-    }
+-
+-    @Override
+-    public void subscribe() {
+-        populate();
+-    }
+-
+-    @Override
+-    public void unsubscribe() {
+-        localDisposable.clear();
+-        cloudDisposable.clear();
+-    }
+-
+-    private void populate() {
+-        if (viewModel.isLocalPopulated() && viewModel.isCloudPopulated()) {
+-            return;
+-        }
+-        loadLocalNote(); // first step, then cloud one will be loaded
+-    }
+-
+-    @Override
+-    public Single<Boolean> autoResolve() {
+-        return Single.fromCallable(() -> {
+-            Note note = localNotes.get(noteId).blockingGet();
+-            if (note.isDuplicated()) {
+-                try {
+-                    // TODO: remove
+-                    localNotes.getMain(note.getNote()).blockingGet();
+-                } catch (NoSuchElementException e) {
+-                    SyncState state = new SyncState(SyncState.State.SYNCED);
+-                    int numRows = localNotes.update(noteId, state).blockingGet();
+-                    if (numRows == 1) {
+-                        repository.refreshNotes();
+-                        return true;
+-                    }
+-                }
+-            }
+-            return false;
+-        });
+-    }
+-
+-    private void loadLocalNote() {
+-        localDisposable.clear();
+-        Disposable disposable = localNotes.get(noteId)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(note -> {
+-                    if (!note.isConflicted()) {
+-                        repository.refreshNotes(); // NOTE: maybe there is a problem with cache
+-                        view.finishActivity();
+-                    } else {
+-                        populateLocalNote(note);
+-                    }
+-                }, throwable -> {
+-                    if (throwable instanceof NoSuchElementException) {
+-                        repository.refreshNotes(); // NOTE: maybe there is a problem with cache
+-                        view.finishActivity(); // NOTE: no item, no problem
+-                    } else {
+-                        viewModel.showDatabaseError();
+-                        loadCloudNote();
+-                    }
+-                });
+-        localDisposable.add(disposable);
+-    }
+-
+-    private void populateLocalNote(@NonNull final Note note) {
+-        checkNotNull(note);
+-        if (note.isDuplicated()) {
+-            viewModel.populateCloudNote(note);
+-            localNotes.getMain(note.getNote())
+-                    .subscribeOn(schedulerProvider.computation())
+-                    .observeOn(schedulerProvider.ui())
+-                    // NOTE: recursion, but mainNote is not duplicated by definition
+-                    .subscribe(this::populateLocalNote, throwable -> {
+-                        if (throwable instanceof NoSuchElementException) {
+-                            // NOTE: main position is empty, so the conflict can be resolved automatically
+-                            // TODO: remove in favor of autoResolve
+-                            SyncState state = new SyncState(SyncState.State.SYNCED);
+-                            int numRows = localNotes.update(noteId, state).blockingGet();
+-                            if (numRows == 1) {
+-                                repository.refreshNotes();
+-                                view.finishActivity();
+-                            } else {
+-                                view.cancelActivity();
+-                            }
+-                        } else {
+-                            viewModel.showDatabaseError();
+-                            loadCloudNote();
+-                        }
+-                    });
+-        } else {
+-            viewModel.populateLocalNote(note);
+-            if (!viewModel.isCloudPopulated()) {
+-                loadCloudNote();
+-            }
+-        } // if
+-    }
+-
+-    private void loadCloudNote() {
+-        cloudDisposable.clear();
+-        Disposable disposable = cloudNotes.download(noteId)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(viewModel::populateCloudNote, throwable -> {
+-                    if (throwable instanceof NoSuchElementException) {
+-                        viewModel.showCloudNotFound();
+-                    } else {
+-                        viewModel.showCloudDownloadError();
+-                    }
+-                });
+-        cloudDisposable.add(disposable);
+-    }
+-
+-    @Override
+-    public void onLocalDeleteClick() {
+-        viewModel.deactivateButtons();
+-        if (viewModel.isStateDuplicated()) {
+-            localNotes.getMain(viewModel.getLocalName())
+-                    .subscribeOn(schedulerProvider.computation())
+-                    .observeOn(schedulerProvider.ui())
+-                    .subscribe(
+-                            note -> replaceNote(note.getId(), noteId),
+-                            throwable -> view.cancelActivity());
+-        } else {
+-            deleteNote(noteId);
+-        }
+-    }
+-
+-    private void replaceNote(
+-            @NonNull final String mainNoteId, @NonNull final String noteId) {
+-        checkNotNull(mainNoteId);
+-        checkNotNull(noteId);
+-        // DB operation is blocking; Cloud is on computation
+-        cloudNotes.delete(mainNoteId)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localNotes.delete(mainNoteId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedNote(mainNoteId);
+-                        SyncState state = new SyncState(SyncState.State.SYNCED);
+-                        int numRows = localNotes.update(noteId, state).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.refreshNotes();
+-                        view.finishActivity();
+-                    } else {
+-                        view.cancelActivity();
+-                    }
+-                }, throwable -> view.cancelActivity());
+-    }
+-
+-    private void deleteNote(@NonNull final String noteId) {
+-        checkNotNull(noteId);
+-        cloudNotes.delete(noteId)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        int numRows = localNotes.delete(noteId).blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.deleteCachedNote(noteId);
+-                        view.finishActivity();
+-                    } else {
+-                        view.cancelActivity();
+-                    }
+-                }, throwable -> view.cancelActivity());
+-    }
+-
+-    @Override
+-    public void onCloudDeleteClick() {
+-        viewModel.deactivateButtons();
+-        deleteNote(noteId);
+-    }
+-
+-    @Override
+-    public void onCloudRetryClick() {
+-        viewModel.showCloudLoading();
+-        loadCloudNote();
+-    }
+-
+-    @Override
+-    public void onLocalUploadClick() {
+-        viewModel.deactivateButtons();
+-        Note note = localNotes.get(noteId).blockingGet();
+-        cloudNotes.upload(note)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(result -> {
+-                    boolean isSuccess = false;
+-                    if (result.isSuccess()) {
+-                        JsonFile jsonFile = (JsonFile) result.getData().get(0);
+-                        SyncState state = new SyncState(jsonFile.getETag(), SyncState.State.SYNCED);
+-                        int numRows = localNotes.update(note.getId(), state)
+-                                .blockingGet();
+-                        isSuccess = (numRows == 1);
+-                    }
+-                    if (isSuccess) {
+-                        repository.refreshNotes();
+-                        view.finishActivity();
+-                    } else {
+-                        view.cancelActivity();
+-                    }
+-                }, throwable -> view.cancelActivity());
+-    }
+-
+-    @Override
+-    public void onCloudDownloadClick() {
+-        viewModel.deactivateButtons();
+-        cloudNotes.download(noteId)
+-                .subscribeOn(schedulerProvider.computation())
+-                .observeOn(schedulerProvider.ui())
+-                .subscribe(note -> {
+-                    long rowId = localNotes.save(note).blockingGet();
+-                    if (rowId > 0) {
+-                        repository.refreshNotes();
+-                        view.finishActivity();
+-                    } else {
+-                        view.cancelActivity();
+-                    }
+-                }, throwable -> view.cancelActivity());
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterModule.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterModule.java
+deleted file mode 100644
+index 197c978..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterModule.java
++++ /dev/null
+@@ -1,39 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import android.content.Context;
+-
+-import com.bytesforge.linkasanote.laano.notes.NoteId;
+-
+-import dagger.Module;
+-import dagger.Provides;
+-
+-@Module
+-public class NotesConflictResolutionPresenterModule {
+-
+-    private final Context context;
+-    private final NotesConflictResolutionContract.View view;
+-    private String noteId;
+-
+-    public NotesConflictResolutionPresenterModule(
+-            Context context, NotesConflictResolutionContract.View view, String noteId) {
+-        this.context = context;
+-        this.view = view;
+-        this.noteId = noteId;
+-    }
+-
+-    @Provides
+-    public NotesConflictResolutionContract.View provideNotesConflictResolutionContractView() {
+-        return view;
+-    }
+-
+-    @Provides
+-    public NotesConflictResolutionContract.ViewModel provideNotesConflictResolutionContractViewModel() {
+-        return new NotesConflictResolutionViewModel(context);
+-    }
+-
+-    @Provides
+-    @NoteId
+-    public String provideNoteId() {
+-        return noteId;
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionViewModel.java b/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionViewModel.java
+deleted file mode 100644
+index 8b2cf6e..0000000
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionViewModel.java
++++ /dev/null
+@@ -1,252 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import android.content.Context;
+-import android.content.res.Resources;
+-import android.databinding.BaseObservable;
+-import android.databinding.ObservableBoolean;
+-import android.databinding.ObservableField;
+-import android.os.Bundle;
+-import android.support.annotation.NonNull;
+-import android.support.annotation.Nullable;
+-
+-import com.bytesforge.linkasanote.R;
+-import com.bytesforge.linkasanote.data.Note;
+-
+-import static com.google.common.base.Preconditions.checkNotNull;
+-
+-public class NotesConflictResolutionViewModel extends BaseObservable implements
+-        NotesConflictResolutionContract.ViewModel {
+-
+-    private static final String STATE_LOCAL_STATE = "LOCAL_STATE";
+-    private static final String STATE_LOCAL_STATUS = "LOCAL_STATUS";
+-    private static final String STATE_LOCAL_NAME = "LOCAL_NAME";
+-    private static final String STATE_LOCAL_TAGS = "LOCAL_TAGS";
+-    private static final String STATE_LOCAL_DELETE_BUTTON = "LOCAL_DELETE_BUTTON";
+-    private static final String STATE_LOCAL_UPLOAD_BUTTON = "LOCAL_UPLOAD_BUTTON";
+-
+-    private static final String STATE_CLOUD_STATE = "CLOUD_STATE";
+-    private static final String STATE_CLOUD_STATUS = "CLOUD_STATUS";
+-    private static final String STATE_CLOUD_NAME = "CLOUD_NAME";
+-    private static final String STATE_CLOUD_TAGS = "CLOUD_TAGS";
+-    private static final String STATE_CLOUD_DELETE_BUTTON = "CLOUD_DELETE_BUTTON";
+-    private static final String STATE_CLOUD_DOWNLOAD_BUTTON = "CLOUD_DOWNLOAD_BUTTON";
+-    private static final String STATE_CLOUD_RETRY_BUTTON = "CLOUD_RETRY_BUTTON";
+-
+-    private static final String STATE_BUTTONS_ACTIVE = "BUTTONS_ACTIVE";
+-
+-    public final ObservableField<String> localState = new ObservableField<>();
+-    public final ObservableField<String> localStatus = new ObservableField<>();
+-    public final ObservableField<String> localName = new ObservableField<>();
+-    public final ObservableField<String> localTags = new ObservableField<>();
+-    public final ObservableBoolean localDeleteButton = new ObservableBoolean();
+-    public final ObservableBoolean localUploadButton = new ObservableBoolean();
+-
+-    public final ObservableField<String> cloudState = new ObservableField<>();
+-    public final ObservableField<String> cloudStatus = new ObservableField<>();
+-    public final ObservableField<String> cloudName = new ObservableField<>();
+-    public final ObservableField<String> cloudTags = new ObservableField<>();
+-    public final ObservableBoolean cloudDeleteButton = new ObservableBoolean();
+-    public final ObservableBoolean cloudDownloadButton = new ObservableBoolean();
+-    public final ObservableBoolean cloudRetryButton = new ObservableBoolean();
+-
+-    public final ObservableBoolean buttonsActive = new ObservableBoolean();
+-
+-    private final Resources resources;
+-    private NotesConflictResolutionContract.Presenter presenter;
+-
+-    public NotesConflictResolutionViewModel(Context context) {
+-        resources = context.getResources();
+-    }
+-
+-    @Override
+-    public void setInstanceState(@Nullable Bundle savedInstanceState) {
+-        if (savedInstanceState == null) {
+-            applyInstanceState(getDefaultInstanceState());
+-        } else {
+-            applyInstanceState(savedInstanceState);
+-        }
+-    }
+-
+-    @Override
+-    public void saveInstanceState(@NonNull Bundle outState) {
+-        checkNotNull(outState);
+-
+-        outState.putString(STATE_LOCAL_STATE, localState.get());
+-        outState.putString(STATE_LOCAL_STATUS, localStatus.get());
+-        outState.putString(STATE_LOCAL_NAME, localName.get());
+-        outState.putString(STATE_LOCAL_TAGS, localTags.get());
+-        outState.putBoolean(STATE_LOCAL_DELETE_BUTTON, localDeleteButton.get());
+-        outState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, localUploadButton.get());
+-
+-        outState.putString(STATE_CLOUD_STATE, cloudState.get());
+-        outState.putString(STATE_CLOUD_STATUS, cloudStatus.get());
+-        outState.putString(STATE_CLOUD_NAME, cloudName.get());
+-        outState.putString(STATE_CLOUD_TAGS, cloudTags.get());
+-        outState.putBoolean(STATE_CLOUD_DELETE_BUTTON, cloudDeleteButton.get());
+-        outState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, cloudDownloadButton.get());
+-        outState.putBoolean(STATE_CLOUD_RETRY_BUTTON, cloudRetryButton.get());
+-
+-        outState.putBoolean(STATE_BUTTONS_ACTIVE, buttonsActive.get());
+-    }
+-
+-    @Override
+-    public void applyInstanceState(@NonNull Bundle state) {
+-        checkNotNull(state);
+-
+-        localState.set(state.getString(STATE_LOCAL_STATE));
+-        localStatus.set(state.getString(STATE_LOCAL_STATUS));
+-        localName.set(state.getString(STATE_LOCAL_NAME));
+-        localTags.set(state.getString(STATE_LOCAL_TAGS));
+-        localDeleteButton.set(state.getBoolean(STATE_LOCAL_DELETE_BUTTON));
+-        localUploadButton.set(state.getBoolean(STATE_LOCAL_UPLOAD_BUTTON));
+-
+-        cloudState.set(state.getString(STATE_CLOUD_STATE));
+-        cloudStatus.set(state.getString(STATE_CLOUD_STATUS));
+-        cloudName.set(state.getString(STATE_CLOUD_NAME));
+-        cloudTags.set(state.getString(STATE_CLOUD_TAGS));
+-        cloudDeleteButton.set(state.getBoolean(STATE_CLOUD_DELETE_BUTTON));
+-        cloudDownloadButton.set(state.getBoolean(STATE_CLOUD_DOWNLOAD_BUTTON));
+-        cloudRetryButton.set(state.getBoolean(STATE_CLOUD_RETRY_BUTTON));
+-
+-        buttonsActive.set(state.getBoolean(STATE_BUTTONS_ACTIVE));
+-
+-        notifyChange();
+-    }
+-
+-    private Bundle getDefaultInstanceState() {
+-        Bundle defaultState = new Bundle();
+-
+-        defaultState.putString(STATE_LOCAL_STATE, null);
+-        defaultState.putString(STATE_LOCAL_STATUS, resources.getString(R.string.status_loading));
+-        defaultState.putString(STATE_LOCAL_NAME, null);
+-        defaultState.putString(STATE_LOCAL_TAGS, null);
+-        defaultState.putBoolean(STATE_LOCAL_DELETE_BUTTON, false);
+-        defaultState.putBoolean(STATE_LOCAL_UPLOAD_BUTTON, false);
+-
+-        defaultState.putString(STATE_CLOUD_STATE, null);
+-        defaultState.putString(STATE_CLOUD_STATUS, resources.getString(R.string.status_loading));
+-        defaultState.putString(STATE_CLOUD_NAME, null);
+-        defaultState.putString(STATE_CLOUD_TAGS, null);
+-        defaultState.putBoolean(STATE_CLOUD_DELETE_BUTTON, false);
+-        defaultState.putBoolean(STATE_CLOUD_DOWNLOAD_BUTTON, false);
+-        defaultState.putBoolean(STATE_CLOUD_RETRY_BUTTON, false);
+-
+-        defaultState.putBoolean(STATE_BUTTONS_ACTIVE, false);
+-
+-        return defaultState;
+-    }
+-
+-    @Override
+-    public void setPresenter(@NonNull NotesConflictResolutionContract.Presenter presenter) {
+-        this.presenter = checkNotNull(presenter);
+-    }
+-
+-    @Override
+-    public void populateLocalNote(@NonNull Note note) {
+-        checkNotNull(note);
+-        localDeleteButton.set(false);
+-        localUploadButton.set(false);
+-        activateButtons();
+-
+-        if (note.isConflicted()) {
+-            if (note.isDeleted()) {
+-                localState.set(resources.getString(R.string.dialog_note_conflict_state_deleted));
+-                localDeleteButton.set(true);
+-            } else {
+-                localState.set(resources.getString(R.string.dialog_note_conflict_state_updated));
+-            }
+-            localUploadButton.set(true);
+-        } else {
+-            localState.set(resources.getString(R.string.dialog_note_conflict_state_no_conflict));
+-            localDeleteButton.set(true);
+-        }
+-        localName.set(note.getNote());
+-        localTags.set(note.getTagsAsString());
+-        localStatus.set(null);
+-        notifyChange(); // NOTE: it is really needed
+-    }
+-
+-    @Override
+-    public boolean isLocalPopulated() {
+-        return localStatus.get() == null;
+-    }
+-
+-    @Override
+-    public void populateCloudNote(@NonNull Note note) {
+-        checkNotNull(note);
+-        cloudRetryButton.set(false);
+-        cloudDeleteButton.set(false);
+-        cloudDownloadButton.set(false);
+-        activateButtons();
+-
+-        if (note.isDuplicated()) { // NOTE: from database record
+-            cloudState.set(resources.getString(R.string.dialog_note_conflict_state_duplicated));
+-            cloudDeleteButton.set(true);
+-        } else {
+-            cloudState.set(resources.getString(R.string.dialog_note_conflict_state_updated));
+-            cloudDownloadButton.set(true);
+-        }
+-        cloudName.set(note.getNote());
+-        cloudTags.set(note.getTagsAsString());
+-        cloudStatus.set(null);
+-        notifyChange();
+-    }
+-
+-    @Override
+-    public boolean isCloudPopulated() {
+-        return cloudStatus.get() == null;
+-    }
+-
+-    @Override
+-    public void showCloudNotFound() {
+-        cloudState.set(resources.getString(R.string.dialog_note_conflict_state_not_found));
+-        cloudStatus.set(null);
+-        localDeleteButton.set(true);
+-    }
+-
+-    @Override
+-    public void showCloudDownloadError() {
+-        activateButtons();
+-        cloudState.set(resources.getString(R.string.dialog_note_conflict_state_error));
+-        cloudStatus.set(resources.getString(R.string.dialog_note_conflict_status_error_download));
+-        cloudRetryButton.set(true);
+-    }
+-
+-    @Override
+-    public void showDatabaseError() {
+-        localState.set(resources.getString(R.string.dialog_note_conflict_state_error));
+-        localStatus.set(resources.getString(R.string.error_database));
+-    }
+-
+-    @Override
+-    public void showCloudLoading() {
+-        cloudRetryButton.set(false);
+-        cloudDeleteButton.set(false);
+-        cloudDownloadButton.set(false);
+-        deactivateButtons();
+-        cloudState.set(null);
+-        cloudStatus.set(resources.getString(R.string.status_loading));
+-    }
+-
+-    @Override
+-    public boolean isStateDuplicated() {
+-        return resources.getString(
+-                R.string.dialog_note_conflict_state_duplicated).equals(cloudState.get());
+-    }
+-
+-    @Override
+-    public String getLocalName() {
+-        return localName.get();
+-    }
+-
+-    @Override
+-    public void activateButtons() {
+-        buttonsActive.set(true);
+-
+-    }
+-
+-    @Override
+-    public void deactivateButtons() {
+-        buttonsActive.set(false);
+-    }
+-}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/settings/Settings.java b/app/src/main/java/com/bytesforge/linkasanote/settings/Settings.java
+index 6ee066a..348046e 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/settings/Settings.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/settings/Settings.java
+@@ -40,6 +40,8 @@ public class Settings {
+     private static final String SETTING_LINK_FILTER = "LINK_FILTER";
+     private static final String SETTING_FAVORITE_FILTER = "FAVORITE_FILTER";
+     private static final String SETTING_NOTE_FILTER = "NOTE_FILTER";
++    private static final String SETTING_SHOW_CONFLICT_RESOLUTION_WARNING =
++            "SHOW_CONFLICT_RESOLUTION_WARNING";
+ 
+     private static final long DEFAULT_LAST_SYNC_TIME = 0;
+     private static final int DEFAULT_LAST_SYNC_STATUS = SyncAdapter.LAST_SYNC_STATUS_UNKNOWN;
+@@ -48,6 +50,7 @@ public class Settings {
+     private static final String DEFAULT_LINK_FILTER = null;
+     private static final String DEFAULT_FAVORITE_FILTER = null;
+     private static final String DEFAULT_NOTE_FILTER = null;
++    private static final boolean DEFAULT_SHOW_CONFLICT_RESOLUTION_WARNING = true;
+ 
+     private final Resources resources;
+     private final SharedPreferences sharedPreferences;
+@@ -133,16 +136,14 @@ public class Settings {
+     }
+ 
+     public synchronized void updateLastSyncTime() {
+-        SharedPreferences.Editor editor = sharedPreferences.edit();
+-        editor.putLong(SETTING_LAST_SYNC_TIME, currentTimeMillis());
+-        editor.apply();
++        putLongSetting(SETTING_LAST_SYNC_TIME, currentTimeMillis());
+     }
+ 
+     public String getLastSyncedETag(@NonNull String key) {
+         return sharedPreferences.getString(checkNotNull(key), DEFAULT_LAST_SYNCED_ETAG);
+     }
+ 
+-    public void setLastSyncedETag(@NonNull String key, String lastSyncedETag) {
++    public synchronized void setLastSyncedETag(@NonNull String key, String lastSyncedETag) {
+         putStringSetting(checkNotNull(key), lastSyncedETag);
+     }
+ 
+@@ -239,6 +240,19 @@ public class Settings {
+         }
+     }
+ 
++    public boolean isShowConflictResolutionWarning() {
++        return sharedPreferences.getBoolean(
++                SETTING_SHOW_CONFLICT_RESOLUTION_WARNING,
++                DEFAULT_SHOW_CONFLICT_RESOLUTION_WARNING);
++    }
++
++    public synchronized void setShowConflictResolutionWarning(boolean show) {
++        boolean oldValue = isShowConflictResolutionWarning();
++        if (show != oldValue) {
++            putBooleanSetting(SETTING_SHOW_CONFLICT_RESOLUTION_WARNING, show);
++        }
++    }
++
+     private void putStringSetting(String key, String value) {
+         SharedPreferences.Editor editor = sharedPreferences.edit();
+         editor.putString(key, value);
+@@ -250,4 +264,16 @@ public class Settings {
+         editor.putInt(key, value);
+         editor.apply();
+     }
++
++    private void putLongSetting(String key, long value) {
++        SharedPreferences.Editor editor = sharedPreferences.edit();
++        editor.putLong(key, value);
++        editor.apply();
++    }
++
++    private void putBooleanSetting(String key, boolean value) {
++        SharedPreferences.Editor editor = sharedPreferences.edit();
++        editor.putBoolean(key, value);
++        editor.apply();
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
+index b3f0e74..0869f3c 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
+@@ -150,19 +150,19 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+             int linkFailsCount = linksSyncResult.getFailsCount();
+             if (linkFailsCount > 0) {
+                 failSources.add(resources.getQuantityString(
+-                        R.plurals.sync_adapter_text_failed_links,
++                        R.plurals.count_links,
+                         linkFailsCount, linkFailsCount));
+             }
+             int favoriteFailsCount = favoritesSyncResult.getFailsCount();
+             if (favoriteFailsCount > 0) {
+                 failSources.add(resources.getQuantityString(
+-                        R.plurals.sync_adapter_text_failed_favorites,
++                        R.plurals.count_favorites,
+                         favoriteFailsCount, favoriteFailsCount));
+             }
+             int noteFailsCount = notesSyncResult.getFailsCount();
+             if (noteFailsCount > 0) {
+                 failSources.add(resources.getQuantityString(
+-                        R.plurals.sync_adapter_text_failed_notes,
++                        R.plurals.count_notes,
+                         noteFailsCount, noteFailsCount));
+             }
+             if (!failSources.isEmpty()) {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/files/JsonFile.java b/app/src/main/java/com/bytesforge/linkasanote/sync/files/JsonFile.java
+index 78cf9d9..bf76e71 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/sync/files/JsonFile.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/files/JsonFile.java
+@@ -27,6 +27,7 @@ public class JsonFile implements Parcelable, Comparable<JsonFile> {
+     private String eTag;
+ 
+     public static final Creator<JsonFile> CREATOR = new Creator<JsonFile>() {
++
+         @Override
+         public JsonFile createFromParcel(Parcel in) {
+             return new JsonFile(in);
+diff --git a/app/src/test/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterTest.java b/app/src/test/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterTest.java
+deleted file mode 100644
+index f5ccfc8..0000000
+--- a/app/src/test/java/com/bytesforge/linkasanote/laano/notes/conflictresolution/NotesConflictResolutionPresenterTest.java
++++ /dev/null
+@@ -1,125 +0,0 @@
+-package com.bytesforge.linkasanote.laano.notes.conflictresolution;
+-
+-import com.bytesforge.linkasanote.TestUtils;
+-import com.bytesforge.linkasanote.data.Note;
+-import com.bytesforge.linkasanote.data.source.Repository;
+-import com.bytesforge.linkasanote.data.source.cloud.CloudItem;
+-import com.bytesforge.linkasanote.data.source.local.LocalNotes;
+-import com.bytesforge.linkasanote.sync.SyncState;
+-import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+-import com.bytesforge.linkasanote.utils.schedulers.ImmediateSchedulerProvider;
+-
+-import org.junit.Before;
+-import org.junit.Test;
+-import org.mockito.Mock;
+-import org.mockito.MockitoAnnotations;
+-
+-import java.util.NoSuchElementException;
+-
+-import io.reactivex.Single;
+-
+-import static org.mockito.ArgumentMatchers.any;
+-import static org.mockito.ArgumentMatchers.eq;
+-import static org.mockito.Mockito.verify;
+-import static org.mockito.Mockito.when;
+-
+-public class NotesConflictResolutionPresenterTest {
+-
+-    @Mock
+-    Repository repository;
+-
+-    @Mock
+-    LocalNotes<Note> localNotes;
+-
+-    @Mock
+-    CloudItem<Note> cloudNotes;
+-
+-    @Mock
+-    NotesConflictResolutionContract.View view;
+-
+-    @Mock
+-    NotesConflictResolutionContract.ViewModel viewModel;
+-
+-    private static final String E_TAGL = "abcdefghigklmnopqrstuvwxwz";
+-    private static final String E_TAGC = "zwxwvutsrqponmlkgihgfedcba";
+-
+-    private BaseSchedulerProvider schedulerProvider;
+-    private NotesConflictResolutionPresenter presenter;
+-    private Note defaultNote;
+-    private String noteId;
+-
+-    @Before
+-    public void setupNotesConflictResolutionPresenter() {
+-        MockitoAnnotations.initMocks(this);
+-        schedulerProvider = new ImmediateSchedulerProvider();
+-        noteId = TestUtils.KEY_PREFIX + 'A';
+-        defaultNote = new Note(noteId, "Note", TestUtils.TAGS);
+-        presenter = new NotesConflictResolutionPresenter(
+-                repository, localNotes, cloudNotes,
+-                view, viewModel, schedulerProvider, defaultNote.getId());
+-    }
+-
+-    @Test
+-    public void notConflictedNote_finishesActivityWithSuccess() {
+-        SyncState state = new SyncState(SyncState.State.SYNCED);
+-        Note note = new Note(defaultNote, state);
+-        when(localNotes.get(eq(noteId)))
+-                .thenReturn(Single.fromCallable(() -> note));
+-        presenter.subscribe();
+-        verify(repository).refreshNotes();
+-        verify(view).finishActivity();
+-    }
+-
+-    @Test
+-    public void wrongId_finishesActivityWithSuccess() {
+-        when(localNotes.get(eq(noteId)))
+-                .thenReturn(Single.error(new NoSuchElementException()));
+-        presenter.subscribe();
+-        verify(repository).refreshNotes();
+-        verify(view).finishActivity();
+-    }
+-
+-    @Test
+-    public void databaseError_showsErrorThenTriesToLoadCloudNote() {
+-        when(localNotes.get(eq(noteId)))
+-                .thenReturn(Single.error(new NullPointerException()));
+-        when(cloudNotes.download(eq(noteId)))
+-                .thenReturn(Single.fromCallable(() -> defaultNote));
+-        presenter.subscribe();
+-        verify(viewModel).showDatabaseError();
+-        verify(viewModel).populateCloudNote(eq(defaultNote));
+-    }
+-
+-    @Test
+-    public void duplicatedNote_populatesToCloudThenLoadsMainToLocal() {
+-        SyncState state = new SyncState(E_TAGL, 1); // duplicated
+-        Note note = new Note(defaultNote, state);
+-        Note mainNote = new Note(
+-                TestUtils.KEY_PREFIX + 'B', "Note", TestUtils.TAGS);
+-        when(localNotes.get(eq(noteId)))
+-                .thenReturn(Single.fromCallable(() -> note));
+-        when(localNotes.getMain(eq(note.getNote())))
+-                .thenReturn(Single.fromCallable(() -> mainNote));
+-        when(viewModel.isCloudPopulated()).thenReturn(true);
+-        presenter.subscribe();
+-        verify(viewModel).populateCloudNote(eq(note));
+-        verify(viewModel).populateLocalNote(eq(mainNote));
+-    }
+-
+-    @Test
+-    public void duplicatedNoteWithNoMainRecord_resolvesConflictAutomatically() {
+-        SyncState state = new SyncState(E_TAGL, 1); // duplicated
+-        Note note = new Note(defaultNote, state);
+-        when(localNotes.get(eq(noteId)))
+-                .thenReturn(Single.fromCallable(() -> note));
+-        when(localNotes.getMain(eq(note.getNote())))
+-                .thenReturn(Single.error(new NoSuchElementException()));
+-        when(viewModel.isCloudPopulated()).thenReturn(true);
+-        when(localNotes.update(eq(noteId), any(SyncState.class)))
+-                .thenReturn(Single.fromCallable(() -> 1));
+-        presenter.subscribe();
+-        verify(viewModel).populateCloudNote(eq(note));
+-        verify(repository).refreshNotes();
+-        verify(view).finishActivity();
+-    }
+-}
+\ No newline at end of file

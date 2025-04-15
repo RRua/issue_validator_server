@@ -1,0 +1,442 @@
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/Constants.java b/app/src/main/java/com/innodroid/mongobrowser/Constants.java
+index b35c55f..5ff1ad2 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/Constants.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/Constants.java
+@@ -2,10 +2,7 @@ package com.innodroid.mongobrowser;
+ 
+ public class Constants {
+ 	public static final String LOG_TAG = "mongoexp";
+-	
+-	public static final String PrefShowSystemCollections = "show_system_collections";
+-	public static final String PrefDocumentPageSize = "document_page_size";
+-	
++
+ 	public static final String ARG_CONNECTION_ID = "connid";
+ 	public static final String ARG_COLLECTION_NAME = "collname";
+ 	public static final String ARG_ACTIVATE_ON_CLICK = "actonclick";
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/Events.java b/app/src/main/java/com/innodroid/mongobrowser/Events.java
+index 3512aa2..25475e3 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/Events.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/Events.java
+@@ -7,6 +7,10 @@ public class Events {
+         EventBus.getDefault().post(new AddConnection());
+     }
+ 
++    public static void postShowSettings() {
++        EventBus.getDefault().post(new ShowSettings());
++    }
++
+     public static void postConnectionSelected(long connectionID) {
+         EventBus.getDefault().post(new ConnectionSelected(connectionID));
+     }
+@@ -87,6 +91,13 @@ public class Events {
+         EventBus.getDefault().post(new QueryUpdated(query));
+     }
+ 
++    public static void postSettingsChanged() {
++        EventBus.getDefault().post(new SettingsChanged());
++    }
++
++    public static class ShowSettings {
++    }
++
+     public static class AddConnection {
+     }
+ 
+@@ -237,5 +248,7 @@ public class Events {
+         }
+     }
+ 
++    public static class SettingsChanged {
++    }
+ }
+ 
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/BaseActivity.java b/app/src/main/java/com/innodroid/mongobrowser/ui/BaseActivity.java
+index bd222fe..6aba3e5 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/BaseActivity.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/BaseActivity.java
+@@ -1,5 +1,6 @@
+ package com.innodroid.mongobrowser.ui;
+ 
++import android.media.audiofx.BassBoost;
+ import android.os.Bundle;
+ import android.support.v4.app.DialogFragment;
+ import android.support.v7.app.AppCompatActivity;
+@@ -115,6 +116,11 @@ public abstract class BaseActivity extends AppCompatActivity {
+ 		reloadConnectionListAndSelect(e.ConnectionId);
+ 	}
+ 
++	public void onEvent(Events.ShowSettings e) {
++		DialogFragment fragment = SettingsFragment.newInstance();
++		fragment.show(getSupportFragmentManager(), null);
++	}
++
+ 	protected void reloadConnectionListAndSelect(long id) {
+ 		if (isFinishing())
+ 			return;
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
+index 003ef9a..3b569f0 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/CollectionListFragment.java
+@@ -20,6 +20,7 @@ import com.innodroid.mongobrowser.util.MongoHelper;
+ import com.innodroid.mongobrowser.Constants;
+ import com.innodroid.mongobrowser.R;
+ import com.innodroid.mongobrowser.data.MongoCollectionAdapter;
++import com.innodroid.mongobrowser.util.Preferences;
+ import com.innodroid.mongobrowser.util.SafeAsyncTask;
+ import com.innodroid.mongobrowser.util.UiUtils;
+ 
+@@ -88,6 +89,10 @@ public class CollectionListFragment extends BaseListFragment {
+ 		onRefresh();
+ 	}
+ 
++	public void onEvent(Events.SettingsChanged e) {
++		onRefresh();
++	}
++
+ 	@Override
+ 	public void onRefresh() {
+     	new LoadNamesTask().execute();
+@@ -202,14 +207,17 @@ public class CollectionListFragment extends BaseListFragment {
+     }
+ 	
+     private class LoadNamesTask extends SafeAsyncTask<Void, Void, String[]> {
++		boolean mShowSystemCollections;
++
+     	public LoadNamesTask() {
+ 			super(getActivity());
++
++			mShowSystemCollections = new Preferences(getActivity()).getShowSystemCollections();
+ 		}
+ 
+     	@Override
+ 		protected String[] safeDoInBackground(Void... arg0) {
+-			boolean includeSystem = PreferenceManager.getDefaultSharedPreferences(getActivity()).getBoolean(Constants.PrefShowSystemCollections, false);
+-			return MongoHelper.getCollectionNames(includeSystem);
++			return MongoHelper.getCollectionNames(mShowSystemCollections);
+ 		}
+ 
+ 		@Override
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
+index 49cc507..9ca4910 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/ConnectionListFragment.java
+@@ -1,11 +1,9 @@
+ package com.innodroid.mongobrowser.ui;
+ 
+-import android.app.Activity;
+ import android.content.Intent;
+ import android.database.Cursor;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+-import android.support.v4.app.ListFragment;
+ import android.support.v4.app.LoaderManager.LoaderCallbacks;
+ import android.support.v4.content.CursorLoader;
+ import android.support.v4.content.Loader;
+@@ -21,12 +19,9 @@ import com.innodroid.mongobrowser.Constants;
+ import com.innodroid.mongobrowser.Events;
+ import com.innodroid.mongobrowser.R;
+ import com.innodroid.mongobrowser.data.MongoBrowserProvider;
+-import com.innodroid.mongobrowser.data.MongoCollectionAdapter;
+ import com.innodroid.mongobrowser.data.MongoConnectionAdapter;
+ 
+-import butterknife.Bind;
+ import butterknife.OnItemClick;
+-import de.greenrobot.event.EventBus;
+ 
+ public class ConnectionListFragment extends BaseListFragment implements LoaderCallbacks<Cursor> {
+     private static final String STATE_ACTIVATED_POSITION = "activated_position";
+@@ -97,8 +92,7 @@ public class ConnectionListFragment extends BaseListFragment implements LoaderCa
+                 Events.postAddConnection();
+                 return true;
+             case R.id.menu_connection_list_configure:
+-            	Intent intent = new Intent(getActivity(), PreferencesActivity.class);
+-            	startActivity(intent);
++                Events.postShowSettings();
+                 return true;
+         }
+ 
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
+index 5bab82a..b4b8f36 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/DocumentListFragment.java
+@@ -25,6 +25,7 @@ import com.innodroid.mongobrowser.data.MongoBrowserProvider;
+ import com.innodroid.mongobrowser.data.MongoBrowserProviderHelper;
+ import com.innodroid.mongobrowser.data.MongoDocumentAdapter;
+ import com.innodroid.mongobrowser.data.MongoQueryAdapter;
++import com.innodroid.mongobrowser.util.Preferences;
+ import com.innodroid.mongobrowser.util.SafeAsyncTask;
+ import com.innodroid.mongobrowser.util.UiUtils;
+ import com.innodroid.mongobrowser.util.UiUtils.ConfirmCallbacks;
+@@ -70,8 +71,7 @@ public class DocumentListFragment extends BaseListFragment {
+ 
+ 		setHasOptionsMenu(true);
+ 		
+-		int take = getResources().getInteger(R.integer.default_document_page_size);
+-		mTake = PreferenceManager.getDefaultSharedPreferences(getActivity()).getInt(Constants.PrefDocumentPageSize, take);
++		mTake = new Preferences(getActivity()).getDocumentPageSize();
+     	mCollectionName = getArguments().getString(Constants.ARG_COLLECTION_NAME);
+     	mConnectionId = getArguments().getLong(Constants.ARG_CONNECTION_ID);
+ 
+@@ -200,7 +200,6 @@ public class DocumentListFragment extends BaseListFragment {
+     private void editQuery() {
+ 		String query = (mQueryText == null) ? Constants.NEW_DOCUMENT_CONTENT_PADDED : mQueryText;
+ 		QueryEditTextDialogFragment dialog = QueryEditTextDialogFragment.newInstance(query);
+-		dialog.setTargetFragment(this, 0);
+ 		dialog.show(getFragmentManager(), null);
+ 	}
+ 
+@@ -211,7 +210,6 @@ public class DocumentListFragment extends BaseListFragment {
+     	}
+     	
+     	QueryEditNameDialogFragment dialog = QueryEditNameDialogFragment.newInstance(mQueryName);
+-    	dialog.setTargetFragment(this, 0);
+     	dialog.show(getFragmentManager(), null);
+ 	}
+ 
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/PreferencesActivity.java b/app/src/main/java/com/innodroid/mongobrowser/ui/PreferencesActivity.java
+deleted file mode 100644
+index 436969f..0000000
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/PreferencesActivity.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-package com.innodroid.mongobrowser.ui;
+-
+-import android.os.Bundle;
+-import android.preference.PreferenceActivity;
+-
+-import com.innodroid.mongobrowser.R;
+-
+-public class PreferencesActivity extends PreferenceActivity {    
+-    @SuppressWarnings("deprecation")
+-	@Override
+-    public void onCreate(Bundle savedInstanceState) {        
+-        super.onCreate(savedInstanceState);        
+-        
+-        addPreferencesFromResource(R.xml.preferences);
+-    }
+-    
+-//    @Override
+-//    public boolean onCreateOptionsMenu(Menu menu) {
+-//        menu.add(Menu.NONE, 0, 0, "Show current settings");
+-//        return super.onCreateOptionsMenu(menu);
+-//    }
+-
+-//    @Override
+-//    public boolean onOptionsItemSelected(MenuItem item) {
+-//        switch (item.getItemId()) {
+-//            case 0:
+-//                startActivity(new Intent(this, ShowSettingsActivity.class));
+-//                return true;
+-//        }
+-//        return false;
+-//    }
+-    
+-}
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditNameDialogFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditNameDialogFragment.java
+index 2a50585..46c3637 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditNameDialogFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditNameDialogFragment.java
+@@ -15,12 +15,6 @@ import butterknife.Bind;
+ public class QueryEditNameDialogFragment extends BaseDialogFragment {
+ 	@Bind(R.id.edit_query_name) EditText mContentEdit;
+ 
+-	private String mContent;
+-
+-    public QueryEditNameDialogFragment() {
+-    	super();
+-    }
+-
+     public static QueryEditNameDialogFragment newInstance(String content) {
+     	QueryEditNameDialogFragment fragment = new QueryEditNameDialogFragment();
+     	Bundle args = new Bundle();
+@@ -33,8 +27,8 @@ public class QueryEditNameDialogFragment extends BaseDialogFragment {
+     public Dialog onCreateDialog(Bundle savedInstanceState) {
+     	View view = super.onCreateDialog(R.layout.fragment_query_name_edit);
+ 
+-    	mContent = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
+-    	mContentEdit.setText(mContent);
++    	String content = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
++    	mContentEdit.setText(content);
+     	
+     	return UiUtils.buildAlertDialog(view, R.drawable.ic_mode_edit_black, "Query Name", true, 0, new UiUtils.AlertDialogCallbacks() {
+ 			@Override
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditTextDialogFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditTextDialogFragment.java
+index 5f10c22..dde6951 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditTextDialogFragment.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/QueryEditTextDialogFragment.java
+@@ -15,12 +15,6 @@ import butterknife.Bind;
+ public class QueryEditTextDialogFragment extends BaseDialogFragment {
+ 	@Bind(R.id.query_edit_content) EditText mContentEdit;
+ 
+-	private String mContent;
+-
+-    public QueryEditTextDialogFragment() {
+-    	super();
+-    }
+-
+     public static QueryEditTextDialogFragment newInstance(String content) {
+     	QueryEditTextDialogFragment fragment = new QueryEditTextDialogFragment();
+     	Bundle args = new Bundle();
+@@ -33,8 +27,8 @@ public class QueryEditTextDialogFragment extends BaseDialogFragment {
+     public Dialog onCreateDialog(Bundle savedInstanceState) {
+     	View view = super.onCreateDialog(R.layout.fragment_query_text_edit);
+ 
+-    	mContent = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
+-    	mContentEdit.setText(mContent);
++    	String content = getArguments().getString(Constants.ARG_DOCUMENT_CONTENT);
++    	mContentEdit.setText(content);
+     	
+     	return UiUtils.buildAlertDialog(view, R.drawable.ic_mode_edit_black, "Edit Query", true, 0, new UiUtils.AlertDialogCallbacks() {
+ 			@Override
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/SettingsFragment.java b/app/src/main/java/com/innodroid/mongobrowser/ui/SettingsFragment.java
+new file mode 100644
+index 0000000..830f021
+--- /dev/null
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/SettingsFragment.java
+@@ -0,0 +1,55 @@
++package com.innodroid.mongobrowser.ui;
++
++import android.app.Dialog;
++import android.os.Bundle;
++import android.preference.PreferenceActivity;
++import android.preference.PreferenceFragment;
++import android.preference.PreferenceManager;
++import android.view.View;
++import android.widget.CheckBox;
++import android.widget.EditText;
++
++import com.innodroid.mongobrowser.Constants;
++import com.innodroid.mongobrowser.Events;
++import com.innodroid.mongobrowser.R;
++import com.innodroid.mongobrowser.util.Preferences;
++import com.innodroid.mongobrowser.util.UiUtils;
++
++import butterknife.Bind;
++
++public class SettingsFragment extends BaseDialogFragment {
++    @Bind(R.id.settings_show_system_collections) public CheckBox mShowSystemCollections;
++    @Bind(R.id.settings_document_load_size) public EditText mDocumentLoadSize;
++
++    public static SettingsFragment newInstance() {
++        SettingsFragment fragment = new SettingsFragment();
++        //Bundle args = new Bundle();
++        //args.putString(Constants.ARG_DOCUMENT_CONTENT, content);
++        //fragment.setArguments(args);
++        return fragment;
++    }
++
++    @Override
++    public Dialog onCreateDialog(Bundle savedInstanceState) {
++        View view = super.onCreateDialog(R.layout.fragment_settings);
++
++        final Preferences prefs = new Preferences(view.getContext());
++        mShowSystemCollections.setChecked(prefs.getShowSystemCollections());
++        mDocumentLoadSize.setText(String.valueOf(prefs.getDocumentPageSize()));
++
++        return UiUtils.buildAlertDialog(view, R.drawable.ic_mode_edit_black, "Settings", true, 0, new UiUtils.AlertDialogCallbacks() {
++            @Override
++            public boolean onOK() {
++                prefs.setShowSystemCollections(mShowSystemCollections.isChecked());
++                prefs.setDocumentPageSize(Integer.parseInt(mDocumentLoadSize.getText().toString()));
++                Events.postSettingsChanged();
++                return true;
++            }
++
++            @Override
++            public boolean onNeutralButton() {
++                return true;
++            }
++        });
++    }
++}
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/ui/SinglePaneActivity.java b/app/src/main/java/com/innodroid/mongobrowser/ui/SinglePaneActivity.java
+index 81a9326..c2c7262 100644
+--- a/app/src/main/java/com/innodroid/mongobrowser/ui/SinglePaneActivity.java
++++ b/app/src/main/java/com/innodroid/mongobrowser/ui/SinglePaneActivity.java
+@@ -1,5 +1,6 @@
+ package com.innodroid.mongobrowser.ui;
+ 
++import android.support.v4.app.Fragment;
+ import android.support.v4.app.FragmentManager;
+ 
+ import com.innodroid.mongobrowser.Events;
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/util/IntEditTextPreference.java b/app/src/main/java/com/innodroid/mongobrowser/util/IntEditTextPreference.java
+deleted file mode 100644
+index e9f0640..0000000
+--- a/app/src/main/java/com/innodroid/mongobrowser/util/IntEditTextPreference.java
++++ /dev/null
+@@ -1,31 +0,0 @@
+-package com.innodroid.mongobrowser.util;
+-
+-import android.content.Context;
+-import android.preference.EditTextPreference;
+-import android.util.AttributeSet;
+-
+-public class IntEditTextPreference extends EditTextPreference {
+-
+-    public IntEditTextPreference(Context context) {
+-        super(context);
+-    }
+-
+-    public IntEditTextPreference(Context context, AttributeSet attrs) {
+-        super(context, attrs);
+-    }
+-
+-    public IntEditTextPreference(Context context, AttributeSet attrs, int defStyle) {
+-        super(context, attrs, defStyle);
+-    }
+-
+-    @Override
+-    protected String getPersistedString(String defaultReturnValue) {
+-        return String.valueOf(getPersistedInt(-1));
+-    }
+-
+-    @Override
+-    protected boolean persistString(String value) {
+-        return persistInt(Integer.valueOf(value));
+-    }
+-}
+-
+diff --git a/app/src/main/java/com/innodroid/mongobrowser/util/Preferences.java b/app/src/main/java/com/innodroid/mongobrowser/util/Preferences.java
+new file mode 100644
+index 0000000..4ce0d9e
+--- /dev/null
++++ b/app/src/main/java/com/innodroid/mongobrowser/util/Preferences.java
+@@ -0,0 +1,36 @@
++package com.innodroid.mongobrowser.util;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.preference.PreferenceManager;
++
++import com.innodroid.mongobrowser.R;
++
++public class Preferences {
++    private SharedPreferences mPrefs;
++    private int mDefaultDocumentPageSize;
++
++    private static final String KEY_SHOW_SYSTEM_COLLECTIONS = "show_system_collections";
++    private static final String KEY_DOCUMENT_PAGE_SIZE = "document_page_size";
++
++    public Preferences(Context context) {
++        mPrefs = PreferenceManager.getDefaultSharedPreferences(context);
++        mDefaultDocumentPageSize = context.getResources().getInteger(R.integer.default_document_page_size);
++    }
++
++    public boolean getShowSystemCollections() {
++        return mPrefs.getBoolean(KEY_SHOW_SYSTEM_COLLECTIONS, false);
++    }
++
++    public void setShowSystemCollections(boolean value) {
++        mPrefs.edit().putBoolean(KEY_SHOW_SYSTEM_COLLECTIONS, value).apply();
++    }
++
++    public int getDocumentPageSize() {
++        return mPrefs.getInt(KEY_DOCUMENT_PAGE_SIZE, mDefaultDocumentPageSize);
++    }
++
++    public void setDocumentPageSize(int value) {
++        mPrefs.edit().putInt(KEY_DOCUMENT_PAGE_SIZE, value).apply();
++    }
++}

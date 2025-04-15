@@ -1,0 +1,2327 @@
+diff --git a/app/src/androidTest/java/com/bytesforge/linkasanote/data/source/local/LocalDataSourceTest.java b/app/src/androidTest/java/com/bytesforge/linkasanote/data/source/local/LocalDataSourceTest.java
+index cc7d55a..de10be7 100644
+--- a/app/src/androidTest/java/com/bytesforge/linkasanote/data/source/local/LocalDataSourceTest.java
++++ b/app/src/androidTest/java/com/bytesforge/linkasanote/data/source/local/LocalDataSourceTest.java
+@@ -43,7 +43,8 @@ public class LocalDataSourceTest {
+     @Before
+     public void setupLocalDataSource() {
+         FAVORITES = AndroidTestUtils.buildFavorites();
+-        localDataSource = new LocalDataSource(contentResolver);
++        LocalFavorites localFavorites = new LocalFavorites(context, contentResolver);
++        localDataSource = new LocalDataSource(contentResolver, localFavorites);
+         cleanupLocalDataSource();
+     }
+ 
+diff --git a/app/src/androidTest/java/com/bytesforge/linkasanote/laano/ApplicationNavigationTest.java b/app/src/androidTest/java/com/bytesforge/linkasanote/laano/ApplicationNavigationTest.java
+index bbd0b81..34c70ad 100644
+--- a/app/src/androidTest/java/com/bytesforge/linkasanote/laano/ApplicationNavigationTest.java
++++ b/app/src/androidTest/java/com/bytesforge/linkasanote/laano/ApplicationNavigationTest.java
+@@ -7,6 +7,7 @@ import android.support.test.rule.ActivityTestRule;
+ import android.support.test.runner.AndroidJUnit4;
+ import android.view.Gravity;
+ 
++import com.bytesforge.linkasanote.AndroidTestUtils;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.laano.favorites.FavoritesFragment;
+ import com.bytesforge.linkasanote.laano.links.LinksFragment;
+@@ -138,6 +139,7 @@ public class ApplicationNavigationTest {
+                 .check(matches(isClosed(Gravity.START)))
+                 .perform(DrawerActions.open());
+         onView(withId(R.id.nav_view)).perform(navigateTo(R.id.add_account_menu_item));
++        AndroidTestUtils.sleep(150); // TODO: find the better way
+         onView(withId(R.id.application_logo)).check(matches(withText(R.string.app_name)));
+ 
+     }
+diff --git a/app/src/androidTest/java/com/bytesforge/linkasanote/manageaccounts/ManageAccountsActivityTest.java b/app/src/androidTest/java/com/bytesforge/linkasanote/manageaccounts/ManageAccountsActivityTest.java
+index 6fff4da..df55323 100644
+--- a/app/src/androidTest/java/com/bytesforge/linkasanote/manageaccounts/ManageAccountsActivityTest.java
++++ b/app/src/androidTest/java/com/bytesforge/linkasanote/manageaccounts/ManageAccountsActivityTest.java
+@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
+ @SuppressWarnings("MissingPermission")
+ public class ManageAccountsActivityTest {
+ 
+-    private static final String USER_NAME = "demo";
++    private static final String USERNAME = "demo";
+ 
+     private Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+     private LaanoApplication laanoApplication = (LaanoApplication) context.getApplicationContext();
+@@ -97,7 +97,7 @@ public class ManageAccountsActivityTest {
+     public ManageAccountsActivityTest() {
+         MockitoAnnotations.initMocks(this);
+         ACCOUNT_TYPE = getAccountType(context);
+-        ACCOUNTS = new Account[]{new Account(USER_NAME + "@demo.nextcloud.com", ACCOUNT_TYPE)};
++        ACCOUNTS = new Account[]{new Account(USERNAME + "@demo.nextcloud.com", ACCOUNT_TYPE)};
+     }
+ 
+     private ApplicationComponent setupMockApplicationComponent(AccountManager accountManager) {
+@@ -151,7 +151,7 @@ public class ManageAccountsActivityTest {
+             onView(withId(R.id.add_account_view)).check(
+                     matches(withText(R.string.item_manage_accounts_add)));
+         }
+-        onView(withId(R.id.user_name)).check(matches(withText(USER_NAME)));
++        onView(withId(R.id.user_name)).check(matches(withText(USERNAME)));
+         onView(withId(R.id.account_name)).check(matches(withText(ACCOUNTS[0].name)));
+     }
+ 
+@@ -172,7 +172,7 @@ public class ManageAccountsActivityTest {
+         manageAccountsActivityTestRule.launchActivity(null);
+ 
+         onView(withId(R.id.account_edit_button)).perform(click());
+-        onView(withId(R.id.account_username)).check(matches(withText(USER_NAME)));
++        onView(withId(R.id.account_username)).check(matches(withText(USERNAME)));
+     }
+ 
+     @Test
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java b/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
+index d982bf3..f55c46e 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Favorite.java
+@@ -28,14 +28,22 @@ public final class Favorite {
+     private static final String TAG = Favorite.class.getSimpleName();
+ 
+     public static final String CLOUD_DIRECTORY = "favorites";
++
++    private static final int JSON_VERSION = 1;
++    private static final String JSON_CONTAINER_VERSION = "version";
++    private static final String JSON_CONTAINER_FAVORITE = "favorite";
++
+     private static final String JSON_PROPERTY_ID = "id";
++    private static final String JSON_PROPERTY_CREATED = "created";
++    private static final String JSON_PROPERTY_UPDATED = "updated";
+     private static final String JSON_PROPERTY_NAME = "name";
+     private static final String JSON_PROPERTY_TAGS = "tags";
+ 
+     @NonNull
+     private final String id;
+ 
+-    private final long added;
++    private final long created;
++    private final long updated;
+ 
+     @Nullable
+     private final String name;
+@@ -47,29 +55,32 @@ public final class Favorite {
+     private final SyncState state;
+ 
+     public Favorite(String name, List<Tag> tags) {
+-        this(generateKey(), name, tags);
++        this(generateKey(), currentTimeMillis(), currentTimeMillis(), name, tags, new SyncState());
+     }
+ 
+     public Favorite(String id, String name, List<Tag> tags) {
+-        this(id, name, tags, new SyncState());
++        // NOTE: updating syncState must not change entry update time
++        this(id, 0, currentTimeMillis(), name, tags, new SyncState());
+     }
+ 
+     public Favorite(String id, String name, List<Tag> tags, SyncState state) {
+-        this(id, currentTimeMillis(), name, tags, state);
++        this(id, 0, currentTimeMillis(), name, tags, state);
+     }
+ 
+     public Favorite(
+-            @NonNull String id, long added, @Nullable String name, @Nullable List<Tag> tags,
+-            @NonNull SyncState state) {
++            @NonNull String id, long created, long updated, @Nullable String name,
++            @Nullable List<Tag> tags, @NonNull SyncState state) {
+         this.id = checkNotNull(id);
+-        this.added = added;
++        this.created = created;
++        this.updated = updated;
+         this.name = name;
+         this.tags = tags;
+         this.state = checkNotNull(state);
+     }
+ 
+     public Favorite(Favorite favorite, @NonNull SyncState state) {
+-        this(favorite.getId(), favorite.getAdded(), favorite.getName(), favorite.getTags(), state);
++        this(favorite.getId(), favorite.getCreated(), favorite.getUpdated(), favorite.getName(),
++                favorite.getTags(), state);
+     }
+ 
+     public static Favorite from(Cursor cursor, List<Tag> tags) {
+@@ -77,22 +88,25 @@ public final class Favorite {
+ 
+         String id = cursor.getString(cursor.getColumnIndexOrThrow(
+                 LocalContract.FavoriteEntry.COLUMN_NAME_ENTRY_ID));
+-        long added = cursor.getLong(cursor.getColumnIndexOrThrow(
+-                LocalContract.FavoriteEntry.COLUMN_NAME_ADDED));
++        long created = cursor.getLong(cursor.getColumnIndexOrThrow(
++                LocalContract.FavoriteEntry.COLUMN_NAME_CREATED));
++        long updated = cursor.getLong(cursor.getColumnIndexOrThrow(
++                LocalContract.FavoriteEntry.COLUMN_NAME_UPDATED));
+         String name = cursor.getString(cursor.getColumnIndexOrThrow(
+                 LocalContract.FavoriteEntry.COLUMN_NAME_NAME));
+ 
+-        return new Favorite(id, added, name, tags, state);
++        return new Favorite(id, created, updated, name, tags, state);
+     }
+ 
+     public static Favorite from(ContentValues values, List<Tag> tags) {
+         SyncState state = SyncState.from(values);
+ 
+         String id = values.getAsString(LocalContract.FavoriteEntry.COLUMN_NAME_ENTRY_ID);
+-        long added = values.getAsLong(LocalContract.FavoriteEntry.COLUMN_NAME_ADDED);
++        long created = values.getAsLong(LocalContract.FavoriteEntry.COLUMN_NAME_CREATED);
++        long updated = values.getAsLong(LocalContract.FavoriteEntry.COLUMN_NAME_UPDATED);
+         String name = values.getAsString(LocalContract.FavoriteEntry.COLUMN_NAME_NAME);
+ 
+-        return new Favorite(id, added, name, tags, state);
++        return new Favorite(id, created, updated, name, tags, state);
+     }
+ 
+     @Nullable
+@@ -107,16 +121,29 @@ public final class Favorite {
+     }
+ 
+     @Nullable
+-    public static Favorite from(JSONObject jsonFavorite, SyncState state) {
++    public static Favorite from(JSONObject jsonContainer, SyncState state) {
++        int version;
++        try {
++            version = jsonContainer.getInt(JSON_CONTAINER_VERSION);
++        } catch (JSONException e) {
++            Log.v(TAG, "Exception while checking Favorite JSON object version");
++            return null;
++        }
++        if (version != JSON_VERSION) {
++            Log.v(TAG, "An unsupported version of JSON object was detected [" + version + "]");
++        }
+         try {
++            JSONObject jsonFavorite = jsonContainer.getJSONObject(JSON_CONTAINER_FAVORITE);
+             String id = jsonFavorite.getString(JSON_PROPERTY_ID);
++            long created = jsonFavorite.getLong(JSON_PROPERTY_CREATED);
++            long updated = jsonFavorite.getLong(JSON_PROPERTY_UPDATED);
+             String name = jsonFavorite.getString(JSON_PROPERTY_NAME);
+             JSONArray jsonTags = jsonFavorite.getJSONArray(JSON_PROPERTY_TAGS);
+             List<Tag> tags = new ArrayList<>();
+             for (int i = 0; i < jsonTags.length(); i++) {
+                 tags.add(Tag.from(jsonTags.getJSONObject(i)));
+             }
+-            return new Favorite(id, name, tags, state);
++            return new Favorite(id, created, updated, name, tags, state);
+         } catch (JSONException e) {
+             Log.v(TAG, "Exception while processing Favorite JSON object");
+             return null;
+@@ -127,7 +154,12 @@ public final class Favorite {
+         ContentValues values = state.getContentValues();
+ 
+         values.put(LocalContract.FavoriteEntry.COLUMN_NAME_ENTRY_ID, getId());
+-        values.put(LocalContract.FavoriteEntry.COLUMN_NAME_ADDED, getAdded());
++        long created = getCreated();
++        if (created > 0) {
++            // NOTE: CURRENT_TIMESTAMP will add another dateTime format to maintain
++            values.put(LocalContract.FavoriteEntry.COLUMN_NAME_CREATED, created);
++        }
++        values.put(LocalContract.FavoriteEntry.COLUMN_NAME_UPDATED, getUpdated());
+         values.put(LocalContract.FavoriteEntry.COLUMN_NAME_NAME, getName());
+ 
+         return values;
+@@ -177,8 +209,12 @@ public final class Favorite {
+         return id;
+     }
+ 
+-    public long getAdded() {
+-        return added;
++    public long getCreated() {
++        return created;
++    }
++
++    public long getUpdated() {
++        return updated;
+     }
+ 
+     @Nullable
+@@ -206,19 +242,25 @@ public final class Favorite {
+         if (isEmpty()) return null;
+         assert tags != null;
+ 
+-        JSONObject jsonFavorite = new JSONObject();
++        JSONObject jsonContainer = new JSONObject();
+         try {
++            JSONObject jsonFavorite = new JSONObject();
+             jsonFavorite.put(JSON_PROPERTY_ID, id);
++            jsonFavorite.put(JSON_PROPERTY_CREATED, created);
++            jsonFavorite.put(JSON_PROPERTY_UPDATED, updated);
+             jsonFavorite.put(JSON_PROPERTY_NAME, name);
+             JSONArray jsonTags = new JSONArray();
+             for (Tag tag : tags) {
+                 jsonTags.put(tag.getJsonObject());
+             }
+             jsonFavorite.put(JSON_PROPERTY_TAGS, jsonTags);
++            // Container
++            jsonContainer.put(JSON_CONTAINER_VERSION, JSON_VERSION);
++            jsonContainer.put(JSON_CONTAINER_FAVORITE, jsonFavorite);
+         } catch (JSONException e) {
+             return null;
+         }
+-        return jsonFavorite;
++        return jsonContainer;
+     }
+ 
+     public boolean isEmpty() {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java b/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
+index 4f4eb59..31342a9 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/Tag.java
+@@ -19,9 +19,11 @@ import static java.lang.System.currentTimeMillis;
+ public final class Tag implements Serializable {
+ 
+     private static final String TAG = Tag.class.getSimpleName();
++
++    // NOTE: tag is saved to the other containers, so it has no version
+     private static final String JSON_PROPERTY_NAME = "name";
+ 
+-    private final long added;
++    private final long created;
+ 
+     @Nullable
+     private final String name;
+@@ -30,31 +32,32 @@ public final class Tag implements Serializable {
+         this(currentTimeMillis(), name);
+     }
+ 
+-    public Tag(long added, @Nullable String name) {
+-        this.added = added;
++    public Tag(long created, @Nullable String name) {
++        this.created = created;
+         this.name = name;
+     }
+ 
+     public static Tag from(Cursor cursor) {
+-        long added = cursor.getLong(cursor.getColumnIndexOrThrow(
+-                LocalContract.TagEntry.COLUMN_NAME_ADDED));
++        long created = cursor.getLong(cursor.getColumnIndexOrThrow(
++                LocalContract.TagEntry.COLUMN_NAME_CREATED));
+ 
+         String name = cursor.getString(cursor.getColumnIndexOrThrow(
+                 LocalContract.TagEntry.COLUMN_NAME_NAME));
+ 
+-        return new Tag(added, name);
++        return new Tag(created, name);
+     }
+ 
+     public static Tag from(ContentValues values) {
+-        long added = values.getAsLong(LocalContract.TagEntry.COLUMN_NAME_ADDED);
++        long created = values.getAsLong(LocalContract.TagEntry.COLUMN_NAME_CREATED);
+ 
+         String name = values.getAsString(LocalContract.TagEntry.COLUMN_NAME_NAME);
+ 
+-        return new Tag(added, name);
++        return new Tag(created, name);
+     }
+ 
+     public static Tag from(JSONObject jsonTag) {
+         try {
++            // NOTE: created
+             String name = jsonTag.getString(JSON_PROPERTY_NAME);
+             return new Tag(name);
+         } catch (JSONException e) {
+@@ -66,15 +69,15 @@ public final class Tag implements Serializable {
+     public ContentValues getContentValues() {
+         ContentValues values = new ContentValues();
+ 
+-        values.put(LocalContract.TagEntry.COLUMN_NAME_ADDED, getAdded());
++        values.put(LocalContract.TagEntry.COLUMN_NAME_CREATED, getCreated());
+ 
+         values.put(LocalContract.TagEntry.COLUMN_NAME_NAME, getName());
+ 
+         return values;
+     }
+ 
+-    public long getAdded() {
+-        return added;
++    public long getCreated() {
++        return created;
+     }
+ 
+     @Nullable
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/Provider.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/Provider.java
+index 6f77230..0ba460c 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/Provider.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/Provider.java
+@@ -311,10 +311,10 @@ public class Provider extends ContentProvider {
+         // Reference
+         final String refTable = leftTable + "_" + tagTable;
+         ContentValues refValues = new ContentValues();
+-        refValues.put(LocalContract.MANY_TO_MANY_COMMON_NAME_ADDED, currentTimeMillis());
++        refValues.put(LocalContract.COMMON_NAME_CREATED, currentTimeMillis());
+         refValues.put(leftTable + BaseColumns._ID, leftId);
+         refValues.put(tagTable + BaseColumns._ID, tagId);
+-        insertEntry(db, refTable, refValues); // NOTE: refTable rowId can be ignored
++        insertEntry(db, refTable, refValues); // NOTE: it's refTable rowId can be ignored
+ 
+         return tagId;
+     }
+@@ -328,7 +328,7 @@ public class Provider extends ContentProvider {
+         long rowId = updateEntry(db, tableName, idField, idValue, values);
+         if (rowId <= 0) {
+             rowId = insertEntry(db, tableName, values);
+-        } else {
++        } else { // NOTE: updateEntry mainly for update the state
+             // NOTE: will be recreated with the new set of tags
+             deleteTagReferences(db, tableName, rowId);
+         }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/RepositoryModule.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/RepositoryModule.java
+index 25e8ead..cba71e7 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/RepositoryModule.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/RepositoryModule.java
+@@ -3,10 +3,11 @@ package com.bytesforge.linkasanote.data.source;
+ import android.accounts.AccountManager;
+ import android.content.ContentResolver;
+ import android.content.Context;
+-import android.content.SharedPreferences;
+ 
+ import com.bytesforge.linkasanote.data.source.cloud.CloudDataSource;
++import com.bytesforge.linkasanote.data.source.cloud.CloudFavorites;
+ import com.bytesforge.linkasanote.data.source.local.LocalDataSource;
++import com.bytesforge.linkasanote.data.source.local.LocalFavorites;
+ import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+ 
+ import javax.inject.Singleton;
+@@ -17,22 +18,35 @@ import dagger.Provides;
+ @Module
+ public class RepositoryModule {
+ 
++    @Provides
++    @Singleton
++    public LocalFavorites provideLocalFavorites(
++            Context context, ContentResolver contentResolver) {
++        return new LocalFavorites(context, contentResolver);
++    }
++
++    @Provides
++    @Singleton
++    public CloudFavorites provideCloudFavorites(Context context) {
++        return new CloudFavorites(context);
++    }
++
+     @Provides
+     @Singleton
+     @Local
+-    public DataSource provideLocalDataSource(ContentResolver contentResolver) {
+-        return new LocalDataSource(contentResolver);
++    public DataSource provideLocalDataSource(
++            ContentResolver contentResolver, LocalFavorites localFavorites) {
++        return new LocalDataSource(contentResolver, localFavorites);
+     }
+ 
+     @Provides
+     @Singleton
+     @Cloud
+     public DataSource provideCloudDataSource(
+-            Context context, SharedPreferences sharedPreferences,
+-            ContentResolver contentResolver, BaseSchedulerProvider schedulerProvider,
+-            AccountManager accountManager) {
+-        return new CloudDataSource(context, sharedPreferences,
+-                contentResolver, schedulerProvider, accountManager);
++            Context context, BaseSchedulerProvider schedulerProvider, AccountManager accountManager,
++            LocalFavorites localFavorites, CloudFavorites cloudFavorites) {
++        return new CloudDataSource(context, schedulerProvider, accountManager,
++                localFavorites, cloudFavorites);
+     }
+ 
+     @Provides
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
+index ec85af6..5677421 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudDataSource.java
+@@ -2,10 +2,9 @@ package com.bytesforge.linkasanote.data.source.cloud;
+ 
+ import android.accounts.Account;
+ import android.accounts.AccountManager;
+-import android.content.ContentResolver;
+ import android.content.Context;
+-import android.content.SharedPreferences;
+ import android.support.annotation.NonNull;
++import android.support.annotation.Nullable;
+ import android.util.Log;
+ 
+ import com.bytesforge.linkasanote.data.Favorite;
+@@ -20,12 +19,15 @@ import com.bytesforge.linkasanote.utils.CloudUtils;
+ import com.bytesforge.linkasanote.utils.schedulers.BaseSchedulerProvider;
+ import com.owncloud.android.lib.common.OwnCloudClient;
+ import com.owncloud.android.lib.common.operations.RemoteOperationResult;
++import com.owncloud.android.lib.resources.files.CreateRemoteFolderOperation;
+ import com.owncloud.android.lib.resources.files.ReadRemoteFileOperation;
+ import com.owncloud.android.lib.resources.files.ReadRemoteFolderOperation;
+ import com.owncloud.android.lib.resources.files.RemoteFile;
+ 
+ import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.List;
++import java.util.Map;
+ import java.util.NoSuchElementException;
+ 
+ import javax.inject.Singleton;
+@@ -44,19 +46,20 @@ public class CloudDataSource implements DataSource {
+ 
+     private final Context context;
+     private final BaseSchedulerProvider schedulerProvider;
+-    private final ContentResolver contentResolver;
+-
+     private final AccountManager accountManager;
++    private final LocalFavorites localFavorites;
++    private final CloudFavorites cloudFavorites;
++
+     private final CompositeDisposable disposable;
+ 
+     public CloudDataSource(
+-            Context context, SharedPreferences sharedPreferences,
+-            ContentResolver contentResolver, BaseSchedulerProvider schedulerProvider,
+-            AccountManager accountManager) {
++            Context context, BaseSchedulerProvider schedulerProvider, AccountManager accountManager,
++            LocalFavorites localFavorites, CloudFavorites cloudFavorites) {
+         this.context = context;
+         this.schedulerProvider = schedulerProvider;
+-        this.contentResolver = contentResolver;
+         this.accountManager = accountManager;
++        this.localFavorites = localFavorites;
++        this.cloudFavorites = cloudFavorites;
+ 
+         disposable = new CompositeDisposable();
+     }
+@@ -129,7 +132,7 @@ public class CloudDataSource implements DataSource {
+             SyncState oldState = null;
+             boolean isReady = false;
+             try {
+-                oldState = LocalFavorites.getFavoriteSyncState(contentResolver, favoriteId).blockingGet();
++                oldState = localFavorites.getFavoriteSyncState(favoriteId).blockingGet();
+             } catch (NoSuchElementException e) {
+                 isReady = true;
+             } catch (NullPointerException e) {
+@@ -140,7 +143,7 @@ public class CloudDataSource implements DataSource {
+             }
+             if (!isReady) return null;
+             // Check cloud
+-            final String remotePath = CloudFavorites.getRemotePath(context, favoriteId);
++            final String remotePath = cloudFavorites.getRemotePath(favoriteId);
+             try {
+                 RemoteFile file = CloudDataSource.getRemoteFile(ocClient, remotePath).blockingGet();
+                 if (oldState == null || !file.getEtag().equals(oldState.getETag())) {
+@@ -149,7 +152,7 @@ public class CloudDataSource implements DataSource {
+             } catch (NoSuchElementException e) {
+                 // NOTE: It's expected state if there is no file in the cloud
+             }
+-            return CloudFavorites.uploadFavorite(favorite, ocClient, context);
++            return cloudFavorites.uploadFavorite(favorite, ocClient);
+         });
+ 
+         Disposable disposable = uploadFavorite
+@@ -160,13 +163,13 @@ public class CloudDataSource implements DataSource {
+                     if (result.isSuccess()) {
+                         JsonFile jsonFile = (JsonFile) result.getData().get(0);
+                         SyncState state = new SyncState(jsonFile.getETag(), SyncState.State.SYNCED);
+-                        numRows = LocalFavorites
+-                                .updateFavorite(contentResolver, favorite.getId(), state)
++                        numRows = localFavorites
++                                .updateFavorite(favorite.getId(), state)
+                                 .blockingGet();
+                     } else if (result.getCode() == RemoteOperationResult.ResultCode.SYNC_CONFLICT) {
+                         SyncState state = new SyncState(SyncState.State.CONFLICTED_UPDATE);
+-                        numRows = LocalFavorites
+-                                .updateFavorite(contentResolver, favorite.getId(), state)
++                        numRows = localFavorites
++                                .updateFavorite(favorite.getId(), state)
+                                 .blockingGet();
+                     }
+                     if (numRows != 1) {
+@@ -201,7 +204,7 @@ public class CloudDataSource implements DataSource {
+             SyncState state = null;
+             boolean isReady = false;
+             try {
+-                state = LocalFavorites.getFavoriteSyncState(contentResolver, favoriteId).blockingGet();
++                state = localFavorites.getFavoriteSyncState(favoriteId).blockingGet();
+             } catch (NoSuchElementException e) {
+                 isReady = true;
+             } catch (NullPointerException e) {
+@@ -212,7 +215,7 @@ public class CloudDataSource implements DataSource {
+             }
+             if (!isReady) return null;
+             // Check cloud
+-            final String remotePath = CloudFavorites.getRemotePath(context, favoriteId);
++            final String remotePath = cloudFavorites.getRemotePath(favoriteId);
+             try {
+                 RemoteFile file = CloudDataSource.getRemoteFile(ocClient, remotePath).blockingGet();
+                 if (state != null && !file.getEtag().equals(state.getETag())) {
+@@ -221,7 +224,7 @@ public class CloudDataSource implements DataSource {
+             } catch (NoSuchElementException e) {
+                 return new RemoteOperationResult(RemoteOperationResult.ResultCode.OK);
+             }
+-            return CloudFavorites.deleteFavorite(favoriteId, ocClient, context);
++            return cloudFavorites.deleteFavorite(favoriteId, ocClient);
+         });
+ 
+         Disposable disposable = deleteFavorite
+@@ -229,14 +232,10 @@ public class CloudDataSource implements DataSource {
+                 .subscribe(result -> {
+                     int numRows = -1;
+                     if (result.isSuccess()) {
+-                        numRows = LocalFavorites
+-                                .deleteFavorite(contentResolver, favoriteId)
+-                                .blockingGet();
++                        numRows = localFavorites.deleteFavorite(favoriteId).blockingGet();
+                     } else if (result.getCode() == RemoteOperationResult.ResultCode.SYNC_CONFLICT) {
+                         SyncState state = new SyncState(SyncState.State.CONFLICTED_DELETE);
+-                        numRows = LocalFavorites
+-                                .updateFavorite(contentResolver, favoriteId, state)
+-                                .blockingGet();
++                        numRows = localFavorites.updateFavorite(favoriteId, state).blockingGet();
+                     }
+                     if (numRows != 1) {
+                         Log.e(TAG, "Unexpected number of rows were processed [" + numRows + "]");
+@@ -273,7 +272,6 @@ public class CloudDataSource implements DataSource {
+         throw new RuntimeException("deleteAllTags() was called but this operation cannot be applied to the cloud");
+     }
+ 
+-
+     // Statics
+ 
+     public static Single<RemoteFile> getRemoteFile(
+@@ -313,4 +311,50 @@ public class CloudDataSource implements DataSource {
+             return objectIterator;
+         });
+     }
++
++    @Nullable
++    public static String getDataSourceETag(
++            OwnCloudClient ocClient, String dataSourceDirectory, boolean createDataSource) {
++        if (dataSourceDirectory == null) return null;
++
++        final ReadRemoteFileOperation readOperation =
++                new ReadRemoteFileOperation(dataSourceDirectory);
++        RemoteOperationResult result = readOperation.execute(ocClient);
++        if (result.isSuccess()) {
++            RemoteFile file = (RemoteFile) result.getData().get(0);
++            return file.getEtag();
++        } else if (result.getCode() == RemoteOperationResult.ResultCode.FILE_NOT_FOUND
++                && createDataSource) {
++            CreateRemoteFolderOperation writeOperation =
++                    new CreateRemoteFolderOperation(dataSourceDirectory, true);
++            result = writeOperation.execute(ocClient);
++            if (result.isSuccess()) {
++                Log.i(TAG, "New folder has been created");
++                return getDataSourceETag(ocClient, dataSourceDirectory, false);
++            }
++        }
++        return null;
++    }
++
++    @NonNull
++    public static Map<String, String> getDataSourceMap(
++            @NonNull OwnCloudClient ocClient, @NonNull String dataSourceDirectory) {
++        checkNotNull(ocClient);
++        checkNotNull(dataSourceDirectory);
++
++        final Map<String, String> dataSourceMap = new HashMap<>();
++        getRemoteFiles(ocClient, dataSourceDirectory).subscribe(file -> {
++            String fileMimeType = file.getMimeType();
++            String fileRemotePath = file.getRemotePath();
++            String id = JsonFile.getId(fileMimeType, fileRemotePath);
++            // TODO: check file size and reject if above reasonable limit
++            if (id != null) {
++                dataSourceMap.put(id, file.getEtag());
++            } else {
++                Log.w(TAG, "A problem was found in cloud dataSource "
++                        + "[" + fileRemotePath + ", mimeType=" + fileMimeType + "]");
++            }
++        }, throwable -> { /* skip the corrupted files */ });
++        return dataSourceMap;
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudFavorites.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudFavorites.java
+index 16d9eec..ba87274 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudFavorites.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/cloud/CloudFavorites.java
+@@ -2,6 +2,7 @@ package com.bytesforge.linkasanote.data.source.cloud;
+ 
+ import android.content.Context;
+ import android.content.SharedPreferences;
++import android.support.annotation.NonNull;
+ import android.support.annotation.Nullable;
+ import android.util.Log;
+ 
+@@ -10,6 +11,7 @@ import com.bytesforge.linkasanote.sync.SyncState;
+ import com.bytesforge.linkasanote.sync.files.JsonFile;
+ import com.bytesforge.linkasanote.sync.operations.nextcloud.UploadFileOperation;
+ import com.bytesforge.linkasanote.utils.CloudUtils;
++import com.bytesforge.linkasanote.utils.CommonUtils;
+ import com.google.common.base.Charsets;
+ import com.google.common.io.Files;
+ import com.owncloud.android.lib.common.OwnCloudClient;
+@@ -22,36 +24,36 @@ import org.json.JSONObject;
+ import java.io.File;
+ import java.io.IOException;
+ import java.util.List;
++import java.util.Map;
+ import java.util.stream.Collectors;
+ 
+-import io.reactivex.annotations.NonNull;
+-
+ import static com.google.common.base.Preconditions.checkNotNull;
+ 
+-public final class CloudFavorites {
++public class CloudFavorites {
+ 
+     private static final String TAG = CloudFavorites.class.getSimpleName();
+ 
+     private static final String CLOUD_DIRECTORY = JsonFile.PATH_SEPARATOR + Favorite.CLOUD_DIRECTORY;
+     private static final String SETTING_LAST_SYNCED_ETAG = "FAVORITES_LAST_SYNCED_ETAG";
+ 
+-    private CloudFavorites() {
++    private final Context context;
++
++    public CloudFavorites(@NonNull Context context) {
++        this.context = checkNotNull(context);
+     }
+ 
+     @Nullable
+-    public static RemoteOperationResult uploadFavorite(
+-            @NonNull final Favorite favorite, @NonNull final OwnCloudClient ocClient,
+-            @NonNull final Context context) {
++    public RemoteOperationResult uploadFavorite(
++            @NonNull final Favorite favorite, @NonNull final OwnCloudClient ocClient) {
+         checkNotNull(favorite);
+         checkNotNull(ocClient);
+-        checkNotNull(context);
+ 
+         final JSONObject favoriteJson = favorite.getJsonObject();
+         if (favoriteJson == null) {
+             Log.e(TAG, "Favorite cannot be saved, it's probably empty");
+             return null;
+         }
+-        final String localPath = context.getCacheDir().getAbsolutePath() + File.separator +
++        final String localPath = CommonUtils.getTempDir(context) + File.separator +
+                 JsonFile.getTempFileName(favorite.getId());
+         final File localFile = new File(localPath);
+         try {
+@@ -60,7 +62,7 @@ public final class CloudFavorites {
+             Log.e(TAG, "Cannot create temporary file [" + localPath + "]");
+             return null;
+         }
+-        final String remotePath = CloudFavorites.getRemotePath(context, favorite.getId());
++        final String remotePath = getRemotePath(favorite.getId());
+         final JsonFile jsonFile = new JsonFile(localPath, remotePath);
+         UploadFileOperation operation = new UploadFileOperation(jsonFile);
+         RemoteOperationResult result = operation.execute(ocClient);
+@@ -71,15 +73,13 @@ public final class CloudFavorites {
+     }
+ 
+     @Nullable
+-    public static Favorite downloadFavorite(
+-            @NonNull final String favoriteId, @NonNull final OwnCloudClient ocClient,
+-            @NonNull final Context context) {
++    public Favorite downloadFavorite(
++            @NonNull final String favoriteId, @NonNull final OwnCloudClient ocClient) {
+         checkNotNull(favoriteId);
+         checkNotNull(ocClient);
+-        checkNotNull(context);
+ 
+-        final String remotePath = getRemotePath(context, favoriteId);
+-        final String localDirectory = context.getCacheDir().getAbsolutePath();
++        final String remotePath = getRemotePath(favoriteId);
++        final String localDirectory = CommonUtils.getTempDir(context);
+         final String localPath = localDirectory + remotePath;
+ 
+         DownloadRemoteFileOperation operation =
+@@ -112,14 +112,12 @@ public final class CloudFavorites {
+     }
+ 
+     @NonNull
+-    public static RemoteOperationResult deleteFavorite(
+-            @NonNull final String favoriteId, @NonNull final OwnCloudClient ocClient,
+-            @NonNull final Context context) {
++    public RemoteOperationResult deleteFavorite(
++            @NonNull final String favoriteId, @NonNull final OwnCloudClient ocClient) {
+         checkNotNull(favoriteId);
+         checkNotNull(ocClient);
+-        checkNotNull(context);
+ 
+-        final String remotePath = CloudFavorites.getRemotePath(context, favoriteId);
++        final String remotePath = getRemotePath(favoriteId);
+         RemoveRemoteFileOperation operation = new RemoveRemoteFileOperation(remotePath);
+         RemoteOperationResult result = operation.execute(ocClient);
+         if (result.isSuccess()
+@@ -129,44 +127,34 @@ public final class CloudFavorites {
+         return result;
+     }
+ 
+-    public static String getRemoteFileName(@NonNull final String favoriteId) {
+-        checkNotNull(favoriteId);
+-        return JsonFile.getFileName(favoriteId);
++    public String getRemoteFileName(@NonNull final String favoriteId) {
++        return JsonFile.getFileName(checkNotNull(favoriteId));
+     }
+ 
+-    public static String getDataSourceDirectory(@NonNull final Context context) {
+-        checkNotNull(context);
++    public String getDataSourceDirectory() {
+         return CloudUtils.getSyncDirectory(context) + CLOUD_DIRECTORY;
+     }
+ 
+-    public static String getRemotePath(
+-            @NonNull final Context context, @NonNull final String favoriteId) {
+-        checkNotNull(context);
++    public String getRemotePath(@NonNull final String favoriteId) {
+         checkNotNull(favoriteId);
+ 
+-        return getDataSourceDirectory(context) + JsonFile.PATH_SEPARATOR +
+-                getRemoteFileName(favoriteId);
++        return getDataSourceDirectory() + JsonFile.PATH_SEPARATOR + getRemoteFileName(favoriteId);
+     }
+ 
+-    public synchronized static boolean isCloudDataSourceChanged(
+-            @NonNull final Context context, @NonNull final String eTag) {
+-        checkNotNull(context);
++    public boolean isCloudDataSourceChanged(@NonNull final String eTag) {
+         checkNotNull(eTag);
+ 
+-        String lastSyncedETag = getLastSyncedETag(context);
++        String lastSyncedETag = getLastSyncedETag();
+         return lastSyncedETag == null || !lastSyncedETag.equals(eTag);
+     }
+ 
+-    public static String getLastSyncedETag(@NonNull final Context context) {
+-        checkNotNull(context);
+-
++    @Nullable
++    public String getLastSyncedETag() {
+         SharedPreferences sharedPreferences = CloudUtils.getCloudSharedPreferences(context);
+         return sharedPreferences.getString(SETTING_LAST_SYNCED_ETAG, null);
+     }
+ 
+-    public static void updateLastSyncedETag(
+-            @NonNull final Context context, @NonNull final String eTag) {
+-        checkNotNull(context);
++    public synchronized void updateLastSyncedETag(@NonNull final String eTag) {
+         checkNotNull(eTag);
+ 
+         SharedPreferences sharedPreferences = CloudUtils.getCloudSharedPreferences(context);
+@@ -174,4 +162,18 @@ public final class CloudFavorites {
+         editor.putString(SETTING_LAST_SYNCED_ETAG, eTag);
+         editor.apply();
+     }
++
++    @Nullable
++    public String getDataSourceETag(@NonNull OwnCloudClient ocClient) {
++        checkNotNull(ocClient);
++
++        return CloudDataSource.getDataSourceETag(ocClient, getDataSourceDirectory(), true);
++    }
++
++    @NonNull
++    public Map<String, String> getDataSourceMap(@NonNull OwnCloudClient ocClient) {
++        checkNotNull(ocClient);
++
++        return CloudDataSource.getDataSourceMap(ocClient, getDataSourceDirectory());
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/DatabaseHelper.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/DatabaseHelper.java
+index 9fc9724..5fae376 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/DatabaseHelper.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/DatabaseHelper.java
+@@ -43,7 +43,8 @@ public class DatabaseHelper extends SQLiteOpenHelper {
+             "CREATE TABLE " + LocalContract.FavoriteEntry.TABLE_NAME + " (" +
+                     LocalContract.FavoriteEntry._ID + INTEGER_TYPE + " PRIMARY KEY AUTOINCREMENT," +
+                     LocalContract.FavoriteEntry.COLUMN_NAME_ENTRY_ID + TEXT_TYPE + " UNIQUE," +
+-                    LocalContract.FavoriteEntry.COLUMN_NAME_ADDED + DATETIME_TYPE + "," +
++                    LocalContract.FavoriteEntry.COLUMN_NAME_CREATED + DATETIME_TYPE + "," +
++                    LocalContract.FavoriteEntry.COLUMN_NAME_UPDATED + DATETIME_TYPE + "," +
+                     LocalContract.FavoriteEntry.COLUMN_NAME_NAME + TEXT_TYPE + "," + // UNIQUE
+                     LocalContract.FavoriteEntry.COLUMN_NAME_ETAG + TEXT_TYPE + "," +
+                     LocalContract.FavoriteEntry.COLUMN_NAME_DUPLICATED + INTEGER_TYPE + "," +
+@@ -58,7 +59,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
+     private static final String SQL_CREATE_TAG_ENTRIES =
+             "CREATE TABLE " + LocalContract.TagEntry.TABLE_NAME + " (" +
+                     LocalContract.TagEntry._ID + INTEGER_TYPE + " PRIMARY KEY AUTOINCREMENT," +
+-                    LocalContract.TagEntry.COLUMN_NAME_ADDED + DATETIME_TYPE + "," +
++                    LocalContract.TagEntry.COLUMN_NAME_CREATED + DATETIME_TYPE + "," +
+                     LocalContract.TagEntry.COLUMN_NAME_NAME + TEXT_TYPE + " UNIQUE" +
+             ");";
+ 
+@@ -97,7 +98,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
+ 
+         return "CREATE TABLE " + leftTable + "_" + rightTable + " (" +
+                 BaseColumns._ID + INTEGER_TYPE + " PRIMARY KEY AUTOINCREMENT," +
+-                LocalContract.MANY_TO_MANY_COMMON_NAME_ADDED + DATETIME_TYPE + "," +
++                LocalContract.COMMON_NAME_CREATED + DATETIME_TYPE + "," +
+                 LID + INTEGER_TYPE + " REFERENCES " + leftTable + "(" + BaseColumns._ID + ")," +
+                 RID + INTEGER_TYPE + " REFERENCES " + rightTable + "(" + BaseColumns._ID + ")," +
+                 "UNIQUE (" + LID + "," + RID + ") ON CONFLICT ABORT);";
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalContract.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalContract.java
+index 82ec82e..d4303e9 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalContract.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalContract.java
+@@ -16,9 +16,10 @@ public final class LocalContract {
+     public static final String CONTENT_SCHEME = "content://";
+     public static final Uri BASE_CONTENT_URI = Uri.parse(CONTENT_SCHEME + CONTENT_AUTHORITY);
+ 
+-    public static final String MANY_TO_MANY_COMMON_NAME_ADDED = "added";
+     // NOTE: entry_id must not be part of SyncState
+     public static final String COMMON_NAME_ENTRY_ID = "entry_id";
++    public static final String COMMON_NAME_CREATED = "created";
++    public static final String COMMON_NAME_UPDATED = "updated";
+     public static final String COMMON_NAME_ETAG = "etag";
+     public static final String COMMON_NAME_DUPLICATED = "duplicated";
+     public static final String COMMON_NAME_CONFLICTED = "conflicted";
+@@ -139,7 +140,8 @@ public final class LocalContract {
+         public static final String TABLE_NAME = "favorite";
+ 
+         public static final String COLUMN_NAME_ENTRY_ID = LocalContract.COMMON_NAME_ENTRY_ID;
+-        public static final String COLUMN_NAME_ADDED = "added";
++        public static final String COLUMN_NAME_CREATED = LocalContract.COMMON_NAME_CREATED;
++        public static final String COLUMN_NAME_UPDATED = LocalContract.COMMON_NAME_UPDATED;
+         public static final String COLUMN_NAME_NAME = "name";
+         public static final String COLUMN_NAME_ETAG = LocalContract.COMMON_NAME_ETAG;
+         public static final String COLUMN_NAME_DUPLICATED = LocalContract.COMMON_NAME_DUPLICATED;
+@@ -158,7 +160,8 @@ public final class LocalContract {
+         public static String[] FAVORITE_COLUMNS = new String[]{
+                 FavoriteEntry._ID,
+                 FavoriteEntry.COLUMN_NAME_ENTRY_ID,
+-                FavoriteEntry.COLUMN_NAME_ADDED,
++                FavoriteEntry.COLUMN_NAME_CREATED,
++                FavoriteEntry.COLUMN_NAME_UPDATED,
+                 FavoriteEntry.COLUMN_NAME_NAME,
+                 FavoriteEntry.COLUMN_NAME_ETAG,
+                 FavoriteEntry.COLUMN_NAME_DUPLICATED,
+@@ -197,7 +200,7 @@ public final class LocalContract {
+ 
+         public static final String TABLE_NAME = "tag";
+ 
+-        public static final String COLUMN_NAME_ADDED = "added";
++        public static final String COLUMN_NAME_CREATED = LocalContract.COMMON_NAME_CREATED;
+         public static final String COLUMN_NAME_NAME = "name";
+ 
+         public static final String CONTENT_TYPE =
+@@ -210,7 +213,7 @@ public final class LocalContract {
+ 
+         public static String[] TAG_COLUMNS = new String[]{
+                 TABLE_NAME + "." + TagEntry._ID,
+-                TABLE_NAME + "." + TagEntry.COLUMN_NAME_ADDED,
++                TABLE_NAME + "." + TagEntry.COLUMN_NAME_CREATED,
+                 TABLE_NAME + "." + TagEntry.COLUMN_NAME_NAME};
+ 
+         public static Uri buildTagsUri() {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
+index 2f9420c..1f5f239 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalDataSource.java
+@@ -29,10 +29,12 @@ public class LocalDataSource implements DataSource {
+ 
+     private static final String TAG = LocalDataSource.class.getSimpleName();
+ 
+-    private ContentResolver contentResolver;
++    private final ContentResolver contentResolver;
++    private final LocalFavorites localFavorites;
+ 
+-    public LocalDataSource(ContentResolver contentResolver) {
++    public LocalDataSource(ContentResolver contentResolver, LocalFavorites localFavorites) {
+         this.contentResolver = contentResolver;
++        this.localFavorites = localFavorites;
+     }
+ 
+     // Links
+@@ -109,22 +111,20 @@ public class LocalDataSource implements DataSource {
+         final String[] selectionArgs = {"0", "1"};
+         final String sortOrder = LocalContract.FavoriteEntry.COLUMN_NAME_NAME + " ASC";
+ 
+-        return LocalFavorites.getFavorites(contentResolver, selection, selectionArgs, sortOrder);
++        return localFavorites.getFavorites(selection, selectionArgs, sortOrder);
+     }
+ 
+     @Override
+     public Single<Favorite> getFavorite(final @NonNull String favoriteId) {
+         checkNotNull(favoriteId);
+-        return LocalFavorites.getFavorite(contentResolver, favoriteId);
++        return localFavorites.getFavorite(favoriteId);
+     }
+ 
+     @Override
+     public void saveFavorite(final @NonNull Favorite favorite) {
+         checkNotNull(favorite);
+ 
+-        long rowId = LocalFavorites
+-                .saveFavorite(contentResolver, favorite)
+-                .blockingGet();
++        long rowId = localFavorites.saveFavorite(favorite).blockingGet();
+         if (rowId <= 0) {
+             Log.e(TAG, "Favorite was not saved [" + favorite.getId() + "]");
+         }
+@@ -132,7 +132,7 @@ public class LocalDataSource implements DataSource {
+ 
+     @Override
+     public void deleteAllFavorites() {
+-        LocalFavorites.deleteFavorites(contentResolver).blockingGet();
++        localFavorites.deleteFavorites().blockingGet();
+     }
+ 
+     @Override
+@@ -141,22 +141,17 @@ public class LocalDataSource implements DataSource {
+ 
+         SyncState state;
+         try {
+-            state = LocalFavorites
+-                    .getFavoriteSyncState(contentResolver, favoriteId)
+-                    .blockingGet();
++            state = localFavorites.getFavoriteSyncState(favoriteId).blockingGet();
+         } catch (NoSuchElementException e) {
+             return; // Nothing to delete
+         } // let throw NullPointerException
+         int numRows;
+         if (!state.isSynced() && state.getETag() == null) {
+             // NOTE: if one has never been synced
+-            numRows = LocalFavorites
+-                    .deleteFavorite(contentResolver, favoriteId)
+-                    .blockingGet();
++            numRows = localFavorites.deleteFavorite(favoriteId).blockingGet();
+         } else {
+             SyncState deletedState = new SyncState(SyncState.State.DELETED);
+-            numRows = LocalFavorites
+-                    .updateFavorite(contentResolver, favoriteId, deletedState)
++            numRows = localFavorites.updateFavorite(favoriteId, deletedState)
+                     .blockingGet();
+         }
+         if (numRows != 1) {
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
+index ab57bae..a5d7584 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/data/source/local/LocalFavorites.java
+@@ -6,6 +6,7 @@ import android.content.Context;
+ import android.database.Cursor;
+ import android.database.sqlite.SQLiteDatabase;
+ import android.net.Uri;
++import android.support.annotation.NonNull;
+ 
+ import com.bytesforge.linkasanote.data.Favorite;
+ import com.bytesforge.linkasanote.data.Tag;
+@@ -17,13 +18,23 @@ import java.util.NoSuchElementException;
+ import io.reactivex.Observable;
+ import io.reactivex.Single;
+ 
+-public final class LocalFavorites {
++import static com.google.common.base.Preconditions.checkNotNull;
+ 
+-    private LocalFavorites() {
++public class LocalFavorites {
++
++    private final Context context;
++    private final ContentResolver contentResolver;
++
++    public LocalFavorites(@NonNull Context context, @NonNull ContentResolver contentResolver) {
++        this.context = checkNotNull(context);
++        this.contentResolver = checkNotNull(contentResolver);
++    }
++
++    public Observable<Favorite> getFavorites() {
++        return getFavorites(null, null, null);
+     }
+ 
+-    public static Observable<Favorite> getFavorites(
+-            final ContentResolver contentResolver,
++    public Observable<Favorite> getFavorites(
+             final String selection, final String[] selectionArgs, final String sortOrder) {
+         return Observable.generate(() -> {
+             return contentResolver.query(
+@@ -49,8 +60,7 @@ public final class LocalFavorites {
+         }, Cursor::close);
+     }
+ 
+-    public static Single<Favorite> getFavorite(
+-            final ContentResolver contentResolver, final String favoriteId) {
++    public Single<Favorite> getFavorite(final String favoriteId) {
+         return Single.fromCallable(() -> {
+             Cursor cursor = contentResolver.query(
+                     LocalContract.FavoriteEntry.buildFavoritesUriWith(favoriteId),
+@@ -73,8 +83,7 @@ public final class LocalFavorites {
+         });
+     }
+ 
+-    public static Single<Long> saveFavorite(
+-            final ContentResolver contentResolver, final Favorite favorite) {
++    public Single<Long> saveFavorite(final Favorite favorite) {
+         return Single.fromCallable(() -> {
+             ContentValues values = favorite.getContentValues();
+             Uri favoriteUri = contentResolver.insert(
+@@ -94,8 +103,7 @@ public final class LocalFavorites {
+         });
+     }
+ 
+-    public static Single<Integer> updateFavorite(
+-            final ContentResolver contentResolver, final String favoriteId, final SyncState state) {
++    public Single<Integer> updateFavorite(final String favoriteId, final SyncState state) {
+         return Single.fromCallable(() -> {
+             ContentValues values = state.getContentValues();
+             Uri uri = LocalContract.FavoriteEntry.buildFavoritesUriWith(favoriteId);
+@@ -103,37 +111,33 @@ public final class LocalFavorites {
+         });
+     }
+ 
+-    public static Single<Integer> deleteFavorite(
+-            final ContentResolver contentResolver, final String favoriteId) {
++    public Single<Integer> deleteFavorite(final String favoriteId) {
+         Uri uri = LocalContract.FavoriteEntry.buildFavoritesUriWith(favoriteId);
+         return LocalDataSource.delete(contentResolver, uri);
+     }
+ 
+-    public static Single<Integer> deleteFavorites(final ContentResolver contentResolver) {
++    public Single<Integer> deleteFavorites() {
+         Uri uri = LocalContract.FavoriteEntry.buildFavoritesUri();
+         return LocalDataSource.delete(contentResolver, uri);
+     }
+ 
+-    public static Single<SyncState> getFavoriteSyncState(
+-            final ContentResolver contentResolver, final String favoriteId) {
++    public Single<SyncState> getFavoriteSyncState(final String favoriteId) {
+         Uri uri = LocalContract.FavoriteEntry.buildFavoritesUriWith(favoriteId);
+         return LocalDataSource.getSyncState(contentResolver, uri);
+     }
+ 
+-    public static Observable<SyncState> getFavoriteSyncStates(
+-            final ContentResolver contentResolver) {
++    public Observable<SyncState> getFavoriteSyncStates() {
+         Uri uri = LocalContract.FavoriteEntry.buildFavoritesUri();
+         return LocalDataSource.getSyncStates(contentResolver, uri, null, null, null);
+     }
+ 
+-    public static Observable<String> getFavoriteIds(final ContentResolver contentResolver) {
++    public Observable<String> getFavoriteIds() {
+         Uri uri = LocalContract.FavoriteEntry.buildFavoritesUri();
+         return LocalDataSource.getIds(contentResolver, uri);
+     }
+ 
+     // TODO: search filter must work similar, so it must be called with the ContentProvider
+-    public static Single<Integer> getNextDuplicated(
+-            final Context context, final String favoriteName) {
++    public Single<Integer> getNextDuplicated(final String favoriteName) {
+         return Single.fromCallable(() -> {
+             DatabaseHelper databaseHelper = new DatabaseHelper(context);
+             SQLiteDatabase db = databaseHelper.getReadableDatabase();
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoActivity.java b/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoActivity.java
+index b263ef3..0f56e4b 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoActivity.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/laano/LaanoActivity.java
+@@ -49,7 +49,7 @@ import com.bytesforge.linkasanote.laano.notes.NotesPresenter;
+ import com.bytesforge.linkasanote.laano.notes.NotesPresenterModule;
+ import com.bytesforge.linkasanote.manageaccounts.ManageAccountsActivity;
+ import com.bytesforge.linkasanote.settings.SettingsActivity;
+-import com.bytesforge.linkasanote.sync.SyncAdapter;
++import com.bytesforge.linkasanote.sync.SyncNotifications;
+ import com.bytesforge.linkasanote.utils.AppBarLayoutOnStateChangeListener;
+ import com.bytesforge.linkasanote.utils.EspressoIdlingResource;
+ 
+@@ -95,11 +95,11 @@ public class LaanoActivity extends AppCompatActivity implements
+         super.onResume();
+ 
+         IntentFilter syncIntentFilter = new IntentFilter();
+-        syncIntentFilter.addAction(SyncAdapter.ACTION_SYNC_START);
+-        syncIntentFilter.addAction(SyncAdapter.ACTION_SYNC_END);
+-        syncIntentFilter.addAction(SyncAdapter.ACTION_SYNC_LINK);
+-        syncIntentFilter.addAction(SyncAdapter.ACTION_SYNC_FAVORITE);
+-        syncIntentFilter.addAction(SyncAdapter.ACTION_SYNC_NOTE);
++        syncIntentFilter.addAction(SyncNotifications.ACTION_SYNC_START);
++        syncIntentFilter.addAction(SyncNotifications.ACTION_SYNC_END);
++        syncIntentFilter.addAction(SyncNotifications.ACTION_SYNC_LINK);
++        syncIntentFilter.addAction(SyncNotifications.ACTION_SYNC_FAVORITE);
++        syncIntentFilter.addAction(SyncNotifications.ACTION_SYNC_NOTE);
+         syncBroadcastReceiver = new SyncBroadcastReceiver();
+         registerReceiver(syncBroadcastReceiver, syncIntentFilter);
+     }
+@@ -301,15 +301,15 @@ public class LaanoActivity extends AppCompatActivity implements
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             String action = intent.getAction();
+-            if (action.equals(SyncAdapter.ACTION_SYNC_START)) {
++            if (action.equals(SyncNotifications.ACTION_SYNC_START)) {
+ 
+-            } else if (action.equals(SyncAdapter.ACTION_SYNC_END)) {
++            } else if (action.equals(SyncNotifications.ACTION_SYNC_END)) {
+ 
+-            } else if (action.equals(SyncAdapter.ACTION_SYNC_LINK)) {
++            } else if (action.equals(SyncNotifications.ACTION_SYNC_LINK)) {
+ 
+-            } else if (action.equals(SyncAdapter.ACTION_SYNC_FAVORITE)) {
++            } else if (action.equals(SyncNotifications.ACTION_SYNC_FAVORITE)) {
+ 
+-            } else if (action.equals(SyncAdapter.ACTION_SYNC_NOTE)) {
++            } else if (action.equals(SyncNotifications.ACTION_SYNC_NOTE)) {
+ 
+             }
+         } // onReceive
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
+index e78343d..093ec8b 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncAdapter.java
+@@ -2,43 +2,26 @@ package com.bytesforge.linkasanote.sync;
+ 
+ import android.accounts.Account;
+ import android.accounts.AccountManager;
+-import android.app.Notification;
+ import android.content.AbstractThreadedSyncAdapter;
+ import android.content.ContentProviderClient;
+-import android.content.ContentResolver;
+ import android.content.Context;
+-import android.content.Intent;
+ import android.content.SyncResult;
+ import android.content.res.Resources;
+ import android.database.sqlite.SQLiteConstraintException;
+-import android.graphics.Bitmap;
+-import android.graphics.drawable.BitmapDrawable;
+-import android.graphics.drawable.Drawable;
+ import android.os.Bundle;
+ import android.support.annotation.NonNull;
+-import android.support.annotation.Nullable;
+-import android.support.v4.app.NotificationCompat;
+-import android.support.v4.app.NotificationManagerCompat;
++import android.support.annotation.VisibleForTesting;
+ import android.util.Log;
+ 
+-import com.bytesforge.linkasanote.BuildConfig;
+ import com.bytesforge.linkasanote.R;
+ import com.bytesforge.linkasanote.data.Favorite;
+-import com.bytesforge.linkasanote.data.source.cloud.CloudDataSource;
+ import com.bytesforge.linkasanote.data.source.cloud.CloudFavorites;
+ import com.bytesforge.linkasanote.data.source.local.LocalFavorites;
+ import com.bytesforge.linkasanote.sync.files.JsonFile;
+ import com.bytesforge.linkasanote.utils.CloudUtils;
+ import com.owncloud.android.lib.common.OwnCloudClient;
+-import com.owncloud.android.lib.common.UserInfo;
+-import com.owncloud.android.lib.common.accounts.AccountUtils;
+ import com.owncloud.android.lib.common.operations.RemoteOperationResult;
+-import com.owncloud.android.lib.resources.files.CreateRemoteFolderOperation;
+-import com.owncloud.android.lib.resources.files.ReadRemoteFileOperation;
+-import com.owncloud.android.lib.resources.files.RemoteFile;
+-import com.owncloud.android.lib.resources.users.GetRemoteUserInfoOperation;
+ 
+-import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Map;
+ import java.util.Set;
+@@ -49,26 +32,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+ 
+     private static final String TAG = SyncAdapter.class.getSimpleName();
+ 
+-    public static final String ACTION_SYNC_START = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_START";
+-    public static final String ACTION_SYNC_END = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_END";
+-    public static final String ACTION_SYNC_LINK = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_LINK";
+-    public static final String ACTION_SYNC_FAVORITE = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_FAVORITE";
+-    public static final String ACTION_SYNC_NOTE = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_NOTE";
+-
+-    public static final String EXTRA_ACCOUNT_NAME = "ACCOUNT_NAME";
+-    public static final String EXTRA_ID = "ID";
+-    public static final String EXTRA_STATUS = "STATUS";
+-
+-    public static final int STATUS_CREATED = 0;
+-    public static final int STATUS_UPDATED = 1;
+-    public static final int STATUS_DELETED = 2;
+-
+-    private static final int NOTIFICATION_SYNC = 0;
+-
+     private final Context context;
+-    private final ContentResolver contentResolver;
++    private final SyncNotifications syncNotifications;
++    private final LocalFavorites localFavorites;
++    private final CloudFavorites cloudFavorites;
+     private final AccountManager accountManager;
+-    private final NotificationManagerCompat notificationManager;
+     private final Resources resources;
+ 
+     private Account account;
+@@ -77,21 +45,16 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+     private int favoriteFailsCount; // NOTE: may be failed at different points, so global
+ 
+     // NOTE: Note should contain linkId to notify related Link, Link contain noteIds just for integrity check
+-    public SyncAdapter(Context context, boolean autoInitialize) {
++    public SyncAdapter(
++            Context context, boolean autoInitialize,
++            AccountManager accountManager, SyncNotifications syncNotifications,
++            LocalFavorites localFavorites, CloudFavorites cloudFavorites) {
+         super(context, autoInitialize);
+         this.context = context;
+-        contentResolver = context.getContentResolver();
+-        accountManager = AccountManager.get(context);
+-        notificationManager = NotificationManagerCompat.from(context);
+-        resources = context.getResources();
+-    }
+-
+-    public SyncAdapter(Context context, boolean autoInitialize, boolean allowParallelSyncs) {
+-        super(context, autoInitialize, allowParallelSyncs);
+-        this.context = context;
+-        contentResolver = context.getContentResolver();
+-        accountManager = AccountManager.get(context);
+-        notificationManager = NotificationManagerCompat.from(context);
++        this.accountManager = accountManager;
++        this.syncNotifications = syncNotifications;
++        this.localFavorites = localFavorites;
++        this.cloudFavorites = cloudFavorites;
+         resources = context.getResources();
+     }
+ 
+@@ -104,70 +67,79 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+ 
+         ocClient = CloudUtils.getOwnCloudClient(account, context);
+         if (ocClient == null) {
+-            notifyFailedSynchronization(
++            syncNotifications.notifyFailedSynchronization(
+                     resources.getString(R.string.sync_adapter_title_failed_login),
+-                    resources.getString(R.string.sync_adapter_text_failed_client));
++                    resources.getString(R.string.sync_adapter_text_failed_login));
+             return;
+         }
+ 
+-        sendSyncBroadcast(ACTION_SYNC_START);
+-        updateUserProfile(account, ocClient, accountManager);
++        //Start
++        syncNotifications.sendSyncBroadcast(
++                SyncNotifications.ACTION_SYNC_START, CloudUtils.getAccountName(account));
++        CloudUtils.updateUserProfile(account, ocClient, accountManager);
+         // Favorites
+-        final String favoriteDataSourceDirectory = CloudFavorites.getDataSourceDirectory(context);
+-        final String eTag = getDataSourceETag(ocClient, favoriteDataSourceDirectory, true);
+-        if (CloudFavorites.isCloudDataSourceChanged(context, eTag)) {
++        final String eTag = cloudFavorites.getDataSourceETag(ocClient);
++        if (eTag == null) {
++            syncNotifications.notifyFailedSynchronization(
++                    resources.getString(R.string.sync_adapter_title_failed_cloud),
++                    resources.getString(R.string.sync_adapter_text_failed_cloud));
++            return;
++        }
++        if (cloudFavorites.isCloudDataSourceChanged(eTag)) {
+             Log.i(TAG, "Favorite DataSource has been changed [" + eTag + "]");
+             favoriteFailsCount = 0;
+-            syncFavorites(ocClient, favoriteDataSourceDirectory);
++            syncFavorites();
+         }
+         // End
+         if (!dbAccessError && favoriteFailsCount == 0) {
+-            CloudFavorites.updateLastSyncedETag(context, eTag);
++            cloudFavorites.updateLastSyncedETag(eTag);
+         }
+-        sendSyncBroadcast(ACTION_SYNC_END);
+-        // Notifications
++        syncNotifications.sendSyncBroadcast(
++                SyncNotifications.ACTION_SYNC_END, CloudUtils.getAccountName(account));
++        // Error notifications
+         if (dbAccessError) {
+-            notifyFailedSynchronization(
++            syncNotifications.notifyFailedSynchronization(
+                     resources.getString(R.string.sync_adapter_title_failed_database),
+-                    resources.getString(R.string.sync_adapter_text_failed_db));
++                    resources.getString(R.string.sync_adapter_text_failed_database));
+         }
+         if (favoriteFailsCount > 0) {
+-            notifyFailedSynchronization(resources.getQuantityString(
+-                    R.plurals.sync_adapter_text_failed_favorites, favoriteFailsCount,
+-                    favoriteFailsCount));
++            syncNotifications.notifyFailedSynchronization(resources.getQuantityString(
++                    R.plurals.sync_adapter_text_failed_favorites,
++                    favoriteFailsCount, favoriteFailsCount));
+         }
+     }
+ 
+-    private void syncFavorites(OwnCloudClient ocClient, String dataSourceDirectory) {
+-        final Map<String, String> cloudDataSourceMap = getDataSourceMap(ocClient, dataSourceDirectory);
+-        if (cloudDataSourceMap == null) return;
++    private void syncFavorites() {
++        final Map<String, String> cloudDataSourceMap = cloudFavorites.getDataSourceMap(ocClient);
+ 
+         // Sync Local
+-        LocalFavorites.getFavorites(contentResolver, null, null, null).subscribe(favorite -> {
++        localFavorites.getFavorites().subscribe(favorite -> {
+             String cloudETag = cloudDataSourceMap.get(favorite.getId());
+             syncFavorite(favorite, cloudETag);
+         }, throwable -> setDbAccessError(true));
+         if (dbAccessError) return;
+ 
+-        // OPTIMIZATION: Map can be taken from previous iteration.
+-        final Set<String> localDataSourceSet = new HashSet<>();
+-        LocalFavorites.getFavoriteIds(contentResolver).subscribe(
+-                localDataSourceSet::add, throwable -> setDbAccessError(true));
++        // OPTIMIZATION: Map can be taken from previous iteration
++        final Set<String> localFavoriteIds = new HashSet<>();
++        localFavorites.getFavoriteIds().subscribe(
++                localFavoriteIds::add, throwable -> setDbAccessError(true));
+         if (dbAccessError) return;
+ 
+         // Load new records from cloud
+         for (String cloudFavoriteId : cloudDataSourceMap.keySet()) {
+-            if (localDataSourceSet.contains(cloudFavoriteId)) continue;
++            if (localFavoriteIds.contains(cloudFavoriteId)) continue;
+ 
+-            Favorite cloudFavorite =
+-                    CloudFavorites.downloadFavorite(cloudFavoriteId, ocClient, context);
++            Favorite cloudFavorite = cloudFavorites.downloadFavorite(cloudFavoriteId, ocClient);
+             if (cloudFavorite == null) {
+                 favoriteFailsCount++;
+                 continue;
+             }
+             boolean notifyChanged = saveFavorite(cloudFavorite);
+             if (notifyChanged) {
+-                sendSyncBroadcast(ACTION_SYNC_FAVORITE, cloudFavoriteId, STATUS_CREATED);
++                syncNotifications.sendSyncBroadcast(
++                        SyncNotifications.ACTION_SYNC_FAVORITE,
++                        CloudUtils.getAccountName(account),
++                        cloudFavoriteId, SyncNotifications.STATUS_CREATED);
+             }
+         } // for
+     }
+@@ -176,16 +148,17 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         String favoriteId = favorite.getId();
+         String favoriteETag = favorite.getETag();
+         boolean notifyChanged = false;
+-        int statusChanged = STATUS_UPDATED;
++        int statusChanged = SyncNotifications.STATUS_UPDATED;
+         if (favoriteETag == null) { // New
+             // duplicated && conflicted can be ignored
+             if (favorite.isDeleted()) {
+                 // DELETE local
+                 Log.e(TAG, "The records never synced must be deleted immediately [" + favoriteId + "]");
+                 notifyChanged = deleteLocalFavorite(favoriteId);
+-                statusChanged = STATUS_DELETED;
++                statusChanged = SyncNotifications.STATUS_DELETED;
+             } else { // synced is ignored (!synced)
+                 // UPLOAD
++                // NOTE: local unsynced will replace cloud with the same ID (acceptable behaviour)
+                 notifyChanged = uploadFavorite(favorite);
+             }
+         } else if (favoriteETag.equals(cloudETag)) { // Green light
+@@ -194,7 +167,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+                 if (favorite.isDeleted()) {
+                     // DELETE cloud
+                     notifyChanged = deleteCloudFavorite(favoriteId);
+-                    statusChanged = STATUS_DELETED;
++                    statusChanged = SyncNotifications.STATUS_DELETED;
+                 } else if (!favorite.isDuplicated()) {
+                     // UPLOAD
+                     notifyChanged = uploadFavorite(favorite);
+@@ -204,7 +177,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+             if (favorite.isSynced()) {
+                 // DELETE local
+                 notifyChanged = deleteLocalFavorite(favoriteId);
+-                statusChanged = STATUS_DELETED;
++                statusChanged = SyncNotifications.STATUS_DELETED;
+             } else {
+                 // SET conflicted
+                 SyncState state = new SyncState(SyncState.State.CONFLICTED_DELETE);
+@@ -213,8 +186,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         } else { // Was changed on cloud
+             // duplicated && conflicted can be ignored
+             // DOWNLOAD (with synced state by default)
+-            Favorite cloudFavorite = CloudFavorites.downloadFavorite(
+-                    favoriteId, ocClient, context);
++            Favorite cloudFavorite = cloudFavorites.downloadFavorite(favoriteId, ocClient);
+             if (cloudFavorite != null) {
+                 if (favorite.isSynced() && !favorite.isDeleted()) {
+                     // SAVE local
+@@ -224,12 +196,13 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+                         if (favorite.isDeleted()) {
+                             // DELETE cloud
+                             notifyChanged = deleteCloudFavorite(favoriteId);
+-                            statusChanged = STATUS_DELETED;
++                            statusChanged = SyncNotifications.STATUS_DELETED;
+                         } else {
+                             // UPDATE state
+                             assert cloudFavorite.getETag() != null;
+                             SyncState state = new SyncState(
+                                     cloudFavorite.getETag(), SyncState.State.SYNCED);
++                            // NOTE: record may be in conflicted state
+                             notifyChanged = updateFavorite(favoriteId, state);
+                         }
+                     } else {
+@@ -243,7 +216,10 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+             }
+         }
+         if (notifyChanged) {
+-            sendSyncBroadcast(ACTION_SYNC_FAVORITE, favoriteId, statusChanged);
++            syncNotifications.sendSyncBroadcast(
++                    SyncNotifications.ACTION_SYNC_FAVORITE,
++                    CloudUtils.getAccountName(account),
++                    favoriteId, statusChanged);
+         }
+     }
+ 
+@@ -253,9 +229,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+ 
+         // Primary record
+         try {
+-            long rowId = LocalFavorites
+-                    .saveFavorite(contentResolver, favorite)
+-                    .blockingGet();
++            long rowId = localFavorites.saveFavorite(favorite).blockingGet();
+             return rowId > 0;
+         } catch (NullPointerException e) {
+             favoriteFailsCount++;
+@@ -264,15 +238,11 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+             // NOTE: will try to resolve it further
+         }
+         // Duplicated record
+-        int duplicated = LocalFavorites
+-                .getNextDuplicated(context, favorite.getName())
+-                .blockingGet();
++        int duplicated = localFavorites.getNextDuplicated(favorite.getName()).blockingGet();
+         SyncState state = new SyncState(favorite.getETag(), duplicated);
+         Favorite duplicatedFavorite = new Favorite(favorite, state);
+         try {
+-            long rowId = LocalFavorites
+-                    .saveFavorite(contentResolver, duplicatedFavorite)
+-                    .blockingGet();
++            long rowId = localFavorites.saveFavorite(duplicatedFavorite).blockingGet();
+             return rowId > 0;
+         } catch (NullPointerException | SQLiteConstraintException e) {
+             favoriteFailsCount++;
+@@ -284,9 +254,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         checkNotNull(favoriteId);
+         Log.i(TAG, favoriteId + ": DELETE local");
+ 
+-        int numRows = LocalFavorites
+-                .deleteFavorite(contentResolver, favoriteId)
+-                .blockingGet();
++        int numRows = localFavorites.deleteFavorite(favoriteId).blockingGet();
+         return numRows == 1;
+     }
+ 
+@@ -294,7 +262,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         checkNotNull(favoriteId);
+         Log.i(TAG, favoriteId + ": DELETE cloud");
+ 
+-        RemoteOperationResult result = CloudFavorites.deleteFavorite(favoriteId, ocClient, context);
++        RemoteOperationResult result = cloudFavorites.deleteFavorite(favoriteId, ocClient); // NonNull
+         return result.isSuccess() && deleteLocalFavorite(favoriteId);
+     }
+ 
+@@ -303,9 +271,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         checkNotNull(state);
+         Log.i(TAG, favoriteId + ": UPDATE");
+ 
+-        int numRows = LocalFavorites
+-                .updateFavorite(contentResolver, favoriteId, state)
+-                .blockingGet();
++        int numRows = localFavorites.updateFavorite(favoriteId, state).blockingGet();
+         return numRows == 1;
+     }
+ 
+@@ -314,7 +280,7 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         Log.i(TAG, favorite.getId() + ": UPLOAD");
+ 
+         boolean notifyChanged = false;
+-        RemoteOperationResult result = CloudFavorites.uploadFavorite(favorite, ocClient, context);
++        RemoteOperationResult result = cloudFavorites.uploadFavorite(favorite, ocClient);
+         if (result == null) {
+             favoriteFailsCount++;
+             return false;
+@@ -322,123 +288,21 @@ public class SyncAdapter extends AbstractThreadedSyncAdapter {
+         if (result.isSuccess()) {
+             JsonFile jsonFile = (JsonFile) result.getData().get(0);
+             SyncState state = new SyncState(jsonFile.getETag(), SyncState.State.SYNCED);
+-            LocalFavorites
+-                    .updateFavorite(contentResolver, favorite.getId(), state)
+-                    .blockingGet();
++            localFavorites.updateFavorite(favorite.getId(), state).blockingGet();
+         } else if (result.getCode() == RemoteOperationResult.ResultCode.SYNC_CONFLICT) {
+             SyncState state = new SyncState(SyncState.State.CONFLICTED_UPDATE);
+-            int numRows = LocalFavorites
+-                    .updateFavorite(contentResolver, favorite.getId(), state)
+-                    .blockingGet();
++            int numRows = localFavorites.updateFavorite(favorite.getId(), state).blockingGet();
+             notifyChanged = (numRows == 1);
+         }
+         return notifyChanged;
+     }
+ 
+-    private static Map<String, String> getDataSourceMap(
+-            @NonNull OwnCloudClient ocClient, @NonNull String remotePath) {
+-        checkNotNull(ocClient);
+-        checkNotNull(remotePath);
+-
+-        final Map<String, String> dataSourceMap = new HashMap<>();
+-        CloudDataSource.getRemoteFiles(ocClient, remotePath).subscribe(file -> {
+-            String fileMimeType = file.getMimeType();
+-            String fileRemotePath = file.getRemotePath();
+-            String id = JsonFile.getId(fileMimeType, fileRemotePath);
+-            // TODO: check file size and reject above reasonable limit
+-            if (id != null) {
+-                dataSourceMap.put(id, file.getEtag());
+-            } else {
+-                Log.w(TAG, "A problem was found in cloud dataSource "
+-                        + "[" + fileRemotePath + ", mimeType=" + fileMimeType + "]");
+-            }
+-        }, throwable -> {});
+-        return dataSourceMap;
+-    }
+-
+-    private static void updateUserProfile(
+-            Account account, OwnCloudClient ocClient, AccountManager accountManager) {
+-        GetRemoteUserInfoOperation operation = new GetRemoteUserInfoOperation();
+-        RemoteOperationResult result = operation.execute(ocClient);
+-        if (result.isSuccess()) {
+-            UserInfo userInfo = (UserInfo) result.getData().get(0);
+-            accountManager.setUserData(
+-                    account, AccountUtils.Constants.KEY_DISPLAY_NAME, userInfo.getDisplayName());
+-        } else {
+-            Log.e(TAG, "Error while retrieving user info from server [" + result.getCode().name() + "]");
+-        }
+-    }
+-
+-    private void sendSyncBroadcast(String action) {
+-        sendSyncBroadcast(action, null, -1);
+-    }
+-
+-    private void sendSyncBroadcast(String action, String id, int status) {
+-        Intent intent = new Intent(action);
+-
+-        intent.putExtra(EXTRA_ACCOUNT_NAME, account.name);
+-        if (id != null) intent.putExtra(EXTRA_ID, id);
+-        if (status >= 0) intent.putExtra(EXTRA_STATUS, status);
+-
+-        context.sendBroadcast(intent);
+-    }
+-
+-    private void notifyFailedSynchronization(@NonNull String text) {
+-        checkNotNull(text);
+-        notifyFailedSynchronization(null, text);
+-    }
+-
+-    private void notifyFailedSynchronization(String title, @NonNull String text) {
+-        checkNotNull(text);
+-
+-        //notificationManager.cancel(NOTIFICATION_SYNC);
+-        String defaultTitle = context.getString(R.string.sync_adapter_title_failed_default);
+-        String notificationTitle = title == null ? defaultTitle : defaultTitle + ": " + title;
+-
+-        Notification notification = new NotificationCompat.Builder(context)
+-                // TODO: change to simplified application icon
+-                .setSmallIcon(R.drawable.ic_sync_white)
+-                .setLargeIcon(getLauncherBitmap(context))
+-                .setColor(context.getResources().getColor(R.color.color_primary, context.getTheme()))
+-                .setTicker(notificationTitle)
+-                .setContentTitle(notificationTitle)
+-                .setContentText(text)
+-                .build();
+-        notificationManager.notify(NOTIFICATION_SYNC, notification);
+-    }
+-
+-    @Nullable
+-    private static String getDataSourceETag(
+-            OwnCloudClient ocClient, String remotePath, boolean createDataSource) {
+-        if (remotePath == null) return null;
+-
+-        final ReadRemoteFileOperation readOperation = new ReadRemoteFileOperation(remotePath);
+-        RemoteOperationResult result = readOperation.execute(ocClient);
+-        if (result.isSuccess()) {
+-            RemoteFile file = (RemoteFile) result.getData().get(0);
+-            return file.getEtag();
+-        } else if (result.getCode() == RemoteOperationResult.ResultCode.FILE_NOT_FOUND
+-                && createDataSource) {
+-            CreateRemoteFolderOperation writeOperation =
+-                    new CreateRemoteFolderOperation(remotePath, true);
+-            result = writeOperation.execute(ocClient);
+-            if (result.isSuccess()) {
+-                Log.i(TAG, "New folder has been created");
+-                return getDataSourceETag(ocClient, remotePath, false);
+-            }
+-        }
+-        return null;
+-    }
+-
+-    private static Bitmap getLauncherBitmap(@NonNull Context context) {
+-        Drawable logo = context.getDrawable(R.mipmap.ic_launcher);
+-        if (logo instanceof BitmapDrawable) {
+-            return ((BitmapDrawable) logo).getBitmap();
+-        }
+-        return null;
++    private void setDbAccessError(boolean dbAccessError) {
++        this.dbAccessError = dbAccessError;
+     }
+ 
+-    public void setDbAccessError(boolean dbAccessError) {
+-        this.dbAccessError = dbAccessError;
++    @VisibleForTesting
++    public int getFavoriteFailsCount() {
++        return favoriteFailsCount;
+     }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncNotifications.java b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncNotifications.java
+new file mode 100644
+index 0000000..214a001
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncNotifications.java
+@@ -0,0 +1,89 @@
++package com.bytesforge.linkasanote.sync;
++
++import android.app.Notification;
++import android.content.Context;
++import android.content.Intent;
++import android.graphics.Bitmap;
++import android.graphics.drawable.BitmapDrawable;
++import android.graphics.drawable.Drawable;
++import android.support.annotation.NonNull;
++import android.support.v4.app.NotificationCompat;
++import android.support.v4.app.NotificationManagerCompat;
++
++import com.bytesforge.linkasanote.BuildConfig;
++import com.bytesforge.linkasanote.R;
++
++import static com.google.common.base.Preconditions.checkNotNull;
++
++public class SyncNotifications {
++
++    public static final String ACTION_SYNC_START = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_START";
++    public static final String ACTION_SYNC_END = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_END";
++    public static final String ACTION_SYNC_LINK = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_LINK";
++    public static final String ACTION_SYNC_FAVORITE = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_FAVORITE";
++    public static final String ACTION_SYNC_NOTE = BuildConfig.APPLICATION_ID + ".ACTION_SYNC_NOTE";
++
++    public static final String EXTRA_ACCOUNT_NAME = "ACCOUNT_NAME";
++    public static final String EXTRA_ID = "ID";
++    public static final String EXTRA_STATUS = "STATUS";
++
++    public static final int STATUS_CREATED = 0;
++    public static final int STATUS_UPDATED = 1;
++    public static final int STATUS_DELETED = 2;
++
++    private static final int NOTIFICATION_SYNC = 0;
++
++    private final Context context;
++    private final NotificationManagerCompat notificationManager;
++
++    public SyncNotifications(Context context) {
++        this.context = context;
++        notificationManager = NotificationManagerCompat.from(context);
++    }
++
++    public void sendSyncBroadcast(String action, String accountName) {
++        sendSyncBroadcast(action, accountName, null, -1);
++    }
++
++    public void sendSyncBroadcast(String action, String accountName, String id, int status) {
++        Intent intent = new Intent(action);
++
++        intent.putExtra(EXTRA_ACCOUNT_NAME, accountName);
++        if (id != null) intent.putExtra(EXTRA_ID, id);
++        if (status >= 0) intent.putExtra(EXTRA_STATUS, status);
++
++        context.sendBroadcast(intent);
++    }
++
++    public void notifyFailedSynchronization(@NonNull String text) {
++        checkNotNull(text);
++        notifyFailedSynchronization(null, text);
++    }
++
++    public void notifyFailedSynchronization(String title, @NonNull String text) {
++        checkNotNull(text);
++
++        //notificationManager.cancel(NOTIFICATION_SYNC);
++        String defaultTitle = context.getString(R.string.sync_adapter_title_failed_default);
++        String notificationTitle = title == null ? defaultTitle : defaultTitle + ": " + title;
++
++        Notification notification = new NotificationCompat.Builder(context)
++                // TODO: change to simplified application icon
++                .setSmallIcon(R.drawable.ic_sync_white)
++                .setLargeIcon(getLauncherBitmap())
++                .setColor(context.getResources().getColor(R.color.color_primary, context.getTheme()))
++                .setTicker(notificationTitle)
++                .setContentTitle(notificationTitle)
++                .setContentText(text)
++                .build();
++        notificationManager.notify(NOTIFICATION_SYNC, notification);
++    }
++
++    private Bitmap getLauncherBitmap() {
++        Drawable logo = context.getDrawable(R.mipmap.ic_launcher);
++        if (logo instanceof BitmapDrawable) {
++            return ((BitmapDrawable) logo).getBitmap();
++        }
++        return null;
++    }
++}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncService.java b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncService.java
+index 87101fe..338f919 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncService.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncService.java
+@@ -1,21 +1,49 @@
+ package com.bytesforge.linkasanote.sync;
+ 
++import android.accounts.AccountManager;
+ import android.app.Service;
++import android.content.Context;
+ import android.content.Intent;
+ import android.os.IBinder;
+ import android.support.annotation.Nullable;
+ 
++import com.bytesforge.linkasanote.ApplicationModule;
++import com.bytesforge.linkasanote.data.source.ProviderModule;
++import com.bytesforge.linkasanote.data.source.RepositoryModule;
++import com.bytesforge.linkasanote.data.source.cloud.CloudFavorites;
++import com.bytesforge.linkasanote.data.source.local.LocalFavorites;
++
++import javax.inject.Inject;
++
+ public class SyncService extends Service {
+ 
+     private static SyncAdapter syncAdapter = null;
+     private static final Object syncAdapterLock = new Object();
+ 
++    @Inject
++    AccountManager accountManager;
++
++    @Inject
++    LocalFavorites localFavorites;
++
++    @Inject
++    CloudFavorites cloudFavorites;
++
+     @Override
+     public void onCreate() {
+         super.onCreate();
++        Context context = getApplicationContext();
++        DaggerSyncServiceComponent.builder()
++                .applicationModule(new ApplicationModule(context))
++                .repositoryModule(new RepositoryModule())
++                .providerModule(new ProviderModule())
++                .build().inject(this);
++
+         synchronized (syncAdapterLock) {
+             if (syncAdapter == null) {
+-                syncAdapter = new SyncAdapter(getApplicationContext(), true);
++                SyncNotifications syncNotifications = new SyncNotifications(context);
++                syncAdapter = new SyncAdapter(context, true,
++                        accountManager, syncNotifications, localFavorites, cloudFavorites);
+             }
+         } // synchronized
+     }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/sync/SyncServiceComponent.java b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncServiceComponent.java
+new file mode 100644
+index 0000000..1551212
+--- /dev/null
++++ b/app/src/main/java/com/bytesforge/linkasanote/sync/SyncServiceComponent.java
+@@ -0,0 +1,19 @@
++package com.bytesforge.linkasanote.sync;
++
++import com.bytesforge.linkasanote.ApplicationModule;
++import com.bytesforge.linkasanote.data.source.ProviderModule;
++import com.bytesforge.linkasanote.data.source.RepositoryModule;
++
++import javax.inject.Singleton;
++
++import dagger.Component;
++
++@Singleton
++@Component(modules = {
++        ApplicationModule.class,
++        RepositoryModule.class,
++        ProviderModule.class})
++public interface SyncServiceComponent {
++
++    void inject(SyncService syncService);
++}
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/utils/CloudUtils.java b/app/src/main/java/com/bytesforge/linkasanote/utils/CloudUtils.java
+index 87c4817..3480ee8 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/utils/CloudUtils.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/utils/CloudUtils.java
+@@ -22,7 +22,10 @@ import com.bytesforge.linkasanote.sync.files.JsonFile;
+ import com.owncloud.android.lib.common.OwnCloudAccount;
+ import com.owncloud.android.lib.common.OwnCloudClient;
+ import com.owncloud.android.lib.common.OwnCloudClientManagerFactory;
++import com.owncloud.android.lib.common.UserInfo;
+ import com.owncloud.android.lib.common.accounts.AccountUtils;
++import com.owncloud.android.lib.common.operations.RemoteOperationResult;
++import com.owncloud.android.lib.resources.users.GetRemoteUserInfoOperation;
+ 
+ import java.io.IOException;
+ import java.util.Arrays;
+@@ -47,6 +50,10 @@ public final class CloudUtils {
+         return context.getString(R.string.authenticator_account_type);
+     }
+ 
++    public static String getAccountName(@NonNull Account account) {
++        return checkNotNull(account).name;
++    }
++
+     @Nullable
+     public static Account[] getAccountsWithPermissionCheck(
+             @NonNull Context context, @NonNull AccountManager accountManager) {
+@@ -128,4 +135,17 @@ public final class CloudUtils {
+         return JsonFile.PATH_SEPARATOR + sharedPreferences.getString(
+                 resources.getString(R.string.pref_key_sync_directory), defaultSyncDirectory);
+     }
++
++    public static void updateUserProfile(
++            Account account, OwnCloudClient ocClient, AccountManager accountManager) {
++        GetRemoteUserInfoOperation operation = new GetRemoteUserInfoOperation();
++        RemoteOperationResult result = operation.execute(ocClient);
++        if (result.isSuccess()) {
++            UserInfo userInfo = (UserInfo) result.getData().get(0);
++            accountManager.setUserData(
++                    account, AccountUtils.Constants.KEY_DISPLAY_NAME, userInfo.getDisplayName());
++        } else {
++            Log.e(TAG, "Error while retrieving user info from server [" + result.getCode().name() + "]");
++        }
++    }
+ }
+diff --git a/app/src/main/java/com/bytesforge/linkasanote/utils/CommonUtils.java b/app/src/main/java/com/bytesforge/linkasanote/utils/CommonUtils.java
+index 4136137..a6bc524 100644
+--- a/app/src/main/java/com/bytesforge/linkasanote/utils/CommonUtils.java
++++ b/app/src/main/java/com/bytesforge/linkasanote/utils/CommonUtils.java
+@@ -1,5 +1,6 @@
+ package com.bytesforge.linkasanote.utils;
+ 
++import android.content.Context;
+ import android.support.annotation.NonNull;
+ 
+ import java.net.IDN;
+@@ -45,4 +46,8 @@ public class CommonUtils {
+ 
+         return new String(buffer);
+     }
++
++    public static String getTempDir(@NonNull Context context) {
++        return checkNotNull(context).getCacheDir().getAbsolutePath();
++    }
+ }
+diff --git a/app/src/test/java/com/bytesforge/linkasanote/TestUtils.java b/app/src/test/java/com/bytesforge/linkasanote/TestUtils.java
+index f44d9a8..232f0c5 100644
+--- a/app/src/test/java/com/bytesforge/linkasanote/TestUtils.java
++++ b/app/src/test/java/com/bytesforge/linkasanote/TestUtils.java
+@@ -10,21 +10,21 @@ import java.util.List;
+ 
+ public class TestUtils {
+ 
+-    public static String KEY_PREFIX = CommonUtils.charRepeat('A', 21);
++    public static final String KEY_PREFIX = CommonUtils.charRepeat('A', 21);
++    public static final List<Tag> FAVORITE_TAGS = new ArrayList<Tag>() {{
++        add(new Tag("first"));
++        add(new Tag("second"));
++    }};
++    public static final List<Tag> FAVORITE_TAGS2 = new ArrayList<Tag>() {{
++        addAll(FAVORITE_TAGS);
++        add(new Tag("third"));
++    }};
++    public static final List<Tag> FAVORITE_TAGS3 = new ArrayList<Tag>() {{
++        addAll(FAVORITE_TAGS2);
++        add(new Tag("fourth"));
++    }};
+ 
+     public static List<Favorite> buildFavorites() {
+-        final List<Tag> FAVORITE_TAGS = new ArrayList<Tag>() {{
+-            add(new Tag("first"));
+-            add(new Tag("second"));
+-        }};
+-        final List<Tag> FAVORITE_TAGS2 = new ArrayList<Tag>() {{
+-            addAll(FAVORITE_TAGS);
+-            add(new Tag("third"));
+-        }};
+-        final List<Tag> FAVORITE_TAGS3 = new ArrayList<Tag>() {{
+-            addAll(FAVORITE_TAGS2);
+-            add(new Tag("fourth"));
+-        }};
+         return new ArrayList<Favorite>() {{
+             add(new Favorite(KEY_PREFIX + 'A', "Favorite", FAVORITE_TAGS));
+             add(new Favorite(KEY_PREFIX + 'B', "Favorite #2", FAVORITE_TAGS2));
+diff --git a/app/src/test/java/com/bytesforge/linkasanote/sync/SyncAdapterTest.java b/app/src/test/java/com/bytesforge/linkasanote/sync/SyncAdapterTest.java
+new file mode 100644
+index 0000000..29bf588
+--- /dev/null
++++ b/app/src/test/java/com/bytesforge/linkasanote/sync/SyncAdapterTest.java
+@@ -0,0 +1,401 @@
++package com.bytesforge.linkasanote.sync;
++
++import android.accounts.AccountManager;
++import android.content.Context;
++import android.content.res.Resources;
++import android.util.Log;
++
++import com.bytesforge.linkasanote.TestUtils;
++import com.bytesforge.linkasanote.data.Favorite;
++import com.bytesforge.linkasanote.data.source.cloud.CloudFavorites;
++import com.bytesforge.linkasanote.data.source.local.LocalFavorites;
++import com.bytesforge.linkasanote.sync.files.JsonFile;
++import com.bytesforge.linkasanote.utils.CloudUtils;
++import com.owncloud.android.lib.common.OwnCloudClient;
++import com.owncloud.android.lib.common.operations.RemoteOperationResult;
++
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.ArgumentCaptor;
++import org.mockito.Captor;
++import org.mockito.Mock;
++import org.mockito.MockitoAnnotations;
++import org.powermock.api.mockito.PowerMockito;
++import org.powermock.core.classloader.annotations.PrepareForTest;
++import org.powermock.modules.junit4.PowerMockRunner;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.stream.Collectors;
++
++import io.reactivex.Observable;
++import io.reactivex.Single;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.ArgumentMatchers.eq;
++import static org.mockito.ArgumentMatchers.isNull;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++@RunWith(PowerMockRunner.class)
++@PrepareForTest({Log.class, CloudUtils.class})
++public class SyncAdapterTest {
++
++    @Mock
++    Context context;
++
++    @Mock
++    AccountManager accountManager;
++
++    @Mock
++    SyncNotifications syncNotifications;
++
++    @Mock
++    LocalFavorites localFavorites;
++
++    @Mock
++    CloudFavorites cloudFavorites;
++
++    @Mock
++    OwnCloudClient ownCloudClient;
++
++    @Mock
++    Resources resources;
++
++    @Captor
++    ArgumentCaptor<SyncState> syncStateCaptor;
++
++    private SyncAdapter syncAdapter;
++
++    private static final String E_TAGL = "abcdefghigklmnopqrstuvwxwz";
++    private static final String E_TAGC = "zwxwvutsrqponmlkgihgfedcba";
++    private static final String SERVER_URL = "https://demo.nextcloud.com";
++    private static final String USERNAME = "demo";
++    private static final String ACCOUNT_NAME = USERNAME + "@" + SERVER_URL;
++    private static final String REMOTE_PATH = "/cloud/path";
++
++    @Before
++    public void setupSyncAdapter() {
++        MockitoAnnotations.initMocks(this);
++        PowerMockito.mockStatic(Log.class);
++        PowerMockito.mockStatic(CloudUtils.class);
++
++        when(context.getResources()).thenReturn(resources);
++        when(CloudUtils.getOwnCloudClient(isNull(), any(Context.class))).thenReturn(ownCloudClient);
++        when(CloudUtils.getAccountName(isNull())).thenReturn(ACCOUNT_NAME);
++        when(cloudFavorites.getDataSourceETag(ownCloudClient)).thenReturn(E_TAGL);
++        when(cloudFavorites.isCloudDataSourceChanged(E_TAGL)).thenReturn(true);
++
++        syncAdapter = new SyncAdapter(context, true,
++                accountManager, syncNotifications, localFavorites, cloudFavorites);
++    }
++
++    @Test
++    public void newLocalFavorite_goesToUploadThenChangesStateToSynced() {
++        Favorite favorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS);
++        assertNotNull(favorite);
++        String favoriteId = favorite.getId();
++
++        setLocalFavorites(localFavorites, singletonList(favorite));
++        setCloudFavorites(cloudFavorites, Collections.emptyList());
++        // Upload
++        RemoteOperationResult result =
++                new RemoteOperationResult(RemoteOperationResult.ResultCode.OK);
++        ArrayList<Object> data = new ArrayList<>();
++        JsonFile file = new JsonFile(REMOTE_PATH);
++        file.setETag(E_TAGC);
++        data.add(file);
++        result.setData(data);
++        when(cloudFavorites.uploadFavorite(any(Favorite.class), eq(ownCloudClient))).thenReturn(result);
++        when(localFavorites.updateFavorite(eq(favoriteId), any(SyncState.class)))
++                .thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).uploadFavorite(eq(favorite), eq(ownCloudClient));
++        verify(localFavorites).updateFavorite(eq(favoriteId), syncStateCaptor.capture());
++        assertEquals(syncStateCaptor.getValue().isSynced(), true);
++        verify(syncNotifications, never()).sendSyncBroadcast(
++                any(String.class), any(String.class), any(String.class), any(int.class));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void newCloudFavorite_goesToLocalWithSyncedState() {
++        Favorite favorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS);
++        assertNotNull(favorite);
++        String favoriteId = favorite.getId();
++        SyncState state = new SyncState(E_TAGC, SyncState.State.SYNCED);
++        Favorite cloudFavorite = new Favorite(favorite, state);
++
++        setLocalFavorites(localFavorites, Collections.emptyList());
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        // Download
++        when(cloudFavorites.downloadFavorite(eq(favoriteId), eq(ownCloudClient)))
++                .thenReturn(cloudFavorite);
++        when(localFavorites.saveFavorite(eq(cloudFavorite))).thenReturn(Single.fromCallable(() -> 1L));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).downloadFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).saveFavorite(eq(cloudFavorite));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_CREATED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localUnsyncedFavorite_ifEqualUpdateLocalETag() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.UNSYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGC, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        when(cloudFavorites.downloadFavorite(eq(favoriteId), eq(ownCloudClient)))
++                .thenReturn(cloudFavorite);
++        when(localFavorites.updateFavorite(eq(favoriteId), any(SyncState.class)))
++                .thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).downloadFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).updateFavorite(eq(favoriteId), syncStateCaptor.capture());
++        assertEquals(syncStateCaptor.getValue().isSynced(), true);
++        assertEquals(syncStateCaptor.getValue().getETag(), E_TAGC);
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_UPDATED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localDeletedFavoriteAgainstUpdatedCloud_ifEqualDeleteCloudAndLocal() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.DELETED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGC, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        when(cloudFavorites.downloadFavorite(eq(favoriteId), eq(ownCloudClient)))
++                .thenReturn(cloudFavorite);
++        RemoteOperationResult result = new RemoteOperationResult(RemoteOperationResult.ResultCode.OK);
++        when(cloudFavorites.deleteFavorite(eq(favoriteId), eq(ownCloudClient))).thenReturn(result);
++        when(localFavorites.deleteFavorite(eq(favoriteId))).thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).downloadFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(cloudFavorites).deleteFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).deleteFavorite(eq(favoriteId));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_DELETED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localUnsyncedFavorite_ifNotEqualLocalGoesToConflictedState() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.UNSYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGC, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite #2", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        when(cloudFavorites.downloadFavorite(eq(favoriteId), eq(ownCloudClient)))
++                .thenReturn(cloudFavorite);
++        when(localFavorites.updateFavorite(eq(favoriteId), any(SyncState.class)))
++                .thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).downloadFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).updateFavorite(eq(favoriteId), syncStateCaptor.capture());
++        assertEquals(syncStateCaptor.getValue().isConflicted(), true);
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_UPDATED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void cloudFavoriteUpdatedWhenLocalSynced_downloadCloudAndUpdateLocal() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.SYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGC, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite #2", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        when(cloudFavorites.downloadFavorite(eq(favoriteId), eq(ownCloudClient)))
++                .thenReturn(cloudFavorite);
++        when(localFavorites.saveFavorite(eq(cloudFavorite))).thenReturn(Single.fromCallable(() -> 1L));
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).downloadFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).saveFavorite(eq(cloudFavorite));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_UPDATED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localNeverSyncedFavorite_deleteLocalOnly() {
++        SyncState localState = new SyncState(SyncState.State.DELETED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, Collections.emptyList());
++        when(localFavorites.deleteFavorite(eq(favoriteId))).thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(localFavorites).deleteFavorite(eq(favoriteId));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_DELETED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localDeletedFavoriteWithCloudETag_deleteCloudAndLocal() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.DELETED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGL, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        RemoteOperationResult result = new RemoteOperationResult(RemoteOperationResult.ResultCode.OK);
++        when(cloudFavorites.deleteFavorite(eq(favoriteId), eq(ownCloudClient))).thenReturn(result);
++        when(localFavorites.deleteFavorite(eq(favoriteId))).thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).deleteFavorite(eq(favoriteId), eq(ownCloudClient));
++        verify(localFavorites).deleteFavorite(eq(favoriteId));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_DELETED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void cloudDeletedFavoriteAgainstLocalSynced_deleteLocal() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.SYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, Collections.emptyList());
++        when(localFavorites.deleteFavorite(eq(favoriteId))).thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(localFavorites).deleteFavorite(eq(favoriteId));
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_DELETED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void cloudDeletedFavoriteAgainstLocalUnsynced_localGoesToConflictedState() {
++        SyncState localState = new SyncState(E_TAGL, SyncState.State.UNSYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, Collections.emptyList());
++        when(localFavorites.updateFavorite(eq(favoriteId), any(SyncState.class)))
++                .thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(localFavorites).updateFavorite(eq(favoriteId), syncStateCaptor.capture());
++        assertEquals(syncStateCaptor.getValue().isDeleted(), true);
++        assertEquals(syncStateCaptor.getValue().isConflicted(), true);
++        verify(syncNotifications).sendSyncBroadcast(eq(SyncNotifications.ACTION_SYNC_FAVORITE),
++                eq(ACCOUNT_NAME), eq(favoriteId), eq(SyncNotifications.STATUS_UPDATED));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    @Test
++    public void localUnsyncedFavoriteWithCloudETag_uploadIfNotDuplicated() {
++        SyncState localState = new SyncState(E_TAGC, SyncState.State.UNSYNCED);
++        Favorite localFavorite = new Favorite(
++                TestUtils.KEY_PREFIX + 'A', "Favorite #2", TestUtils.FAVORITE_TAGS, localState);
++        assertNotNull(localFavorite);
++        String favoriteId = localFavorite.getId();
++        SyncState cloudState = new SyncState(E_TAGC, SyncState.State.SYNCED); // default
++        Favorite cloudFavorite = new Favorite(
++                favoriteId, "Favorite", TestUtils.FAVORITE_TAGS, cloudState);
++
++        setLocalFavorites(localFavorites, singletonList(localFavorite));
++        setCloudFavorites(cloudFavorites, singletonList(cloudFavorite));
++        // Upload
++        RemoteOperationResult result =
++                new RemoteOperationResult(RemoteOperationResult.ResultCode.OK);
++        ArrayList<Object> data = new ArrayList<>();
++        JsonFile file = new JsonFile(REMOTE_PATH);
++        file.setETag(E_TAGC);
++        data.add(file);
++        result.setData(data);
++        when(cloudFavorites.uploadFavorite(any(Favorite.class), eq(ownCloudClient))).thenReturn(result);
++        when(localFavorites.updateFavorite(eq(favoriteId), any(SyncState.class)))
++                .thenReturn(Single.fromCallable(() -> 1));
++
++        syncAdapter.onPerformSync(null, null, null, null, null);
++        verify(cloudFavorites).uploadFavorite(eq(localFavorite), eq(ownCloudClient));
++        verify(localFavorites).updateFavorite(eq(favoriteId), syncStateCaptor.capture());
++        assertEquals(syncStateCaptor.getValue().isSynced(), true);
++        verify(syncNotifications, never()).sendSyncBroadcast(
++                any(String.class), any(String.class), any(String.class), any(int.class));
++        assertEquals(syncAdapter.getFavoriteFailsCount(), 0);
++    }
++
++    // Helpers
++
++    private void setLocalFavorites(LocalFavorites localFavorites, List<Favorite> favorites) {
++        when(localFavorites.getFavorites()).thenReturn(Observable.fromIterable(favorites));
++        Set<String> localFavoriteIds = favorites.stream()
++                .map(Favorite::getId).collect(Collectors.toSet());
++        when(localFavorites.getFavoriteIds()).thenReturn(Observable.fromIterable(localFavoriteIds));
++    }
++
++    private void setCloudFavorites(CloudFavorites cloudFavorites, List<Favorite> favorites) {
++        Map<String, String> cloudDataSourceMap = new HashMap<>(favorites.size());
++        for (Favorite favorite : favorites) {
++            cloudDataSourceMap.put(favorite.getId(), favorite.getETag());
++        }
++        when(cloudFavorites.getDataSourceMap(eq(ownCloudClient))).thenReturn(cloudDataSourceMap);
++    }
++
++    private List<Favorite> singletonList(Favorite favorite) {
++        return new ArrayList<>(Collections.singletonList(favorite));
++    }
++}
+\ No newline at end of file

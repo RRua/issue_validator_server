@@ -1,0 +1,2289 @@
+diff --git a/src/ch/bailu/aat/activities/AbsGpxListActivity.java b/src/ch/bailu/aat/activities/AbsGpxListActivity.java
+index e0a39d97..3083f4d6 100644
+--- a/src/ch/bailu/aat/activities/AbsGpxListActivity.java
++++ b/src/ch/bailu/aat/activities/AbsGpxListActivity.java
+@@ -21,9 +21,9 @@ import ch.bailu.aat.dispatcher.ContentSource;
+ import ch.bailu.aat.dispatcher.CurrentLocationSource;
+ import ch.bailu.aat.dispatcher.IteratorSource;
+ import ch.bailu.aat.dispatcher.OverlaySource;
+-import ch.bailu.aat.helpers.AppFile;
+ import ch.bailu.aat.helpers.AppTheme;
+ import ch.bailu.aat.helpers.FileAction;
++import ch.bailu.aat.helpers.file.FileIntent;
+ import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.preferences.SolidDirectory;
+ import ch.bailu.aat.services.directory.Iterator;
+@@ -251,7 +251,8 @@ public abstract class AbsGpxListActivity extends AbsDispatcher implements OnItem
+         } else if (v == prevView) {
+             multiView.setPrevious();
+         } else if (v == fileManager) {
+-            AppFile.viewDirectory(this, new File(sdirectory.getValue()));
++            File directory = new File(sdirectory.getValue()); 
++            new FileIntent(directory).view(this);
+         }
+ 
+     }
+diff --git a/src/ch/bailu/aat/activities/AbsOsmApiActivity.java b/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
+index 80bc9982..8903af3e 100644
+--- a/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
++++ b/src/ch/bailu/aat/activities/AbsOsmApiActivity.java
+@@ -8,6 +8,7 @@ import org.osmdroid.util.BoundingBoxE6;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
++import android.net.Uri;
+ import android.os.Bundle;
+ import android.view.View;
+ import android.view.View.OnClickListener;
+@@ -22,6 +23,7 @@ import ch.bailu.aat.dispatcher.CustomFileSource;
+ import ch.bailu.aat.helpers.AbsTextBackup;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDirectory;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.AppTheme;
+ import ch.bailu.aat.helpers.OsmApiHelper;
+@@ -40,34 +42,34 @@ import ch.bailu.aat.views.TagEditor;
+ 
+ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClickListener {
+     private static final String SOLID_KEY=AbsOsmApiActivity.class.getSimpleName();
+-    
++
+ 
+     private TagEditor          tagEditor;
+     private BusyButton         download;
+     private View               erase;
+     private View               saveCopy;
+     private View               addLayer;
+-    
++
+     private NodeListView       list;
+-    
++
+     private OsmApiHelper       osmApi;
+     private ProcessHandle      request=ProcessHandle.NULL;
+-    
++
+     private final LayoutParams layout= new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);;
+-    
+-    
++
++
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        
++
+         try {
+-            osmApi = createUrlGenerator(AppBroadcaster.getBoundingBox(getIntent()));
++            osmApi = createUrlGenerator(AppIntent.getBoundingBox(getIntent()));
+             AppBroadcaster.register(this, onFileDownloaded, AppBroadcaster.FILE_CHANGED_ONDISK);
+         } catch (Exception e) {
+             AppLog.e(this,e);
+         }
+         setContentView(createContentView());
+-        
++
+         ContentSource[] source = new ContentSource[] {
+                 new CustomFileSource(getServiceContext(),osmApi.getResultFile().toString()),};
+ 
+@@ -77,14 +79,47 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+ 
+         setDispatcher(new ContentDispatcher(this,source, target));
+ 
++        setQueryTextFromIntent();
+     }  
+ 
++    
++    private void setQueryTextFromIntent() {
++        String query = queryFromIntent(getIntent());
++        if (query != null) {
++            tagEditor.setText(query);
++        }
++    }
++
++
++    public static String queryFromIntent(Intent intent) {
++        Uri  uri = intent.getData();
++        if (uri != null) return queryFromUri(uri);
++        return null;
++    }
++
++
++    public static String queryFromUri(Uri uri) {
++
++        String query = uri.getEncodedQuery();
++        if (query != null) {
++            Uri n = Uri.parse("http://bailu.ch/query?"+uri.getEncodedQuery()); // we need a hierarchical url
++            String query_parameter = n.getQueryParameter("q");
++            if (query_parameter != null) {
++                query_parameter = query_parameter.replace('\n', ',');
++                return query_parameter;
++            }
++        }
++        return null;
++    }
++
++
++
+     private LinearLayout createContentView()  {
+         ContentView view = new ContentView(this);
+         ControlBar bar = createControlBar();
+         view.addView(bar, layout);        
+-        
+-        
++
++
+         TextView urlLabel = new TextView(this);
+         urlLabel.setText(osmApi.getUrlStart());
+         view.addView(urlLabel, layout);
+@@ -98,39 +133,39 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+         postLabel.setText(osmApi.getUrlEnd());
+         view.addView(postLabel, layout);
+         AppTheme.themify(postLabel);
+-        
++
+         list = new NodeListView(getServiceContext(),SOLID_KEY,
+                 INFO_ID_FILEVIEW);
+-        
+-        
++
++
+         view.addView(list,layout);
+ 
+         return view;
+     }
+ 
+-    
++
+     private ControlBar createControlBar() {
+         ControlBar bar = new MainControlBar(getServiceContext(),6);      
+-        
++
+         download = new BusyButton(this, R.drawable.go_bottom_inverse);
+-        
++
+         bar.addView(download);
+         download.setOnClickListener(this);
+-        
++
+         erase = bar.addImageButton(R.drawable.edit_clear_all_inverse);
+         addLayer = bar.addImageButton(R.drawable.view_paged_inverse);
+         saveCopy = bar.addImageButton(R.drawable.document_save_as_inverse);
+ 
+-        
++
+         ToolTip.set(download, R.string.tt_nominatim_query);
+         ToolTip.set(erase, R.string.tt_nominatim_clear);
+         ToolTip.set(addLayer, R.string.tt_nominatim_overlay);
+         ToolTip.set(saveCopy, R.string.tt_nominatim_save);
+-    
++
+         addButtons(bar);
+ 
+         bar.setOnClickListener1(this);
+-        
++
+ 
+         return bar;
+     }
+@@ -154,7 +189,7 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+             new AddOverlayDialog(this,osmApi.getResultFile());
+         }
+ 
+-        
++
+     }
+ 
+ 
+@@ -167,13 +202,13 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+ 
+             request.stopLoading();
+             download.startWaiting();
+-            
++
+             request = new ApiQueryHandle(
+                     osmApi.getUrl(query), 
+                     osmApi.getResultFile(), 
+                     query, 
+                     osmApi.getQueryFile());
+-            
++
+             background.download(request);
+ 
+         } catch (Exception e) {
+@@ -189,14 +224,14 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+     private final BroadcastReceiver  onFileDownloaded = new BroadcastReceiver () {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            if (AppBroadcaster.hasUrl(intent, request.toString())) {
++            if (AppIntent.hasUrl(intent, request.toString())) {
+                 download.stopWaiting();
+                 request = ProcessHandle.NULL;
+             }
+         }
+     };
+ 
+-    
++
+     private void saveCopy() {
+         try {
+             final File source = osmApi.getResultFile();
+@@ -208,23 +243,23 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+                     AppBroadcaster.FILE_CHANGED_ONDISK, 
+                     target.toString(), 
+                     source.toString());
+-            
++
+         } catch (IOException e) {
+             AppLog.e(this, e);
+         }
+     }
+-    
++
+ 
+     private File getOverlayFile() throws IOException {
+         final String query = AbsTextBackup.read(osmApi.getQueryFile());
+         final String prefix = OsmApiHelper.getFilePrefix(query);
+         final String extension = osmApi.getFileExtension();
+         final File directory = AppDirectory.getDataDirectory(this, AppDirectory.DIR_OVERLAY);
+-        
++
+         return AppDirectory.generateUniqueFilePath(directory, prefix, extension);
+     }
+-    
+-    
++
++
+ 
+ 
+     @Override
+@@ -232,18 +267,18 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+         unregisterReceiver(onFileDownloaded);
+         super.onDestroy();
+     }
+-    
+-    
++
++
+     private static class ApiQueryHandle extends DownloadHandle {
+         private final String queryString;
+         private final File queryFile;
+-        
++
+         public ApiQueryHandle(String source, File target, String qs, File qf) {
+             super(source, target);
+             queryString = qs;
+             queryFile   = qf;
+         }
+-        
++
+         @Override
+         public long bgOnProcess() {
+             long r=super.bgOnProcess();
+@@ -254,11 +289,11 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+                     e.printStackTrace();
+                 }
+             }
+-            
++
+             return r;
+         }
+     }
+-    
++
+     @Override
+     public void onServicesUp(boolean firstRun) {}
+ 
+diff --git a/src/ch/bailu/aat/activities/ActivitySwitcher.java b/src/ch/bailu/aat/activities/ActivitySwitcher.java
+index 349abf21..9998f420 100644
+--- a/src/ch/bailu/aat/activities/ActivitySwitcher.java
++++ b/src/ch/bailu/aat/activities/ActivitySwitcher.java
+@@ -7,8 +7,8 @@ import org.osmdroid.util.BoundingBoxE6;
+ import android.app.Activity;
+ import android.content.Context;
+ import android.content.Intent;
+-import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.R;
++import ch.bailu.aat.helpers.AppIntent;
+ 
+ public class ActivitySwitcher {
+     public final static ActivitySwitcher list[] = {
+@@ -53,7 +53,7 @@ public class ActivitySwitcher {
+     public static void start(Context context, Class<?> activityClass, String string) {
+         Intent intent = new Intent();
+ 
+-        AppBroadcaster.setFile(intent, string);
++        AppIntent.setFile(intent, string);
+         start(context, activityClass, intent);
+     }
+ 
+@@ -63,19 +63,12 @@ public class ActivitySwitcher {
+     public static void start(Context context, Class<?> activityClass, File file) {
+         Intent intent = new Intent();
+ 
+-        AppBroadcaster.setFile(intent, file.getAbsolutePath());
++        AppIntent.setFile(intent, file.getAbsolutePath());
+         start(context, activityClass, intent);
+     }
+ 
+ 
+-    public static void start(Context context, Class<?> activityClass, BoundingBoxE6 box) {
+-        Intent intent = new Intent();
+-        
+-        AppBroadcaster.setBoundingBox(intent, box);
+-        start(context, activityClass, intent);
+-    }
+-    
+-    
++
+     
+     public static void start(Context context, Class<?> activityClass, Intent intent) {
+         intent.setClass(context, activityClass); 
+@@ -98,4 +91,12 @@ public class ActivitySwitcher {
+             }
+         }
+     }
++
++    public static void start(Context context, Class<?> a, BoundingBoxE6 box) {
++        Intent intent = new Intent();
++        AppIntent.setBoundingBox(intent, box);
++        start(context, a, intent);
++        
++    }
++
+ }
+diff --git a/src/ch/bailu/aat/activities/GpxViewActivity.java b/src/ch/bailu/aat/activities/GpxViewActivity.java
+index 7009adfa..c7c272fa 100644
+--- a/src/ch/bailu/aat/activities/GpxViewActivity.java
++++ b/src/ch/bailu/aat/activities/GpxViewActivity.java
+@@ -31,6 +31,7 @@ import ch.bailu.aat.dispatcher.OverlaySource;
+ import ch.bailu.aat.dispatcher.TrackerSource;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.helpers.AppLayout;
++import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.FileAction;
+ import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.views.BusyButton;
+@@ -85,14 +86,13 @@ public class GpxViewActivity extends AbsDispatcher implements OnClickListener {
+         
+         if (uri != null) {
+             fileID = uri.getEncodedPath();
+-            
++            AppLog.d(this, uri.toString());
+             contentView = new ContentView(this);
+             contentView.addView(createButtonBar());
+             multiView = createMultiView();
+             contentView.addView(multiView);
+             setContentView(contentView);
+             createDispatcher();
+-            
+         }
+         
+         
+diff --git a/src/ch/bailu/aat/activities/HtmlViewActivity.java b/src/ch/bailu/aat/activities/HtmlViewActivity.java
+index 2b8e192c..89be1fe6 100644
+--- a/src/ch/bailu/aat/activities/HtmlViewActivity.java
++++ b/src/ch/bailu/aat/activities/HtmlViewActivity.java
+@@ -1,8 +1,8 @@
+ package ch.bailu.aat.activities;
+ 
+-import ch.bailu.aat.helpers.AppBroadcaster;
+ import android.content.Intent;
+ import android.os.Bundle;
++import ch.bailu.aat.helpers.AppIntent;
+ 
+ public class HtmlViewActivity extends AbsHtmlViewActivity {
+ 
+@@ -17,7 +17,7 @@ public class HtmlViewActivity extends AbsHtmlViewActivity {
+     @Override
+     public String getText() {
+         Intent intent = getIntent();
+-        return AppBroadcaster.getFile(intent);
++        return AppIntent.getFile(intent);
+     }
+ 
+     
+diff --git a/src/ch/bailu/aat/activities/MainActivity.java b/src/ch/bailu/aat/activities/MainActivity.java
+index 9ce7b10f..95d3b5f9 100644
+--- a/src/ch/bailu/aat/activities/MainActivity.java
++++ b/src/ch/bailu/aat/activities/MainActivity.java
+@@ -54,6 +54,7 @@ implements AdapterView.OnItemSelectedListener, OnSharedPreferenceChangeListener
+         createViews();
+         createDispatcher();
+ 
++        
+     }
+ 
+ 
+diff --git a/src/ch/bailu/aat/activities/MapActivity.java b/src/ch/bailu/aat/activities/MapActivity.java
+index 712109d6..1f3933cc 100644
+--- a/src/ch/bailu/aat/activities/MapActivity.java
++++ b/src/ch/bailu/aat/activities/MapActivity.java
+@@ -1,6 +1,7 @@
+ package ch.bailu.aat.activities;
+ 
+ 
++import org.osmdroid.util.BoundingBoxE6;
+ import org.osmdroid.util.GeoPoint;
+ 
+ import android.content.Intent;
+@@ -20,6 +21,8 @@ import ch.bailu.aat.dispatcher.EditorSource;
+ import ch.bailu.aat.dispatcher.OverlaySource;
+ import ch.bailu.aat.dispatcher.TrackerSource;
+ import ch.bailu.aat.gpx.GpxInformation;
++import ch.bailu.aat.helpers.AppIntent;
++import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.editor.EditorHelper;
+ import ch.bailu.aat.views.ContentView;
+@@ -65,24 +68,42 @@ public class MapActivity extends AbsDispatcher implements OnClickListener{
+         createDispatcher();
+         
+         
+-        setMapCenterFromIntent();
++        handleIntent();
+     }
+ 
+ 
+-    private void setMapCenterFromIntent() {
++    private void handleIntent() {
+         Intent intent = getIntent();
+         Uri uri = intent.getData();
+         
+         if (intent.getAction()==Intent.ACTION_VIEW && uri != null) {
+-            GeoPoint geo = new GeoPoint(0,0);
+-            
+-            if (Coordinates.stringToGeoPoint(uri.toString(), geo)) {
+-                map.map.getController().setCenter(geo);
+-            }
++            AppLog.d(uri, uri.toString());
++            setMapCenterFromUri(uri);
++            openQueryFromUri(uri);
+         }
+     }
+ 
++    private void setMapCenterFromUri(Uri uri) {
++        GeoPoint geo = new GeoPoint(0,0);
++        
++        if (Coordinates.stringToGeoPoint(uri.toString(), geo)) {
++            map.map.getController().setCenter(geo);
++        }
++    }
+ 
++    
++    private void openQueryFromUri(Uri uri) {
++        String query = AbsOsmApiActivity.queryFromUri(uri);
++
++        if (query != null) {
++            Intent intent = new Intent();
++            AppIntent.setBoundingBox(intent, new BoundingBoxE6(0,0,0,0));
++            intent.setData(uri);
++            ActivitySwitcher.start(this, NominatimActivity.class, intent);
++        }
++    }
++    
++    
+     private OsmInteractiveView createMap() {
+         final ServiceContext sc=getServiceContext();
+         final OsmInteractiveView map=new OsmInteractiveView(sc, SOLID_KEY);
+diff --git a/src/ch/bailu/aat/activities/MapFeatureListActivity.java b/src/ch/bailu/aat/activities/MapFeatureListActivity.java
+index 5d4c8061..05dff870 100644
+--- a/src/ch/bailu/aat/activities/MapFeatureListActivity.java
++++ b/src/ch/bailu/aat/activities/MapFeatureListActivity.java
+@@ -4,7 +4,8 @@ import java.io.File;
+ 
+ import android.content.Intent;
+ import android.os.Bundle;
+-import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.views.FeaturesList;
+ 
+ public class MapFeatureListActivity extends AbsDispatcher {
+@@ -13,8 +14,6 @@ public class MapFeatureListActivity extends AbsDispatcher {
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        
+-        
+ 
+ 
+     }
+@@ -23,9 +22,9 @@ public class MapFeatureListActivity extends AbsDispatcher {
+     @Override
+     public void onServicesUp(boolean firstRun) {
+         final Intent intent = getIntent();
+-        final String file = AppBroadcaster.getFile(intent);
++        final String file = AppIntent.getFile(intent);
+         
+-        list = new FeaturesList(getServiceContext(), new File(file));
++        list = new FeaturesList(getServiceContext(), new FileAccess(new File(file)));
+         setContentView(list);
+ 
+     }
+diff --git a/src/ch/bailu/aat/activities/MapFeaturesActivity.java b/src/ch/bailu/aat/activities/MapFeaturesActivity.java
+index 33edc8b8..37203ef8 100644
+--- a/src/ch/bailu/aat/activities/MapFeaturesActivity.java
++++ b/src/ch/bailu/aat/activities/MapFeaturesActivity.java
+@@ -10,6 +10,7 @@ import ch.bailu.aat.R;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDialog;
+ import ch.bailu.aat.helpers.AppDirectory;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.AppTheme;
+ import ch.bailu.aat.helpers.ToolTip;
+@@ -93,7 +94,7 @@ public class MapFeaturesActivity extends AbsDispatcher implements OnClickListene
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             try {
+-                if (AppBroadcaster.hasFile(intent, AppDirectory.getMapFeatureIndex(context).toString())) {
++                if (AppIntent.hasFile(intent, AppDirectory.getMapFeatureIndex(context).toString())) {
+                     download.stopWaiting();
+                     list.loadList();
+                 }
+diff --git a/src/ch/bailu/aat/coordinates/Coordinates.java b/src/ch/bailu/aat/coordinates/Coordinates.java
+index 83891515..ae41e1ec 100644
+--- a/src/ch/bailu/aat/coordinates/Coordinates.java
++++ b/src/ch/bailu/aat/coordinates/Coordinates.java
+@@ -10,22 +10,23 @@ public abstract class Coordinates {
+     public static boolean stringToGeoPoint(String src, GeoPoint dst) {
+         String[] parts = src.split("[:,?#]");
+ 
+-        int c=0;
++        int hit=0;
+ 
+         double la=0, lo;
+-        for (int x = 0; x < parts.length; x++) {
++        for (int x = 0; x < parts.length && hit < 2; x++) {
+             try {
+                 final double d = Double.parseDouble(parts[x]);
+-                c++;
++                hit++;
+ 
+-                if (c==1) {
++                if (hit==1) {
+                     la = d;
+-                } else if (c==2) {
++                } else if (hit==2) {
+                     lo = d;
+-
+-                    dst.setLatitudeE6((int)(la*1E6));
+-                    dst.setLongitudeE6((int)(lo*1E6));
+-                    return true;
++                    if (lo != 0d && la !=0d) {
++                        dst.setLatitudeE6((int)(la*1E6));
++                        dst.setLongitudeE6((int)(lo*1E6));
++                        return true;
++                    }
+                 }
+ 
+             } catch (NumberFormatException  e) {
+@@ -38,23 +39,23 @@ public abstract class Coordinates {
+ 
+     public static String geoPointToGeoUri(IGeoPoint src) {
+         StringBuilder b = new StringBuilder();
+-        
++
+         b.append("geo:");
+         b.append(src.getLatitudeE6()/1e6d);
+         b.append(',');
+         b.append(src.getLongitudeE6()/1e6d);
+-        
++
+         return b.toString();
+     }
+ 
+ 
+     public static String geoPointToDescription(GeoPoint src) {
+         StringBuilder b = new StringBuilder();
+-        
++
+         b.append("Coordinates:\nLatitude:");
+         b.append(src.getLatitudeE6()/1e6d);
+         b.append("Longitude:");
+         b.append(src.getLongitudeE6()/1e6d);
+-        
++
+         return b.toString();    }
+ }
+diff --git a/src/ch/bailu/aat/dispatcher/CustomFileSource.java b/src/ch/bailu/aat/dispatcher/CustomFileSource.java
+index e5b58813..8bc9c517 100644
+--- a/src/ch/bailu/aat/dispatcher/CustomFileSource.java
++++ b/src/ch/bailu/aat/dispatcher/CustomFileSource.java
+@@ -7,6 +7,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import ch.bailu.aat.gpx.GpxFileWrapper;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.cache.GpxObject;
+ import ch.bailu.aat.services.cache.GpxObjectStatic;
+@@ -20,7 +21,7 @@ public class CustomFileSource extends ContentSource {
+     private final BroadcastReceiver  onChangedInCache = new BroadcastReceiver () {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            if (AppBroadcaster.hasFile(intent, handle.toString())) {
++            if (AppIntent.hasFile(intent, handle.toString())) {
+                 forceUpdate();
+             }
+         }
+diff --git a/src/ch/bailu/aat/dispatcher/EditorSource.java b/src/ch/bailu/aat/dispatcher/EditorSource.java
+index cbeeb282..6ede3ae2 100644
+--- a/src/ch/bailu/aat/dispatcher/EditorSource.java
++++ b/src/ch/bailu/aat/dispatcher/EditorSource.java
+@@ -5,6 +5,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.editor.EditorHelper;
+ 
+@@ -23,7 +24,7 @@ public class EditorSource extends ContentSource {
+         private void update(Intent intent, GpxInformation info) {
+             String id=info.getPath();
+             
+-            if (AppBroadcaster.hasFile(intent, id)) {
++            if (AppIntent.hasFile(intent, id)) {
+                 forceUpdate();
+             }
+         }
+diff --git a/src/ch/bailu/aat/dispatcher/IteratorSource.java b/src/ch/bailu/aat/dispatcher/IteratorSource.java
+index f3f9fd1c..675895b7 100644
+--- a/src/ch/bailu/aat/dispatcher/IteratorSource.java
++++ b/src/ch/bailu/aat/dispatcher/IteratorSource.java
+@@ -6,6 +6,7 @@ import android.content.Intent;
+ import ch.bailu.aat.activities.AbsServiceLink;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.FileAction;
+ import ch.bailu.aat.preferences.SolidDirectory;
+@@ -107,7 +108,7 @@ public abstract class IteratorSource extends ContentSource implements OnCursorCh
+         private final BroadcastReceiver  onChangedInCache = new BroadcastReceiver () {
+             @Override
+             public void onReceive(Context context, Intent intent) {
+-                if (AppBroadcaster.hasFile(intent, getInfo().getPath())) {
++                if (AppIntent.hasFile(intent, getInfo().getPath())) {
+                     forceUpdate();
+                 }
+             }
+diff --git a/src/ch/bailu/aat/dispatcher/OverlaySource.java b/src/ch/bailu/aat/dispatcher/OverlaySource.java
+index a1965081..70607089 100644
+--- a/src/ch/bailu/aat/dispatcher/OverlaySource.java
++++ b/src/ch/bailu/aat/dispatcher/OverlaySource.java
+@@ -12,6 +12,7 @@ import ch.bailu.aat.coordinates.BoundingBox;
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.gpx.GpxList;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.preferences.SolidOverlayFile;
+ import ch.bailu.aat.preferences.SolidOverlayFileList;
+ import ch.bailu.aat.services.ServiceContext;
+@@ -83,7 +84,7 @@ public class OverlaySource extends ContentSource implements GpxInformation.ID {
+         private final BroadcastReceiver  onFileProcessed = new BroadcastReceiver () {
+             @Override
+             public void onReceive(Context context, Intent intent) {
+-                if (AppBroadcaster.hasFile(intent, handle.toString())) {
++                if (AppIntent.hasFile(intent, handle.toString())) {
+                     initAndUpdateOverlay();
+                 }
+             }
+diff --git a/src/ch/bailu/aat/gpx/parser/GpxListReader.java b/src/ch/bailu/aat/gpx/parser/GpxListReader.java
+index ec969ab7..58b1695e 100644
+--- a/src/ch/bailu/aat/gpx/parser/GpxListReader.java
++++ b/src/ch/bailu/aat/gpx/parser/GpxListReader.java
+@@ -1,11 +1,11 @@
+ package ch.bailu.aat.gpx.parser;
+ 
+-import java.io.File;
+ import java.io.IOException;
+ 
+ import ch.bailu.aat.gpx.GpxBigDelta;
+ import ch.bailu.aat.gpx.GpxList;
+ import ch.bailu.aat.gpx.GpxPoint;
++import ch.bailu.aat.helpers.file.AbsContentAccess;
+ import ch.bailu.aat.services.background.ThreadControl;
+ 
+ public class GpxListReader {
+@@ -20,7 +20,7 @@ public class GpxListReader {
+     
+     private XmlParser parser;
+ 
+-    public GpxListReader (ThreadControl c, File f) throws IOException {
++    public GpxListReader (ThreadControl c, AbsContentAccess f) throws IOException {
+         threadControl=c;
+ 
+         parser = new XmlParser(f);
+diff --git a/src/ch/bailu/aat/gpx/parser/SimpleGpxListReader.java b/src/ch/bailu/aat/gpx/parser/SimpleGpxListReader.java
+index 39191e1e..ba1d25d4 100644
+--- a/src/ch/bailu/aat/gpx/parser/SimpleGpxListReader.java
++++ b/src/ch/bailu/aat/gpx/parser/SimpleGpxListReader.java
+@@ -1,8 +1,8 @@
+ package ch.bailu.aat.gpx.parser;
+ 
+-import java.io.File;
+ import java.io.IOException;
+ 
++import ch.bailu.aat.helpers.file.AbsContentAccess;
+ import ch.bailu.aat.services.background.ThreadControl;
+ 
+ 
+@@ -16,7 +16,7 @@ public class SimpleGpxListReader extends GpxListReader {
+     };
+ 
+ 
+-    public SimpleGpxListReader(File f) throws IOException {
++    public SimpleGpxListReader(AbsContentAccess f) throws IOException {
+         super(tc, f);
+     }
+ }
+diff --git a/src/ch/bailu/aat/gpx/parser/SimpleStream.java b/src/ch/bailu/aat/gpx/parser/SimpleStream.java
+index d8b23f75..ec13730e 100644
+--- a/src/ch/bailu/aat/gpx/parser/SimpleStream.java
++++ b/src/ch/bailu/aat/gpx/parser/SimpleStream.java
+@@ -1,8 +1,6 @@
+ package ch.bailu.aat.gpx.parser;
+ import java.io.BufferedReader;
+ import java.io.Closeable;
+-import java.io.File;
+-import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
+ import java.io.InputStream;
+@@ -12,6 +10,7 @@ import java.io.StringReader;
+ import java.io.UnsupportedEncodingException;
+ 
+ import ch.bailu.aat.helpers.AppLog;
++import ch.bailu.aat.helpers.file.AbsContentAccess;
+ 
+ 
+ public class SimpleStream implements Closeable {
+@@ -22,10 +21,10 @@ public class SimpleStream implements Closeable {
+     private final Reader reader;
+     private int c=0;
+ 
+-    public SimpleStream(File file) throws FileNotFoundException, UnsupportedEncodingException {
++    public SimpleStream(AbsContentAccess file) throws FileNotFoundException, UnsupportedEncodingException {
+         
+         
+-        InputStream istream = new FileInputStream(file);
++        InputStream istream = file.open_r();//new FileInputStream(file);
+         Reader ireader = new InputStreamReader(istream, CHARSET);
+         reader = new BufferedReader(ireader, BUFFER_BYTES);            
+     }
+diff --git a/src/ch/bailu/aat/gpx/parser/XmlParser.java b/src/ch/bailu/aat/gpx/parser/XmlParser.java
+index c4fc1ab4..dc9792dd 100644
+--- a/src/ch/bailu/aat/gpx/parser/XmlParser.java
++++ b/src/ch/bailu/aat/gpx/parser/XmlParser.java
+@@ -1,7 +1,6 @@
+ package ch.bailu.aat.gpx.parser;
+ 
+ import java.io.Closeable;
+-import java.io.File;
+ import java.io.IOException;
+ import java.util.ArrayList;
+ 
+@@ -11,6 +10,7 @@ import android.util.SparseArray;
+ import ch.bailu.aat.gpx.GpxAttributes;
+ import ch.bailu.aat.gpx.GpxAttributes.Tag;
+ import ch.bailu.aat.gpx.interfaces.GpxPointInterface;
++import ch.bailu.aat.helpers.file.AbsContentAccess;
+ 
+ public class XmlParser implements Closeable, GpxPointInterface {
+ 
+@@ -35,7 +35,7 @@ public class XmlParser implements Closeable, GpxPointInterface {
+         public final SparseArray<GeoPoint> nodeMap = new SparseArray<GeoPoint>(50);
+         public final ArrayList<GpxAttributes.Tag> tagList = new ArrayList<GpxAttributes.Tag>();
+         
+-        private ParserIO(File file) throws IOException {
++        private ParserIO(AbsContentAccess file) throws IOException {
+             stream = new SimpleStream(file);
+ 
+             latitude = new DoubleParser(stream,6);
+@@ -46,7 +46,7 @@ public class XmlParser implements Closeable, GpxPointInterface {
+         }
+     }
+ 
+-    public XmlParser(File file) throws IOException {
++    public XmlParser(AbsContentAccess file) throws IOException {
+         io = new ParserIO(file);
+     }
+ 
+diff --git a/src/ch/bailu/aat/helpers/AbsTextBackup.java b/src/ch/bailu/aat/helpers/AbsTextBackup.java
+index d6816f75..bb4abbeb 100644
+--- a/src/ch/bailu/aat/helpers/AbsTextBackup.java
++++ b/src/ch/bailu/aat/helpers/AbsTextBackup.java
+@@ -6,6 +6,7 @@ import java.io.IOException;
+ import java.io.OutputStreamWriter;
+ 
+ import ch.bailu.aat.gpx.parser.SimpleStream;
++import ch.bailu.aat.helpers.file.FileAccess;
+ 
+ public abstract class AbsTextBackup  {
+ 
+@@ -75,7 +76,7 @@ public abstract class AbsTextBackup  {
+ 
+ 
+         private void readToBuffer(StringBuilder buffer) throws IOException  {
+-            SimpleStream stream = new SimpleStream(file);
++            SimpleStream stream = new SimpleStream(new FileAccess(file));
+ 
+             int count = MAX_FILE_SIZE;
+ 
+diff --git a/src/ch/bailu/aat/helpers/AppBroadcaster.java b/src/ch/bailu/aat/helpers/AppBroadcaster.java
+index 6fc19b60..c67ac0a3 100644
+--- a/src/ch/bailu/aat/helpers/AppBroadcaster.java
++++ b/src/ch/bailu/aat/helpers/AppBroadcaster.java
+@@ -1,17 +1,11 @@
+ package ch.bailu.aat.helpers;
+ 
+-import org.osmdroid.util.BoundingBoxE6;
+-
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ 
+ public class AppBroadcaster {
+-    private static final String EXTRA_FILE="file";
+-    private static final String EXTRA_URL="source";
+-    
+-    private static final String EXTRA_ID="id";
+     public static final String NAME_SPACE="ch.bailu.aat.";
+ 
+ 
+@@ -73,23 +67,13 @@ public class AppBroadcaster {
+     }
+ 
+ 
+-    public static void broadcast(Context context, String action, int id) {
+-        Intent intent = new Intent();
+-        intent.setAction(action);
+-
+-        intent.putExtra(EXTRA_ID, id);
+-
+-        context.sendBroadcast(intent);
+-    }
+-
+-
++ 
+     public static void broadcast(Context context, String action, String file) {
+         
+         Intent intent = new Intent();
+         intent.setAction(action);
+ 
+-        intent.putExtra(EXTRA_FILE, file);
+-        
++        AppIntent.setFile(intent, file);
+         context.sendBroadcast(intent);
+     }
+ 
+@@ -99,62 +83,14 @@ public class AppBroadcaster {
+         Intent intent = new Intent();
+         intent.setAction(action);
+ 
+-        intent.putExtra(EXTRA_FILE, file);
+-        intent.putExtra(EXTRA_URL, url);
++        AppIntent.setFile(intent, file);
++        AppIntent.setUrl(intent, url);
+         
+         context.sendBroadcast(intent);
+     }
+     
+  
+-    /*
+-    public static void setSource(Intent intent, String source) {
+-        intent.putExtra(EXTRA_SOURCE, source);
+-    }
+-    */
+-    public static boolean hasUrl(Intent intent, String url) {
+-        return intent.getStringExtra(EXTRA_URL).equals(url);
+-    }
+-    
+-    
+-    public static String getUrl(Intent intent) {
+-        return intent.getStringExtra(EXTRA_URL);
+-    }
+-    public static void setFile(Intent intent, String file) {
+-        intent.putExtra(EXTRA_FILE, file);
+-    }
+-    
+-    public static String getFile(Intent intent) {
+-        return intent.getStringExtra(EXTRA_FILE);
+-    }
+-    
+-    public static boolean hasFile(Intent intent, String file) {
+-        return intent.getStringExtra(EXTRA_FILE).equals(file);
+-    }
+-    
+-    
+-    public static int getExtraID(Intent intent) {
+-        return intent.getIntExtra(EXTRA_ID, -1);
+-    }
+-
+-    
+-    
+ 
+-    public static void setBoundingBox(Intent intent, BoundingBoxE6 box) {
+-        intent.putExtra("N", box.getLatNorthE6());
+-        intent.putExtra("E", box.getLonEastE6());
+-        intent.putExtra("S", box.getLatSouthE6());
+-        intent.putExtra("W", box.getLonWestE6());
+-        
+-    }
+-    
+-    public static BoundingBoxE6 getBoundingBox(Intent intent) {
+-        return new BoundingBoxE6(
+-                intent.getIntExtra("N",0),
+-                intent.getIntExtra("E",0),
+-                intent.getIntExtra("S",0),
+-                intent.getIntExtra("W",0)
+-                );
+-    }
+ 
+     
+ }
+diff --git a/src/ch/bailu/aat/helpers/AppFile.java b/src/ch/bailu/aat/helpers/AppFile.java
+deleted file mode 100644
+index 80bbaaf8..00000000
+--- a/src/ch/bailu/aat/helpers/AppFile.java
++++ /dev/null
+@@ -1,176 +0,0 @@
+-package ch.bailu.aat.helpers;
+-
+-import java.io.Closeable;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.OutputStream;
+-import java.nio.MappedByteBuffer;
+-import java.nio.channels.FileChannel;
+-import java.nio.charset.Charset;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-import android.net.Uri;
+-
+-public class AppFile {
+-    public static final File NULL_FILE = new File("/dev/null");;
+-
+-    public static String contentToString(File file) throws IOException {
+-        FileInputStream stream = new FileInputStream(file);
+-
+-        try {
+-            FileChannel channel = stream.getChannel();
+-            MappedByteBuffer map = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
+-
+-            return Charset.defaultCharset().decode(map).toString();
+-
+-        } finally {
+-            stream.close();
+-
+-        }
+-    }
+-
+-
+-    public static void viewDirectory(Context context, File directory) {
+-        if (directory.exists()) {  // this works (only?) with OI Filemanager
+-            final Intent intent = new Intent(Intent.ACTION_VIEW);
+-            final Uri uri = Uri.fromFile(directory);
+-            intent.setData(uri);
+-            context.startActivity(Intent.createChooser(intent, directory.toString()));
+-        }
+-    }
+-    
+-    public static void view(Context context, File file) {
+-        viewPrivateFile(context, file);
+-    }
+-
+-    
+-    public static void viewFile(Context context, File file) {
+-        final Uri uri = Uri.fromFile(file);
+-        final Intent intent = new Intent(Intent.ACTION_VIEW);
+-        
+-        intent.setDataAndType(uri, "application/gpx+xml");
+-        context.startActivity(Intent.createChooser(intent , file.getName()));
+-    }
+-    
+-    public static void viewPrivateFile(Context context, File file) {
+-        final Uri uri = Uri.parse("content://ch.bailu.aat.gpx" + file.getAbsolutePath());
+-        final Intent intent = new Intent(Intent.ACTION_VIEW);
+-        
+-        intent.setDataAndType(uri, "text/plain");
+-        context.startActivity(Intent.createChooser(intent , file.getName()));
+-    }
+-    
+-    
+-    
+-
+-    public static void send(Context context, File file) {
+-        sendAsExtraStream(context, file);
+-    }
+-    
+-
+-    public static void sendAsExtraStream(Context context, File file) {
+-        /**
+-         * This is the correct implementation for sending one file as an e-mail attachment.
+-         * It does, however, not work with private files.
+-         * 
+-         */
+-        final Uri uri = Uri.fromFile(file);
+-        final Intent intent = new Intent(Intent.ACTION_SEND);
+-
+-        intent.putExtra(Intent.EXTRA_SUBJECT, file.getName());
+-        intent.putExtra(Intent.EXTRA_TEXT, file.getAbsolutePath());
+-        intent.setType("application/gpx+xml");
+-        intent.putExtra(Intent.EXTRA_STREAM, uri);
+-
+-        context.startActivity(Intent.createChooser(intent , file.getName()));
+-    }
+-
+-
+-    
+-    public static void sendAsPrivateData(Context context, File file) {
+-        /**
+-         * Does not work with Android/Google e-mail client. They call query(...) on the ContentProvider.
+-         */
+-        final Uri uri = Uri.parse("content://ch.bailu.aat.gpx" + file.getAbsolutePath());
+-        
+-        AppLog.d(uri, uri.toString());
+-        final Intent intent = new Intent(Intent.ACTION_SEND);
+-        
+-        intent.putExtra(Intent.EXTRA_SUBJECT, file.getName());
+-        intent.putExtra(Intent.EXTRA_TEXT, file.getAbsolutePath());
+-        intent.setType("application/gpx+xml");
+-        intent.putExtra(Intent.EXTRA_STREAM, uri);
+-        context.startActivity(Intent.createChooser(intent , file.getName()));
+-    }
+-    
+-    
+-    public static void copy(Context context, Uri uri, File target) throws Exception {
+-        InputStream is = null;
+-        OutputStream os = null;
+-
+-        try {
+-
+-            is = context.getContentResolver().openInputStream(uri);
+-            os = new FileOutputStream(target);
+-            copy(is, os);
+-            os.close();
+-            is.close();
+-        } catch (Exception e) {
+-            closeStream(is);
+-            closeStream(os);
+-            throw e;
+-        }
+-    }
+-
+-    public static void copy(File source, File target) throws Exception {
+-        InputStream is = null;
+-        OutputStream os = null;
+-
+-        try {
+-            is = new FileInputStream(source);
+-            os = new FileOutputStream(target);
+-            copy(is, os);
+-            os.close();
+-            is.close();
+-        } catch (Exception e) {
+-            closeStream(is);
+-            closeStream(os);
+-            throw e;
+-        }
+-    }
+-
+-    private static void closeStream(Closeable c) {
+-        try {
+-            if (c != null) c.close();
+-        } catch (IOException e) {}
+-    }
+-
+-    public static void copy(InputStream is, OutputStream os) throws IOException {
+-        byte[] buffer = new byte[4096];
+-        int count;
+-        while ((count = is.read(buffer)) > 0) {
+-            os.write(buffer, 0, count);
+-        }
+-    }
+-
+-    
+-    public static void copyTo(Context context, File file) throws IOException {
+-        new AppSelectDirectoryDialog(context, file);
+-    }
+-
+-    public static void copyTo(Context context, File file, File targetDir) throws Exception {
+-        final File target = new File(targetDir, file.getName());
+-
+-        if (target.exists()) {
+-            AppLog.e(context, target.toString() + " allready exists.*");
+-        } else {
+-            copy(file, target);
+-            AppLog.i(context, target.getAbsolutePath());
+-        }
+-
+-    }
+-}
+diff --git a/src/ch/bailu/aat/helpers/AppIntent.java b/src/ch/bailu/aat/helpers/AppIntent.java
+new file mode 100644
+index 00000000..59a7287d
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/AppIntent.java
+@@ -0,0 +1,61 @@
++package ch.bailu.aat.helpers;
++
++import org.osmdroid.util.BoundingBoxE6;
++
++import android.content.Intent;
++
++public class AppIntent {
++    private static final String EXTRA_FILE="file";
++    private static final String EXTRA_URL="source";
++
++    
++    
++    public static void setUrl(Intent intent, String url) {
++        intent.putExtra(EXTRA_URL, url);
++    }
++
++    public static boolean hasUrl(Intent intent, String url) {
++        return intent.getStringExtra(EXTRA_URL).equals(url);
++    }
++
++
++    public static String getUrl(Intent intent) {
++        return intent.getStringExtra(EXTRA_URL);
++    }
++    public static void setFile(Intent intent, String file) {
++        intent.putExtra(EXTRA_FILE, file);
++    }
++
++    public static String getFile(Intent intent) {
++        return intent.getStringExtra(EXTRA_FILE);
++    }
++
++    public static boolean hasFile(Intent intent, String file) {
++        return intent.getStringExtra(EXTRA_FILE).equals(file);
++    }
++
++
++
++
++
++
++    public static void setBoundingBox(Intent intent, BoundingBoxE6 box) {
++        intent.putExtra("N", box.getLatNorthE6());
++        intent.putExtra("E", box.getLonEastE6());
++        intent.putExtra("S", box.getLatSouthE6());
++        intent.putExtra("W", box.getLonWestE6());
++
++    }
++
++    public static BoundingBoxE6 getBoundingBox(Intent intent) {
++        return new BoundingBoxE6(
++                intent.getIntExtra("N",0),
++                intent.getIntExtra("E",0),
++                intent.getIntExtra("S",0),
++                intent.getIntExtra("W",0)
++                );
++    }
++
++
++
++}
+diff --git a/src/ch/bailu/aat/helpers/AppSelectDirectoryDialog.java b/src/ch/bailu/aat/helpers/AppSelectDirectoryDialog.java
+index 7e236ebd..91fa2937 100644
+--- a/src/ch/bailu/aat/helpers/AppSelectDirectoryDialog.java
++++ b/src/ch/bailu/aat/helpers/AppSelectDirectoryDialog.java
+@@ -3,11 +3,11 @@ package ch.bailu.aat.helpers;
+ import java.io.File;
+ import java.io.IOException;
+ 
+-import ch.bailu.aat.R;
+-
+ import android.app.AlertDialog;
+ import android.content.Context;
+ import android.content.DialogInterface;
++import ch.bailu.aat.R;
++import ch.bailu.aat.helpers.file.FileUI;
+ 
+ public class AppSelectDirectoryDialog  implements  DialogInterface.OnClickListener {
+     private final File file;
+@@ -47,7 +47,7 @@ public class AppSelectDirectoryDialog  implements  DialogInterface.OnClickListen
+     @Override
+     public void onClick(DialogInterface dialog, int i) {
+         try {
+-            AppFile.copyTo(context, file, directories[i]);
++            new FileUI(file).copyTo(context, directories[i]);
+         } catch (Exception e) {
+             AppLog.e(context, e);
+         }
+diff --git a/src/ch/bailu/aat/helpers/FileAction.java b/src/ch/bailu/aat/helpers/FileAction.java
+index 1bec7e2e..2a4e5455 100644
+--- a/src/ch/bailu/aat/helpers/FileAction.java
++++ b/src/ch/bailu/aat/helpers/FileAction.java
+@@ -8,6 +8,8 @@ import android.view.View;
+ import android.widget.EditText;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.activities.AbsServiceLink;
++import ch.bailu.aat.helpers.file.FileIntent;
++import ch.bailu.aat.helpers.file.FileUI;
+ import ch.bailu.aat.menus.FileMenu;
+ import ch.bailu.aat.preferences.AddOverlayDialog;
+ import ch.bailu.aat.preferences.SolidDirectory;
+@@ -77,17 +79,17 @@ public class FileAction   {
+ 
+     
+     public void view() {
+-        AppFile.view(scontext.getContext(), file);
++        new FileIntent(file).view(scontext.getContext());
+     }
+     
+     
+     public void sendTo() {
+-        AppFile.send(scontext.getContext(), file);
++        new FileIntent(file).send(scontext.getContext());
+     }
+ 
+     public void copyTo() {
+         try {
+-            AppFile.copyTo(scontext.getContext(), file);
++            new FileUI(file).copyTo(scontext.getContext());
+         } catch (IOException e) {
+             AppLog.e(scontext.getContext(), e);
+         }
+diff --git a/src/ch/bailu/aat/helpers/FileList.java b/src/ch/bailu/aat/helpers/FileList.java
+index 5780e6ee..5b8f39e6 100644
+--- a/src/ch/bailu/aat/helpers/FileList.java
++++ b/src/ch/bailu/aat/helpers/FileList.java
+@@ -69,7 +69,7 @@ public class FileList {
+         if (isIndexValid()) {
+             return files[index];
+         }
+-        return AppFile.NULL_FILE;
++        return new File("/dev/null");
+     }
+     
+     
+diff --git a/src/ch/bailu/aat/helpers/file/AbsContentAccess.java b/src/ch/bailu/aat/helpers/file/AbsContentAccess.java
+new file mode 100644
+index 00000000..5aecfc9a
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/file/AbsContentAccess.java
+@@ -0,0 +1,73 @@
++package ch.bailu.aat.helpers.file;
++
++import java.io.BufferedInputStream;
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.InputStream;
++import java.io.OutputStream;
++
++public abstract class AbsContentAccess {
++    public abstract InputStream open_r() throws FileNotFoundException;
++    public abstract OutputStream open_w() throws FileNotFoundException;
++
++
++    public String contentToString() throws IOException {
++        BufferedInputStream in = new BufferedInputStream(open_r());
++        StringBuilder out = new StringBuilder();
++
++        
++        try {
++            int c;
++            while ((c = in.read()) > -1) {
++                out.append((char)c);
++            }
++
++        } finally {
++            in.close();
++
++        }
++        return out.toString();
++    }
++
++
++
++
++    public void copy(File dest) throws Exception {
++        InputStream in = null;
++        OutputStream out = null;
++
++        try {
++
++            in = open_r();
++            out = new FileOutputStream(dest);
++            copy(in, out);
++            
++        } finally {
++            if (in != null) in.close();
++            if (out != null) out.close();
++        }
++    }
++
++    
++    private static void copy(InputStream in, OutputStream out) throws IOException {
++        byte[] buffer = new byte[4096];
++        int count;
++        while ((count = in.read(buffer)) > 0) {
++            out.write(buffer, 0, count);
++        }
++    }
++
++
++   public abstract File toFile();
++    
++    
++    public long lastModified() {
++        File file = toFile();
++        if (file != null) {
++            return file.lastModified();
++        }
++        return System.currentTimeMillis();
++    }
++}
+diff --git a/src/ch/bailu/aat/helpers/file/FileAccess.java b/src/ch/bailu/aat/helpers/file/FileAccess.java
+new file mode 100644
+index 00000000..3886f32a
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/file/FileAccess.java
+@@ -0,0 +1,37 @@
++package ch.bailu.aat.helpers.file;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileNotFoundException;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++
++
++public class FileAccess extends AbsContentAccess {
++    private final File file;
++
++    
++    public FileAccess(File f) {
++        file = f;
++    }
++
++
++    @Override
++    public InputStream open_r() throws FileNotFoundException {
++        return new FileInputStream(file);
++
++    }
++
++    @Override
++    public OutputStream open_w() throws FileNotFoundException {
++        return new FileOutputStream(file);
++    }
++
++
++
++
++    public File toFile() {
++        return file;
++    }
++}
+diff --git a/src/ch/bailu/aat/helpers/file/FileIntent.java b/src/ch/bailu/aat/helpers/file/FileIntent.java
+new file mode 100644
+index 00000000..2f8b9b48
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/file/FileIntent.java
+@@ -0,0 +1,95 @@
++package ch.bailu.aat.helpers.file;
++
++import java.io.File;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.Intent;
++import android.net.Uri;
++
++public class FileIntent {
++ 
++    private final File file;
++    private final Intent intent;
++    
++    public FileIntent (File f, Intent i) {
++        file = f;
++        intent = i;
++    }
++    
++    
++    public FileIntent(File f) {
++        file = f;
++        intent = new Intent();
++    }
++    
++    public static final int PICK_RESULT=1;
++    
++    public void pick(Activity context) {
++        if (file.exists() && file.isDirectory()) {
++            intent.setData(getFileUri());
++            context.startActivityForResult(Intent.createChooser(intent, file.getName()), PICK_RESULT);    
++        }
++    }
++
++    
++    public void view(Context context) {
++        if (file.exists()) {
++            
++            
++            intent.setAction(Intent.ACTION_VIEW);
++            
++            if (file.isDirectory()) {
++                intent.setData(getFileUri());
++            } else {
++                intent.setData(getContentUri());
++            }
++        }
++        context.startActivity(Intent.createChooser(intent, file.getName()));
++    }
++    
++    
++    private Uri getFileUri() {
++        return Uri.fromFile(file);
++    }
++    
++    
++    private Uri getContentUri() {
++        return Uri.parse("content://ch.bailu.aat.gpx" + file.getAbsolutePath());
++    }
++
++    
++   public void send(Context context) {
++        /**
++         * This is the correct implementation for sending one file as an e-mail attachment.
++         * It does, however, not work with private files.
++         * 
++         */
++        //final Uri uri = Uri.fromFile(file);
++        final Uri uri = getContentUri(); 
++        
++        intent.setAction(Intent.ACTION_SEND);
++        intent.putExtra(Intent.EXTRA_SUBJECT, file.getName());
++        intent.putExtra(Intent.EXTRA_TEXT, file.getAbsolutePath());
++        intent.putExtra(Intent.EXTRA_STREAM, uri);
++        setType(); // only works with type set (gmail and android mail)
++        
++        context.startActivity(Intent.createChooser(intent , file.getName()));
++    }
++
++
++    private void setType() {
++        String type = mimeTypeFromFileName(file.toString());
++        
++        if (type != null) {
++            intent.setType(type);
++        }
++    }
++    
++    
++    public static String mimeTypeFromFileName(String name) {
++        if (name.endsWith(".gpx")) return "application/gpx+xml";
++        else if (name.endsWith(".osm")) return "application/xml";
++        return null;
++    }
++}
+diff --git a/src/ch/bailu/aat/helpers/file/FileUI.java b/src/ch/bailu/aat/helpers/file/FileUI.java
+new file mode 100644
+index 00000000..5ebb66d8
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/file/FileUI.java
+@@ -0,0 +1,89 @@
++package ch.bailu.aat.helpers.file;
++
++import java.io.File;
++import java.io.IOException;
++
++import android.app.Activity;
++import android.content.Context;
++import ch.bailu.aat.R;
++import ch.bailu.aat.helpers.AppDialog;
++import ch.bailu.aat.helpers.AppLog;
++import ch.bailu.aat.helpers.AppSelectDirectoryDialog;
++import ch.bailu.aat.preferences.AddOverlayDialog;
++import ch.bailu.aat.preferences.SolidDirectory;
++import ch.bailu.aat.preferences.SolidMockLocationFile;
++import ch.bailu.aat.services.ServiceContext;
++
++public class FileUI {
++    private final File file;
++    
++    public FileUI(File f) {
++        file = f;
++    }
++    
++    public void copyTo(Context context) throws IOException {
++        new AppSelectDirectoryDialog(context, file);
++    }
++
++    public void copyTo(Context context, File targetDir) throws Exception {
++        final File target = new File(targetDir, file.getName());
++
++        if (target.exists()) {
++            AppLog.e(context, target.toString() + " allready exists.*");
++        } else {
++            new UriAccess(context, file).copy(target);
++            AppLog.i(context, target.getAbsolutePath());
++        }
++
++    }
++    
++    
++    public void reloadPreview(ServiceContext scontext) {
++        if (file.getParent().equals(new SolidDirectory(scontext.getContext()).getValue())) {
++            scontext.getDirectoryService().deleteEntry(file.getAbsolutePath());
++        }
++    }
++
++
++    public void delete(Activity a, ServiceContext sc) {
++        new FileDeletionDialog(a, sc);
++    }
++
++
++    private class FileDeletionDialog extends AppDialog {
++        private final ServiceContext scontext;
++        
++        public FileDeletionDialog(Activity activity, ServiceContext sc) {
++            scontext = sc;
++            displayYesNoDialog(activity, activity.getString(R.string.file_delete_ask), file.toString());
++        }
++
++
++        @Override
++        protected void onPositiveClick() {
++            file.delete();
++            rescanDirectory(scontext);
++        }
++    }
++
++
++    public void useAsOverlay(Context context) {
++        new AddOverlayDialog(context, file);
++    }
++
++    public void useForMockLocation(Context context) {
++        new SolidMockLocationFile(context).setValue(file.toString());
++    }
++
++
++    
++    public void rescanDirectory(ServiceContext scontext) {
++        if (file.getParent().equals(new SolidDirectory(scontext.getContext()).getValue())) {
++            scontext.getDirectoryService().rescan();
++        }
++    }
++
++    public CharSequence getName() {
++        return file.getName();
++    }
++}
+diff --git a/src/ch/bailu/aat/helpers/file/UriAccess.java b/src/ch/bailu/aat/helpers/file/UriAccess.java
+new file mode 100644
+index 00000000..8935d884
+--- /dev/null
++++ b/src/ch/bailu/aat/helpers/file/UriAccess.java
+@@ -0,0 +1,52 @@
++package ch.bailu.aat.helpers.file;
++
++import java.io.File;
++import java.io.FileNotFoundException;
++import java.io.InputStream;
++import java.io.OutputStream;
++
++import android.content.Context;
++import android.net.Uri;
++
++public class UriAccess extends AbsContentAccess {
++    private final Uri uri;
++    private final Context context;
++
++    public UriAccess(Context c, Uri u) {
++        uri = u;
++        context = c;
++    }
++
++
++    public UriAccess(Context c, File f) {
++        this (c, Uri.fromFile(f));
++    }
++
++    @Override
++    public InputStream open_r() throws FileNotFoundException {
++        return context.getContentResolver().openInputStream(uri);
++
++    }
++
++    @Override
++    public OutputStream open_w() throws FileNotFoundException {
++        return context.getContentResolver().openOutputStream(uri);
++    }
++
++
++
++    @Override
++    public File toFile() {
++        String path = uri.getPath();
++        if (path != null) {
++            final File file = new File(path);
++            if (file.exists()) {
++                return file;
++            }
++        }
++        return null;
++    }
++    
++    
++
++}
+diff --git a/src/ch/bailu/aat/menus/OptionsMenu.java b/src/ch/bailu/aat/menus/OptionsMenu.java
+index d70c158a..0970ff4c 100644
+--- a/src/ch/bailu/aat/menus/OptionsMenu.java
++++ b/src/ch/bailu/aat/menus/OptionsMenu.java
+@@ -2,9 +2,15 @@ package ch.bailu.aat.menus;
+ 
+ import org.osmdroid.util.BoundingBoxE6;
+ 
++import android.content.Context;
++import android.content.Intent;
++import android.view.ContextMenu;
++import android.view.Menu;
++import android.view.MenuItem;
+ import ch.bailu.aat.R;
+ import ch.bailu.aat.activities.ActivitySwitcher;
+ import ch.bailu.aat.activities.NominatimActivity;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.preferences.CheckListDialog;
+ import ch.bailu.aat.preferences.IndexListDialog;
+ import ch.bailu.aat.preferences.SolidAutopause;
+@@ -14,10 +20,6 @@ import ch.bailu.aat.preferences.SolidOverlayFileList;
+ import ch.bailu.aat.preferences.SolidPreset;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.tracker.State;
+-import android.content.Context;
+-import android.view.ContextMenu;
+-import android.view.Menu;
+-import android.view.MenuItem;
+ 
+ public class OptionsMenu extends AbsMenu {
+     private MenuItem start, pause, backlight, autopause, map, overlays, nominatim;
+@@ -92,7 +94,9 @@ public class OptionsMenu extends AbsMenu {
+             new CheckListDialog(c,new SolidOverlayFileList(c));
+ 
+         } else if (item == nominatim) {
+-            ActivitySwitcher.start(c, NominatimActivity.class,new BoundingBoxE6(0,0,0,0));
++            Intent intent = new Intent();
++            AppIntent.setBoundingBox(intent, new BoundingBoxE6(0,0,0,0));
++            ActivitySwitcher.start(c, NominatimActivity.class);
+ 
+ 
+         } else {
+diff --git a/src/ch/bailu/aat/osm_features/MapFeaturesParser.java b/src/ch/bailu/aat/osm_features/MapFeaturesParser.java
+index 61d53d76..24f25218 100644
+--- a/src/ch/bailu/aat/osm_features/MapFeaturesParser.java
++++ b/src/ch/bailu/aat/osm_features/MapFeaturesParser.java
+@@ -4,6 +4,7 @@ import java.io.File;
+ import java.io.IOException;
+ 
+ import ch.bailu.aat.gpx.parser.SimpleStream;
++import ch.bailu.aat.helpers.file.FileAccess;
+ 
+ public class MapFeaturesParser {
+     
+@@ -21,7 +22,7 @@ public class MapFeaturesParser {
+     }
+     
+     
+-    public MapFeaturesParser(OnHaveFeature hf, File file) throws IOException {
++    public MapFeaturesParser(OnHaveFeature hf, FileAccess file) throws IOException {
+         haveFeature = hf;
+         
+         parseFeatures(file);
+@@ -34,7 +35,7 @@ public class MapFeaturesParser {
+        
+         for (int i=0; i< files.length; i++) {
+             if (files[i].exists() && files[i].canRead() && files[i].isFile()) {
+-                parseSummary(files[i]);
++                parseSummary(new FileAccess(files[i]));
+             }
+         }
+     }
+@@ -62,7 +63,7 @@ public class MapFeaturesParser {
+     
+ 
+     
+-    private void parseSummary(File file) throws IOException {
++    private void parseSummary(FileAccess file) throws IOException {
+         SimpleStream in = new SimpleStream(file);
+         
+         parseSummary(in);
+@@ -72,7 +73,7 @@ public class MapFeaturesParser {
+     }
+     
+     
+-    private void parseFeatures(File file) throws IOException {
++    private void parseFeatures(FileAccess file) throws IOException {
+         SimpleStream in = new SimpleStream(file); 
+ 
+         parseSummary(in);
+diff --git a/src/ch/bailu/aat/osm_features/MapFeaturesPreparser.java b/src/ch/bailu/aat/osm_features/MapFeaturesPreparser.java
+index 1f644f11..608affb8 100644
+--- a/src/ch/bailu/aat/osm_features/MapFeaturesPreparser.java
++++ b/src/ch/bailu/aat/osm_features/MapFeaturesPreparser.java
+@@ -11,6 +11,7 @@ import android.content.Context;
+ import ch.bailu.aat.gpx.parser.SimpleStream;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDirectory;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.services.background.DownloadHandle;
+ 
+ 
+@@ -37,7 +38,7 @@ public class MapFeaturesPreparser {
+     
+     
+     public MapFeaturesPreparser(Context c) throws IOException {
+-        in = new SimpleStream(AppDirectory.getMapFeatureIndex(c));
++        in = new SimpleStream(new FileAccess(AppDirectory.getMapFeatureIndex(c)));
+         
+         parseMapFeatures(c);
+         AppBroadcaster.broadcast(c,
+diff --git a/src/ch/bailu/aat/preferences/Storage.java b/src/ch/bailu/aat/preferences/Storage.java
+index f86a92d4..5141de44 100644
+--- a/src/ch/bailu/aat/preferences/Storage.java
++++ b/src/ch/bailu/aat/preferences/Storage.java
+@@ -7,9 +7,8 @@ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.os.Environment;
+-import ch.bailu.aat.helpers.AppFile;
+-import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.ContextWrapperInterface;
++import ch.bailu.aat.helpers.file.UriAccess;
+ 
+ public class Storage  implements ContextWrapperInterface {
+     private final static String DEF_VALUE="0";
+@@ -55,7 +54,7 @@ public class Storage  implements ContextWrapperInterface {
+         final File source =new File(getSharedPrefsDirectory(context),  GLOBAL_NAME + ".xml");
+         final File target = new File(Environment.getExternalStorageDirectory(), "aat_preferences.xml");
+ 
+-        AppFile.copy(source, target);
++        new UriAccess(context, source).copy(target);
+     }
+ 
+ 
+@@ -72,7 +71,7 @@ public class Storage  implements ContextWrapperInterface {
+ 
+         if (target.exists()) target.delete();
+ 
+-        AppFile.copy(source, target);
++        new UriAccess(context, source).copy(target);
+ 
+         final SharedPreferences restore = context.getSharedPreferences("restore", Context.MODE_PRIVATE);
+ 
+diff --git a/src/ch/bailu/aat/providers/GpxProvider.java b/src/ch/bailu/aat/providers/GpxProvider.java
+index ef491b81..ca3d2dc4 100644
+--- a/src/ch/bailu/aat/providers/GpxProvider.java
++++ b/src/ch/bailu/aat/providers/GpxProvider.java
+@@ -6,16 +6,17 @@ import java.io.FileNotFoundException;
+ import android.content.ContentProvider;
+ import android.content.ContentValues;
+ import android.database.Cursor;
++import android.database.MatrixCursor;
+ import android.net.Uri;
+ import android.os.ParcelFileDescriptor;
++import android.provider.OpenableColumns;
+ import ch.bailu.aat.helpers.AppLog;
+ 
+ 
+ 
+ public class GpxProvider extends ContentProvider {
+     private static final UnsupportedOperationException UNSUPORTED=new UnsupportedOperationException("Not supported by this provider");
+-    public  static final String TYPE="application/gpx+xml";
+-
++    
+ 
+     @Override
+     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
+@@ -33,27 +34,33 @@ public class GpxProvider extends ContentProvider {
+     
+     @Override
+     public boolean onCreate() {
++        
++        
+         return true;
+     }
+ 
+     @Override
+     public Cursor query(Uri uri, String[] strings, String s, String[] strings2, String s2) {
+-        final File file =  new File(uri.getPath());
+-
+-        AppLog.d(uri, uri.toString());
+-        AppLog.d(this, file.toString());
+-
+-        AppLog.d(this,  s);
+-        AppLog.d(this, s2);
+         
++        MatrixCursor cursor = new MatrixCursor(new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE});
+         
+         
+-        throw UNSUPORTED;
++        final File file =  new File(uri.getPath());
++
++        cursor.addRow(new Object[]{file.getName(), file.length()});
++        return cursor;
+     }
+ 
+     @Override
+     public String getType(Uri uri) {
+-        return TYPE;
++        final File file =  new File(uri.getPath());
++        return mimeTypeFromFileName(file.getName());
++    }
++    
++    public static String mimeTypeFromFileName(String name) {
++        if (name.endsWith(".gpx")) return "application/gpx+xml";
++        else if (name.endsWith(".osm")) return "application/xml";
++        return null;
+     }
+ 
+     @Override
+@@ -71,7 +78,4 @@ public class GpxProvider extends ContentProvider {
+         throw UNSUPORTED;
+     }
+     
+-
+-    
+- 
+ }
+diff --git a/src/ch/bailu/aat/services/background/BackgroundService.java b/src/ch/bailu/aat/services/background/BackgroundService.java
+index 1fb02778..e06d4945 100644
+--- a/src/ch/bailu/aat/services/background/BackgroundService.java
++++ b/src/ch/bailu/aat/services/background/BackgroundService.java
+@@ -10,6 +10,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.util.SparseArray;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+@@ -68,7 +69,7 @@ public class BackgroundService extends VirtualService {
+         private BroadcastReceiver onFileDownloaded = new BroadcastReceiver() {
+             @Override
+             public void onReceive(Context context, Intent intent) {
+-                AppLog.i(context, AppBroadcaster.getFile(intent));
++                AppLog.i(context, AppIntent.getFile(intent));
+             }
+         };
+ 
+diff --git a/src/ch/bailu/aat/services/background/MapFeaturesDownloader.java b/src/ch/bailu/aat/services/background/MapFeaturesDownloader.java
+index 06dd91b6..4551bbd0 100644
+--- a/src/ch/bailu/aat/services/background/MapFeaturesDownloader.java
++++ b/src/ch/bailu/aat/services/background/MapFeaturesDownloader.java
+@@ -10,6 +10,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDirectory;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.osm_features.MapFeaturesPreparser;
+ import ch.bailu.aat.services.ServiceContext;
+@@ -41,7 +42,7 @@ public class MapFeaturesDownloader implements Closeable {
+     private final BroadcastReceiver  onFileDownloaded = new BroadcastReceiver () {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            state.ping(AppBroadcaster.getUrl(intent));
++            state.ping(AppIntent.getUrl(intent));
+         }
+     };
+ 
+diff --git a/src/ch/bailu/aat/services/cache/GpxObjectStatic.java b/src/ch/bailu/aat/services/cache/GpxObjectStatic.java
+index bbbce919..de2e9dd3 100644
+--- a/src/ch/bailu/aat/services/cache/GpxObjectStatic.java
++++ b/src/ch/bailu/aat/services/cache/GpxObjectStatic.java
+@@ -16,6 +16,7 @@ import ch.bailu.aat.gpx.interfaces.GpxBigDeltaInterface;
+ import ch.bailu.aat.gpx.linked_list.Node;
+ import ch.bailu.aat.gpx.parser.GpxListReader;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.file.UriAccess;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.background.FileHandle;
+ import ch.bailu.aat.services.dem.Dem3Tile;
+@@ -42,7 +43,7 @@ public class GpxObjectStatic extends GpxObject implements ElevationUpdaterClient
+     }
+     
+ 
+-    private void reload(ServiceContext sc) {
++    private void reload(final ServiceContext sc) {
+         final FileHandle f = new FileHandle(toString()) {
+ 
+             private boolean locked=false;
+@@ -51,7 +52,10 @@ public class GpxObjectStatic extends GpxObject implements ElevationUpdaterClient
+             public long bgOnProcess() {
+                 locked=true;
+                 try {
+-                    GpxListReader reader = new GpxListReader(this, new File(toString()));
++                    final Context context = sc.getContext();
++                    final File file = new File(toString());
++                    
++                    GpxListReader reader = new GpxListReader(this, new UriAccess(context, file));
+                     if (canContinue()) {
+                         gpxList = reader.getGpxList();
+                         ready=true;
+diff --git a/src/ch/bailu/aat/services/cache/ObjectBroadcaster.java b/src/ch/bailu/aat/services/cache/ObjectBroadcaster.java
+index 0192ffd7..979e7806 100644
+--- a/src/ch/bailu/aat/services/cache/ObjectBroadcaster.java
++++ b/src/ch/bailu/aat/services/cache/ObjectBroadcaster.java
+@@ -7,6 +7,7 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.util.SparseArray;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ 
+ public class ObjectBroadcaster implements Closeable {
+@@ -56,7 +57,7 @@ public class ObjectBroadcaster implements Closeable {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             for (int i=0; i<table.size(); i++) {
+-                table.valueAt(i).onChanged(AppBroadcaster.getFile(intent), serviceContext);
++                table.valueAt(i).onChanged(AppIntent.getFile(intent), serviceContext);
+             }
+         }
+     };
+@@ -66,7 +67,7 @@ public class ObjectBroadcaster implements Closeable {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             for (int i=0; i<table.size(); i++) {
+-                table.valueAt(i).onDownloaded(AppBroadcaster.getFile(intent),AppBroadcaster.getUrl(intent), serviceContext);
++                table.valueAt(i).onDownloaded(AppIntent.getFile(intent),AppIntent.getUrl(intent), serviceContext);
+             }
+         }
+     };
+diff --git a/src/ch/bailu/aat/services/cache/ObjectTable.java b/src/ch/bailu/aat/services/cache/ObjectTable.java
+index 0ffec303..83b2c425 100644
+--- a/src/ch/bailu/aat/services/cache/ObjectTable.java
++++ b/src/ch/bailu/aat/services/cache/ObjectTable.java
+@@ -2,7 +2,7 @@ package ch.bailu.aat.services.cache;
+ 
+ import android.content.Intent;
+ import android.util.SparseArray;
+-import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.cache.CacheService.SelfOn;
+@@ -119,7 +119,7 @@ public class ObjectTable {
+ 
+ 
+     private ObjectHandle getHandle(Intent intent) {
+-        String string = AppBroadcaster.getFile(intent);
++        String string = AppIntent.getFile(intent);
+         Container c = table.get(string.hashCode());
+ 
+         if (c == null) {
+diff --git a/src/ch/bailu/aat/services/dem/ElevationUpdater.java b/src/ch/bailu/aat/services/dem/ElevationUpdater.java
+index e373a569..975babc5 100644
+--- a/src/ch/bailu/aat/services/dem/ElevationUpdater.java
++++ b/src/ch/bailu/aat/services/dem/ElevationUpdater.java
+@@ -8,6 +8,7 @@ import android.content.Intent;
+ import android.util.SparseArray;
+ import ch.bailu.aat.coordinates.SrtmCoordinates;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ 
+ 
+@@ -34,7 +35,7 @@ public class ElevationUpdater implements Closeable, ElevationProvider{
+     private BroadcastReceiver onRequestElevationUpdate = new BroadcastReceiver() {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            String id = AppBroadcaster.getFile(intent);
++            String id = AppIntent.getFile(intent);
+             
+             addObject(id);
+             updateObject(id);
+@@ -46,7 +47,7 @@ public class ElevationUpdater implements Closeable, ElevationProvider{
+     private BroadcastReceiver onFileDownloaded = new BroadcastReceiver() {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            String id = AppBroadcaster.getFile(intent);
++            String id = AppIntent.getFile(intent);
+             Dem3Tile tile = tiles.get(id);
+             
+             if (tile != null) {
+@@ -58,7 +59,7 @@ public class ElevationUpdater implements Closeable, ElevationProvider{
+     private BroadcastReceiver onFileChanged = new BroadcastReceiver() {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            String id = AppBroadcaster.getFile(intent);
++            String id = AppIntent.getFile(intent);
+             
+             if (tiles.have(id)){
+                 updateObjects();
+diff --git a/src/ch/bailu/aat/services/icons/IconMapParser.java b/src/ch/bailu/aat/services/icons/IconMapParser.java
+index 501ad9a9..43e9819b 100644
+--- a/src/ch/bailu/aat/services/icons/IconMapParser.java
++++ b/src/ch/bailu/aat/services/icons/IconMapParser.java
+@@ -1,9 +1,9 @@
+ package ch.bailu.aat.services.icons;
+ 
+-import java.io.File;
+ import java.io.IOException;
+ 
+ import ch.bailu.aat.gpx.parser.SimpleStream;
++import ch.bailu.aat.helpers.file.AbsContentAccess;
+ 
+ public class IconMapParser {
+     private final static int ICON=0, KEY=1, VALUE=2, END=3, MAX=4; 
+@@ -13,7 +13,7 @@ public class IconMapParser {
+     
+     private final StringBuilder buffer = new StringBuilder();
+     
+-    IconMapParser(File file, IconMap map) throws IOException {
++    IconMapParser(AbsContentAccess file, IconMap map) throws IOException {
+         SimpleStream stream = new SimpleStream(file);
+ 
+         stream.read();
+diff --git a/src/ch/bailu/aat/services/icons/IconMapService.java b/src/ch/bailu/aat/services/icons/IconMapService.java
+index 3e2ef5a5..a23073d6 100644
+--- a/src/ch/bailu/aat/services/icons/IconMapService.java
++++ b/src/ch/bailu/aat/services/icons/IconMapService.java
+@@ -11,6 +11,7 @@ import ch.bailu.aat.gpx.GpxSegmentNode;
+ import ch.bailu.aat.gpx.interfaces.GpxType;
+ import ch.bailu.aat.helpers.AppDirectory;
+ import ch.bailu.aat.helpers.AppLog;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+@@ -64,7 +65,7 @@ public class IconMapService extends VirtualService {
+ 
+             if (mapFile.exists()) {
+                 try {
+-                    new IconMapParser(mapFile, map);
++                    new IconMapParser(new FileAccess(mapFile), map);
+                 } catch (IOException e) {
+                     AppLog.e(this, e);
+                 }
+diff --git a/src/ch/bailu/aat/services/tracker/TrackCrashRestorer.java b/src/ch/bailu/aat/services/tracker/TrackCrashRestorer.java
+index b62adc09..7d55a20c 100644
+--- a/src/ch/bailu/aat/services/tracker/TrackCrashRestorer.java
++++ b/src/ch/bailu/aat/services/tracker/TrackCrashRestorer.java
+@@ -9,6 +9,8 @@ import ch.bailu.aat.gpx.parser.SimpleGpxListReader;
+ import ch.bailu.aat.gpx.writer.GpxListWriter;
+ import ch.bailu.aat.helpers.AppDirectory;
+ import ch.bailu.aat.helpers.AppLog;
++import ch.bailu.aat.helpers.file.AbsContentAccess;
++import ch.bailu.aat.helpers.file.FileAccess;
+ 
+ 
+ public class TrackCrashRestorer{
+@@ -23,7 +25,7 @@ public class TrackCrashRestorer{
+ 
+         if (source.exists()) {
+             
+-            GpxList track = readFile(source);
++            GpxList track = readFile(new FileAccess(source));
+             if (track.getPointList().size() > TrackLogger.MIN_TRACKPOINTS) { 
+                 AppLog.i(context, "Restore track*");                
+         
+@@ -50,7 +52,7 @@ public class TrackCrashRestorer{
+ 
+ 
+     
+-    private GpxList readFile(File remainingLogFile) throws IOException {
++    private GpxList readFile(AbsContentAccess remainingLogFile) throws IOException {
+         SimpleGpxListReader reader = new SimpleGpxListReader(remainingLogFile);
+         return reader.getGpxList();
+     }
+diff --git a/src/ch/bailu/aat/services/tracker/location/MockLocation.java b/src/ch/bailu/aat/services/tracker/location/MockLocation.java
+index e8408b00..5b2c9470 100644
+--- a/src/ch/bailu/aat/services/tracker/location/MockLocation.java
++++ b/src/ch/bailu/aat/services/tracker/location/MockLocation.java
+@@ -12,6 +12,7 @@ import ch.bailu.aat.gpx.interfaces.GpxBigDeltaInterface;
+ import ch.bailu.aat.gpx.parser.SimpleGpxListReader;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.Timer;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.preferences.SolidMockLocationFile;
+ 
+ public class MockLocation extends LocationStackChainedItem implements Runnable, GpxInformation.ID{
+@@ -31,7 +32,7 @@ public class MockLocation extends LocationStackChainedItem implements Runnable,
+         
+         try {
+         	File file = new File(new SolidMockLocationFile(c).getValue());
+-        	mockData = new SimpleGpxListReader(file).getGpxList();
++        	mockData = new SimpleGpxListReader(new FileAccess(file)).getGpxList();
+             
+             timer.kick();
+             sendState(STATE_WAIT);
+diff --git a/src/ch/bailu/aat/test/TestGpx.java b/src/ch/bailu/aat/test/TestGpx.java
+index 413f2897..685a84d0 100644
+--- a/src/ch/bailu/aat/test/TestGpx.java
++++ b/src/ch/bailu/aat/test/TestGpx.java
+@@ -7,6 +7,7 @@ import android.content.Context;
+ import ch.bailu.aat.gpx.GpxList;
+ import ch.bailu.aat.gpx.parser.SimpleGpxListReader;
+ import ch.bailu.aat.gpx.writer.GpxListWriter;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.preferences.SolidMockLocationFile;
+ import ch.bailu.aat.preferences.SolidString;
+ 
+@@ -42,15 +43,15 @@ public class TestGpx extends UnitTest {
+ 
+ 
+     public void testFile(File fileA, File fileB) throws IOException, AssertionError {
+-            GpxList listA= new SimpleGpxListReader(fileA).getGpxList();
+-            GpxList listB=new SimpleGpxListReader(fileB).getGpxList();
++            GpxList listA= new SimpleGpxListReader(new FileAccess(fileA)).getGpxList();
++            GpxList listB=new SimpleGpxListReader(new FileAccess(fileB)).getGpxList();
+             
+             File fileCopy = new File(getTestDirectory(getContext()),"test_copy.gpx");
+             GpxListWriter writer = new GpxListWriter(listA, fileCopy);
+             writer.flushOutput();
+             writer.close();
+             
+-            GpxList listC=new SimpleGpxListReader(fileCopy).getGpxList();
++            GpxList listC=new SimpleGpxListReader(new FileAccess(fileCopy)).getGpxList();
+             
+ 
+             assertListEquals(listA, listB);
+diff --git a/src/ch/bailu/aat/views/FeaturesList.java b/src/ch/bailu/aat/views/FeaturesList.java
+index 44add31c..a3bb9ab2 100644
+--- a/src/ch/bailu/aat/views/FeaturesList.java
++++ b/src/ch/bailu/aat/views/FeaturesList.java
+@@ -24,9 +24,9 @@ import ch.bailu.aat.activities.HtmlViewActivity;
+ import ch.bailu.aat.activities.MapFeatureListActivity;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDirectory;
+-import ch.bailu.aat.helpers.AppFile;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.AppTheme;
++import ch.bailu.aat.helpers.file.FileAccess;
+ import ch.bailu.aat.osm_features.MapFeaturesParser;
+ import ch.bailu.aat.osm_features.MapFeaturesParser.OnHaveFeature;
+ import ch.bailu.aat.services.ServiceContext;
+@@ -48,7 +48,7 @@ OnHaveFeature {
+     private final ArrayList<ListData> data = new ArrayList<ListData>();
+ 
+ 
+-    public FeaturesList(ServiceContext sc, File file) {
++    public FeaturesList(ServiceContext sc, FileAccess file) {
+         this(sc);
+ 
+         loadList(file, sc.getIconMapService());
+@@ -89,7 +89,7 @@ OnHaveFeature {
+ 
+ 
+ 
+-    public void loadList(File file, IconMapService.Self map) {
++    public void loadList(FileAccess file, IconMapService.Self map) {
+         try {
+             new MapFeaturesParser(this, file);
+             if (observer != null) observer.onChanged();
+@@ -204,7 +204,7 @@ OnHaveFeature {
+                 File file;
+                 try {
+                     file = new File(AppDirectory.getDataDirectory(getContext(), AppDirectory.DIR_OSM_FEATURES_PREPARSED),d.name.toString());
+-                    String content = AppFile.contentToString(file);
++                    String content = new FileAccess(file).contentToString();
+                     ActivitySwitcher.start(getContext(), HtmlViewActivity.class, content);
+ 
+                 } catch (Exception e) {
+diff --git a/src/ch/bailu/aat/views/PreviewView.java b/src/ch/bailu/aat/views/PreviewView.java
+index 3820a2c9..ad0c42f8 100644
+--- a/src/ch/bailu/aat/views/PreviewView.java
++++ b/src/ch/bailu/aat/views/PreviewView.java
+@@ -8,6 +8,7 @@ import android.content.Intent;
+ import android.widget.ImageView;
+ import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.helpers.AppDirectory;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.cache.ImageObject;
+ import ch.bailu.aat.services.cache.ObjectHandle;
+@@ -112,7 +113,7 @@ public class PreviewView extends ImageView {
+         public void onReceive(Context context, Intent intent) {
+             final String file = imageHandle.toString();
+ 
+-            if (AppBroadcaster.hasFile(intent, file)) displayImage();
++            if (AppIntent.hasFile(intent, file)) displayImage();
+         }
+     };
+ }
+diff --git a/src/ch/bailu/aat/views/TagEditor.java b/src/ch/bailu/aat/views/TagEditor.java
+index 081c491d..94ef3331 100644
+--- a/src/ch/bailu/aat/views/TagEditor.java
++++ b/src/ch/bailu/aat/views/TagEditor.java
+@@ -13,6 +13,7 @@ import android.widget.EditText;
+ import android.widget.LinearLayout;
+ import ch.bailu.aat.helpers.AbsTextBackup;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLayout;
+ import ch.bailu.aat.helpers.AppLog;
+ 
+@@ -66,7 +67,7 @@ public class TagEditor extends LinearLayout {
+ 
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            String text = AppBroadcaster.getFile(intent);
++            String text = AppIntent.getFile(intent);
+             
+             if (text != null) {
+                 editor.append("\n");
+@@ -117,4 +118,8 @@ public class TagEditor extends LinearLayout {
+     public void erase() {
+         editor.setText("");
+     }
++
++    public void setText(String query) {
++        editor.setText(query);
++    }
+ }
+diff --git a/src/ch/bailu/aat/views/map/CachedTileProvider.java b/src/ch/bailu/aat/views/map/CachedTileProvider.java
+index b8cec965..c4b198e9 100644
+--- a/src/ch/bailu/aat/views/map/CachedTileProvider.java
++++ b/src/ch/bailu/aat/views/map/CachedTileProvider.java
+@@ -8,6 +8,7 @@ import android.content.Intent;
+ import android.graphics.drawable.Drawable;
+ import android.os.Handler;
+ import ch.bailu.aat.helpers.AppBroadcaster;
++import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.cache.TileObject;
+ import ch.bailu.aat.services.cache.TileStackObject;
+@@ -23,7 +24,7 @@ public class CachedTileProvider extends AbsOsmTileProvider {
+ 
+         @Override
+         public void onReceive(Context context, Intent intent) {
+-            String string = AppBroadcaster.getFile(intent);
++            String string = AppIntent.getFile(intent);
+             if (cache.get((string)) != null) {
+                 handler.sendEmptyMessage(MapTile.MAPTILE_SUCCESS_ID);
+             }
+diff --git a/src/ch/bailu/aat/views/map/overlay/control/NavigationBarOverlay.java b/src/ch/bailu/aat/views/map/overlay/control/NavigationBarOverlay.java
+index c9603cc8..b8603dee 100644
+--- a/src/ch/bailu/aat/views/map/overlay/control/NavigationBarOverlay.java
++++ b/src/ch/bailu/aat/views/map/overlay/control/NavigationBarOverlay.java
+@@ -76,7 +76,8 @@ public class NavigationBarOverlay extends ControlBarOverlay implements GpxInform
+              if (boundingCycle >= infoCache.size()) 
+                  boundingCycle=0;
+              
+-             if (infoCache.valueAt(boundingCycle).getBoundingBox().hasBounding()) 
++             if (       infoCache.valueAt(boundingCycle).getBoundingBox().hasBounding() 
++                     || infoCache.valueAt(boundingCycle).getGpxList().getPointList().size()>0) 
+                  return true;
+          }
+          return false;

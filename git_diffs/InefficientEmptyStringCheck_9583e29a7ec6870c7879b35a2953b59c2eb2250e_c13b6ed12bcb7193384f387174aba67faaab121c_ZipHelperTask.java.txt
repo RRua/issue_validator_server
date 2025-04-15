@@ -1,0 +1,4313 @@
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt
+new file mode 100644
+index 000000000..a2c3276df
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCommonsArchiveHelperTask.kt
+@@ -0,0 +1,101 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.R
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.archivers.ArchiveEntry
++import org.apache.commons.compress.archivers.ArchiveException
++import org.apache.commons.compress.archivers.ArchiveInputStream
++import java.io.FileInputStream
++import java.io.IOException
++import java.io.InputStream
++import java.lang.ref.WeakReference
++import java.util.*
++
++abstract class AbstractCommonsArchiveHelperTask(
++    context: Context,
++    private val filePath: String,
++    private val relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    CompressedHelperTask(goBack, l) {
++
++    private val context: WeakReference<Context> = WeakReference(context)
++
++    /**
++     * Subclasses implement this method to create [ArchiveInputStream] instances with given archive
++     * as [InputStream].
++     *
++     * @param inputStream archive as [InputStream]
++     */
++    abstract fun createFrom(inputStream: InputStream): ArchiveInputStream
++
++    @Throws(ArchiveException::class)
++    @Suppress("LabeledExpression")
++    public override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
++        var tarInputStream: ArchiveInputStream?
++        try {
++            tarInputStream = createFrom(FileInputStream(filePath))
++            var entry: ArchiveEntry?
++            while (tarInputStream.nextEntry.also { entry = it } != null) {
++                entry?.run {
++                    var name = name
++                    if (!CompressedHelper.isEntryPathValid(name)) {
++                        AppConfig.toast(
++                            context.get(),
++                            context.get()!!.getString(R.string.multiple_invalid_archive_entries)
++                        )
++                        return@run
++                    }
++                    if (name.endsWith(CompressedHelper.SEPARATOR)) {
++                        name = name.substring(0, name.length - 1)
++                    }
++                    val isInBaseDir =
++                        (relativePath == "" && !name.contains(CompressedHelper.SEPARATOR))
++                    val isInRelativeDir = (
++                        name.contains(CompressedHelper.SEPARATOR) &&
++                            name.substring(0, name.lastIndexOf(CompressedHelper.SEPARATOR))
++                            == relativePath
++                        )
++                    if (isInBaseDir || isInRelativeDir) {
++                        elements.add(
++                            CompressedObjectParcelable(
++                                name,
++                                lastModifiedDate.time,
++                                size,
++                                isDirectory
++                            )
++                        )
++                    }
++                }
++            }
++        } catch (e: IOException) {
++            throw ArchiveException(String.format("Tarball archive %s is corrupt", filePath), e)
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt
+new file mode 100644
+index 000000000..1345710d1
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/AbstractCompressedTarArchiveHelperTask.kt
+@@ -0,0 +1,62 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
++import org.apache.commons.compress.compressors.CompressorInputStream
++import java.io.InputStream
++import java.lang.reflect.Constructor
++import java.util.*
++
++abstract class AbstractCompressedTarArchiveHelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCommonsArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    private val compressorInputStreamConstructor: Constructor<out CompressorInputStream>
++
++    init {
++        compressorInputStreamConstructor = getCompressorInputStreamClass()
++            .getDeclaredConstructor(InputStream::class.java)
++        compressorInputStreamConstructor.isAccessible = true
++    }
++
++    /**
++     * Subclasses implement this method to specify the [CompressorInputStream] class to be used. It
++     * will be used to create the backing inputstream beneath [TarArchiveInputStream] in
++     * [createFrom].
++     *
++     * @return Class representing the implementation will be handling
++     */
++    abstract fun getCompressorInputStreamClass(): Class<out CompressorInputStream>
++
++    override fun createFrom(inputStream: InputStream): TarArchiveInputStream {
++        return TarArchiveInputStream(compressorInputStreamConstructor.newInstance(inputStream))
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.java
+deleted file mode 100644
+index 641a7f561..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.java
++++ /dev/null
+@@ -1,85 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import androidx.annotation.NonNull;
+-
+-public class Bzip2HelperTask extends CompressedHelperTask {
+-
+-  private String filePath, relativePath;
+-
+-  public Bzip2HelperTask(
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    TarArchiveInputStream tarInputStream = null;
+-    try {
+-      tarInputStream =
+-          new TarArchiveInputStream(new BZip2CompressorInputStream(new FileInputStream(filePath)));
+-
+-      TarArchiveEntry entry;
+-      while ((entry = tarInputStream.getNextTarEntry()) != null) {
+-        String name = entry.getName();
+-        if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
+-
+-        boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-        boolean isInRelativeDir =
+-            name.contains(SEPARATOR)
+-                && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  entry.getName(),
+-                  entry.getLastModifiedDate().getTime(),
+-                  entry.getSize(),
+-                  entry.isDirectory()));
+-        }
+-      }
+-    } catch (IOException e) {
+-      throw new ArchiveException(String.format("Bzip2 archive %s is corrupt", filePath), e);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.kt
+new file mode 100644
+index 000000000..c21ac07f9
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTask.kt
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
++import java.util.*
++
++class Bzip2HelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        BZip2CompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java
+deleted file mode 100644
+index 04e81b6c5..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.java
++++ /dev/null
+@@ -1,76 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import java.io.IOException;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.os.AsyncTask;
+-
+-import androidx.annotation.NonNull;
+-
+-public abstract class CompressedHelperTask
+-    extends AsyncTask<Void, IOException, AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> {
+-
+-  private boolean createBackItem;
+-  private OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish;
+-
+-  CompressedHelperTask(
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    createBackItem = goBack;
+-    onFinish = l;
+-  }
+-
+-  @Override
+-  protected final AsyncTaskResult<ArrayList<CompressedObjectParcelable>> doInBackground(
+-      Void... voids) {
+-    AsyncTaskResult<ArrayList<CompressedObjectParcelable>> result = null;
+-    ArrayList<CompressedObjectParcelable> elements = new ArrayList<>();
+-    if (createBackItem) elements.add(0, new CompressedObjectParcelable());
+-
+-    try {
+-      addElements(elements);
+-      Collections.sort(elements, new CompressedObjectParcelable.Sorter());
+-
+-      return new AsyncTaskResult<>(elements);
+-    } catch (ArchiveException ifArchiveIsCorruptOrInvalid) {
+-      return new AsyncTaskResult<>(ifArchiveIsCorruptOrInvalid);
+-    }
+-  }
+-
+-  @Override
+-  protected final void onPostExecute(
+-      AsyncTaskResult<ArrayList<CompressedObjectParcelable>> zipEntries) {
+-    super.onPostExecute(zipEntries);
+-    onFinish.onAsyncTaskFinished(zipEntries);
+-  }
+-
+-  abstract void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException;
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt
+new file mode 100644
+index 000000000..cff2c6181
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/CompressedHelperTask.kt
+@@ -0,0 +1,62 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.os.AsyncTask
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.archivers.ArchiveException
++import java.io.IOException
++import java.util.*
++
++abstract class CompressedHelperTask internal constructor(
++    private val createBackItem: Boolean,
++    private val onFinish:
++        OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AsyncTask<Void, IOException, AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>() {
++
++    public override fun doInBackground(
++        vararg voids: Void
++    ): AsyncTaskResult<ArrayList<CompressedObjectParcelable>> {
++
++        val elements = ArrayList<CompressedObjectParcelable>()
++        if (createBackItem) elements.add(0, CompressedObjectParcelable())
++        return try {
++            addElements(elements)
++            Collections.sort(elements, CompressedObjectParcelable.Sorter())
++            AsyncTaskResult(elements)
++        } catch (ifArchiveIsCorruptOrInvalid: ArchiveException) {
++            AsyncTaskResult(ifArchiveIsCorruptOrInvalid)
++        }
++    }
++
++    override fun onPostExecute(
++        zipEntries: AsyncTaskResult<ArrayList<CompressedObjectParcelable>>
++    ) {
++        super.onPostExecute(zipEntries)
++        onFinish.onAsyncTaskFinished(zipEntries)
++    }
++
++    @Throws(ArchiveException::class)
++    protected abstract fun addElements(elements: ArrayList<CompressedObjectParcelable>)
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java
+deleted file mode 100644
+index 1cb75011f..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.java
++++ /dev/null
+@@ -1,99 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.lang.ref.WeakReference;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.application.AppConfig;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class GzipHelperTask extends CompressedHelperTask {
+-
+-  private WeakReference<Context> context;
+-  private String filePath, relativePath;
+-
+-  public GzipHelperTask(
+-      Context context,
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.context = new WeakReference<>(context);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    TarArchiveInputStream tarInputStream = null;
+-    try {
+-      tarInputStream =
+-          new TarArchiveInputStream(new GzipCompressorInputStream(new FileInputStream(filePath)));
+-
+-      TarArchiveEntry entry;
+-      while ((entry = tarInputStream.getNextTarEntry()) != null) {
+-        String name = entry.getName();
+-        if (!CompressedHelper.isEntryPathValid(name)) {
+-          AppConfig.toast(
+-              context.get(), context.get().getString(R.string.multiple_invalid_archive_entries));
+-          continue;
+-        }
+-        if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
+-
+-        boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-        boolean isInRelativeDir =
+-            name.contains(SEPARATOR)
+-                && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  entry.getName(),
+-                  entry.getModTime().getTime(),
+-                  entry.getSize(),
+-                  entry.isDirectory()));
+-        }
+-      }
+-    } catch (IOException e) {
+-      throw new ArchiveException(String.format("Tarball archive %s is corrupt", filePath), e);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.kt
+new file mode 100644
+index 000000000..d905e43cb
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/GzipHelperTask.kt
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
++import java.util.*
++
++class GzipHelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        GzipCompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.java
+deleted file mode 100644
+index 2073fb5b5..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.java
++++ /dev/null
+@@ -1,85 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import androidx.annotation.NonNull;
+-
+-public class LzmaHelperTask extends CompressedHelperTask {
+-
+-  private String filePath, relativePath;
+-
+-  public LzmaHelperTask(
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    TarArchiveInputStream tarInputStream = null;
+-    try {
+-      tarInputStream =
+-          new TarArchiveInputStream(new LZMACompressorInputStream(new FileInputStream(filePath)));
+-
+-      TarArchiveEntry entry;
+-      while ((entry = tarInputStream.getNextTarEntry()) != null) {
+-        String name = entry.getName();
+-        if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
+-
+-        boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-        boolean isInRelativeDir =
+-            name.contains(SEPARATOR)
+-                && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  entry.getName(),
+-                  entry.getLastModifiedDate().getTime(),
+-                  entry.getSize(),
+-                  entry.isDirectory()));
+-        }
+-      }
+-    } catch (IOException e) {
+-      throw new ArchiveException(String.format("LZMA archive %s is corrupt", filePath), e);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.kt
+new file mode 100644
+index 000000000..d7464351a
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTask.kt
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream
++import java.util.*
++
++class LzmaHelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        LZMACompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java
+deleted file mode 100644
+index ea9ed0eb9..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.java
++++ /dev/null
+@@ -1,100 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import java.io.File;
+-import java.io.FileNotFoundException;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.RarDecompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-import com.github.junrar.Archive;
+-import com.github.junrar.exception.RarException;
+-import com.github.junrar.exception.UnsupportedRarV5Exception;
+-import com.github.junrar.rarfile.FileHeader;
+-
+-import androidx.annotation.NonNull;
+-
+-public class RarHelperTask extends CompressedHelperTask {
+-
+-  private String fileLocation;
+-  private String relativeDirectory;
+-
+-  /**
+-   * AsyncTask to load RAR file items.
+-   *
+-   * @param realFileDirectory the location of the zip file
+-   * @param dir relativeDirectory to access inside the zip file
+-   */
+-  public RarHelperTask(
+-      String realFileDirectory,
+-      String dir,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    fileLocation = realFileDirectory;
+-    relativeDirectory = dir;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    try {
+-      Archive zipfile = new Archive(new File(fileLocation));
+-      String relativeDirDiffSeparator = relativeDirectory.replace(CompressedHelper.SEPARATOR, "\\");
+-
+-      for (FileHeader rarArchive : zipfile.getFileHeaders()) {
+-        String name = rarArchive.getFileName();
+-        if (!CompressedHelper.isEntryPathValid(name)) {
+-          continue;
+-        }
+-        boolean isInBaseDir =
+-            (relativeDirDiffSeparator == null || relativeDirDiffSeparator.equals(""))
+-                && !name.contains("\\");
+-        boolean isInRelativeDir =
+-            relativeDirDiffSeparator != null
+-                && name.contains("\\")
+-                && name.substring(0, name.lastIndexOf("\\")).equals(relativeDirDiffSeparator);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  RarDecompressor.convertName(rarArchive),
+-                  rarArchive.getMTime().getTime(),
+-                  rarArchive.getFullUnpackSize(),
+-                  rarArchive.isDirectory()));
+-        }
+-      }
+-    } catch (UnsupportedRarV5Exception e) {
+-      throw new ArchiveException("RAR v5 archives are not supported", e);
+-    } catch (FileNotFoundException e) {
+-      throw new ArchiveException("First part of multipart archive not found", e);
+-    } catch (RarException | IOException e) {
+-      throw new ArchiveException(String.format("RAR archive %s is corrupt", fileLocation));
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt
+new file mode 100644
+index 000000000..f0e8117dd
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/RarHelperTask.kt
+@@ -0,0 +1,93 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.filesystem.compressed.showcontents.helpers.RarDecompressor.Companion.convertName
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import com.github.junrar.Archive
++import com.github.junrar.exception.RarException
++import com.github.junrar.exception.UnsupportedRarV5Exception
++import org.apache.commons.compress.archivers.ArchiveException
++import java.io.File
++import java.io.FileNotFoundException
++import java.io.IOException
++import java.util.*
++
++/**
++ * AsyncTask to load RAR file items.
++ *
++ * @param realFileDirectory the location of the zip file
++ * @param dir relativeDirectory to access inside the zip file
++ */
++class RarHelperTask(
++    private val fileLocation: String,
++    private val relativeDirectory: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    CompressedHelperTask(goBack, l) {
++
++    @Throws(ArchiveException::class)
++    override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
++        try {
++            val zipfile = Archive(File(fileLocation))
++            val relativeDirDiffSeparator = relativeDirectory.replace(
++                CompressedHelper.SEPARATOR, "\\"
++            )
++            for (rarArchive in zipfile.fileHeaders) {
++                val name = rarArchive.fileName
++                if (!CompressedHelper.isEntryPathValid(name)) {
++                    continue
++                }
++                val isInBaseDir = (
++                    (relativeDirDiffSeparator == null || relativeDirDiffSeparator == "") &&
++                        !name.contains("\\")
++                    )
++                val isInRelativeDir = (
++                    relativeDirDiffSeparator != null && name.contains("\\") &&
++                        name.substring(0, name.lastIndexOf("\\"))
++                        == relativeDirDiffSeparator
++                    )
++                if (isInBaseDir || isInRelativeDir) {
++                    elements.add(
++                        CompressedObjectParcelable(
++                            convertName(rarArchive),
++                            rarArchive.mTime.time,
++                            rarArchive.fullUnpackSize,
++                            rarArchive.isDirectory
++                        )
++                    )
++                }
++            }
++        } catch (e: UnsupportedRarV5Exception) {
++            throw ArchiveException("RAR v5 archives are not supported", e)
++        } catch (e: FileNotFoundException) {
++            throw ArchiveException("First part of multipart archive not found", e)
++        } catch (e: RarException) {
++            throw ArchiveException(String.format("RAR archive %s is corrupt", fileLocation))
++        } catch (e: IOException) {
++            throw ArchiveException(String.format("RAR archive %s is corrupt", fileLocation))
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.java
+deleted file mode 100644
+index 38e63a63d..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.java
++++ /dev/null
+@@ -1,130 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.File;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.PasswordRequiredException;
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.tukaani.xz.CorruptedInputException;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.application.AppConfig;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache;
+-import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZArchiveEntry;
+-import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile;
+-import com.amaze.filemanager.ui.activities.MainActivity;
+-import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.widget.EditText;
+-
+-import androidx.annotation.NonNull;
+-
+-public class SevenZipHelperTask extends CompressedHelperTask {
+-
+-  private String filePath, relativePath;
+-
+-  private boolean paused = false;
+-
+-  public SevenZipHelperTask(
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    while (true) {
+-      if (paused) continue;
+-
+-      try {
+-        SevenZFile sevenzFile =
+-            (ArchivePasswordCache.getInstance().containsKey(filePath))
+-                ? new SevenZFile(
+-                    new File(filePath),
+-                    ArchivePasswordCache.getInstance().get(filePath).toCharArray())
+-                : new SevenZFile(new File(filePath));
+-
+-        for (SevenZArchiveEntry entry : sevenzFile.getEntries()) {
+-          String name = entry.getName();
+-          boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-          boolean isInRelativeDir =
+-              name.contains(SEPARATOR)
+-                  && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-          if (isInBaseDir || isInRelativeDir) {
+-            elements.add(
+-                new CompressedObjectParcelable(
+-                    entry.getName(),
+-                    entry.getLastModifiedDate().getTime(),
+-                    entry.getSize(),
+-                    entry.isDirectory()));
+-          }
+-        }
+-        paused = false;
+-        break;
+-      } catch (PasswordRequiredException e) {
+-        paused = true;
+-        publishProgress(e);
+-      } catch (IOException e) {
+-        throw new ArchiveException(String.format("7zip archive %s is corrupt", filePath));
+-      }
+-    }
+-  }
+-
+-  @Override
+-  protected void onProgressUpdate(IOException... values) {
+-    super.onProgressUpdate(values);
+-    if (values.length < 1) return;
+-
+-    IOException result = values[0];
+-    // We only handle PasswordRequiredException here.
+-    if (result instanceof PasswordRequiredException || result instanceof CorruptedInputException) {
+-      ArchivePasswordCache.getInstance().remove(filePath);
+-      GeneralDialogCreation.showPasswordDialog(
+-          AppConfig.getInstance().getMainActivityContext(),
+-          (MainActivity) AppConfig.getInstance().getMainActivityContext(),
+-          AppConfig.getInstance().getUtilsProvider().getAppTheme(),
+-          R.string.archive_password_prompt,
+-          R.string.authenticate_password,
+-          ((dialog, which) -> {
+-            EditText editText = dialog.getView().findViewById(R.id.singleedittext_input);
+-            String password = editText.getText().toString();
+-            ArchivePasswordCache.getInstance().put(filePath, password);
+-            paused = false;
+-            dialog.dismiss();
+-          }),
+-          null);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt
+new file mode 100644
+index 000000000..e4f6d8440
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/SevenZipHelperTask.kt
+@@ -0,0 +1,122 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.widget.EditText
++import com.afollestad.materialdialogs.DialogAction
++import com.afollestad.materialdialogs.MaterialDialog
++import com.amaze.filemanager.R
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile
++import com.amaze.filemanager.ui.activities.MainActivity
++import com.amaze.filemanager.ui.dialogs.GeneralDialogCreation
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.PasswordRequiredException
++import org.apache.commons.compress.archivers.ArchiveException
++import org.tukaani.xz.CorruptedInputException
++import java.io.File
++import java.io.IOException
++import java.util.*
++
++class SevenZipHelperTask(
++    private val filePath: String,
++    private val relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    CompressedHelperTask(goBack, l) {
++
++    private var paused = false
++    @Throws(ArchiveException::class)
++    override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
++        while (true) {
++            if (paused) continue
++            try {
++                val sevenzFile = if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
++                    SevenZFile(
++                        File(filePath),
++                        ArchivePasswordCache.getInstance()[filePath]!!.toCharArray()
++                    )
++                } else {
++                    SevenZFile(File(filePath))
++                }
++                for (entry in sevenzFile.entries) {
++                    val name = entry.name
++                    val isInBaseDir = (
++                        relativePath == "" &&
++                            !name.contains(CompressedHelper.SEPARATOR)
++                        )
++                    val isInRelativeDir = (
++                        name.contains(CompressedHelper.SEPARATOR) &&
++                            name.substring(0, name.lastIndexOf(CompressedHelper.SEPARATOR))
++                            == relativePath
++                        )
++                    if (isInBaseDir || isInRelativeDir) {
++                        elements.add(
++                            CompressedObjectParcelable(
++                                entry.name,
++                                entry.lastModifiedDate.time,
++                                entry.size,
++                                entry.isDirectory
++                            )
++                        )
++                    }
++                }
++                paused = false
++                break
++            } catch (e: PasswordRequiredException) {
++                paused = true
++                publishProgress(e)
++            } catch (e: IOException) {
++                throw ArchiveException(String.format("7zip archive %s is corrupt", filePath))
++            }
++        }
++    }
++
++    override fun onProgressUpdate(vararg values: IOException) {
++        super.onProgressUpdate(*values)
++        if (values.isEmpty()) return
++        val result = values[0]
++        // We only handle PasswordRequiredException here.
++        if (result is PasswordRequiredException || result is CorruptedInputException) {
++            ArchivePasswordCache.getInstance().remove(filePath)
++            GeneralDialogCreation.showPasswordDialog(
++                AppConfig.getInstance().mainActivityContext!!,
++                (AppConfig.getInstance().mainActivityContext as MainActivity?)!!,
++                AppConfig.getInstance().utilsProvider.appTheme,
++                R.string.archive_password_prompt,
++                R.string.authenticate_password,
++                { dialog: MaterialDialog, _: DialogAction? ->
++                    val editText = dialog.view.findViewById<EditText>(R.id.singleedittext_input)
++                    val password = editText.text.toString()
++                    ArchivePasswordCache.getInstance()[filePath] = password
++                    paused = false
++                    dialog.dismiss()
++                },
++                null
++            )
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java
+deleted file mode 100644
+index b6595ab3a..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.java
++++ /dev/null
+@@ -1,87 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import androidx.annotation.NonNull;
+-
+-public class TarHelperTask extends CompressedHelperTask {
+-
+-  private String filePath, relativePath;
+-
+-  public TarHelperTask(
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    TarArchiveInputStream tarInputStream = null;
+-    try {
+-      tarInputStream = new TarArchiveInputStream(new FileInputStream(filePath));
+-
+-      TarArchiveEntry entry;
+-      while ((entry = tarInputStream.getNextTarEntry()) != null) {
+-        String name = entry.getName();
+-        if (!CompressedHelper.isEntryPathValid(name)) {
+-          continue;
+-        }
+-        if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
+-
+-        boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-        boolean isInRelativeDir =
+-            name.contains(SEPARATOR)
+-                && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  entry.getName(),
+-                  entry.getLastModifiedDate().getTime(),
+-                  entry.getSize(),
+-                  entry.isDirectory()));
+-        }
+-      }
+-    } catch (IOException e) {
+-      throw new ArchiveException(String.format("Tar archive %s is corrupt", filePath));
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt
+new file mode 100644
+index 000000000..b82964216
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTask.kt
+@@ -0,0 +1,43 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.archivers.ArchiveInputStream
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
++import java.io.InputStream
++import java.util.*
++
++class TarHelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCommonsArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    override fun createFrom(inputStream: InputStream): ArchiveInputStream =
++        TarArchiveInputStream(inputStream)
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.java
+deleted file mode 100644
+index b53c1db24..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.java
++++ /dev/null
+@@ -1,85 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import androidx.annotation.NonNull;
+-
+-public class XzHelperTask extends CompressedHelperTask {
+-
+-  private String filePath, relativePath;
+-
+-  public XzHelperTask(
+-      String filePath,
+-      String relativePath,
+-      boolean goBack,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goBack, l);
+-    this.filePath = filePath;
+-    this.relativePath = relativePath;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    TarArchiveInputStream tarInputStream = null;
+-    try {
+-      tarInputStream =
+-          new TarArchiveInputStream(new XZCompressorInputStream(new FileInputStream(filePath)));
+-
+-      TarArchiveEntry entry;
+-      while ((entry = tarInputStream.getNextTarEntry()) != null) {
+-        String name = entry.getName();
+-        if (name.endsWith(SEPARATOR)) name = name.substring(0, name.length() - 1);
+-
+-        boolean isInBaseDir = relativePath.equals("") && !name.contains(SEPARATOR);
+-        boolean isInRelativeDir =
+-            name.contains(SEPARATOR)
+-                && name.substring(0, name.lastIndexOf(SEPARATOR)).equals(relativePath);
+-
+-        if (isInBaseDir || isInRelativeDir) {
+-          elements.add(
+-              new CompressedObjectParcelable(
+-                  entry.getName(),
+-                  entry.getLastModifiedDate().getTime(),
+-                  entry.getSize(),
+-                  entry.isDirectory()));
+-        }
+-      }
+-    } catch (IOException e) {
+-      throw new ArchiveException(String.format("XZ archive %s is corrupt", filePath));
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.kt
+new file mode 100644
+index 000000000..ace0ec175
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTask.kt
+@@ -0,0 +1,42 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
++import java.util.*
++
++class XzHelperTask(
++    context: Context,
++    filePath: String,
++    relativePath: String,
++    goBack: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    AbstractCompressedTarArchiveHelperTask(context, filePath, relativePath, goBack, l) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        XZCompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java
+deleted file mode 100644
+index e3293512b..000000000
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.java
++++ /dev/null
+@@ -1,151 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.asynchronous.asynctasks.compress;
+-
+-import java.io.File;
+-import java.lang.ref.WeakReference;
+-import java.util.ArrayList;
+-import java.util.Iterator;
+-
+-import org.apache.commons.compress.archivers.ArchiveException;
+-
+-import com.amaze.filemanager.R;
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.application.AppConfig;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-import android.net.Uri;
+-
+-import androidx.annotation.NonNull;
+-
+-import net.lingala.zip4j.ZipFile;
+-import net.lingala.zip4j.exception.ZipException;
+-import net.lingala.zip4j.model.FileHeader;
+-
+-public class ZipHelperTask extends CompressedHelperTask {
+-
+-  private WeakReference<Context> context;
+-  private Uri fileLocation;
+-  private String relativeDirectory;
+-
+-  /**
+-   * AsyncTask to load ZIP file items.
+-   *
+-   * @param realFileDirectory the location of the zip file
+-   * @param dir relativeDirectory to access inside the zip file
+-   */
+-  public ZipHelperTask(
+-      Context c,
+-      String realFileDirectory,
+-      String dir,
+-      boolean goback,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> l) {
+-    super(goback, l);
+-    context = new WeakReference<>(c);
+-    fileLocation = Uri.parse(realFileDirectory);
+-    relativeDirectory = dir;
+-  }
+-
+-  @Override
+-  void addElements(@NonNull ArrayList<CompressedObjectParcelable> elements)
+-      throws ArchiveException {
+-    try {
+-      ArrayList<CompressedObjectParcelable> wholelist = new ArrayList<>();
+-
+-      ZipFile zipfile = new ZipFile(fileLocation.getPath());
+-      for (Iterator<FileHeader> headers = zipfile.getFileHeaders().iterator();
+-          headers.hasNext(); ) {
+-        FileHeader entry = headers.next();
+-        if (!CompressedHelper.isEntryPathValid(entry.getFileName())) {
+-          AppConfig.toast(
+-              context.get(), context.get().getString(R.string.multiple_invalid_archive_entries));
+-          continue;
+-        }
+-        wholelist.add(
+-            new CompressedObjectParcelable(
+-                entry.getFileName(),
+-                entry.getLastModifiedTimeEpoch(),
+-                entry.getUncompressedSize(),
+-                entry.isDirectory()));
+-      }
+-
+-      ArrayList<String> strings = new ArrayList<>();
+-
+-      for (CompressedObjectParcelable entry : wholelist) {
+-        File file = new File(entry.path);
+-        if (relativeDirectory == null || relativeDirectory.trim().length() == 0) {
+-          String y = entry.path;
+-          if (y.startsWith("/")) y = y.substring(1, y.length());
+-          if (file.getParent() == null
+-              || file.getParent().length() == 0
+-              || file.getParent().equals("/")) {
+-            if (!strings.contains(y)) {
+-              elements.add(
+-                  new CompressedObjectParcelable(y, entry.date, entry.size, entry.directory));
+-              strings.add(y);
+-            }
+-          } else {
+-            String path = y.substring(0, y.indexOf("/") + 1);
+-            if (!strings.contains(path)) {
+-              CompressedObjectParcelable zipObj =
+-                  new CompressedObjectParcelable(path, entry.date, entry.size, true);
+-              strings.add(path);
+-              elements.add(zipObj);
+-            }
+-          }
+-        } else {
+-          String y = entry.path;
+-          if (entry.path.startsWith("/")) y = y.substring(1, y.length());
+-
+-          if (file.getParent() != null
+-              && (file.getParent().equals(relativeDirectory)
+-                  || file.getParent().equals("/" + relativeDirectory))) {
+-            if (!strings.contains(y)) {
+-              elements.add(
+-                  new CompressedObjectParcelable(y, entry.date, entry.size, entry.directory));
+-              strings.add(y);
+-            }
+-          } else {
+-            if (y.startsWith(relativeDirectory + "/")
+-                && y.length() > relativeDirectory.length() + 1) {
+-              String path1 = y.substring(relativeDirectory.length() + 1, y.length());
+-
+-              int index = relativeDirectory.length() + 1 + path1.indexOf("/");
+-              String path = y.substring(0, index + 1);
+-              if (!strings.contains(path)) {
+-                CompressedObjectParcelable zipObj =
+-                    new CompressedObjectParcelable(
+-                        y.substring(0, index + 1), entry.date, entry.size, true);
+-                strings.add(path);
+-                elements.add(zipObj);
+-              }
+-            }
+-          }
+-        }
+-      }
+-    } catch (ZipException e) {
+-      throw new ArchiveException("Zip file is corrupt", e);
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt
+new file mode 100644
+index 000000000..5b5be86fd
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/asynctasks/compress/ZipHelperTask.kt
+@@ -0,0 +1,160 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.asynchronous.asynctasks.compress
++
++import android.content.Context
++import android.net.Uri
++import com.amaze.filemanager.R
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import net.lingala.zip4j.ZipFile
++import net.lingala.zip4j.exception.ZipException
++import net.lingala.zip4j.model.FileHeader
++import org.apache.commons.compress.archivers.ArchiveException
++import java.io.File
++import java.lang.ref.WeakReference
++import java.util.*
++import kotlin.collections.ArrayList
++
++class ZipHelperTask(
++    c: Context,
++    realFileDirectory: String,
++    dir: String?,
++    goback: Boolean,
++    l: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++) :
++    CompressedHelperTask(goback, l) {
++
++    private val context: WeakReference<Context> = WeakReference(c)
++    private val fileLocation: Uri = Uri.parse(realFileDirectory)
++    private val relativeDirectory: String? = dir
++
++    @Throws(ArchiveException::class)
++    @Suppress("ComplexMethod", "LongMethod")
++    public override fun addElements(elements: ArrayList<CompressedObjectParcelable>) {
++        try {
++            val zipfile = ZipFile(fileLocation.path)
++            val wholelist = filterValidEntryList(zipfile)
++            val strings = ArrayList<String>()
++            for (entry in wholelist) {
++                val file = File(entry.path)
++                if (relativeDirectory == null || relativeDirectory.trim { it <= ' ' }.isEmpty()) {
++                    var y = entry.path
++                    if (y.startsWith("/")) {
++                        y = y.substring(1, y.length)
++                    }
++                    if (file.parent == null || file.parent.isEmpty() || file.parent == "/") {
++                        if (!strings.contains(y)) {
++                            elements.add(
++                                CompressedObjectParcelable(
++                                    y,
++                                    entry.date,
++                                    entry.size,
++                                    entry.directory
++                                )
++                            )
++                            strings.add(y)
++                        }
++                    } else {
++                        val path = y.substring(0, y.indexOf("/") + 1)
++                        if (!strings.contains(path)) {
++                            val zipObj = CompressedObjectParcelable(
++                                path,
++                                entry.date,
++                                entry.size,
++                                true
++                            )
++                            strings.add(path)
++                            elements.add(zipObj)
++                        }
++                    }
++                } else {
++                    var y = entry.path
++                    if (entry.path.startsWith("/")) {
++                        y = y.substring(1, y.length)
++                    }
++                    if (file.parent != null &&
++                        (
++                            file.parent == relativeDirectory ||
++                                file.parent == "/$relativeDirectory"
++                            )
++                    ) {
++                        if (!strings.contains(y)) {
++                            elements.add(
++                                CompressedObjectParcelable(
++                                    y,
++                                    entry.date,
++                                    entry.size,
++                                    entry.directory
++                                )
++                            )
++                            strings.add(y)
++                        }
++                    } else {
++                        if (y.startsWith("$relativeDirectory/") &&
++                            y.length > relativeDirectory.length + 1
++                        ) {
++                            val path1 = y.substring(relativeDirectory.length + 1, y.length)
++                            val index = relativeDirectory.length + 1 + path1.indexOf("/")
++                            val path = y.substring(0, index + 1)
++                            if (!strings.contains(path)) {
++                                val zipObj = CompressedObjectParcelable(
++                                    y.substring(0, index + 1), entry.date, entry.size, true
++                                )
++                                strings.add(path)
++                                elements.add(zipObj)
++                            }
++                        }
++                    }
++                }
++            }
++        } catch (e: ZipException) {
++            throw ArchiveException("Zip file is corrupt", e)
++        }
++    }
++
++    private fun filterValidEntryList(zipFile: ZipFile): List<CompressedObjectParcelable> {
++        val retval = ArrayList<CompressedObjectParcelable>()
++        val headers: Iterator<FileHeader> = zipFile.fileHeaders.iterator()
++        while (headers.hasNext()) {
++            val entry = headers.next()
++            if (!CompressedHelper.isEntryPathValid(entry.fileName)) {
++                AppConfig.toast(
++                    context.get(),
++                    context.get()!!.getString(R.string.multiple_invalid_archive_entries)
++                )
++                continue
++            }
++            retval.add(
++                CompressedObjectParcelable(
++                    entry.fileName,
++                    entry.lastModifiedTimeEpoch,
++                    entry.uncompressedSize,
++                    entry.isDirectory
++                )
++            )
++        }
++        return retval
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ZipService.kt b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ZipService.kt
+index d9be10a8b..cfb6504b1 100644
+--- a/app/src/main/java/com/amaze/filemanager/asynchronous/services/ZipService.kt
++++ b/app/src/main/java/com/amaze/filemanager/asynchronous/services/ZipService.kt
+@@ -206,7 +206,7 @@ class ZipService : AbstractProgressiveService() {
+          * Main logic for zipping specified files.
+          */
+         fun execute(context: Context, baseFiles: ArrayList<File>, zipPath: String?) {
+-            val out: OutputStream
++            val out: OutputStream?
+             val zipDirectory = File(zipPath)
+             watcherUtil = ServiceWatcherUtil(progressHandler)
+             watcherUtil!!.watch(this@ZipService)
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java b/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
+index e3553754b..ed0ce3f8f 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/FileUtil.java
+@@ -72,6 +72,7 @@ import android.util.Log;
+ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
+ import androidx.documentfile.provider.DocumentFile;
+ 
+ import io.reactivex.Maybe;
+@@ -181,6 +182,7 @@ public abstract class FileUtil {
+     return true;
+   }
+ 
++  @Nullable
+   public static OutputStream getOutputStream(final File target, Context context)
+       throws FileNotFoundException {
+     OutputStream outStream = null;
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCommonsArchiveExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCommonsArchiveExtractor.kt
+new file mode 100644
+index 000000000..d197b8e02
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCommonsArchiveExtractor.kt
+@@ -0,0 +1,116 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import com.amaze.filemanager.filesystem.FileUtil
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor
++import com.amaze.filemanager.filesystem.files.GenericCopyUtil
++import org.apache.commons.compress.archivers.ArchiveEntry
++import org.apache.commons.compress.archivers.ArchiveInputStream
++import java.io.*
++import java.util.*
++
++abstract class AbstractCommonsArchiveExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : Extractor(context, filePath, outputPath, listener, updatePosition) {
++
++    /**
++     * Subclasses implement this method to create [ArchiveInputStream] instances with given archive
++     * as [InputStream].
++     *
++     * @param inputStream archive as [InputStream]
++     */
++    abstract fun createFrom(inputStream: InputStream): ArchiveInputStream
++
++    @Throws(IOException::class)
++    @Suppress("EmptyWhileBlock")
++    override fun extractWithFilter(filter: Filter) {
++        var totalBytes: Long = 0
++        val archiveEntries = ArrayList<ArchiveEntry>()
++        var inputStream = createFrom(FileInputStream(filePath))
++        var archiveEntry: ArchiveEntry?
++        while (inputStream.nextEntry.also { archiveEntry = it } != null) {
++            archiveEntry?.run {
++                if (filter.shouldExtract(name, isDirectory)) {
++                    archiveEntries.add(this)
++                    totalBytes += size
++                }
++            }
++        }
++        listener.onStart(totalBytes, archiveEntries[0].name)
++        inputStream.close()
++        inputStream = createFrom(FileInputStream(filePath))
++        archiveEntries.forEach { entry ->
++            if (!listener.isCancelled) {
++                listener.onUpdate(entry.name)
++                // TAR is sequential, you need to walk all the way to the file you want
++                while (entry.hashCode() != inputStream.nextEntry.hashCode()) {}
++                extractEntry(context, inputStream, entry, outputPath)
++            }
++        }
++        inputStream.close()
++        listener.onFinish()
++    }
++
++    @Throws(IOException::class)
++    protected fun extractEntry(
++        context: Context,
++        inputStream: ArchiveInputStream,
++        entry: ArchiveEntry,
++        outputDir: String
++    ) {
++        if (entry.isDirectory) {
++            FileUtil.mkdir(File(outputDir, entry.name), context)
++            return
++        }
++        val outputFile = File(outputDir, entry.name)
++        if (!outputFile.parentFile.exists()) {
++            FileUtil.mkdir(outputFile.parentFile, context)
++        }
++        FileUtil.getOutputStream(outputFile, context)?.let { fileOutputStream ->
++            BufferedOutputStream(fileOutputStream).run {
++                var len: Int
++                val buf = ByteArray(GenericCopyUtil.DEFAULT_BUFFER_SIZE)
++                while (inputStream.read(buf).also { len = it } != -1) {
++                    write(buf, 0, len)
++                    updatePosition.updatePosition(len.toLong())
++                }
++                close()
++                outputFile.setLastModified(entry.lastModifiedDate.time)
++            }
++        } ?: AppConfig.toast(
++            context,
++            context.getString(
++                R.string.error_archive_cannot_extract,
++                entry.name,
++                outputDir
++            )
++        )
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCompressedTarArchiveExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCompressedTarArchiveExtractor.kt
+new file mode 100644
+index 000000000..a47be2100
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/AbstractCompressedTarArchiveExtractor.kt
+@@ -0,0 +1,59 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
++import org.apache.commons.compress.compressors.CompressorInputStream
++import java.io.InputStream
++import java.lang.reflect.Constructor
++
++abstract class AbstractCompressedTarArchiveExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) :
++    AbstractCommonsArchiveExtractor(context, filePath, outputPath, listener, updatePosition) {
++
++    private val compressorInputStreamConstructor: Constructor<out CompressorInputStream>
++
++    init {
++        compressorInputStreamConstructor = getCompressorInputStreamClass()
++            .getDeclaredConstructor(InputStream::class.java)
++        compressorInputStreamConstructor.isAccessible = true
++    }
++
++    /**
++     * Subclasses implement this method to specify the [CompressorInputStream] class to be used. It
++     * will be used to create the backing inputstream beneath [TarArchiveInputStream] in
++     * [createFrom].
++     *
++     * @return Class representing the implementation will be handling
++     */
++    abstract fun getCompressorInputStreamClass(): Class<out CompressorInputStream>
++
++    override fun createFrom(inputStream: InputStream): TarArchiveInputStream {
++        return TarArchiveInputStream(compressorInputStreamConstructor.newInstance(inputStream))
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.java
+deleted file mode 100644
+index 15cd8fb2a..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.java
++++ /dev/null
+@@ -1,118 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream;
+-
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class Bzip2Extractor extends Extractor {
+-
+-  public Bzip2Extractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-    TarArchiveInputStream inputStream =
+-        new TarArchiveInputStream(new BZip2CompressorInputStream(new FileInputStream(filePath)));
+-
+-    TarArchiveEntry tarArchiveEntry;
+-
+-    while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
+-      if (filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
+-        archiveEntries.add(tarArchiveEntry);
+-        totalBytes += tarArchiveEntry.getSize();
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, archiveEntries.get(0).getName());
+-
+-    inputStream.close();
+-    inputStream =
+-        new TarArchiveInputStream(new BZip2CompressorInputStream(new FileInputStream(filePath)));
+-
+-    for (TarArchiveEntry entry : archiveEntries) {
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        // TAR is sequential, you need to walk all the way to the file you want
+-        while (entry.hashCode() != inputStream.getNextTarEntry().hashCode()) ;
+-        extractEntry(context, inputStream, entry, outputPath);
+-      }
+-    }
+-    inputStream.close();
+-
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      TarArchiveInputStream inputStream,
+-      TarArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(new File(outputDir, entry.getName()), context);
+-      return;
+-    }
+-
+-    File outputFile = new File(outputDir, entry.getName());
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        outputStream.write(buf, 0, len);
+-        updatePosition.updatePosition(len);
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getModTime().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.kt
+new file mode 100644
+index 000000000..e751031a4
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/Bzip2Extractor.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
++
++class Bzip2Extractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : AbstractCompressedTarArchiveExtractor(
++    context, filePath, outputPath, listener, updatePosition
++) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        BZip2CompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java
+deleted file mode 100644
+index bce9eb5b0..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.java
++++ /dev/null
+@@ -1,130 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+-
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class GzipExtractor extends Extractor {
+-
+-  public GzipExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-    TarArchiveInputStream inputStream =
+-        new TarArchiveInputStream(new GzipCompressorInputStream(new FileInputStream(filePath)));
+-
+-    TarArchiveEntry tarArchiveEntry;
+-
+-    while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
+-      if (CompressedHelper.isEntryPathValid(tarArchiveEntry.getName())) {
+-        if (filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
+-          archiveEntries.add(tarArchiveEntry);
+-          totalBytes += tarArchiveEntry.getSize();
+-        }
+-      } else {
+-        invalidArchiveEntries.add(tarArchiveEntry.getName());
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, archiveEntries.get(0).getName());
+-
+-    inputStream.close();
+-    inputStream =
+-        new TarArchiveInputStream(new GzipCompressorInputStream(new FileInputStream(filePath)));
+-
+-    for (TarArchiveEntry entry : archiveEntries) {
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        // TAR is sequential, you need to walk all the way to the file you want
+-        while (entry.hashCode() != inputStream.getNextTarEntry().hashCode()) ;
+-        extractEntry(context, inputStream, entry, outputPath);
+-      }
+-    }
+-    inputStream.close();
+-
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      TarArchiveInputStream inputStream,
+-      TarArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-
+-    File outputFile = new File(outputDir, fixEntryName(entry.getName()));
+-    if (!outputFile.getCanonicalPath().startsWith(outputDir)) {
+-      throw new IOException("Incorrect ZipEntry path!");
+-    }
+-
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(outputFile, context);
+-      return;
+-    }
+-
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        if (!listener.isCancelled()) {
+-          outputStream.write(buf, 0, len);
+-          updatePosition.updatePosition(len);
+-        } else break;
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getModTime().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.kt
+new file mode 100644
+index 000000000..dc2693e9b
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/GzipExtractor.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
++
++class GzipExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : AbstractCompressedTarArchiveExtractor(
++    context, filePath, outputPath, listener, updatePosition
++) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        GzipCompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.java
+deleted file mode 100644
+index 3654a881d..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.java
++++ /dev/null
+@@ -1,118 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream;
+-
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class LzmaExtractor extends Extractor {
+-
+-  public LzmaExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-    TarArchiveInputStream inputStream =
+-        new TarArchiveInputStream(new LZMACompressorInputStream(new FileInputStream(filePath)));
+-
+-    TarArchiveEntry tarArchiveEntry;
+-
+-    while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
+-      if (filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
+-        archiveEntries.add(tarArchiveEntry);
+-        totalBytes += tarArchiveEntry.getSize();
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, archiveEntries.get(0).getName());
+-
+-    inputStream.close();
+-    inputStream =
+-        new TarArchiveInputStream(new LZMACompressorInputStream(new FileInputStream(filePath)));
+-
+-    for (TarArchiveEntry entry : archiveEntries) {
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        // TAR is sequential, you need to walk all the way to the file you want
+-        while (entry.hashCode() != inputStream.getNextTarEntry().hashCode()) ;
+-        extractEntry(context, inputStream, entry, outputPath);
+-      }
+-    }
+-    inputStream.close();
+-
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      TarArchiveInputStream inputStream,
+-      TarArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(new File(outputDir, entry.getName()), context);
+-      return;
+-    }
+-
+-    File outputFile = new File(outputDir, entry.getName());
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        outputStream.write(buf, 0, len);
+-        updatePosition.updatePosition(len);
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getModTime().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.kt
+new file mode 100644
+index 000000000..e1917cb3d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/LzmaExtractor.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.lzma.LZMACompressorInputStream
++
++class LzmaExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : AbstractCompressedTarArchiveExtractor(
++    context, filePath, outputPath, listener, updatePosition
++) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        LZMACompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.java
+deleted file mode 100644
+index 4bd1e0169..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.java
++++ /dev/null
+@@ -1,129 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache;
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZArchiveEntry;
+-import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class SevenZipExtractor extends Extractor {
+-
+-  public SevenZipExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    SevenZFile sevenzFile =
+-        (ArchivePasswordCache.getInstance().containsKey(filePath))
+-            ? new SevenZFile(
+-                new File(filePath), ArchivePasswordCache.getInstance().get(filePath).toCharArray())
+-            : new SevenZFile(new File(filePath));
+-
+-    ArrayList<SevenZArchiveEntry> arrayList = new ArrayList<>();
+-
+-    // iterating archive elements to find file names that are to be extracted
+-    for (SevenZArchiveEntry entry : sevenzFile.getEntries()) {
+-      if (filter.shouldExtract(entry.getName(), entry.isDirectory())) {
+-        // Entry to be extracted is at least the entry path (may be more, when it is a directory)
+-        arrayList.add(entry);
+-        totalBytes += entry.getSize();
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, arrayList.get(0).getName());
+-
+-    SevenZArchiveEntry entry;
+-    while ((entry = sevenzFile.getNextEntry()) != null) {
+-      if (!arrayList.contains(entry)) {
+-        continue;
+-      }
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        extractEntry(context, sevenzFile, entry, outputPath);
+-      }
+-    }
+-    sevenzFile.close();
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      SevenZFile sevenzFile,
+-      SevenZArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-    String name = entry.getName();
+-
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(new File(outputDir, name), context);
+-      return;
+-    }
+-    File outputFile = new File(outputDir, name);
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-
+-    byte[] content = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-    long progress = 0;
+-    try {
+-      while (progress < entry.getSize()) {
+-        int length;
+-        int bytesLeft = Long.valueOf(entry.getSize() - progress).intValue();
+-        length =
+-            sevenzFile.read(
+-                content,
+-                0,
+-                bytesLeft > GenericCopyUtil.DEFAULT_BUFFER_SIZE
+-                    ? GenericCopyUtil.DEFAULT_BUFFER_SIZE
+-                    : bytesLeft);
+-        outputStream.write(content, 0, length);
+-        updatePosition.updatePosition(length);
+-        progress += length;
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getLastModifiedDate().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.kt
+new file mode 100644
+index 000000000..a889cd7f3
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/SevenZipExtractor.kt
+@@ -0,0 +1,131 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import com.amaze.filemanager.filesystem.FileUtil
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor
++import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZArchiveEntry
++import com.amaze.filemanager.filesystem.compressed.sevenz.SevenZFile
++import com.amaze.filemanager.filesystem.files.GenericCopyUtil
++import java.io.BufferedOutputStream
++import java.io.File
++import java.io.IOException
++import java.util.*
++
++class SevenZipExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) :
++    Extractor(context, filePath, outputPath, listener, updatePosition) {
++
++    @Throws(IOException::class)
++    override fun extractWithFilter(filter: Filter) {
++        var totalBytes: Long = 0
++        val sevenzFile = if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
++            SevenZFile(File(filePath), ArchivePasswordCache.getInstance()[filePath]!!.toCharArray())
++        } else {
++            SevenZFile(File(filePath))
++        }
++        val arrayList = ArrayList<SevenZArchiveEntry>()
++
++        // iterating archive elements to find file names that are to be extracted
++        for (entry in sevenzFile.entries) {
++            if (filter.shouldExtract(entry.name, entry.isDirectory)) {
++                // Entry to be extracted is at least the entry path
++                // (may be more, when it is a directory)
++                arrayList.add(entry)
++                totalBytes += entry.size
++            }
++        }
++        listener.onStart(totalBytes, arrayList[0].name)
++        var entry: SevenZArchiveEntry?
++        while (sevenzFile.nextEntry.also { entry = it } != null) {
++            if (!arrayList.contains(entry)) {
++                continue
++            }
++            if (!listener.isCancelled) {
++                listener.onUpdate(entry!!.name)
++                extractEntry(context, sevenzFile, entry!!, outputPath)
++            }
++        }
++        sevenzFile.close()
++        listener.onFinish()
++    }
++
++    @Throws(IOException::class)
++    private fun extractEntry(
++        context: Context,
++        sevenzFile: SevenZFile,
++        entry: SevenZArchiveEntry,
++        outputDir: String
++    ) {
++        val name = entry.name
++        if (entry.isDirectory) {
++            FileUtil.mkdir(File(outputDir, name), context)
++            return
++        }
++        val outputFile = File(outputDir, name)
++        if (!outputFile.parentFile.exists()) {
++            FileUtil.mkdir(outputFile.parentFile, context)
++        }
++        FileUtil.getOutputStream(outputFile, context)?.let { fileOutputStream ->
++            BufferedOutputStream(fileOutputStream).runCatching {
++                val content = ByteArray(GenericCopyUtil.DEFAULT_BUFFER_SIZE)
++                var progress: Long = 0
++                while (progress < entry.size) {
++                    var length: Int
++                    val bytesLeft = java.lang.Long.valueOf(entry.size - progress).toInt()
++                    length = sevenzFile.read(
++                        content,
++                        0,
++                        if (bytesLeft > GenericCopyUtil.DEFAULT_BUFFER_SIZE) {
++                            GenericCopyUtil.DEFAULT_BUFFER_SIZE
++                        } else {
++                            bytesLeft
++                        }
++                    )
++                    write(content, 0, length)
++                    updatePosition.updatePosition(length.toLong())
++                    progress += length.toLong()
++                }
++                close()
++                outputFile.setLastModified(entry.lastModifiedDate.time)
++            }
++        }?.onFailure {
++            throw it
++        } ?: AppConfig.toast(
++            context,
++            context.getString(
++                R.string.error_archive_cannot_extract,
++                entry.name,
++                outputDir
++            )
++        )
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java
+deleted file mode 100644
+index 3709eadf9..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.java
++++ /dev/null
+@@ -1,128 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class TarExtractor extends Extractor {
+-
+-  public TarExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    List<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-    TarArchiveInputStream inputStream = new TarArchiveInputStream(new FileInputStream(filePath));
+-
+-    TarArchiveEntry tarArchiveEntry;
+-
+-    while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
+-      if (CompressedHelper.isEntryPathValid(tarArchiveEntry.getName())) {
+-        if (filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
+-          archiveEntries.add(tarArchiveEntry);
+-          totalBytes += tarArchiveEntry.getSize();
+-        }
+-      } else {
+-        invalidArchiveEntries.add(tarArchiveEntry.getName());
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, archiveEntries.get(0).getName());
+-
+-    inputStream.close();
+-    inputStream = new TarArchiveInputStream(new FileInputStream(filePath));
+-
+-    for (TarArchiveEntry entry : archiveEntries) {
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        // TAR is sequential, you need to walk all the way to the file you want
+-        while (entry.hashCode() != inputStream.getNextTarEntry().hashCode()) ;
+-        extractEntry(context, inputStream, entry, outputPath);
+-      }
+-    }
+-    inputStream.close();
+-
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      TarArchiveInputStream inputStream,
+-      TarArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-    File outputFile = new File(outputDir, fixEntryName(entry.getName()));
+-
+-    if (!outputFile.getCanonicalPath().startsWith(outputDir)) {
+-      throw new IOException("Incorrect TarArchiveEntry path!");
+-    }
+-
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(outputFile, context);
+-      return;
+-    }
+-
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        if (!listener.isCancelled()) {
+-          outputStream.write(buf, 0, len);
+-          updatePosition.updatePosition(len);
+-        } else break;
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getModTime().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.kt
+new file mode 100644
+index 000000000..8ea4f306d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/TarExtractor.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
++import java.io.InputStream
++
++class TarExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : AbstractCommonsArchiveExtractor(
++    context, filePath, outputPath, listener, updatePosition
++) {
++
++    override fun createFrom(inputStream: InputStream): TarArchiveInputStream =
++        TarArchiveInputStream(inputStream)
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.java
+deleted file mode 100644
+index 484e6bddb..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.java
++++ /dev/null
+@@ -1,118 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.FileInputStream;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-
+-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+-import org.apache.commons.compress.compressors.xz.XZCompressorInputStream;
+-
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class XzExtractor extends Extractor {
+-
+-  public XzExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    ArrayList<TarArchiveEntry> archiveEntries = new ArrayList<>();
+-    TarArchiveInputStream inputStream =
+-        new TarArchiveInputStream(new XZCompressorInputStream(new FileInputStream(filePath)));
+-
+-    TarArchiveEntry tarArchiveEntry;
+-
+-    while ((tarArchiveEntry = inputStream.getNextTarEntry()) != null) {
+-      if (filter.shouldExtract(tarArchiveEntry.getName(), tarArchiveEntry.isDirectory())) {
+-        archiveEntries.add(tarArchiveEntry);
+-        totalBytes += tarArchiveEntry.getSize();
+-      }
+-    }
+-
+-    listener.onStart(totalBytes, archiveEntries.get(0).getName());
+-
+-    inputStream.close();
+-    inputStream =
+-        new TarArchiveInputStream(new XZCompressorInputStream(new FileInputStream(filePath)));
+-
+-    for (TarArchiveEntry entry : archiveEntries) {
+-      if (!listener.isCancelled()) {
+-        listener.onUpdate(entry.getName());
+-        // TAR is sequential, you need to walk all the way to the file you want
+-        while (entry.hashCode() != inputStream.getNextTarEntry().hashCode()) ;
+-        extractEntry(context, inputStream, entry, outputPath);
+-      }
+-    }
+-    inputStream.close();
+-
+-    listener.onFinish();
+-  }
+-
+-  private void extractEntry(
+-      @NonNull final Context context,
+-      TarArchiveInputStream inputStream,
+-      TarArchiveEntry entry,
+-      String outputDir)
+-      throws IOException {
+-    if (entry.isDirectory()) {
+-      FileUtil.mkdir(new File(outputDir, entry.getName()), context);
+-      return;
+-    }
+-
+-    File outputFile = new File(outputDir, entry.getName());
+-    if (!outputFile.getParentFile().exists()) {
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        outputStream.write(buf, 0, len);
+-        updatePosition.updatePosition(len);
+-      }
+-    } finally {
+-      outputStream.close();
+-      outputFile.setLastModified(entry.getModTime().getTime());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.kt
+new file mode 100644
+index 000000000..77b40a560
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/XzExtractor.kt
+@@ -0,0 +1,40 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import org.apache.commons.compress.compressors.CompressorInputStream
++import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
++
++class XzExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : AbstractCompressedTarArchiveExtractor(
++    context, filePath, outputPath, listener, updatePosition
++) {
++
++    override fun getCompressorInputStreamClass(): Class<out CompressorInputStream> =
++        XZCompressorInputStream::class.java
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java
+deleted file mode 100644
+index 725d422f4..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.java
++++ /dev/null
+@@ -1,140 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers;
+-
+-import java.io.BufferedInputStream;
+-import java.io.BufferedOutputStream;
+-import java.io.File;
+-import java.io.IOException;
+-import java.util.ArrayList;
+-import java.util.List;
+-
+-import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache;
+-import com.amaze.filemanager.file_operations.utils.UpdatePosition;
+-import com.amaze.filemanager.filesystem.FileUtil;
+-import com.amaze.filemanager.filesystem.compressed.CompressedHelper;
+-import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor;
+-import com.amaze.filemanager.filesystem.files.GenericCopyUtil;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-import net.lingala.zip4j.ZipFile;
+-import net.lingala.zip4j.exception.ZipException;
+-import net.lingala.zip4j.model.FileHeader;
+-
+-public class ZipExtractor extends Extractor {
+-
+-  public ZipExtractor(
+-      @NonNull Context context,
+-      @NonNull String filePath,
+-      @NonNull String outputPath,
+-      @NonNull OnUpdate listener,
+-      @NonNull UpdatePosition updatePosition) {
+-    super(context, filePath, outputPath, listener, updatePosition);
+-  }
+-
+-  @Override
+-  protected void extractWithFilter(@NonNull Filter filter) throws IOException {
+-    long totalBytes = 0;
+-    List<FileHeader> entriesToExtract = new ArrayList<>();
+-    try {
+-      ZipFile zipfile = new ZipFile(filePath);
+-      if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
+-        zipfile.setPassword(ArchivePasswordCache.getInstance().get(filePath).toCharArray());
+-      }
+-
+-      // iterating archive elements to find file names that are to be extracted
+-      for (Object obj : zipfile.getFileHeaders()) {
+-        FileHeader fileHeader = (FileHeader) obj;
+-
+-        if (CompressedHelper.isEntryPathValid(fileHeader.getFileName())) {
+-          if (filter.shouldExtract(fileHeader.getFileName(), fileHeader.isDirectory())) {
+-            entriesToExtract.add(fileHeader);
+-            totalBytes += fileHeader.getUncompressedSize();
+-          }
+-        } else {
+-          invalidArchiveEntries.add(fileHeader.getFileName());
+-        }
+-      }
+-
+-      listener.onStart(totalBytes, entriesToExtract.get(0).getFileName());
+-
+-      for (FileHeader entry : entriesToExtract) {
+-        if (!listener.isCancelled()) {
+-          listener.onUpdate(entry.getFileName());
+-          extractEntry(context, zipfile, entry, outputPath);
+-        }
+-      }
+-      listener.onFinish();
+-    } catch (ZipException e) {
+-      throw new IOException(e);
+-    }
+-  }
+-
+-  /**
+-   * Method extracts {@link FileHeader} from {@link ZipFile}
+-   *
+-   * @param zipFile zip file from which entriesToExtract are to be extracted
+-   * @param entry zip entry that is to be extracted
+-   * @param outputDir output directory
+-   */
+-  private void extractEntry(
+-      @NonNull final Context context, ZipFile zipFile, FileHeader entry, String outputDir)
+-      throws IOException {
+-    final File outputFile = new File(outputDir, fixEntryName(entry.getFileName()));
+-
+-    if (!outputFile.getCanonicalPath().startsWith(outputDir)) {
+-      throw new IOException("Incorrect ZipEntry path!");
+-    }
+-
+-    if (entry.isDirectory()) {
+-      // zip entry is a directory, return after creating new directory
+-      FileUtil.mkdir(outputFile, context);
+-      return;
+-    }
+-
+-    if (!outputFile.getParentFile().exists()) {
+-      // creating directory if not already exists
+-      FileUtil.mkdir(outputFile.getParentFile(), context);
+-    }
+-
+-    BufferedInputStream inputStream = new BufferedInputStream(zipFile.getInputStream(entry));
+-    BufferedOutputStream outputStream =
+-        new BufferedOutputStream(FileUtil.getOutputStream(outputFile, context));
+-
+-    try {
+-      int len;
+-      byte buf[] = new byte[GenericCopyUtil.DEFAULT_BUFFER_SIZE];
+-      while ((len = inputStream.read(buf)) != -1) {
+-        if (!listener.isCancelled()) {
+-          outputStream.write(buf, 0, len);
+-          updatePosition.updatePosition(len);
+-        } else break;
+-      }
+-    } finally {
+-      outputStream.close();
+-      inputStream.close();
+-      outputFile.setLastModified(entry.getLastModifiedTimeEpoch());
+-    }
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.kt
+new file mode 100644
+index 000000000..c15688b6d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/extractcontents/helpers/ZipExtractor.kt
+@@ -0,0 +1,133 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.extractcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.R
++import com.amaze.filemanager.application.AppConfig
++import com.amaze.filemanager.file_operations.filesystem.compressed.ArchivePasswordCache
++import com.amaze.filemanager.file_operations.utils.UpdatePosition
++import com.amaze.filemanager.filesystem.FileUtil
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.filesystem.compressed.extractcontents.Extractor
++import com.amaze.filemanager.filesystem.files.GenericCopyUtil
++import net.lingala.zip4j.ZipFile
++import net.lingala.zip4j.exception.ZipException
++import net.lingala.zip4j.model.FileHeader
++import java.io.BufferedInputStream
++import java.io.BufferedOutputStream
++import java.io.File
++import java.io.IOException
++import java.util.*
++
++class ZipExtractor(
++    context: Context,
++    filePath: String,
++    outputPath: String,
++    listener: OnUpdate,
++    updatePosition: UpdatePosition
++) : Extractor(context, filePath, outputPath, listener, updatePosition) {
++    @Throws(IOException::class)
++    override fun extractWithFilter(filter: Filter) {
++        var totalBytes: Long = 0
++        val entriesToExtract: MutableList<FileHeader> = ArrayList()
++        try {
++            val zipfile = ZipFile(filePath)
++            if (ArchivePasswordCache.getInstance().containsKey(filePath)) {
++                zipfile.setPassword(ArchivePasswordCache.getInstance()[filePath]!!.toCharArray())
++            }
++
++            // iterating archive elements to find file names that are to be extracted
++            zipfile.fileHeaders.forEach { obj ->
++                val fileHeader = obj as FileHeader
++                if (CompressedHelper.isEntryPathValid(fileHeader.fileName)) {
++                    if (filter.shouldExtract(fileHeader.fileName, fileHeader.isDirectory)) {
++                        entriesToExtract.add(fileHeader)
++                        totalBytes += fileHeader.uncompressedSize
++                    }
++                } else {
++                    invalidArchiveEntries.add(fileHeader.fileName)
++                }
++            }
++            listener.onStart(totalBytes, entriesToExtract[0].fileName)
++            for (entry in entriesToExtract) {
++                if (!listener.isCancelled) {
++                    listener.onUpdate(entry.fileName)
++                    extractEntry(context, zipfile, entry, outputPath)
++                }
++            }
++            listener.onFinish()
++        } catch (e: ZipException) {
++            throw IOException(e)
++        }
++    }
++
++    /**
++     * Method extracts [FileHeader] from [ZipFile]
++     *
++     * @param zipFile zip file from which entriesToExtract are to be extracted
++     * @param entry zip entry that is to be extracted
++     * @param outputDir output directory
++     */
++    @Throws(IOException::class)
++    private fun extractEntry(
++        context: Context,
++        zipFile: ZipFile,
++        entry: FileHeader,
++        outputDir: String
++    ) {
++        val outputFile = File(outputDir, fixEntryName(entry.fileName))
++        if (!outputFile.canonicalPath.startsWith(outputDir)) {
++            throw IOException("Incorrect ZipEntry path!")
++        }
++        if (entry.isDirectory) {
++            // zip entry is a directory, return after creating new directory
++            FileUtil.mkdir(outputFile, context)
++            return
++        }
++        if (!outputFile.parentFile.exists()) {
++            // creating directory if not already exists
++            FileUtil.mkdir(outputFile.parentFile, context)
++        }
++        val inputStream = BufferedInputStream(zipFile.getInputStream(entry))
++        FileUtil.getOutputStream(outputFile, context)?.let { fileOutputStream ->
++            BufferedOutputStream(fileOutputStream).run {
++                var len: Int
++                val buf = ByteArray(GenericCopyUtil.DEFAULT_BUFFER_SIZE)
++                while (inputStream.read(buf).also { len = it } != -1) {
++                    if (!listener.isCancelled) {
++                        write(buf, 0, len)
++                        updatePosition.updatePosition(len.toLong())
++                    } else break
++                }
++                close()
++                outputFile.setLastModified(entry.lastModifiedTimeEpoch)
++            }
++        } ?: AppConfig.toast(
++            context,
++            context.getString(
++                R.string.error_archive_cannot_extract,
++                entry.fileName,
++                outputDir
++            )
++        )
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java
+deleted file mode 100644
+index 1f0d6bd4b..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.java
++++ /dev/null
+@@ -1,90 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.showcontents;
+-
+-import java.util.ArrayList;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
+-import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil;
+-import com.amaze.filemanager.asynchronous.services.ExtractService;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-import android.content.Intent;
+-
+-/** @author Emmanuel on 20/11/2017, at 17:14. */
+-public abstract class Decompressor {
+-
+-  protected Context context;
+-  protected String filePath;
+-
+-  public Decompressor(Context context) {
+-    this.context = context;
+-  }
+-
+-  public void setFilePath(String path) {
+-    filePath = path;
+-  }
+-
+-  /**
+-   * Separator must be "/"
+-   *
+-   * @param path end with "/" if it is a directory, does not if it's a file
+-   */
+-  public abstract CompressedHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish);
+-
+-  /** Decompress a file somewhere */
+-  public final void decompress(String whereToDecompress) {
+-    Intent intent = new Intent(context, ExtractService.class);
+-    intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-    intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, new String[0]);
+-    intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-    ServiceWatcherUtil.runService(context, intent);
+-  }
+-
+-  /**
+-   * Decompress files or dirs inside the compressed file.
+-   *
+-   * @param subDirectories separator is "/", ended with "/" if it is a directory, does not if it's a
+-   *     file
+-   */
+-  public final void decompress(String whereToDecompress, String[] subDirectories) {
+-    for (int i = 0; i < subDirectories.length; i++) {
+-      subDirectories[i] = realRelativeDirectory(subDirectories[i]);
+-    }
+-
+-    Intent intent = new Intent(context, ExtractService.class);
+-    intent.putExtra(ExtractService.KEY_PATH_ZIP, filePath);
+-    intent.putExtra(ExtractService.KEY_ENTRIES_ZIP, subDirectories);
+-    intent.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress);
+-    ServiceWatcherUtil.runService(context, intent);
+-  }
+-
+-  /** Get the real relative directory path (useful if you converted the separator or something) */
+-  protected String realRelativeDirectory(String dir) {
+-    return dir;
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt
+new file mode 100644
+index 000000000..40178932e
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/Decompressor.kt
+@@ -0,0 +1,83 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.showcontents
++
++import android.content.Context
++import android.content.Intent
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask
++import com.amaze.filemanager.asynchronous.management.ServiceWatcherUtil
++import com.amaze.filemanager.asynchronous.services.ExtractService
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
++
++/** @author Emmanuel on 20/11/2017, at 17:14.
++ */
++abstract class Decompressor(protected var context: Context) {
++
++    var filePath: String? = null
++
++    /**
++     * Separator must be "/"
++     *
++     * @param path end with "/" if it is a directory, does not if it's a file
++     */
++    abstract fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ): CompressedHelperTask
++
++    /** Decompress a file somewhere  */
++    fun decompress(whereToDecompress: String) {
++        val intent = Intent(context, ExtractService::class.java).also {
++            it.putExtra(ExtractService.KEY_PATH_ZIP, filePath)
++            it.putExtra(ExtractService.KEY_ENTRIES_ZIP, arrayOfNulls<String>(0))
++            it.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress)
++        }
++        ServiceWatcherUtil.runService(context, intent)
++    }
++
++    /**
++     * Decompress files or dirs inside the compressed file.
++     *
++     * @param subDirectories separator is "/", ended with "/" if it is a directory, does not if it's a
++     * file
++     */
++    fun decompress(whereToDecompress: String, subDirectories: Array<String>) {
++        subDirectories.map {
++            realRelativeDirectory(it)
++        }.run {
++            val intent = Intent(context, ExtractService::class.java).also {
++                it.putExtra(ExtractService.KEY_PATH_ZIP, filePath)
++                it.putExtra(ExtractService.KEY_ENTRIES_ZIP, subDirectories)
++                it.putExtra(ExtractService.KEY_PATH_EXTRACT, whereToDecompress)
++            }
++            ServiceWatcherUtil.runService(context, intent)
++        }
++    }
++
++    /** Get the real relative directory path (useful if you converted the separator or something)  */
++    protected open fun realRelativeDirectory(dir: String): String {
++        return dir
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.kt
+similarity index 62%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.kt
+index 87f0311cb..2d6bb0ab0 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/Bzip2Decompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,30 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.Bzip2HelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.Bzip2HelperTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class Bzip2Decompressor extends Decompressor {
+-
+-  public Bzip2Decompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public CompressedHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new Bzip2HelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
++class Bzip2Decompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        Bzip2HelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.kt
+similarity index 62%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.kt
+index abedbb2a4..017438b43 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/GzipDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,30 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.GzipHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.GzipHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class GzipDecompressor extends Decompressor {
+-
+-  public GzipDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public CompressedHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new GzipHelperTask(context, filePath, path, addGoBackItem, onFinish);
+-  }
++class GzipDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        GzipHelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.kt
+similarity index 62%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.kt
+index a513eeaf2..86d99b5f3 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/LzmaDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,30 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.LzmaHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.LzmaHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class LzmaDecompressor extends Decompressor {
+-
+-  public LzmaDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public CompressedHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new LzmaHelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
++class LzmaDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        LzmaHelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java
+deleted file mode 100644
+index 68dba3037..000000000
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.java
++++ /dev/null
+@@ -1,62 +0,0 @@
+-/*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+- * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+- *
+- * This file is part of Amaze File Manager.
+- *
+- * Amaze File Manager is free software: you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published by
+- * the Free Software Foundation, either version 3 of the License, or
+- * (at your option) any later version.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * You should have received a copy of the GNU General Public License
+- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+- */
+-
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
+-
+-import static com.amaze.filemanager.filesystem.compressed.CompressedHelper.SEPARATOR;
+-
+-import java.util.ArrayList;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.RarHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-import com.github.junrar.rarfile.FileHeader;
+-
+-import android.content.Context;
+-
+-public class RarDecompressor extends Decompressor {
+-
+-  public RarDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public RarHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new RarHelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
+-
+-  public static String convertName(FileHeader file) {
+-    String name = file.getFileNameString().replace('\\', '/');
+-
+-    if (file.isDirectory()) return name + SEPARATOR;
+-    else return name;
+-  }
+-
+-  @Override
+-  protected String realRelativeDirectory(String dir) {
+-    if (dir.endsWith(SEPARATOR)) dir = dir.substring(0, dir.length() - 1);
+-    return dir.replace(SEPARATOR.toCharArray()[0], '\\');
+-  }
+-}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt
+new file mode 100644
+index 000000000..25671921d
+--- /dev/null
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/RarDecompressor.kt
+@@ -0,0 +1,66 @@
++/*
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
++ *
++ * This file is part of Amaze File Manager.
++ *
++ * Amaze File Manager is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.RarHelperTask
++import com.amaze.filemanager.filesystem.compressed.CompressedHelper
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import com.github.junrar.rarfile.FileHeader
++import java.util.*
++
++class RarDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        RarHelperTask(filePath!!, path, addGoBackItem, onFinish)
++
++    override fun realRelativeDirectory(dir: String): String {
++        var dir = dir
++        if (dir.endsWith(CompressedHelper.SEPARATOR)) {
++            dir = dir.substring(0, dir.length - 1)
++        }
++        return dir.replace(CompressedHelper.SEPARATOR.toCharArray()[0], '\\')
++    }
++
++    companion object {
++
++        /**
++         * Helper method to convert RAR [FileHeader] entries containing backslashes back to slashes.
++         *
++         * @param file RAR entry as [FileHeader] object
++         */
++        @JvmStatic
++        fun convertName(file: FileHeader): String {
++            val name = file.fileName.replace('\\', '/')
++            return if (file.isDirectory) {
++                name + CompressedHelper.SEPARATOR
++            } else {
++                name
++            }
++        }
++    }
++}
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
+similarity index 63%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
+index 2c45ab3b1..6c8c18311 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/SevenZipDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,31 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
+-
+-import java.util.ArrayList;
+-
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.SevenZipHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-import androidx.annotation.NonNull;
+-
+-public class SevenZipDecompressor extends Decompressor {
+-
+-  public SevenZipDecompressor(@NonNull Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public SevenZipHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new SevenZipHelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
++
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.SevenZipHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
++
++class SevenZipDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        SevenZipHelperTask(filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
+similarity index 65%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
+index 74dea459e..bf22d94f1 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/TarDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,29 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.TarHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class TarDecompressor extends Decompressor {
+-
+-  public TarDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public TarHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new TarHelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
++class TarDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        TarHelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.kt
+similarity index 62%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.kt
+index 4d0518792..ae97ed231 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/XzDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,30 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.XzHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.CompressedHelperTask;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.XzHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class XzDecompressor extends Decompressor {
+-
+-  public XzDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public CompressedHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new XzHelperTask(filePath, path, addGoBackItem, onFinish);
+-  }
++class XzDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        XzHelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
+similarity index 65%
+rename from app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java
+rename to app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
+index e4cbcd075..44aa117c7 100644
+--- a/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.java
++++ b/app/src/main/java/com/amaze/filemanager/filesystem/compressed/showcontents/helpers/ZipDecompressor.kt
+@@ -1,5 +1,5 @@
+ /*
+- * Copyright (C) 2014-2020 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
++ * Copyright (C) 2014-2021 Arpit Khurana <arpitkh96@gmail.com>, Vishal Nehra <vishalmeham2@gmail.com>,
+  * Emmanuel Messulam<emmanuelbendavid@gmail.com>, Raymond Lai <airwave209gt at gmail.com> and Contributors.
+  *
+  * This file is part of Amaze File Manager.
+@@ -18,29 +18,21 @@
+  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+-package com.amaze.filemanager.filesystem.compressed.showcontents.helpers;
++package com.amaze.filemanager.filesystem.compressed.showcontents.helpers
+ 
+-import java.util.ArrayList;
++import android.content.Context
++import com.amaze.filemanager.adapters.data.CompressedObjectParcelable
++import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult
++import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperTask
++import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor
++import com.amaze.filemanager.utils.OnAsyncTaskFinished
++import java.util.*
+ 
+-import com.amaze.filemanager.adapters.data.CompressedObjectParcelable;
+-import com.amaze.filemanager.asynchronous.asynctasks.AsyncTaskResult;
+-import com.amaze.filemanager.asynchronous.asynctasks.compress.ZipHelperTask;
+-import com.amaze.filemanager.filesystem.compressed.showcontents.Decompressor;
+-import com.amaze.filemanager.utils.OnAsyncTaskFinished;
+-
+-import android.content.Context;
+-
+-public class ZipDecompressor extends Decompressor {
+-
+-  public ZipDecompressor(Context context) {
+-    super(context);
+-  }
+-
+-  @Override
+-  public ZipHelperTask changePath(
+-      String path,
+-      boolean addGoBackItem,
+-      OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>> onFinish) {
+-    return new ZipHelperTask(context, filePath, path, addGoBackItem, onFinish);
+-  }
++class ZipDecompressor(context: Context) : Decompressor(context) {
++    override fun changePath(
++        path: String,
++        addGoBackItem: Boolean,
++        onFinish: OnAsyncTaskFinished<AsyncTaskResult<ArrayList<CompressedObjectParcelable>>>
++    ) =
++        ZipHelperTask(context, filePath!!, path, addGoBackItem, onFinish)
+ }
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTaskTest.kt
+index b43eb0f35..231c04f30 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/Bzip2HelperTaskTest.kt
+@@ -21,11 +21,13 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.os.Environment
++import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+ class Bzip2HelperTaskTest : AbstractCompressedHelperTaskTest() {
+ 
+     override fun createTask(relativePath: String): CompressedHelperTask = Bzip2HelperTask(
++        ApplicationProvider.getApplicationContext(),
+         File(
+             Environment.getExternalStorageDirectory(),
+             "test-archive.tar.bz2"
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTaskTest.kt
+index f451908f1..31052a0c9 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/LzmaHelperTaskTest.kt
+@@ -21,10 +21,12 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.os.Environment
++import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+ class LzmaHelperTaskTest : AbstractCompressedHelperTaskTest() {
+     override fun createTask(relativePath: String): CompressedHelperTask = LzmaHelperTask(
++        ApplicationProvider.getApplicationContext(),
+         File(Environment.getExternalStorageDirectory(), "test-archive.tar.lzma").absolutePath,
+         relativePath,
+         false,
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt
+index 899b3efb5..8533f893a 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/TarHelperTaskTest.kt
+@@ -21,10 +21,12 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.os.Environment
++import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+ class TarHelperTaskTest : AbstractCompressedHelperTaskTest() {
+     override fun createTask(relativePath: String): CompressedHelperTask = TarHelperTask(
++        ApplicationProvider.getApplicationContext(),
+         File(Environment.getExternalStorageDirectory(), "test-archive.tar").absolutePath,
+         relativePath,
+         false,
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest.kt
+index ee1a2876d..cca26fb1b 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest.kt
+@@ -21,10 +21,12 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.os.Environment
++import androidx.test.core.app.ApplicationProvider
+ import java.io.File
+ 
+ class XzHelperTaskTest : AbstractCompressedHelperTaskTest() {
+     override fun createTask(relativePath: String): CompressedHelperTask = XzHelperTask(
++        ApplicationProvider.getApplicationContext(),
+         File(Environment.getExternalStorageDirectory(), "test-archive.tar.xz").absolutePath,
+         relativePath,
+         false,
+diff --git a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest2.kt b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest2.kt
+index 67e6a6012..9065daa17 100644
+--- a/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest2.kt
++++ b/app/src/test/java/com/amaze/filemanager/asynchronous/asynctasks/compress/XzHelperTaskTest2.kt
+@@ -21,6 +21,7 @@
+ package com.amaze.filemanager.asynchronous.asynctasks.compress
+ 
+ import android.os.Environment
++import androidx.test.core.app.ApplicationProvider
+ import org.junit.Assert.assertEquals
+ import org.junit.Test
+ import java.io.File
+@@ -54,6 +55,7 @@ class XzHelperTaskTest2 : AbstractCompressedHelperTaskTest() {
+     }
+ 
+     override fun createTask(relativePath: String): CompressedHelperTask = XzHelperTask(
++        ApplicationProvider.getApplicationContext(),
+         File(Environment.getExternalStorageDirectory(), "compress.tar.xz").absolutePath,
+         relativePath,
+         false,

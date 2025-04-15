@@ -1,0 +1,154 @@
+diff --git a/app/src/main/java/at/or/at/radiosilence/App.java b/app/src/main/java/at/or/at/radiosilence/App.java
+deleted file mode 100644
+index b1a6b31..0000000
+--- a/app/src/main/java/at/or/at/radiosilence/App.java
++++ /dev/null
+@@ -1,15 +0,0 @@
+-
+-package at.or.at.radiosilence;
+-
+-import android.app.Application;
+-import android.os.Build;
+-
+-public class App extends Application {
+-    @Override
+-    public void onCreate() {
+-        super.onCreate();
+-        if (Build.VERSION.SDK_INT >= 17) {
+-            BackgroundIntentService.grantWriteSecureSettings(this);
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/at/or/at/radiosilence/BackgroundIntentService.java b/app/src/main/java/at/or/at/radiosilence/BackgroundIntentService.java
+index f577395..e67c630 100644
+--- a/app/src/main/java/at/or/at/radiosilence/BackgroundIntentService.java
++++ b/app/src/main/java/at/or/at/radiosilence/BackgroundIntentService.java
+@@ -1,40 +1,33 @@
+-
+ package at.or.at.radiosilence;
+ 
+ import android.app.IntentService;
+ import android.content.Context;
+ import android.content.Intent;
+-
+ import eu.chainfire.libsuperuser.Shell;
+ 
+ public class BackgroundIntentService extends IntentService {
+ 
+-    public static final String ACTION_GRANT_WRITE_SECURE_SETTINGS = "at.or.at.radiosilence.action.BOOT_COMPLETE";
++    public static final String ACTION_TURN_OFF_AIRPLANE_MODE = "at.or.at.radiosilence.action.TURN_OFF_AIRPLANE_MODE";
+ 
+-    private static String command;
+-
+-    public static void grantWriteSecureSettings(Context context) {
++    public static void turnOffAirplaneMode(Context context) {
+         if (context == null) {
+             return;
+         }
+ 
+         Intent intent = new Intent(context, BackgroundIntentService.class);
+-        intent.setAction(ACTION_GRANT_WRITE_SECURE_SETTINGS);
++        intent.setAction(ACTION_TURN_OFF_AIRPLANE_MODE);
+         context.startService(intent);
+     }
+ 
+     public BackgroundIntentService() {
+         super("BackgroundIntentService");
+-        command = "adb pm grant " + getPackageName() + " android.permission.WRITE_SECURE_SETTINGS";
+     }
+ 
+     @Override
+     protected void onHandleIntent(Intent intent) {
+-        String action = intent.getAction();
+-        if ((action == null) || (action.equals(""))) return;
+-
+-        if (action.equals(ACTION_GRANT_WRITE_SECURE_SETTINGS)) {
+-            Shell.SU.run(command);
++        if (intent != null && ACTION_TURN_OFF_AIRPLANE_MODE.equals(intent.getAction())) {
++            Shell.SU.run("settings put global airplane_mode_on 0");
++            Shell.SU.run("am broadcast -a android.intent.action.AIRPLANE_MODE --ez state false");
+         }
+     }
+ }
+diff --git a/app/src/main/java/at/or/at/radiosilence/BootCompleteReceiver.java b/app/src/main/java/at/or/at/radiosilence/BootCompleteReceiver.java
+deleted file mode 100644
+index d877013..0000000
+--- a/app/src/main/java/at/or/at/radiosilence/BootCompleteReceiver.java
++++ /dev/null
+@@ -1,17 +0,0 @@
+-
+-package at.or.at.radiosilence;
+-
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.os.Build;
+-
+-public class BootCompleteReceiver extends BroadcastReceiver {
+-    @Override
+-    public void onReceive(Context context, Intent intent) {
+-        if (Build.VERSION.SDK_INT < 17) {
+-            return;  // no special permissions needed
+-        }
+-        BackgroundIntentService.grantWriteSecureSettings(context);
+-    }
+-}
+\ No newline at end of file
+diff --git a/app/src/main/java/at/or/at/radiosilence/PowerConnectedReceiver.java b/app/src/main/java/at/or/at/radiosilence/PowerConnectedReceiver.java
+index c3e1fbb..56037ea 100644
+--- a/app/src/main/java/at/or/at/radiosilence/PowerConnectedReceiver.java
++++ b/app/src/main/java/at/or/at/radiosilence/PowerConnectedReceiver.java
+@@ -3,25 +3,24 @@ package at.or.at.radiosilence;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+-import android.os.BatteryManager;
+ import android.os.Build;
+ import android.provider.Settings;
++import android.util.Log;
+ 
+ public class PowerConnectedReceiver extends BroadcastReceiver {
+ 
++    public static final String TAG = "PowerConnectedReceiver";
++
+     @Override
+     public void onReceive(Context context, Intent intent) {
+-        int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+-        boolean isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+-                status == BatteryManager.BATTERY_STATUS_FULL;
+-
+-        int chargePlug = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1);
+-        boolean usbCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_USB;
+-        boolean acCharge = chargePlug == BatteryManager.BATTERY_PLUGGED_AC;
+-        Settings.System.putInt(context.getContentResolver(), Settings.System.AIRPLANE_MODE_ON, 1);
++        Log.i(TAG, "onReceive " + intent);
++        if (intent == null || !Intent.ACTION_POWER_CONNECTED.equals(intent.getAction())) {
++            return;
++        }
+ 
+-        if (!isAirplaneModeOn(context)) {
+-            setSettings(context, 1);
++        if (isAirplaneModeOn(context)) {
++            Log.i(TAG, "isAirplaneModeOn " + isAirplaneModeOn(context));
++            setSettings(context);
+         }
+     }
+ 
+@@ -35,15 +34,13 @@ public class PowerConnectedReceiver extends BroadcastReceiver {
+         }
+     }
+ 
+-    public static void setSettings(Context context, int value) {
++    public static void setSettings(Context context) {
+         if (Build.VERSION.SDK_INT < 17) {
+             Settings.System.putInt(
+                     context.getContentResolver(),
+                     Settings.System.AIRPLANE_MODE_ON, value);
+         } else {
+-            Settings.Global.putInt(
+-                    context.getContentResolver(),
+-                    Settings.Global.AIRPLANE_MODE_ON, value);
++            BackgroundIntentService.turnOffAirplaneMode(context);
+         }
+     }
+ }

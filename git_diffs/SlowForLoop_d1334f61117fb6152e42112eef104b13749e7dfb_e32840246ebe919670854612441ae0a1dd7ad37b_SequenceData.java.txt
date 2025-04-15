@@ -1,0 +1,584 @@
+diff --git a/AndroidInfrared/src/com/github/timnew/androidinfrared/CommandBuilder.java b/AndroidInfrared/src/com/github/timnew/androidinfrared/CommandBuilder.java
+index 38d076a..868ac25 100644
+--- a/AndroidInfrared/src/com/github/timnew/androidinfrared/CommandBuilder.java
++++ b/AndroidInfrared/src/com/github/timnew/androidinfrared/CommandBuilder.java
+@@ -4,7 +4,8 @@ import java.util.ArrayList;
+ import java.util.List;
+ 
+ public class CommandBuilder {
+-    public static final int DEFAULT_TOP_BIT = 0x80000000;
++    public static final int TOP_BIT_32 = 0x1 << 31;
++    public static final long TOP_BIT_64 = 0x1L << 63;
+     private final int frequency;
+     private final List<Integer> buffer;
+     private Boolean lastMark;
+@@ -55,17 +56,21 @@ public class CommandBuilder {
+     }
+ 
+     public CommandBuilder sequence(SequenceDefinition definition, int length, int data) {
+-        return sequence(definition, DEFAULT_TOP_BIT, length, data);
++        return sequence(definition, TOP_BIT_32, length, data);
+     }
+ 
+-    public CommandBuilder sequence(SequenceDefinition definition, int topBit, int length, int data) {
++    public CommandBuilder sequence(SequenceDefinition definition, int length, long data) {
++        return sequence(definition, TOP_BIT_64, length, data);
++    }
++
++    public CommandBuilder sequence(SequenceDefinition definition, long topBit, int length, long data) {
+         for (int index = 0; index < length; index++) {
+             if ((data & topBit) == topBit) {
+                 definition.one(this, index);
+             } else {
+                 definition.zero(this, index);
+             }
+-            
++
+             data <<= 1;
+         }
+         return this;
+@@ -82,6 +87,14 @@ public class CommandBuilder {
+         return result.toString();
+     }
+ 
++    public int getFrequency() {
++        return frequency;
++    }
++
++    public List<Integer> getBuffer() {
++        return buffer;
++    }
++
+     public static SequenceDefinition simpleSequence(final int oneMark, final int oneSpace, final int zeroMark, final int zeroSpace) {
+         return new SequenceDefinition() {
+             @Override
+diff --git a/AndroidInfrared/src/com/github/timnew/androidinfrared/IrdaProtocols.java b/AndroidInfrared/src/com/github/timnew/androidinfrared/IrdaProtocols.java
+index a4dc03e..ced9b7d 100644
+--- a/AndroidInfrared/src/com/github/timnew/androidinfrared/IrdaProtocols.java
++++ b/AndroidInfrared/src/com/github/timnew/androidinfrared/IrdaProtocols.java
+@@ -35,10 +35,10 @@ public class IrdaProtocols {
+ 
+         private static final SequenceDefinition SEQUENCE_DEFINITION = simpleSequence(ONE_MARK, HDR_SPACE, ZERO_MARK, HDR_SPACE);
+ 
+-        public static String buildSony(int bitCount, int data) {
++        public static String buildSony(int bitCount, long data) {
+             return commandBuilder(FREQUENCY)
+                     .pair(HDR_MARK, HDR_SPACE)
+-                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (32 - bitCount))
++                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (64 - bitCount))
+                     .build();
+         }
+     }
+@@ -61,12 +61,12 @@ public class IrdaProtocols {
+         };
+ 
+         // Note: first bit must be a one (start bit)
+-        public static String buildRC5(int bitCount, int data) {
++        public static String buildRC5(int bitCount, long data) {
+             return commandBuilder(FREQUENCY)
+                     .mark(T1)
+                     .space(T1)
+                     .mark(T1)
+-                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (32 - bitCount))
++                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (64 - bitCount))
+                     .build();
+         }
+     }
+@@ -97,11 +97,11 @@ public class IrdaProtocols {
+         };
+ 
+         // Caller needs to take care of flipping the toggle bit
+-        public static String buildRC6(int bitCount, int data) {
++        public static String buildRC6(int bitCount, long data) {
+             return commandBuilder(FREQUENCY)
+                     .pair(HDR_MARK, HDR_SPACE)
+                     .pair(T1, T1)
+-                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (32 - bitCount))
++                    .sequence(SEQUENCE_DEFINITION, bitCount, data << (64 - bitCount))
+                     .build();
+         }
+     }
+@@ -115,6 +115,7 @@ public class IrdaProtocols {
+         private static final int ONE_SPACE = 95;
+         private static final int ZERO_SPACE = 157;
+         private static final int TOP_BIT = 0x8000;
++
+         private static final SequenceDefinition SEQUENCE_DEFINITION = simpleSequence(BIT_MARK, ONE_SPACE, BIT_MARK, ZERO_SPACE);
+ 
+         public static String buildDISH(int bitCount, int data) {
+@@ -132,19 +133,18 @@ public class IrdaProtocols {
+         private static final int ONE_SPACE = 69;
+         private static final int ZERO_SPACE = 30;
+ 
+-        private static final int TOGGLE_MASK = 0x3FF;
++        private static final int INVERSE_MASK = 0x3FF;
+         private static final int TOP_BIT = 0x4000;
+ 
+         private static final SequenceDefinition SEQUENCE_DEFINITION = simpleSequence(BIT_MARK, ONE_SPACE, BIT_MARK, ZERO_SPACE);
+ 
+         public static String buildSharp(int bitCount, int data) {
+-
+             return commandBuilder(FREQUENCY)
+                     .sequence(SEQUENCE_DEFINITION, TOP_BIT, bitCount, data)
+                     .pair(BIT_MARK, ZERO_SPACE)
+                     .delay(46)
+ 
+-                    .sequence(SEQUENCE_DEFINITION, TOP_BIT, bitCount, data ^ TOGGLE_MASK)
++                    .sequence(SEQUENCE_DEFINITION, TOP_BIT, bitCount, data ^ INVERSE_MASK)
+                     .pair(BIT_MARK, ZERO_SPACE)
+                     .delay(46)
+                     .build();
+@@ -186,13 +186,13 @@ public class IrdaProtocols {
+ 
+         private static final SequenceDefinition SEQUENCE_DEFINITION = simpleSequence(BIT_MARK, ONE_SPACE, BIT_MARK, ZERO_SPACE);
+ 
+-        public static String buildJVC(int bitCount, int data, boolean repeat) {
++        public static String buildJVC(int bitCount, long data, boolean repeat) {
+             CommandBuilder builder = commandBuilder(FREQUENCY);
+ 
+             if (!repeat)
+                 builder.pair(HDR_MARK, HDR_SPACE);
+ 
+-            return builder.sequence(SEQUENCE_DEFINITION, bitCount, data << (32 - bitCount))
++            return builder.sequence(SEQUENCE_DEFINITION, bitCount, data << (64 - bitCount))
+                     .mark(BIT_MARK)
+                     .build();
+         }
+diff --git a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/CommandBuilderTest.java b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/CommandBuilderTest.java
+new file mode 100644
+index 0000000..eb6f4fb
+--- /dev/null
++++ b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/CommandBuilderTest.java
+@@ -0,0 +1,86 @@
++package com.github.timnew.androidinfrared;
++
++import org.junit.Before;
++import org.junit.Test;
++
++import static com.github.timnew.androidinfrared.CommandBuilder.commandBuilder;
++import static org.fest.assertions.api.Assertions.assertThat;
++
++public class CommandBuilderTest {
++
++    public static final int FREQUENCY = 40000;
++    public static final String FREQUENCY_DATA = "40000,";
++    private CommandBuilder builder;
++
++    @Before
++    public void setUp() throws Exception {
++        builder = commandBuilder(FREQUENCY);
++    }
++
++    @Test
++    public void should_build_with_correct_frequency() {
++        assertThat(builder.getFrequency()).isEqualTo(FREQUENCY);
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY);
++    }
++
++    @Test
++    public void should_build_pair_correctly() {
++        builder.pair(30, 40).pair(50, 60);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 30, 40, 50, 60);
++    }
++
++    @Test
++    public void should_build_mark() {
++        builder.pair(30, 40).mark(10);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 30, 40, 10);
++
++        builder.mark(20);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 30, 40, 30);
++    }
++
++    @Test
++    public void should_build_space() {
++        builder.pair(30, 40).space(10);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 30, 50);
++
++        builder.mark(20).space(10);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 30, 50, 20, 10);
++    }
++
++    @Test
++    public void should_merge_pair_and_reverse_pair() {
++        builder.pair(10, 20).reversePair(20, 30);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 10, 40, 30);
++
++        builder.pair(5, 10);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 10, 40, 35, 10);
++    }
++
++    @Test
++    public void should_inject_delay() {
++        builder.pair(10, 20).delay(1); // 1 ms == 40 ticks @ frequency 40kHz
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 10, 60);
++
++        builder.mark(10).delay(1);
++
++        assertThat(builder.getBuffer()).containsExactly(FREQUENCY, 10, 60, 10, 40);
++
++    }
++
++    @Test
++    public void should_render_properly() {
++        builder.pair(10, 20).pair(30, 40);
++
++        assertThat(builder.build()).isEqualTo(FREQUENCY_DATA + "10,20,30,40,");
++    }
++
++
++}
+diff --git a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/IrSequence.java b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/IrSequence.java
+deleted file mode 100644
+index b282936..0000000
+--- a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/IrSequence.java
++++ /dev/null
+@@ -1,21 +0,0 @@
+-package com.github.timnew.androidinfrared;
+-
+-public abstract class IrSequence {
+-    public abstract String getName();
+-
+-    protected String code;
+-
+-    protected abstract CharSequence generateCode();
+-
+-    public String getCode() {
+-        if (code != null)
+-            return code;
+-
+-        return code = generateCode().toString();
+-    }
+-
+-    @Override
+-    public String toString() {
+-        return String.format("%s<%s>", getName(), getCode());
+-    }
+-}
+diff --git a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NECTest.java b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NECTest.java
+deleted file mode 100644
+index c7d88c4..0000000
+--- a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NECTest.java
++++ /dev/null
+@@ -1,25 +0,0 @@
+-package com.github.timnew.androidinfrared;
+-
+-import org.junit.Test;
+-
+-import static org.fest.assertions.api.Assertions.assertThat;
+-
+-public class NECTest {
+-
+-    public static final NecIrSequence ON_SEQENCE = new NecIrSequence(32, 0xFFE01F);
+-    public static final NecIrSequence OFF_SEQENCE = new NecIrSequence(32, 0xFF609F);
+-
+-    @Test
+-    public void should_be_generate() {
+-        String onCode = ON_SEQENCE.getCode();
+-        String offCode = OFF_SEQENCE.getCode();
+-
+-        String onCode1 = IrdaProtocols.NEC.buildNEC(32, 0xFFE01F);
+-        String offCode1 = IrdaProtocols.NEC.buildNEC(32, 0xFF609F);
+-
+-//        assertThat(onCode1).isEqualTo(onCode);
+-        assertThat(offCode1).isEqualTo(offCode);
+-    }
+-}
+-
+-
+diff --git a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NecIrSequence.java b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NecIrSequence.java
+deleted file mode 100644
+index fb00e62..0000000
+--- a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/NecIrSequence.java
++++ /dev/null
+@@ -1,38 +0,0 @@
+-package com.github.timnew.androidinfrared;
+-
+-import static com.github.timnew.androidinfrared.SequenceData.sequenceData;
+-
+-public class NecIrSequence extends IrSequence {
+-
+-    public static final int NEC_FREQUENCY = 38028;  // T = 26.296 ms
+-    public static final int NEC_HDR_MARK = 342;
+-    public static final int NEC_HDR_SPACE = 171;
+-    public static final int NEC_BIT_MARK = 21;
+-    public static final int NEC_ONE_SPACE = 60;
+-    public static final int NEC_ZERO_SPACE = 21;
+-
+-    private final int bitCount;
+-    private final int data;
+-
+-    public NecIrSequence(int bitCount, int data) {
+-        this.bitCount = bitCount;
+-        this.data = data;
+-    }
+-
+-    @Override
+-    public String getName() {
+-        return "NEC Sequence";
+-    }
+-
+-    @Override
+-    protected CharSequence generateCode() {
+-        return sequenceData(NEC_FREQUENCY)
+-                .writePair(NEC_HDR_MARK, NEC_HDR_SPACE)
+-                .setPositivePair(NEC_BIT_MARK, NEC_ONE_SPACE)
+-                .setNegtivePair(NEC_BIT_MARK, NEC_ZERO_SPACE)
+-                .writeData(bitCount, data)
+-                .writePair(NEC_BIT_MARK, 0);
+-    }
+-
+-}
+-
+diff --git a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/SequenceData.java b/AndroidInfraredTest/src/com/github/timnew/androidinfrared/SequenceData.java
+deleted file mode 100644
+index c2c4df7..0000000
+--- a/AndroidInfraredTest/src/com/github/timnew/androidinfrared/SequenceData.java
++++ /dev/null
+@@ -1,84 +0,0 @@
+-package com.github.timnew.androidinfrared;
+-
+-import static java.lang.String.format;
+-
+-public class SequenceData implements CharSequence {
+-    public static final int TOP_BIT = 0x80000000;
+-    private StringBuilder buffer;
+-    private CharSequence positivePair;
+-    private CharSequence negtivePair;
+-
+-    public static SequenceData sequenceData(int frequency) {
+-        return new SequenceData(frequency);
+-    }
+-
+-    SequenceData(int frequencyKHz) {
+-        buffer = new StringBuilder();
+-        buffer.append(frequencyKHz);
+-    }
+-
+-    public SequenceData writePair(int on, int off) {
+-        buffer.append(',');
+-        buffer.append(on);
+-        buffer.append(',');
+-        buffer.append(off);
+-
+-        return this;
+-    }
+-
+-    public SequenceData writePair(CharSequence pair) {
+-        buffer.append(',');
+-        buffer.append(pair);
+-
+-        return this;
+-    }
+-
+-    @Override
+-    public int length() {
+-        return buffer.length();
+-    }
+-
+-    @Override
+-    public char charAt(int index) {
+-        return buffer.charAt(index);
+-    }
+-
+-    @Override
+-    public CharSequence subSequence(int start, int end) {
+-        return buffer.subSequence(start, end);
+-    }
+-
+-    @Override
+-    public String toString() {
+-        return buffer.toString();
+-    }
+-
+-    public static String makePair(int on, int off) {
+-        return format("%d,%d", on, off);
+-    }
+-
+-    public SequenceData setPositivePair(int on, int off) {
+-        positivePair = makePair(on, off);
+-
+-        return this;
+-    }
+-
+-    public SequenceData setNegtivePair(int on, int off) {
+-        negtivePair = makePair(on, off);
+-
+-        return this;
+-    }
+-
+-    public SequenceData writeData(int bitCount, int data) {
+-        for (int index = 0; index < bitCount; index++) {
+-            if ((data & TOP_BIT) == TOP_BIT)
+-                writePair(positivePair);
+-            else
+-                writePair(negtivePair);
+-
+-            data <<= 1;
+-        }
+-
+-        return this;
+-    }
+-}
+diff --git a/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/ControlPanelFragment.java b/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/ControlPanelFragment.java
+index 0c815e8..3c9c60b 100644
+--- a/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/ControlPanelFragment.java
++++ b/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/ControlPanelFragment.java
+@@ -23,7 +23,7 @@ public class ControlPanelFragment extends Fragment {
+ 
+     public static final String PANEL_PATH_TEMPLATE = "file:///android_asset/panels/%s/index.html";
+     public static final String PANELS_PATH = "panels";
+-    public static final String PANEL = "Panel";
++    public static final String IR_PANEL = "IR Panel";
+ 
+     @FragmentArg
+     protected String layoutUrl;
+@@ -46,7 +46,6 @@ public class ControlPanelFragment extends Fragment {
+ 
+         panel.addJavascriptInterface(emitter, "ir");
+         panel.setWebViewClient(new WebViewClient() {
+-
+         });
+ 
+         panel.setWebChromeClient(new WebChromeClient() {
+@@ -57,19 +56,19 @@ public class ControlPanelFragment extends Fragment {
+ 
+                 switch (consoleMessage.messageLevel()) {
+                     case DEBUG:
+-                        Log.d(PANEL, messageText);
++                        Log.d(IR_PANEL, messageText);
+                         break;
+                     case ERROR:
+-                        Log.e(PANEL, messageText);
++                        Log.e(IR_PANEL, messageText);
+                         break;
+                     case LOG:
+-                        Log.v(PANEL, messageText);
++                        Log.v(IR_PANEL, messageText);
+                         break;
+                     case TIP:
+-                        Log.i(PANEL, messageText);
++                        Log.i(IR_PANEL, messageText);
+                         break;
+                     case WARNING:
+-                        Log.w(PANEL, messageText);
++                        Log.w(IR_PANEL, messageText);
+                         break;
+                 }
+ 
+diff --git a/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/InfraredEmitter.java b/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/InfraredEmitter.java
+index b0e3fb4..28e5612 100644
+--- a/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/InfraredEmitter.java
++++ b/SmartRemoteControl/src/main/java/com/github/timnew/smartremotecontrol/InfraredEmitter.java
+@@ -4,17 +4,25 @@ import android.content.Context;
+ import android.util.Log;
+ 
+ import com.github.timnew.androidinfrared.IrdaManager;
+-import com.github.timnew.androidinfrared.IrdaProtocols;
+ import com.googlecode.androidannotations.annotations.AfterInject;
+ import com.googlecode.androidannotations.annotations.EBean;
+ import com.googlecode.androidannotations.annotations.RootContext;
+ import com.googlecode.androidannotations.api.Scope;
+ 
++import static com.github.timnew.androidinfrared.IrdaProtocols.DISH.buildDISH;
++import static com.github.timnew.androidinfrared.IrdaProtocols.JVC.buildJVC;
++import static com.github.timnew.androidinfrared.IrdaProtocols.NEC.buildNEC;
++import static com.github.timnew.androidinfrared.IrdaProtocols.Panasonic.buildPanasonic;
++import static com.github.timnew.androidinfrared.IrdaProtocols.RC5.buildRC5;
++import static com.github.timnew.androidinfrared.IrdaProtocols.RC6.buildRC6;
++import static com.github.timnew.androidinfrared.IrdaProtocols.Sharp.buildSharp;
++import static com.github.timnew.androidinfrared.IrdaProtocols.Sony.buildSony;
+ import static java.lang.String.format;
+ 
+ @EBean(scope = Scope.Singleton)
+ public class InfraredEmitter {
+ 
++    public static final String IR_COMMAND = "IRCommand";
+     @RootContext
+     protected Context context;
+ 
+@@ -25,56 +33,56 @@ public class InfraredEmitter {
+         manager = IrdaManager.getIrdaManager(context);
+     }
+ 
+-    private void logAction(String type, int size, int data) {
+-        Log.i("IRCommand", format("[%s](%d bits): 0x%X", type, size, data));
++    private void logAction(String type, int size, long data) {
++        Log.i(IR_COMMAND, format("[%s](%d bits): 0x%X", type, size, data));
+     }
+ 
+-    private void logActionWithAddress(String type, int address, int data) {
+-        Log.i("IRCommand", format("[%s]: Address: 0x%X Data: 0x%X", type, address, data));
++    private void logActionWithAddress(String type, int address, long data) {
++        Log.i(IR_COMMAND, format("[%s]: Address: 0x%X Data: 0x%X", type, address, data));
+     }
+ 
+-    public void NEC(int size, int data) {
++    public void NEC(int size, long data) {
+         logAction("NEC", size, data);
+         try {
+-            manager.sendSequence(IrdaProtocols.NEC.buildNEC(size, data));
++            manager.sendSequence(buildNEC(size, (int) data));
+         } catch (Exception ex) {
+             ex.printStackTrace();
+         }
+     }
+ 
+-    public void Sony(int size, int data) {
++    public void Sony(int size, long data) {
+         logAction("Sony", size, data);
+-        manager.sendSequence(IrdaProtocols.Sony.buildSony(size, data));
++        manager.sendSequence(buildSony(size, data));
+     }
+ 
+-    public void RC5(int size, int data) {
++    public void RC5(int size, long data) {
+         logAction("RC", size, data);
+-        manager.sendSequence(IrdaProtocols.RC5.buildRC5(size, data));
++        manager.sendSequence(buildRC5(size, data));
+     }
+ 
+-    public void RC6(int size, int data) {
++    public void RC6(int size, long data) {
+         logAction("RC", size, data);
+-        manager.sendSequence(IrdaProtocols.RC6.buildRC6(size, data));
++        manager.sendSequence(buildRC6(size, data));
+     }
+ 
+-    public void DISH(int size, int data) {
++    public void DISH(int size, long data) {
+         logAction("DISH", size, data);
+-        manager.sendSequence(IrdaProtocols.DISH.buildDISH(size, data));
++        manager.sendSequence(buildDISH(size, (int) data));
+     }
+ 
+-    public void Sharp(int size, int data) {
++    public void Sharp(int size, long data) {
+         logAction("Sharp", size, data);
+-        manager.sendSequence(IrdaProtocols.Sharp.buildSharp(size, data));
++        manager.sendSequence(buildSharp(size, (int) data));
+     }
+ 
+-    public void Panasonic(int address, int data) {
++    public void Panasonic(int address, long data) {
+         logActionWithAddress("Panasonic", address, data);
+-        manager.sendSequence(IrdaProtocols.Panasonic.buildPanasonic(address, data));
++        manager.sendSequence(buildPanasonic(address, (int) data));
+     }
+ 
+-    public void JVC(int size, int data) {
++    public void JVC(int size, long data) {
+         logAction("JVC", size, data);
+-        manager.sendSequence(IrdaProtocols.JVC.buildJVC(size, data, false));
++        manager.sendSequence(buildJVC(size, data, false));
+     }
+ 
+ }

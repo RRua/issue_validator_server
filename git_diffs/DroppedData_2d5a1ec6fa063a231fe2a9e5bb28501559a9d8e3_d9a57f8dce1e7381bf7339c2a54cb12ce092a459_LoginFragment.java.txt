@@ -1,0 +1,623 @@
+diff --git a/app/src/androidTest/java/com/sshdaemon/sshd/SshPasswordTest.java b/app/src/androidTest/java/com/sshdaemon/sshd/SshPasswordTest.java
+new file mode 100644
+index 0000000..b7ef874
+--- /dev/null
++++ b/app/src/androidTest/java/com/sshdaemon/sshd/SshPasswordTest.java
+@@ -0,0 +1,20 @@
++package com.sshdaemon.sshd;
++
++import org.junit.Test;
++
++import static com.sshdaemon.sshd.SshPassword.getRandomString;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotEquals;
++
++public class SshPasswordTest {
++
++    @Test
++    public void testCorrectLength() {
++        assertEquals(10, getRandomString(10).length());
++    }
++
++    @Test
++    public void testSecondDontEqual() {
++        assertNotEquals(getRandomString(10), getRandomString(10));
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/sshdaemon/LoginFragment.java b/app/src/main/java/com/sshdaemon/LoginFragment.java
+deleted file mode 100644
+index 3cafe22..0000000
+--- a/app/src/main/java/com/sshdaemon/LoginFragment.java
++++ /dev/null
+@@ -1,17 +0,0 @@
+-package com.sshdaemon;
+-
+-import android.os.Bundle;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-
+-import androidx.annotation.NonNull;
+-import androidx.fragment.app.Fragment;
+-
+-public class LoginFragment extends Fragment {
+-    @Override
+-    public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+-        View view = inflater.inflate(R.layout.shr_login_fragment, container, false);
+-        return view;
+-    }
+-}
+diff --git a/app/src/main/java/com/sshdaemon/MainActivity.java b/app/src/main/java/com/sshdaemon/MainActivity.java
+index 6dffd7c..a8d4c93 100644
+--- a/app/src/main/java/com/sshdaemon/MainActivity.java
++++ b/app/src/main/java/com/sshdaemon/MainActivity.java
+@@ -1,42 +1,159 @@
+ package com.sshdaemon;
+ 
++import android.Manifest;
++import android.content.IntentFilter;
++import android.content.pm.PackageManager;
++import android.graphics.Typeface;
++import android.net.ConnectivityManager;
+ import android.os.Bundle;
++import android.os.Environment;
++import android.os.PowerManager;
++import android.view.View;
++import android.view.WindowManager;
++import android.widget.Button;
++import android.widget.EditText;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
+ import androidx.appcompat.app.AppCompatActivity;
+-import androidx.fragment.app.Fragment;
+-import androidx.fragment.app.FragmentTransaction;
++import androidx.core.app.ActivityCompat;
++
++import com.google.android.material.floatingactionbutton.FloatingActionButton;
++import com.google.android.material.textfield.TextInputEditText;
++import com.sshdaemon.net.NetworkChangeReceiver;
++import com.sshdaemon.sshd.SshDaemon;
++import com.sshdaemon.sshd.SshFingerprint;
++
++import java.io.IOException;
++import java.util.Map;
++import java.util.Objects;
++
++import static com.sshdaemon.sshd.SshPassword.getRandomString;
++import static com.sshdaemon.util.TextViewHelper.createTextView;
++
++
++public class MainActivity extends AppCompatActivity {
++
++    private SshDaemon sshDaemon;
++    private PowerManager.WakeLock wakeLock;
++
++    private String getValue(EditText t) {
++        return t.getText().toString().equals("") ? t.getHint().toString() : t.getText().toString();
++    }
++
++    private void enableInput(boolean enable) {
++        TextInputEditText port = findViewById(R.id.port_value);
++        TextInputEditText user = findViewById(R.id.user_value);
++        TextInputEditText password = findViewById(R.id.password_value);
++        Button generate = findViewById(R.id.generate);
++        port.setEnabled(enable);
++        user.setEnabled(enable);
++        password.setEnabled(enable);
++        generate.setClickable(enable);
++    }
++
++    private void releaseWakeLock() {
++        if (wakeLock.isHeld()) wakeLock.release();
++        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++    }
++
++    private void acquireWakelock() {
++        if (!wakeLock.isHeld()) wakeLock.acquire();
++        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
++    }
++
++    private void setFingerPrints(Map<SshFingerprint.DIGESTS, String> fingerPrints) {
++
++        LinearLayout fingerPrintsLayout = findViewById(R.id.server_fingerprints);
++
++        fingerPrintsLayout.removeAllViews();
++
++        TextView interfacesText = new TextView(this);
++        interfacesText.setText(R.string.fingerprints_label_text);
++        interfacesText.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++        interfacesText.setTypeface(null, Typeface.BOLD);
+ 
+-public class MainActivity extends AppCompatActivity implements NavigationHost {
++        fingerPrintsLayout.addView(interfacesText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++
++        for (Map.Entry<SshFingerprint.DIGESTS, String> e : fingerPrints.entrySet()) {
++            TextView textView = createTextView(this, "(" + e.getKey() + ") " + e.getValue());
++            fingerPrintsLayout.addView(textView,
++                    new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++        }
++    }
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        setContentView(R.layout.shr_main_activity);
++        setContentView(R.layout.main_activity);
++
++        LinearLayout linearLayout = findViewById(R.id.network_interfaces);
++
++        this.registerReceiver(new NetworkChangeReceiver(linearLayout, this),
++                new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
++
++        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
++        wakeLock = powerManager.newWakeLock((PowerManager.PARTIAL_WAKE_LOCK |
++                        PowerManager.ACQUIRE_CAUSES_WAKEUP),
++                "SshDaemon:SshDaemonWakeLock");
++
++        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
++                != PackageManager.PERMISSION_GRANTED)
++            ActivityCompat.requestPermissions(this,
++                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1);
+ 
+-        if (savedInstanceState == null) {
+-            getSupportFragmentManager()
+-                    .beginTransaction()
+-                    .add(R.id.container, new LoginFragment())
+-                    .commit();
+-        }
+     }
+ 
+-    /**
+-     * Navigate to the given fragment.
+-     *
+-     * @param fragment       Fragment to navigate to.
+-     * @param addToBackstack Whether or not the current fragment should be added to the backstack.
+-     */
+     @Override
+-    public void navigateTo(Fragment fragment, boolean addToBackstack) {
+-        FragmentTransaction transaction =
+-                getSupportFragmentManager()
+-                        .beginTransaction()
+-                        .replace(R.id.container, fragment);
+-
+-        if (addToBackstack) {
+-            transaction.addToBackStack(null);
+-        }
++    protected void onResume() {
++        super.onResume();
++        if (sshDaemon != null)
++            startStopClicked(findViewById(R.id.start_stop_action));
++    }
+ 
+-        transaction.commit();
++    @Override
++    protected void onPause() {
++        super.onPause();
++        if (sshDaemon != null)
++            startStopClicked(findViewById(R.id.start_stop_action));
++    }
++
++    public void generateClicked(View view) {
++        TextInputEditText password = findViewById(R.id.password_value);
++        password.setText(getRandomString(5));
++    }
++
++    public void startStopClicked(View view) {
++        TextInputEditText port = findViewById(R.id.port_value);
++        TextInputEditText user = findViewById(R.id.user_value);
++        TextInputEditText password = findViewById(R.id.password_value);
++//        String path = Objects.requireNonNull(getExternalFilesDir(null)).toString();
++        String path = Environment.getExternalStorageDirectory().getPath();
++
++        String realPort = getValue(port);
++        if (realPort.equals("Port")) realPort = "8022";
++        String realUser = getValue(user);
++        String realPassword = getValue(password);
++
++        FloatingActionButton button = (FloatingActionButton) view;
++
++        try {
++            if (!Objects.isNull(sshDaemon) && sshDaemon.isRunning()) {
++                releaseWakeLock();
++                sshDaemon.stop();
++                enableInput(true);
++                ((LinearLayout) findViewById(R.id.server_fingerprints)).removeAllViews();
++                button.setImageResource(R.drawable.play);
++            } else {
++                acquireWakelock();
++                sshDaemon = new SshDaemon(path, Integer.parseInt(realPort), realUser, realPassword);
++                setFingerPrints(sshDaemon.getFingerPrints());
++                sshDaemon.start();
++                enableInput(false);
++                button.setImageResource(R.drawable.pause);
++            }
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
+     }
+ }
+diff --git a/app/src/main/java/com/sshdaemon/NavigationHost.java b/app/src/main/java/com/sshdaemon/NavigationHost.java
+deleted file mode 100644
+index ef41245..0000000
+--- a/app/src/main/java/com/sshdaemon/NavigationHost.java
++++ /dev/null
+@@ -1,15 +0,0 @@
+-package com.sshdaemon;
+-
+-import androidx.fragment.app.Fragment;
+-
+-/**
+- * A host (typically an {@code Activity}} that can display fragments and knows how to respond to
+- * navigation events.
+- */
+-public interface NavigationHost {
+-    /**
+-     * Trigger a navigation to the specified fragment, optionally adding a transaction to the back
+-     * stack to make this navigation reversible.
+-     */
+-    void navigateTo(Fragment fragment, boolean addToBackstack);
+-}
+diff --git a/app/src/main/java/com/sshdaemon/net/NetworkChangeReceiver.java b/app/src/main/java/com/sshdaemon/net/NetworkChangeReceiver.java
+new file mode 100644
+index 0000000..0dbb9ef
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/net/NetworkChangeReceiver.java
+@@ -0,0 +1,108 @@
++package com.sshdaemon.net;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.graphics.Typeface;
++import android.net.ConnectivityManager;
++import android.net.Network;
++import android.net.NetworkCapabilities;
++import android.widget.LinearLayout;
++import android.widget.TableRow;
++import android.widget.TextView;
++
++import com.sshdaemon.R;
++
++import java.net.InetAddress;
++import java.net.NetworkInterface;
++import java.net.SocketException;
++import java.util.Enumeration;
++import java.util.Set;
++import java.util.TreeSet;
++
++import static com.sshdaemon.util.TextViewHelper.createTextView;
++
++
++public class NetworkChangeReceiver extends BroadcastReceiver {
++
++    private final LinearLayout networkInterfaces;
++
++    public NetworkChangeReceiver(LinearLayout networkInterfaces, Context context) {
++        this.networkInterfaces = networkInterfaces;
++        showNetworkInterfaces(context);
++    }
++
++    private Set<String> getInterfaces() {
++
++        TreeSet<String> result = new TreeSet<>();
++
++        try {
++
++            Enumeration<NetworkInterface> networkInterfaces = NetworkInterface.getNetworkInterfaces();
++
++            while (networkInterfaces.hasMoreElements()) {
++
++                NetworkInterface networkInterface = networkInterfaces.nextElement();
++
++                if ((!networkInterface.isLoopback()) &&
++                        networkInterface.isUp() &&
++                        !networkInterface.isVirtual()) {
++
++                    Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
++
++                    while (addresses.hasMoreElements()) {
++                        InetAddress inetAddress = addresses.nextElement();
++                        String hostAddress = inetAddress.getHostAddress();
++                        if (!(hostAddress.contains("dummy") || hostAddress.contains("rmnet"))) {
++                            hostAddress = hostAddress.replace("%", " on interface ");
++                        }
++                        result.add(hostAddress);
++                    }
++                }
++            }
++        } catch (SocketException e) {
++            e.printStackTrace();
++        }
++        return result;
++    }
++
++    private boolean hasConnectivity(ConnectivityManager connectivityManager) {
++        Network nw = connectivityManager.getActiveNetwork();
++
++        if (nw == null) return false;
++
++        NetworkCapabilities actNw = connectivityManager.getNetworkCapabilities(nw);
++
++        return actNw != null &&
++                (actNw.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
++                        actNw.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
++                        actNw.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
++                        actNw.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH));
++    }
++
++    private void showNetworkInterfaces(Context context) {
++
++        this.networkInterfaces.removeAllViews();
++
++        if (!hasConnectivity((ConnectivityManager) context
++                .getSystemService(Context.CONNECTIVITY_SERVICE)))
++            return;
++
++        TextView interfacesText = new TextView(context);
++        interfacesText.setText(R.string.interface_label_text);
++        interfacesText.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++        interfacesText.setTypeface(null, Typeface.BOLD);
++
++        networkInterfaces.addView(interfacesText, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++
++        for (String interfaceAddress : getInterfaces())
++            networkInterfaces.addView(createTextView(context, interfaceAddress),
++                    new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
++
++    }
++
++    @Override
++    public void onReceive(final Context context, final Intent intent) {
++        showNetworkInterfaces(context);
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/sshdaemon/sshd/SshDaemon.java b/app/src/main/java/com/sshdaemon/sshd/SshDaemon.java
+new file mode 100644
+index 0000000..10af10f
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/sshd/SshDaemon.java
+@@ -0,0 +1,72 @@
++package com.sshdaemon.sshd;
++
++import org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory;
++import org.apache.sshd.server.SshServer;
++import org.apache.sshd.server.keyprovider.SimpleGeneratorHostKeyProvider;
++import org.apache.sshd.server.shell.InteractiveProcessShellFactory;
++import org.apache.sshd.server.subsystem.sftp.SftpSubsystemFactory;
++
++import java.io.IOException;
++import java.nio.file.Paths;
++import java.security.KeyPair;
++import java.security.NoSuchAlgorithmException;
++import java.security.interfaces.RSAPublicKey;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++/***
++ * __     _        ___
++ * / _\___| |__    /   \__ _  ___ _ __ ___   ___  _ __
++ * \ \/ __| '_ \  / /\ / _` |/ _ \ '_ ` _ \ / _ \| '_ \
++ * _\ \__ \ | | |/ /_// (_| |  __/ | | | | | (_) | | | |
++ * \__/___/_| |_/___,' \__,_|\___|_| |_| |_|\___/|_| |_|
++ */
++
++
++public class SshDaemon {
++
++    private final SshServer sshd;
++    private final List<KeyPair> keyPairs;
++
++    public SshDaemon(String rootPath, int port, String user, String password) {
++        System.setProperty("user.home", rootPath);
++        this.sshd = SshServer.setUpDefaultServer();
++        sshd.setPort(port);
++        sshd.setPasswordAuthenticator(new SshPasswordAuthenticator(user, password));
++        sshd.setPublickeyAuthenticator(new SshPublicKeyAuthenticator());
++        SimpleGeneratorHostKeyProvider simpleGeneratorHostKeyProvider = new SimpleGeneratorHostKeyProvider(Paths.get(rootPath));
++        sshd.setKeyPairProvider(simpleGeneratorHostKeyProvider);
++        sshd.setShellFactory(new InteractiveProcessShellFactory());
++        SftpSubsystemFactory factory = new SftpSubsystemFactory.Builder().build();
++        sshd.setSubsystemFactories(Collections.singletonList(factory));
++        sshd.setFileSystemFactory(new VirtualFileSystemFactory(Paths.get(rootPath)));
++        this.keyPairs = simpleGeneratorHostKeyProvider.loadKeys(null);
++    }
++
++    public Map<SshFingerprint.DIGESTS, String> getFingerPrints() {
++        final Map<SshFingerprint.DIGESTS, String> result = new HashMap<>();
++        final RSAPublicKey publicKey = (RSAPublicKey) this.keyPairs.get(0).getPublic();
++
++        try {
++            result.put(SshFingerprint.DIGESTS.MD5, SshFingerprint.fingerprintMD5(publicKey.getPublicExponent(), publicKey.getModulus()));
++            result.put(SshFingerprint.DIGESTS.SHA256, SshFingerprint.fingerprintSHA256(publicKey.getPublicExponent(), publicKey.getModulus()));
++        } catch (NoSuchAlgorithmException e) {
++            e.printStackTrace();
++        }
++        return result;
++    }
++
++    public void start() throws IOException {
++        sshd.start();
++    }
++
++    public void stop() throws IOException {
++        sshd.stop();
++    }
++
++    public boolean isRunning() {
++        return sshd.isStarted();
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/sshdaemon/sshd/SshFingerprint.java b/app/src/main/java/com/sshdaemon/sshd/SshFingerprint.java
+new file mode 100644
+index 0000000..c57eeef
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/sshd/SshFingerprint.java
+@@ -0,0 +1,64 @@
++package com.sshdaemon.sshd;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.math.BigInteger;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.util.Base64;
++
++public class SshFingerprint {
++
++    public enum DIGESTS {
++        MD5,
++        SHA256
++    }
++
++    private static final char[] HEX_ARRAY = "0123456789abcdef".toCharArray();
++
++    public static String bytesToHex(byte[] bytes) {
++        char[] hexChars = new char[bytes.length * 2];
++        for (int j = 0; j < bytes.length; j++) {
++            int v = bytes[j] & 0xFF;
++            hexChars[j * 2] = HEX_ARRAY[v >>> 4];
++            hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
++        }
++        return new String(hexChars);
++    }
++
++    public static String fingerprintMD5(BigInteger publicExponent, BigInteger modulus) throws NoSuchAlgorithmException {
++        byte[] keyBlob = keyBlob(publicExponent, modulus);
++        byte[] md5DigestPublic = MessageDigest.getInstance("MD5").digest(keyBlob);
++        return bytesToHex(md5DigestPublic).replaceAll("(.{2})(?!$)", "$1:");
++    }
++
++    public static String fingerprintSHA256(BigInteger publicExponent, BigInteger modulus) throws NoSuchAlgorithmException {
++        byte[] keyBlob = keyBlob(publicExponent, modulus);
++        byte[] sha256DigestPublic = MessageDigest.getInstance("SHA256").digest(keyBlob);
++        return new String(Base64.getEncoder().encode(sha256DigestPublic));
++    }
++
++    private static byte[] keyBlob(BigInteger publicExponent, BigInteger modulus) {
++        try {
++            ByteArrayOutputStream out = new ByteArrayOutputStream();
++            writeLengthFirst("ssh-rsa".getBytes(), out);
++            writeLengthFirst(publicExponent.toByteArray(), out);
++            writeLengthFirst(modulus.toByteArray(), out);
++            return out.toByteArray();
++        } catch (IOException e) {
++            return null;
++        }
++    }
++
++    // http://www.ietf.org/rfc/rfc4253.txt
++    private static void writeLengthFirst(byte[] array, ByteArrayOutputStream out) throws IOException {
++        out.write((array.length >>> 24) & 0xFF);
++        out.write((array.length >>> 16) & 0xFF);
++        out.write((array.length >>> 8) & 0xFF);
++        out.write((array.length >>> 0) & 0xFF);
++        if (array.length == 1 && array[0] == (byte) 0x00)
++            out.write(new byte[0]);
++        else
++            out.write(array);
++    }
++}
+diff --git a/app/src/main/java/com/sshdaemon/sshd/SshPassword.java b/app/src/main/java/com/sshdaemon/sshd/SshPassword.java
+new file mode 100644
+index 0000000..dca787a
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/sshd/SshPassword.java
+@@ -0,0 +1,18 @@
++package com.sshdaemon.sshd;
++
++import java.security.SecureRandom;
++
++public class SshPassword {
++
++    private static final String ALLOWED_CHARACTERS = "0123456789qwertzuiopasdfghjklyxcvbnm";
++
++    public static String getRandomString(final int sizeOfPasswordString) {
++        final SecureRandom random = new SecureRandom();
++        final StringBuilder sb = new StringBuilder(sizeOfPasswordString);
++
++        for (int i = 0; i < sizeOfPasswordString; ++i)
++            sb.append(ALLOWED_CHARACTERS.charAt(random.nextInt(ALLOWED_CHARACTERS.length())));
++
++        return sb.toString();
++    }
++}
+diff --git a/app/src/main/java/com/sshdaemon/sshd/SshPasswordAuthenticator.java b/app/src/main/java/com/sshdaemon/sshd/SshPasswordAuthenticator.java
+new file mode 100644
+index 0000000..ef30d26
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/sshd/SshPasswordAuthenticator.java
+@@ -0,0 +1,22 @@
++package com.sshdaemon.sshd;
++
++import org.apache.sshd.server.auth.AsyncAuthException;
++import org.apache.sshd.server.auth.password.PasswordAuthenticator;
++import org.apache.sshd.server.auth.password.PasswordChangeRequiredException;
++import org.apache.sshd.server.session.ServerSession;
++
++public class SshPasswordAuthenticator implements PasswordAuthenticator {
++
++    private final String user;
++    private final String password;
++
++    public SshPasswordAuthenticator(String user, String password) {
++        this.user = user;
++        this.password = password;
++    }
++
++    @Override
++    public boolean authenticate(String username, String password, ServerSession session) throws PasswordChangeRequiredException, AsyncAuthException {
++        return username.equals(user) && password.equals(this.password);
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/sshdaemon/sshd/SshPublicKeyAuthenticator.java b/app/src/main/java/com/sshdaemon/sshd/SshPublicKeyAuthenticator.java
+new file mode 100644
+index 0000000..e489a3a
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/sshd/SshPublicKeyAuthenticator.java
+@@ -0,0 +1,18 @@
++package com.sshdaemon.sshd;
++
++import org.apache.sshd.server.auth.AsyncAuthException;
++import org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator;
++import org.apache.sshd.server.session.ServerSession;
++
++import java.security.PublicKey;
++
++public class SshPublicKeyAuthenticator implements PublickeyAuthenticator {
++
++    public SshPublicKeyAuthenticator() {
++    }
++
++    @Override
++    public boolean authenticate(String username, PublicKey key, ServerSession session) throws AsyncAuthException {
++        return false;
++    }
++}
+diff --git a/app/src/main/java/com/sshdaemon/util/TextViewHelper.java b/app/src/main/java/com/sshdaemon/util/TextViewHelper.java
+new file mode 100644
+index 0000000..b22a478
+--- /dev/null
++++ b/app/src/main/java/com/sshdaemon/util/TextViewHelper.java
+@@ -0,0 +1,15 @@
++package com.sshdaemon.util;
++
++import android.content.Context;
++import android.widget.TableRow;
++import android.widget.TextView;
++
++public class TextViewHelper {
++
++    public static TextView createTextView(Context context, String text) {
++        TextView textView = new TextView(context);
++        textView.setText(text);
++        textView.setLayoutParams(new TableRow.LayoutParams(TableRow.LayoutParams.MATCH_PARENT, TableRow.LayoutParams.MATCH_PARENT));
++        return textView;
++    }
++}

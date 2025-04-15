@@ -1,0 +1,886 @@
+diff --git a/app/src/main/java/ch/bailu/aat/description/PredictiveTimeDescription.java b/app/src/main/java/ch/bailu/aat/description/PredictiveTimeDescription.java
+index 0dcf00f5..147d4668 100644
+--- a/app/src/main/java/ch/bailu/aat/description/PredictiveTimeDescription.java
++++ b/app/src/main/java/ch/bailu/aat/description/PredictiveTimeDescription.java
+@@ -25,7 +25,7 @@ public class PredictiveTimeDescription extends TimeDescription {
+     }
+ 
+     public String getValue() {
+-        return getValue(time);
++        return format(time);
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/description/TimeDescription.java b/app/src/main/java/ch/bailu/aat/description/TimeDescription.java
+index 5f9d04ee..f8d15b2a 100644
+--- a/app/src/main/java/ch/bailu/aat/description/TimeDescription.java
++++ b/app/src/main/java/ch/bailu/aat/description/TimeDescription.java
+@@ -22,7 +22,7 @@ public class TimeDescription extends LongDescription {
+     }
+ 
+     public String getValue() {
+-        return getValue(getCache());
++        return format(getCache());
+     }
+ 
+     @Override
+@@ -34,9 +34,16 @@ public class TimeDescription extends LongDescription {
+ 
+     private static final StringBuilder builder = new StringBuilder(10);
+ 
+-    public static String getValue(long time) {
+-        builder.setLength(0);
+ 
++    public static String format(long time) {
++        synchronized (builder) {
++            builder.setLength(0);
++            return format(builder, time).toString();
++        }
++    }
++
++
++    public static StringBuilder format(StringBuilder out, long time) {
+         int seconds, hours, minutes;
+ 
+         // 1. calculate milliseconds to unit
+@@ -48,12 +55,15 @@ public class TimeDescription extends LongDescription {
+         seconds -= minutes * 60;
+         minutes -= hours * 60;
+ 
+-        appendValueAndDelimer(builder, hours);
+-        appendValueAndDelimer(builder, minutes);
+-        appendValue(builder, seconds);
+-        return builder.toString();
++        appendValueAndDelimer(out, hours);
++        appendValueAndDelimer(out, minutes);
++        appendValue(out, seconds);
++        return out;
++
+     }
+ 
++
++
+     private static void appendValueAndDelimer(StringBuilder builder, int value) {
+         appendValue(builder,value);
+         builder.append(":");
+diff --git a/app/src/main/java/ch/bailu/aat/preferences/SolidLocationProvider.java b/app/src/main/java/ch/bailu/aat/preferences/SolidLocationProvider.java
+index 3fb610cf..77e87d5d 100644
+--- a/app/src/main/java/ch/bailu/aat/preferences/SolidLocationProvider.java
++++ b/app/src/main/java/ch/bailu/aat/preferences/SolidLocationProvider.java
+@@ -3,6 +3,11 @@ package ch.bailu.aat.preferences;
+ import android.content.Context;
+ 
+ import ch.bailu.aat.R;
++import ch.bailu.aat.services.location.GpsLocation;
++import ch.bailu.aat.services.location.GpsOrNetworkLocation;
++import ch.bailu.aat.services.location.LocationStackItem;
++import ch.bailu.aat.services.location.MockLocation;
++import ch.bailu.aat.services.location.NetworkLocation;
+ 
+ public class SolidLocationProvider extends SolidStaticIndexList {
+ 
+@@ -16,22 +21,37 @@ public class SolidLocationProvider extends SolidStaticIndexList {
+                     c.getString(R.string.p_location_gps),
+                     c.getString(R.string.p_location_gps) + " 2000ms",
+                     c.getString(R.string.p_location_gps) + " 3000ms",
++                    c.getString(R.string.p_location_gps) + " or Network*",
++                    "Network only*",
+                     c.getString(R.string.p_location_mock)
+             };
+         }
+         return provider_list;
+     }
+ 
++
+     public SolidLocationProvider(Context c) {
+         super(Storage.global(c), KEY,
+                 generateProviderList(c));
+     }
+     
+-        
++
++
++    public LocationStackItem createProvider(LocationStackItem last) {
++        int i = getIndex();
++
++        if      (i==0) return new GpsLocation(last, getContext(), 1000);
++        else if (i==1) return new GpsLocation(last, getContext(), 2000);
++        else if (i==2) return new GpsLocation(last, getContext(), 3000);
++        else if (i==3) return new GpsOrNetworkLocation(last, getContext(), 1000);
++        else if (i==4) return new NetworkLocation(last, getContext(), 5000);
++        else           return new MockLocation(getContext(), last);
++    }
++
++
+     @Override
+     public String getLabel() {
+         return getContext().getString(R.string.p_location_provider); 
+     }
+ 
+-    
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java b/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
+index af3fa265..2673c993 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/AccuracyFilter.java
+@@ -16,12 +16,10 @@ public class AccuracyFilter extends LocationStackChainedItem {
+     public void close() {}
+ 
+     @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation()");
++    public void passLocation(LocationInformation location) {
+ 
+         if (location.getAccuracy() < minAccuracy) {
+-//            AppLog.d(this, "send");
+-            sendLocation(location);
++            super.passLocation(location);
+         }
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java b/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
+index 2e4a29b5..2058554d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/AutopauseTrigger.java
+@@ -26,7 +26,7 @@ public class AutopauseTrigger extends LocationStackChainedItem {
+     public void close() {}
+ 
+     @Override
+-    public void newLocation(LocationInformation location) {
++    public void passLocation(LocationInformation location) {
+ 
+ 
+         float speed = location.getSpeed();
+@@ -40,7 +40,7 @@ public class AutopauseTrigger extends LocationStackChainedItem {
+             trigger.log(logContext);
+         }
+ 
+-        sendLocation(location);
++        super.passLocation(location);
+     }
+ 
+     
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java b/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
+index 70aeaff3..a06c987c 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/CleanLocation.java
+@@ -6,7 +6,7 @@ import ch.bailu.aat.gpx.GpxPoint;
+ import ch.bailu.aat.gpx.interfaces.GpxPointInterface;
+ 
+ public class CleanLocation extends LocationStackItem {
+-    private static final long LOCATION_LIFETIME_MILLIS=5*1000;
++    private static final long LOCATION_LIFETIME_MILLIS=3*1000;
+ 
+     private GpxPointInterface currentLocation=GpxPoint.NULL;
+ 
+@@ -23,25 +23,16 @@ public class CleanLocation extends LocationStackItem {
+ 
+ 
+     @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation()");
+-//        if (hasLoggableLocation()) AppLog.d(this, "hsLoggableLocation()");
+-        currentLocation=location;
+-    }
+-
+-    @Override
+-    public void sendLocation(LocationInformation location) {}
++    public void passState(int state) {
+ 
+-    @Override
+-    public void sendState(int state) {}
++    }
+ 
+     @Override
+-    public void newState(int state) {}
++    public void passLocation(LocationInformation location) {
++    }
+ 
+-    @Override
+-    public void close() {}
+ 
+-    @Override
++     @Override
+     public void preferencesChanged(Context c, int i) {}
+ 
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java b/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
+index f5bf89a6..232ddce4 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/DirtyLocation.java
+@@ -41,16 +41,15 @@ public class DirtyLocation extends LocationStackChainedItem {
+ 
+     
+     @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation() -> send");
++    public void passLocation(LocationInformation location) {
+         locationInformation=location;
+-        sendLocation(location);
++        super.passLocation(location);
+         AppBroadcaster.broadcast(storage.getContext(), AppBroadcaster.LOCATION_CHANGED);
+     }
+     
+     @Override
+-    public void newState(int s) {
+-        super.newState(s);
++    public void passState(int s) {
++        super.passState(s);
+         state = s;
+         AppBroadcaster.broadcast(storage.getContext(), AppBroadcaster.LOCATION_CHANGED);
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java b/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
+index bab0242e..0abc66d2 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/DistanceFilter.java
+@@ -18,12 +18,10 @@ public class DistanceFilter extends LocationStackChainedItem {
+     public void close() {}
+ 
+     @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation()");
++    public void passLocation(LocationInformation location) {
+         if (oldLocation==null || notTooClose(oldLocation,location)) {
+             oldLocation=location;
+-//            AppLog.d(this, "send");
+-            sendLocation(location);
++            super.passLocation(location);
+         }
+     }
+     
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/GpsLocation.java b/app/src/main/java/ch/bailu/aat/services/location/GpsLocation.java
+new file mode 100644
+index 00000000..a9be93bb
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/services/location/GpsLocation.java
+@@ -0,0 +1,10 @@
++package ch.bailu.aat.services.location;
++
++import android.content.Context;
++import android.location.LocationManager;
++
++public class GpsLocation extends RealLocation {
++    public GpsLocation(LocationStackItem i, Context c, int interval) {
++        super(i, c, LocationManager.GPS_PROVIDER, interval);
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/GpsOrNetworkLocation.java b/app/src/main/java/ch/bailu/aat/services/location/GpsOrNetworkLocation.java
+new file mode 100644
+index 00000000..a5000e7d
+--- /dev/null
++++ b/app/src/main/java/ch/bailu/aat/services/location/GpsOrNetworkLocation.java
+@@ -0,0 +1,68 @@
++package ch.bailu.aat.services.location;
++
++import android.content.Context;
++
++import ch.bailu.aat.gpx.StateID;
++
++public class GpsOrNetworkLocation extends LocationStackChainedItem {
++
++    private final NetworkLocation network;
++    private final GpsLocation gps;
++
++
++    private boolean haveGps=false;
++
++
++    public GpsOrNetworkLocation(LocationStackItem i, Context c, int interval) {
++        super(i);
++
++        network = new NetworkLocation(new LocationStackItem() {
++
++            @Override
++            public void passState(int state) {}
++
++            @Override
++            public void passLocation(LocationInformation location) {
++                if (!haveGps) GpsOrNetworkLocation.this.passLocation(location);
++            }
++
++        }, c, interval * 5);
++
++        gps = new GpsLocation(new LocationStackItem() {
++            @Override
++            public void passState(int state) {
++                haveGps =  (state == StateID.ON);
++                GpsOrNetworkLocation.this.passState(state);
++            }
++
++
++            @Override
++            public void passLocation(LocationInformation location) {
++                GpsOrNetworkLocation.this.passLocation(location);
++            }
++
++        }, c, interval);
++
++    }
++
++
++
++    @Override
++    public void close() {
++        super.close();
++        network.close();
++        gps.close();
++    }
++    
++    @Override
++    public void appendStatusText(StringBuilder builder) {
++        super.appendStatusText(builder);
++
++        network.appendStatusText(builder);
++        gps.appendStatusText(builder);
++
++        if (haveGps) {
++            builder.append("have GPS");
++        }
++    }
++}
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java b/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
+index 28ca0772..8aa3ed45 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/InformationFilter.java
+@@ -1,7 +1,5 @@
+ package ch.bailu.aat.services.location;
+ 
+-import android.content.Context;
+-
+ public class InformationFilter extends LocationStackChainedItem {
+ 
+     public InformationFilter(LocationStackItem n) {
+@@ -9,20 +7,10 @@ public class InformationFilter extends LocationStackChainedItem {
+     }
+ 
+     @Override
+-    public void close() {}
+-
+-    @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation()");
+-        if (location.hasAltitude() /*&& location.hasBearing() && location.hasSpeed()*/) {
+-//            AppLog.d(this, "-> send");
+-            sendLocation(location);
++    public void passLocation(LocationInformation location) {
++        if (location.hasAltitude()) {
++            super.passLocation(location);
+         }
+     }
+ 
+-    @Override
+-    public void preferencesChanged(Context c, int i) {}
+-    
+-    
+-
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/LocationService.java b/app/src/main/java/ch/bailu/aat/services/location/LocationService.java
+index d7beebf7..a56dd2fb 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/LocationService.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationService.java
+@@ -79,11 +79,7 @@ public class LocationService extends VirtualService
+             provider.close();
+         }
+ 
+-        if      (sprovider.getIndex()==0) provider = new SystemLocation(lastItem(), getSContext());
+-        else if (sprovider.getIndex()==1) provider = new SystemLocation(lastItem(), getSContext(), 2000);
+-        else if (sprovider.getIndex()==2) provider = new SystemLocation(lastItem(), getSContext(), 3000);
+-        else                              provider = new MockLocation(getContext(), lastItem());
+-
++        provider = sprovider.createProvider(lastItem());
+         itemList.add(provider);
+     }
+ 
+@@ -148,5 +144,4 @@ public class LocationService extends VirtualService
+         builder.append("</p>");
+ 
+     }
+-
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java b/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
+index 85dafbca..9995edc9 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationStackChainedItem.java
+@@ -9,18 +9,14 @@ public abstract class LocationStackChainedItem extends LocationStackItem {
+     }
+     
+     @Override
+-    public void sendLocation(LocationInformation l) {
+-        next.newLocation(l);
++    public void passLocation(LocationInformation l) {
++        next.passLocation(l);
+     }
+     
+     
+     @Override
+-    public void sendState(int state) {
+-        next.newState(state);
++    public void passState(int state) {
++        next.passState(state);
+     }
+     
+-    @Override
+-    public void newState(int state) {
+-        sendState(state);
+-    }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java b/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
+index 911e5273..875f4a06 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/LocationStackItem.java
+@@ -1,20 +1,24 @@
+ package ch.bailu.aat.services.location;
+ 
++import android.content.Context;
++
+ import java.io.Closeable;
+ 
+ import ch.bailu.aat.preferences.PresetDependent;
+ 
+ public abstract class LocationStackItem implements Closeable, PresetDependent{
+-    public abstract void sendState(int state);
+-    public abstract void newState(int state);
+-
+-    public abstract void sendLocation(LocationInformation location);
+-    public abstract void newLocation(LocationInformation location);
++    public abstract void passState(int state);
++    public abstract void passLocation(LocationInformation location);
+ 
+ 
+     @Override
+     public void close(){}
+ 
++
++    @Override
++    public void preferencesChanged(Context c, int i) {}
++
++
+     public void appendStatusText(StringBuilder builder) {
+         builder.append("<b>");
+         builder.append(getClass().getSimpleName());
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java b/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
+index 1ba566e0..c5649ecb 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/MissingTrigger.java
+@@ -14,11 +14,9 @@ public class MissingTrigger extends LocationStackChainedItem {
+ 
+     
+     @Override
+-    public void newLocation(LocationInformation location) {
+-//        AppLog.d(this, "newLocation() -> send");
+-//        if (isMissingUpdates()) AppLog.d(this, "isMissingUpdates");
++    public void passLocation(LocationInformation location) {
+         stamp=location.getTimeStamp();
+-        sendLocation(location);
++        super.passLocation(location);
+ 
+ 
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java b/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
+index dc713fdb..7544877d 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/MockLocation.java
+@@ -41,11 +41,11 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+             mockData = new GpxListReader(file, AutoPause.NULL).getGpxList();
+ 
+             timer.kick();
+-            sendState(StateID.WAIT);
++            passState(StateID.WAIT);
+ 
+         } catch (Exception e) {
+             AppLog.e(c, e);
+-            sendState(StateID.OFF);
++            passState(StateID.OFF);
+         }
+     }
+ 
+@@ -62,17 +62,17 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+         } else {
+             node = (GpxPointNode) mockData.getPointList().getFirst();
+             if (sendLocation()) {
+-                sendState(StateID.ON);
++                passState(StateID.ON);
+                 kickTimer();
+             } else {
+-                sendState(StateID.OFF);
++                passState(StateID.OFF);
+             }
+         }
+     }
+ 
+     private boolean sendLocation() {
+         if (node != null) {
+-            sendLocation(new MockLocationInformation(node));
++            super.passLocation(new MockLocationInformation(node));
+ 
+             node = (GpxPointNode)node.getNext();
+             if (node != null) {
+@@ -174,19 +174,10 @@ public class MockLocation extends LocationStackChainedItem implements Runnable{
+     }
+ 
+     @Override
+-    public void sendState(int s) {
++    public void passState(int s) {
+         state = s;
+-        super.sendState(s);
++        super.passState(s);
+     }
+ 
+ 
+-    @Override
+-    public void newLocation(LocationInformation location) {}
+-
+-
+-    @Override
+-    public void preferencesChanged(Context c, int i) {}
+-
+-
+-
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java b/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
+index aed1f1f5..7db456e3 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/NetworkLocation.java
+@@ -5,14 +5,7 @@ import android.location.LocationManager;
+ 
+ public class NetworkLocation extends RealLocation {
+ 
+-    public static final int NETWORK_INTERVAL=60*SystemLocation.GPS_INTERVAL;
+-
+-    public NetworkLocation(LocationStackItem i, Context c) {
+-        super(i, c, LocationManager.NETWORK_PROVIDER);
+-        init(NETWORK_INTERVAL);
++    public NetworkLocation(LocationStackItem i, Context c, int interval) {
++        super(i, c, LocationManager.NETWORK_PROVIDER, interval);
+     }
+-
+-    @Override
+-    public void sendState(int s) {}
+-
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java b/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
+index 23f84a21..f04efcc8 100644
+--- a/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
++++ b/app/src/main/java/ch/bailu/aat/services/location/RealLocation.java
+@@ -22,30 +22,21 @@ import ch.bailu.util_java.foc.FocName;
+ public class RealLocation extends LocationStackChainedItem
+         implements LocationListener, ContextWrapperInterface{
+ 
+-    private final String provider;
++    private final FocName provider;
+     private final Context context;
+-    private int state=-99;
+-    private LocationInformation lastLocation; 
+ 
++    private int state = -99;
+ 
+-    private class LocationWrapper extends LocationInformation {
+-        private final Location location;
+-
+-        public LocationWrapper(Location l) {
+-            location = l;
+-            location.setTime(System.currentTimeMillis());
+-        }
+-
++    private Location location;
++    private final LocationInformation locationInformation = new  LocationInformation () {
+         @Override
+         public int getState() {
+             return state;
+         }
+-
+         @Override
+         public Foc getFile() {
+-            return new FocName(location.getProvider());
++            return provider;
+         }
+-
+         @Override
+         public float getAccuracy() {
+             return location.getAccuracy();
+@@ -54,22 +45,18 @@ public class RealLocation extends LocationStackChainedItem
+         public float getSpeed() {
+             return location.getSpeed();
+         }
+-
+         @Override
+         public short getAltitude() {
+             return (short)Math.round(location.getAltitude());
+         }
+-
+         @Override
+         public double getLatitude() {
+             return location.getLatitude();
+         }
+-
+         @Override
+         public double getLongitude() {
+             return location.getLongitude();
+         }
+-
+         @Override
+         public long getTimeStamp() {
+             return location.getTime();
+@@ -98,36 +85,40 @@ public class RealLocation extends LocationStackChainedItem
+         public boolean hasBearing() {
+             return location.hasBearing();
+         }
+-    }
++    };
++
+ 
+     private class NoServiceException extends Exception {
+         private static final long serialVersionUID = 5318663897402154115L;
+     }
+ 
+ 
+-    public RealLocation(LocationStackItem i, Context c, String p) {
++
++    public RealLocation(LocationStackItem i, Context c, String p, int intervall) {
+         super(i);
+ 
+         context = c;
+-        provider = p;
+-        lastLocation = new LocationWrapper(new Location(provider));
++        provider = new FocName(p);
++        location = new Location(provider.getName());
++
++        init(intervall);
+     }
+     
+     
+-    public void init(int gpsInterval) {
++    private void init(int gpsInterval) {
+         try {
+-            setState(StateID.WAIT);
++            passState(StateID.WAIT);
+ 
+             final LocationManager lm = getLocationManager(context);
+ 
+-            validateProvider(lm, provider);
+-            sendLastKnownLocation(lm, provider);
+-            requestLocationUpdates(lm, provider, gpsInterval);
++            validateProvider(lm, provider.getName());
++            sendLastKnownLocation(lm, provider.getName());
++            requestLocationUpdates(lm, provider.getName(), gpsInterval);
+ 
+         } catch (NoServiceException ex) {
+-            setState(StateID.NOSERVICE);
++            passState(StateID.NOSERVICE);
+         } catch (SecurityException | IllegalArgumentException ex) {
+-            setState(StateID.NOACCESS);
++            passState(StateID.NOACCESS);
+         }
+ 
+     }
+@@ -136,7 +127,7 @@ public class RealLocation extends LocationStackChainedItem
+     private void sendLastKnownLocation(LocationManager lm, String provider) {
+         if (AppPermission.checkLocation(context)) {
+             final Location loc = lm.getLastKnownLocation(provider);
+-            if (loc != null) sendLocation(loc);
++            if (loc != null) locationChange(loc);
+         }
+     }
+ 
+@@ -146,11 +137,6 @@ public class RealLocation extends LocationStackChainedItem
+ 
+ 
+     private void validateProvider(LocationManager lm, String provider) throws NoServiceException {
+-        /* 
+-         *  On shashlik all access to LocationManager throws null pointer exception. 
+-         *  Therefore we catch all exceptions. 
+-         */
+-        
+         try {
+             List <String> list = lm.getAllProviders();
+ 
+@@ -164,21 +150,21 @@ public class RealLocation extends LocationStackChainedItem
+         } catch (Exception e) {
+             throw new NoServiceException();
+         }
+-
+     }
++
++
+     private LocationManager getLocationManager(Context c) throws NoServiceException {
+         if (AppPermission.checkLocation(c)) {
+             final Object r = c.getSystemService(Context.LOCATION_SERVICE);
+ 
+-            if (r == null || LocationManager.class.isInstance(r) == false) {
+-                throw new NoServiceException();
+-            } else {
++            if (r instanceof LocationManager) {
+                 return (LocationManager) r;
+             }
+         }
+         throw new NoServiceException();
+     }
+ 
++
+     private void requestLocationUpdates(LocationManager lm, String provider, long interval)
+             throws SecurityException, IllegalArgumentException {
+         lm.requestLocationUpdates(provider , interval, 0, this);
+@@ -189,37 +175,36 @@ public class RealLocation extends LocationStackChainedItem
+         try {
+             AppLog.d(this, "=> removeUpdates()");
+             getLocationManager(context).removeUpdates(this);
+-        } catch (NoServiceException e) {
+-            state=StateID.NOSERVICE;
++        } catch (Exception e) {
++            state = StateID.NOSERVICE;
+         }
+     }
+ 
+     @Override
+     public void onLocationChanged(Location l) {
+-        setState(StateID.ON);
+-        sendLocation(l);
++        passState(StateID.ON);
++        locationChange(l);
+     }
+ 
+ 
+-    public void sendLocation(Location l) {
+-        lastLocation= new LocationWrapper(l);
+-        sendLocation(lastLocation);
++    public void locationChange(Location l) {
++        location = l;
++        passLocation(locationInformation);
+     }
+ 
+ 
+     @Override
+     public void onProviderDisabled(String p) {
+-
+-        if (provider.equals(p)) {
+-            setState(StateID.OFF);
++        if (provider.getName().equals(p)) {
++            passState(StateID.OFF);
+         }
+     }
+ 
+     @Override
+     public void onProviderEnabled(String p) {
+ 
+-        if (provider.equals(p)) {
+-            setState(StateID.WAIT);
++        if (provider.getName().equals(p)) {
++            passState(StateID.WAIT);
+         }
+     }
+ 
+@@ -227,7 +212,7 @@ public class RealLocation extends LocationStackChainedItem
+     @Override
+     public void onStatusChanged(String p, int status, Bundle extras) {
+ 
+-        if (provider.equals(p)) {
++        if (provider.getName().equals(p)) {
+ 
+             if (status == LocationProvider.AVAILABLE) {
+                 onProviderEnabled(p);
+@@ -239,21 +224,15 @@ public class RealLocation extends LocationStackChainedItem
+         }
+     }
+ 
+-    public void setState(int s) {
++    @Override
++    public void passState(int s) {
+         if (state != s) {
+             state = s;
+-            sendState(s);
++            super.passState(s);
+         }
+     }
+ 
+ 
+-    @Override
+-    public void newLocation(LocationInformation location) {
+-        sendLocation(location);
+-    }
+-
+-    @Override
+-    public void preferencesChanged(Context c, int i) {}
+ 
+     @Override
+     public Context getContext() {
+@@ -277,7 +256,6 @@ public class RealLocation extends LocationStackChainedItem
+         default: builder.append("STATE_WAIT"); break;
+         }
+         builder.append("<br>");
+-
+     }
+ 
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java b/app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java
+deleted file mode 100644
+index a6ea5007..00000000
+--- a/app/src/main/java/ch/bailu/aat/services/location/SystemLocation.java
++++ /dev/null
+@@ -1,67 +0,0 @@
+-package ch.bailu.aat.services.location;
+-
+-import android.location.LocationManager;
+-
+-import ch.bailu.aat.gpx.StateID;
+-import ch.bailu.aat.services.ServiceContext;
+-
+-public class SystemLocation extends RealLocation {
+-    public static final int GPS_INTERVAL=1000;
+-
+-    //private final ServiceLocker locker;
+-    private NetworkLocation networkLocation;
+-
+-
+-
+-    public SystemLocation(LocationStackItem i, ServiceContext c) {
+-        this(i, c, GPS_INTERVAL);
+-      
+-    }
+-
+-    public SystemLocation(LocationStackItem i, ServiceContext c, int gpsInterval) {
+-        super(i, c.getContext(), LocationManager.GPS_PROVIDER);
+-        //locker = new ServiceLocker(c);
+-        
+-        init(gpsInterval);
+-    }
+-
+-
+-    @Override
+-    public void close() {
+-        super.close();
+-        //locker.close();
+-        disableNetworkLocation();
+-    }
+-    
+-    @Override
+-    public void sendState(int s) {
+-        //locker.autoLock(s);
+-        
+-        if (s == StateID.ON) disableNetworkLocation();
+-        else enableNetworkLocation();
+-        super.sendState(s);
+-    }
+-
+-    private void enableNetworkLocation() {
+-        if (networkLocation == null && getContext() != null) 
+-            networkLocation=new NetworkLocation(this, getContext());
+-    }
+-
+-    private void disableNetworkLocation() {
+-        if (networkLocation != null) {
+-            networkLocation.close();
+-            networkLocation = null;
+-        }
+-    }
+-
+-    @Override
+-    public void appendStatusText(StringBuilder builder) {
+-        super.appendStatusText(builder);
+-
+-        if (networkLocation == null) {
+-            builder.append(NetworkLocation.class.getSimpleName());
+-            builder.append(": disabled<br>");
+-        } else
+-            networkLocation.appendStatusText(builder);
+-    }
+-}

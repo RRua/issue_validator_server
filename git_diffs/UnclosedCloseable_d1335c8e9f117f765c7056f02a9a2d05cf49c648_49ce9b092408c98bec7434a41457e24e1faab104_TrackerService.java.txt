@@ -1,0 +1,2109 @@
+diff --git a/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java b/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
+index 1cc9ed97..9ad01cc0 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
+@@ -192,7 +192,7 @@ public abstract class AbsOsmApiActivity extends AbsDispatcher implements OnClick
+         try {
+             String query = tagEditor.getText();
+ 
+-            BackgroundService.Self background = getServiceContext().getBackgroundService();
++            BackgroundService background = getServiceContext().getBackgroundService();
+ 
+ 
+             request.stopLoading();
+diff --git a/app/src/main/java/ch/bailu/aat/activities/AbsServiceLink.java b/app/src/main/java/ch/bailu/aat/activities/AbsServiceLink.java
+index a9bdaf07..9485523e 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/AbsServiceLink.java
++++ b/app/src/main/java/ch/bailu/aat/activities/AbsServiceLink.java
+@@ -1,11 +1,19 @@
+ package ch.bailu.aat.activities;
+ 
+ 
++import android.app.Notification;
+ import android.os.Bundle;
+ 
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.ServiceLink;
++import ch.bailu.aat.services.background.BackgroundService;
++import ch.bailu.aat.services.cache.CacheService;
++import ch.bailu.aat.services.dem.ElevationService;
++import ch.bailu.aat.services.directory.DirectoryService;
++import ch.bailu.aat.services.icons.IconMapService;
++import ch.bailu.aat.services.tileremover.TileRemoverService;
++import ch.bailu.aat.services.tracker.TrackerService;
+ 
+ public abstract class AbsServiceLink extends AbsActivity {
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/OneService.java b/app/src/main/java/ch/bailu/aat/services/OneService.java
+index b3e954a3..6f03f1ca 100644
+--- a/app/src/main/java/ch/bailu/aat/services/OneService.java
++++ b/app/src/main/java/ch/bailu/aat/services/OneService.java
+@@ -1,5 +1,7 @@
+ package ch.bailu.aat.services;
+ 
++import android.content.Context;
++
+ import ch.bailu.aat.services.background.BackgroundService;
+ import ch.bailu.aat.services.cache.CacheService;
+ import ch.bailu.aat.services.dem.ElevationService;
+@@ -8,46 +10,62 @@ import ch.bailu.aat.services.icons.IconMapService;
+ import ch.bailu.aat.services.tileremover.TileRemoverService;
+ import ch.bailu.aat.services.tracker.TrackerService;
+ 
+-public class OneService extends AbsService  {
++import static ch.bailu.aat.services.ServiceLink.ServiceNotUpError;
++
++public class OneService extends AbsService  implements ServiceContext {
+ 
+-    public TrackerService tracker;
+-    public BackgroundService background;
+-    public IconMapService iconMap;
+-    public CacheService   cache;
+-    public DirectoryService directory;
+-    public ElevationService elevation;
+-    public TileRemoverService tileRemover;
++    private TrackerService tracker;
++    private BackgroundService background;
++    private IconMapService iconMap;
++    private CacheService   cache;
++    private DirectoryService directory;
++    private ElevationService elevation;
++    private TileRemoverService tileRemover;
+ 
+-    private VirtualServiceLink scontext;
++
++    private boolean up = false;
+ 
+     @Override 
+     public void onCreate() {
++        up = true;
+         super.onCreate();
+-
+-        scontext = new VirtualServiceLink(this);
+-
+-        tracker = new TrackerService(scontext);
+-        background = new BackgroundService(scontext);
+-        iconMap = new IconMapService(scontext);
+-        cache = new CacheService(scontext);
+-        directory = new DirectoryService(scontext);
+-        elevation = new ElevationService(scontext);
+-        tileRemover = new TileRemoverService(scontext);
+-
+     }
+ 
+ 
+     @Override
+     public void onDestroy() {
+-        tracker.close();        tracker=null;
+-        background.close();     background=null;
+-        iconMap.close();        iconMap=null;
+-        cache.close();          cache=null;
+-        directory.close();      directory=null;
+-        elevation.close();      elevation=null;
+-        tileRemover.close();    tileRemover=null;
+-
+-        scontext=null;
++        if (tracker != null) {
++            tracker.close();
++            tracker = null;
++        }
++
++        if (background != null) {
++            background.close();
++            background = null;
++        }
++
++        if (iconMap != null) {
++            iconMap.close();
++            iconMap = null;
++        }
++
++        if (cache != null) {
++            cache.close();
++            cache = null;
++        }
++
++
++        if (elevation != null) {
++            elevation.close();
++            elevation = null;
++        }
++
++        if (tileRemover != null) {
++            tileRemover.close();
++            tileRemover = null;
++        }
++
++        up = false;
+         super.onDestroy();
+ 
+     }
+@@ -55,29 +73,97 @@ public class OneService extends AbsService  {
+ 
+     @Override
+     public void onLowMemory() {
++        cache.onLowMemory();
+         super.onLowMemory();
+-        cache.getSelf().onLowMemory();
++    }
++
++
++    @Override
++    public BackgroundService getBackgroundService() {
++        if (isUp() && background == null) {
++            background = new BackgroundService(this);
++        }
++        return background;
++    }
++
++    @Override
++    public CacheService getCacheService() {
++        if (isUp() && cache == null) {
++            cache = new CacheService(this);
++        }
++        return cache;
++    }
++
++    @Override
++    public ElevationService getElevationService() {
++        if (isUp() && elevation == null)
++            elevation = new ElevationService(this);
++        return elevation;
++    }
++
++    @Override
++    public IconMapService getIconMapService() {
++        if (isUp() && iconMap == null)
++            iconMap = new IconMapService(this);
++        return iconMap;
++    }
++
++    @Override
++    public DirectoryService getDirectoryService() {
++        if (isUp() && directory == null)
++            directory = new DirectoryService(this);
++        return directory;
++    }
++
++    @Override
++    public TrackerService getTrackerService() {
++        if (isUp() && tracker == null)
++            tracker = new TrackerService(this);
++        return tracker;
++    }
++
++    @Override
++    public TileRemoverService getTileRemoverService() {
++        if (isUp() && tileRemover == null)
++            tileRemover = new TileRemoverService(this);
++        return tileRemover;
+     }
+ 
+ 
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+-        super.appendStatusText(builder);
+-        appendStatusText(tracker, builder);
+-        appendStatusText(background, builder);
+-        appendStatusText(cache, builder);
+-        appendStatusText(iconMap, builder);
+-        appendStatusText(directory, builder);
+-        appendStatusText(elevation, builder);
++        if (isUp()) {
++            super.appendStatusText(builder);
++            appendStatusText(tracker, builder);
++            appendStatusText(background, builder);
++            appendStatusText(cache, builder);
++            appendStatusText(iconMap, builder);
++            appendStatusText(directory, builder);
++            appendStatusText(elevation, builder);
++        }
+     }
+ 
+     public void appendStatusText(VirtualService service, StringBuilder builder) {
+-        builder.append("<h1>");
+-        builder.append(service.getClass().getSimpleName());
+-        builder.append("</h1>");
++        if (isUp()) {
++            builder.append("<h1>");
++            builder.append(service.getClass().getSimpleName());
++            builder.append("</h1>");
++
++            builder.append("<p>");
++            service.appendStatusText(builder);
++            builder.append("</p>");
++        }
++    }
++
++    @Override
++    public Context getContext() {
++        isUp(); return this;
++    }
+ 
+-        builder.append("<p>");
+-        service.appendStatusText(builder);
+-        builder.append("</p>");
++    public boolean isUp() {
++        if (!up) {
++            new ServiceNotUpError(OneService.class);
++        }
++        return up;
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/ServiceContext.java b/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
+index 33a84f56..0ee95f9c 100644
+--- a/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
++++ b/app/src/main/java/ch/bailu/aat/services/ServiceContext.java
+@@ -1,6 +1,6 @@
+ package ch.bailu.aat.services;
+ 
+-import android.app.Service;
++import android.app.Notification;
+ 
+ import ch.bailu.aat.helpers.ContextWrapperInterface;
+ import ch.bailu.aat.services.background.BackgroundService;
+@@ -11,130 +11,22 @@ import ch.bailu.aat.services.icons.IconMapService;
+ import ch.bailu.aat.services.tileremover.TileRemoverService;
+ import ch.bailu.aat.services.tracker.TrackerService;
+ 
+-public abstract class ServiceContext implements ContextWrapperInterface {
++public interface ServiceContext extends ContextWrapperInterface {
+ 
++    void lock(String s);
++    void free(String s);
+ 
+-    public static class ServiceNotUpException extends Exception {
+-        private static final long serialVersionUID = 5632759660184034845L;
++    BackgroundService getBackgroundService();
++    CacheService getCacheService();
++    ElevationService getElevationService();
++    IconMapService getIconMapService();
++    DirectoryService getDirectoryService();
++    TrackerService getTrackerService();
++    TileRemoverService getTileRemoverService();
+ 
+-        public ServiceNotUpException(Class<?> service)  {
+-            super("Service '" + service.getSimpleName() + "' is not running.*");
+-        }
+-    }
++    void startForeground(int id, Notification notification);
++    void stopForeground(boolean b);
+ 
++    void appendStatusText(StringBuilder content);
+ 
+-    public abstract OneService getService() throws ServiceNotUpException;
+-
+-    public abstract void lock(String s);
+-    public abstract void free(String s);
+-
+-    public BackgroundService.Self getBackgroundService() {
+-        BackgroundService s=null;
+-        try {
+-            s=getService().background;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new BackgroundService.Self();
+-        return s.getSelf();
+-    }
+-
+-
+-    public CacheService.Self getCacheService()  {
+-        CacheService s=null;
+-        try {
+-            s=getService().cache;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new CacheService.Self();
+-        return s.getSelf(); 
+-    }
+-
+-
+-    public ElevationService.Self getElevationService() {
+-        ElevationService s=null;
+-        try {
+-            s=getService().elevation;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new ElevationService.Self();
+-        return s.getSelf();    }
+-
+-
+-    public IconMapService.Self getIconMapService() {
+-        IconMapService s=null;
+-        try {
+-            s=getService().iconMap;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new IconMapService.Self();
+-        return s.getSelf();    }
+-
+-
+-    public DirectoryService.Self getDirectoryService() {
+-        DirectoryService s=null;
+-        try {
+-            s=getService().directory;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new DirectoryService.Self();
+-        return s.getSelf();    }
+-
+-
+-
+-    public TrackerService.Self getTrackerService() {
+-        TrackerService s=null;
+-        try {
+-            s=getService().tracker;
+-
+-        } catch (Exception e) {
+-            s=null;
+-
+-        }
+-
+-        if (s==null) return new TrackerService.Self();
+-        return s.getSelf();
+-    }
+-
+-
+-    public TileRemoverService getTileRemoverService() {
+-        try {
+-            return getService().tileRemover;
+-
+-        } catch (Exception e) {
+-            return null;
+-
+-        }
+-    }
+-
+-
+-    public void appendStatusText(StringBuilder content) {
+-        try {
+-            getService().appendStatusText(content);
+-        } catch (ServiceNotUpException e) {
+-            content.append("<p>ERROR*: ");
+-            content.append(e.getMessage());
+-            content.append("</p>");
+-        }
+-    }
+-    
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/ServiceLink.java b/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
+index b8c01d55..3fb50509 100644
+--- a/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
++++ b/app/src/main/java/ch/bailu/aat/services/ServiceLink.java
+@@ -1,5 +1,6 @@
+ package ch.bailu.aat.services;
+ 
++import android.app.Notification;
+ import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -8,7 +9,28 @@ import android.os.IBinder;
+ 
+ import java.io.Closeable;
+ 
+-public abstract class ServiceLink extends ServiceContext implements ServiceConnection, Closeable {
++import ch.bailu.aat.services.background.BackgroundService;
++import ch.bailu.aat.services.cache.CacheService;
++import ch.bailu.aat.services.dem.ElevationService;
++import ch.bailu.aat.services.directory.DirectoryService;
++import ch.bailu.aat.services.icons.IconMapService;
++import ch.bailu.aat.services.tileremover.TileRemoverService;
++import ch.bailu.aat.services.tracker.TrackerService;
++
++public abstract class ServiceLink implements
++        ServiceContext,
++        ServiceConnection,
++        Closeable {
++
++
++    public static class ServiceNotUpError extends Error {
++        private static final long serialVersionUID = 5632759660184034845L;
++
++        public ServiceNotUpError(Class<?> service)  {
++            super("Service '" + service.getSimpleName() + "' is not running.*");
++        }
++    }
++
+ 
+     private OneService service=null;
+     private boolean bound =false;
+@@ -37,6 +59,7 @@ public abstract class ServiceLink extends ServiceContext implements ServiceConne
+     }
+ 
+ 
++
+     @Override
+     public void onServiceConnected(ComponentName className, IBinder binder) {
+ 
+@@ -72,28 +95,84 @@ public abstract class ServiceLink extends ServiceContext implements ServiceConne
+     public abstract void onServiceUp();
+ 
+ 
+-    @Override
+-    public OneService getService() throws ServiceNotUpException {
++
++    private OneService getService()  {
+         if (isUp())
+             return service;
+         else
+-            throw new ServiceNotUpException(OneService.class);
++            throw new ServiceNotUpError(OneService.class);
+     }
+ 
+ 
+     @Override
+     public void lock(String s) {
+-        if (isUp()) service.lock(s);
++        if (isUp()) getService().lock(s);
+     }
+ 
+ 
+     @Override
+     public void free(String s) {
+-        if (isUp()) service.free(s);
++        if (isUp()) getService().free(s);
+     }
+ 
++
++
+     @Override
+     public void close() {
+         down();
+     }
++
++
++
++    @Override
++    public BackgroundService getBackgroundService() {
++        return getService().getBackgroundService();
++    }
++
++    @Override
++    public CacheService getCacheService() {
++        return getService().getCacheService();
++    }
++
++    @Override
++    public ElevationService getElevationService() {
++        return getService().getElevationService();
++    }
++
++    @Override
++    public IconMapService getIconMapService() {
++        return getService().getIconMapService();
++    }
++
++    @Override
++    public DirectoryService getDirectoryService() {
++        return getService().getDirectoryService();
++    }
++
++    @Override
++    public TrackerService getTrackerService() {
++        return getService().getTrackerService();
++    }
++
++    @Override
++    public TileRemoverService getTileRemoverService() {
++        return getService().getTileRemoverService();
++    }
++
++
++    @Override
++    public void startForeground(int id, Notification notification) {
++        getService().startForeground(id, notification);
++    }
++
++    @Override
++    public void stopForeground(boolean b) {
++        getService().stopForeground(b);
++    }
++
++    @Override
++    public void appendStatusText(StringBuilder content) {
++        getService().appendStatusText(content);
++    }
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/VirtualService.java b/app/src/main/java/ch/bailu/aat/services/VirtualService.java
+index 8a49466d..21967e0f 100644
+--- a/app/src/main/java/ch/bailu/aat/services/VirtualService.java
++++ b/app/src/main/java/ch/bailu/aat/services/VirtualService.java
+@@ -4,7 +4,7 @@ import android.content.Context;
+ 
+ import java.io.Closeable;
+ 
+-public abstract class VirtualService implements Closeable{
++public abstract class VirtualService implements Closeable {
+     
+     
+     private final ServiceContext scontext;
+@@ -12,15 +12,12 @@ public abstract class VirtualService implements Closeable{
+     public VirtualService(ServiceContext sc) {
+         scontext = sc;
+     }
+-    
+-    
++
+     public abstract void appendStatusText(StringBuilder builder);
+ 
+-    
+     public ServiceContext getSContext() {
+         return scontext;
+     }
+-    
+     public Context getContext() {
+         return scontext.getContext();
+     }
+diff --git a/app/src/main/java/ch/bailu/aat/services/VirtualServiceLink.java b/app/src/main/java/ch/bailu/aat/services/VirtualServiceLink.java
+deleted file mode 100644
+index 1e2dea8f..00000000
+--- a/app/src/main/java/ch/bailu/aat/services/VirtualServiceLink.java
++++ /dev/null
+@@ -1,34 +0,0 @@
+-package ch.bailu.aat.services;
+-
+-import android.content.Context;
+-
+-public class VirtualServiceLink extends ServiceContext {
+-
+-    private final  OneService service;
+-    
+-    public VirtualServiceLink(OneService s) {
+-        service = s;
+-    }
+-    @Override
+-    public Context getContext() {
+-        return service;
+-    }
+-
+-    @Override
+-    public OneService getService() throws ServiceNotUpException {
+-       return service;
+-        
+-    }
+-
+-    @Override
+-    public void lock(String s) {
+-        service.lock(s);
+-    }
+-    
+-    @Override
+-    public void free(String s) {
+-        service.free(s);
+-    }
+-
+-
+-}
+diff --git a/app/src/main/java/ch/bailu/aat/services/background/BackgroundService.java b/app/src/main/java/ch/bailu/aat/services/background/BackgroundService.java
+index 56f50111..bcddf369 100644
+--- a/app/src/main/java/ch/bailu/aat/services/background/BackgroundService.java
++++ b/app/src/main/java/ch/bailu/aat/services/background/BackgroundService.java
+@@ -5,7 +5,6 @@ import android.content.Context;
+ import android.content.Intent;
+ import android.util.SparseArray;
+ 
+-import java.io.Closeable;
+ import java.io.File;
+ import java.net.MalformedURLException;
+ import java.net.URL;
+@@ -19,174 +18,139 @@ import ch.bailu.aat.services.VirtualService;
+ public class BackgroundService extends VirtualService {
+ 
+ 
+-    private final Self self;
+-
+-    public Self getSelf() {
+-        return self;
+-    }
+-
+-
+-    public BackgroundService(ServiceContext sc) {
+-        super(sc);
+-        self = new SelfOn();
+-    }
+ 
++    private final static int PROCESS_QUEUE_SIZE=500;
+ 
+-    
+-    public void close() {
+-        self.close();
+-    }
++    private final SparseArray<DownloaderThread> downloaders = new SparseArray<>();
++    private final SparseArray<LoaderThread> loaders = new SparseArray<>();
++    private ProcessThread process;
+ 
+ 
+-    @Override
+-    public void appendStatusText(StringBuilder builder) {
+-        self.appendStatusText(builder);
+-    }
+-
++    private final MapFeaturesDownloader mapFeaturesDownloader;
+ 
+-    
+-    public static class Self implements Closeable {
+-        public void process(ProcessHandle handle) {}
+-        public void download(ProcessHandle handle) {}
+-        public void load(ProcessHandle handle) {}
+-        public void downloadMapFeatures() {}
++    private final BroadcastReceiver onFileDownloaded = new BroadcastReceiver() {
+         @Override
+-        public void close() {}
+-        public void appendStatusText(StringBuilder builder) {}
+-    }
+-
+-
+-    
+-    public class SelfOn extends Self {
+-        private final static int PROCESS_QUEUE_SIZE=500;
++        public void onReceive(Context context, Intent intent) {
++            AppLog.i(context, AppIntent.getFile(intent));
++        }
++    };
+ 
+-        private final SparseArray<DownloaderThread> downloaders = new SparseArray<>();
+-        private final SparseArray<LoaderThread> loaders = new SparseArray<>();
+-        private ProcessThread process;
++    public BackgroundService(ServiceContext sc) {
++        super(sc);
++        mapFeaturesDownloader = new MapFeaturesDownloader(getSContext());
++        AppBroadcaster.register(getContext(), onFileDownloaded, AppBroadcaster.FILE_CHANGED_ONDISK);
+ 
+ 
+-        private final MapFeaturesDownloader mapFeaturesDownloader;
++        process =new ProcessThread(PROCESS_QUEUE_SIZE) {
+ 
+-        private final BroadcastReceiver onFileDownloaded = new BroadcastReceiver() {
+             @Override
+-            public void onReceive(Context context, Intent intent) {
+-                AppLog.i(context, AppIntent.getFile(intent));
++            public void bgOnHaveHandle(ProcessHandle handle) {
++                if (handle.canContinue()) {
++                    handle.bgLock();
++                    handle.bgOnProcess();
++                    handle.bgUnlock();
++                    handle.broadcast(getContext());
++
++                }
+             }
+         };
+ 
+-        public SelfOn() {
+-            mapFeaturesDownloader = new MapFeaturesDownloader(getSContext());
+-            AppBroadcaster.register(getContext(), onFileDownloaded, AppBroadcaster.FILE_CHANGED_ONDISK);
+-
+-
+-            process =new ProcessThread(PROCESS_QUEUE_SIZE) {
++    }
+ 
+-                @Override
+-                public void bgOnHaveHandle(ProcessHandle handle) {
+-                    if (handle.canContinue()) {
+-                        handle.bgLock();
+-                        handle.bgOnProcess();
+-                        handle.bgUnlock();
+-                        handle.broadcast(getContext());
++    public void process(ProcessHandle handle) {
++        process.process(handle);
++    }
+ 
+-                    }
+-                }
+-            };
+ 
++    public void download(ProcessHandle handle) {
++        URL url;
++        try {
++            url = new URL(handle.toString());
++        } catch (MalformedURLException e) {
++            url = null;
+         }
+-        @Override
+-        public void process(ProcessHandle handle) {
+-            process.process(handle);
+-        }
+-
+-        @Override
+-        public void download(ProcessHandle handle) {
+-            URL url;
+-            try {
+-                url = new URL(handle.toString());
+-            } catch (MalformedURLException e) {
+-                url = null;
+-            }
+ 
+-            if (url != null) {
+-                String host = url.getHost();
+-                DownloaderThread downloader = downloaders.get(host.hashCode());
++        if (url != null) {
++            String host = url.getHost();
++            DownloaderThread downloader = downloaders.get(host.hashCode());
+ 
+-                if (downloader == null) {
+-                    downloader = new DownloaderThread(getContext(), host);
+-                    downloaders.put(host.hashCode(), downloader);
+-                }
+-                downloader.process(handle);
++            if (downloader == null) {
++                downloader = new DownloaderThread(getContext(), host);
++                downloaders.put(host.hashCode(), downloader);
+             }
++            downloader.process(handle);
+         }
++    }
+ 
+ 
+-        @Override
+-        public void load(ProcessHandle handle) {
+-            final String base = getBaseDirectory(handle.toString());
+ 
+-            LoaderThread loader = loaders.get(base.hashCode());
++    public void load(ProcessHandle handle) {
++        final String base = getBaseDirectory(handle.toString());
+ 
+-            if (loader == null) {
+-                loader = new LoaderThread(getContext(), base);
+-                loaders.put(base.hashCode(), loader);
+-            }
+-            loader.process(handle);
+-        }
++        LoaderThread loader = loaders.get(base.hashCode());
+ 
+-        @Override
+-        public void downloadMapFeatures() {
+-            mapFeaturesDownloader.download();
++        if (loader == null) {
++            loader = new LoaderThread(getContext(), base);
++            loaders.put(base.hashCode(), loader);
+         }
+-        @Override
+-        public void close() {
+-            getContext().unregisterReceiver(onFileDownloaded);
++        loader.process(handle);
++    }
+ 
+-            mapFeaturesDownloader.close();
+ 
+-            for (int i=0; i<loaders.size(); i++)
+-                loaders.valueAt(i).close();
+-            loaders.clear();
++    public void downloadMapFeatures() {
++        mapFeaturesDownloader.download();
++    }
+ 
+-            for (int i=0; i<downloaders.size(); i++)
+-                downloaders.valueAt(i).close();
+-            downloaders.clear();
+ 
+-            process.close();
+-            process=null;
+-        }
++    @Override
++    public void close() {
++        getContext().unregisterReceiver(onFileDownloaded);
+ 
+-        private String getBaseDirectory(String id) {
+-            File p1 = new File (id);
+-            File r = p1;
++        mapFeaturesDownloader.close();
+ 
+-            int c=0;
+-            final int t=3;
++        for (int i=0; i<loaders.size(); i++)
++            loaders.valueAt(i).close();
++        loaders.clear();
+ 
+-            while (p1!=null) {
+-                p1=p1.getParentFile();
++        for (int i=0; i<downloaders.size(); i++)
++            downloaders.valueAt(i).close();
++        downloaders.clear();
+ 
+-                if (c<t) {
+-                    c++;
++        process.close();
++        process=null;
++    }
+ 
+-                } else {
+-                    r=r.getParentFile();
++    private String getBaseDirectory(String id) {
++        File p1 = new File (id);
++        File r = p1;
+ 
+-                }
++        int c=0;
++        final int t=3;
++
++        while (p1!=null) {
++            p1=p1.getParentFile();
++
++            if (c<t) {
++                c++;
++
++            } else {
++                r=r.getParentFile();
+ 
+             }
+ 
+-            return r.getAbsolutePath();
+         }
+ 
+-        @Override        
+-        public void appendStatusText(StringBuilder builder) {
++        return r.getAbsolutePath();
++    }
++
++    @Override
++    public void appendStatusText(StringBuilder builder) {
+ 
+-            for (int i=0; i<loaders.size(); i++)
+-                loaders.valueAt(i).appendStatusText(builder);
++        for (int i=0; i<loaders.size(); i++)
++            loaders.valueAt(i).appendStatusText(builder);
+ 
+-            for (int i=0; i<downloaders.size(); i++)
+-                downloaders.valueAt(i).appendStatusText(builder);
+-        }
++        for (int i=0; i<downloaders.size(); i++)
++            downloaders.valueAt(i).appendStatusText(builder);
+     }
+ }
++
+diff --git a/app/src/main/java/ch/bailu/aat/services/cache/CacheService.java b/app/src/main/java/ch/bailu/aat/services/cache/CacheService.java
+index 844c9866..6e248a64 100644
+--- a/app/src/main/java/ch/bailu/aat/services/cache/CacheService.java
++++ b/app/src/main/java/ch/bailu/aat/services/cache/CacheService.java
+@@ -4,124 +4,65 @@ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+ 
+-import java.io.Closeable;
+-
+ import ch.bailu.aat.helpers.AppBroadcaster;
+-import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+-import ch.bailu.aat.services.cache.ObjectHandle.Factory;
+ 
+ 
+ 
+ public class CacheService extends VirtualService {
+ 
+-    private final Self self;
+-
+-    public Self getSelf() {
+-        return self;
++    public final ObjectTable table=new ObjectTable();
++    public final ObjectBroadcaster broadcaster;
+ 
+-    }
++    public final ServiceContext scontext;
+ 
+-    
+     public CacheService(ServiceContext sc) {
+         super(sc);
+-        self = new SelfOn();
++
++        scontext = sc;
++        broadcaster = new ObjectBroadcaster(getSContext());
++
++
++        AppBroadcaster.register(getContext(), onFileProcessed, AppBroadcaster.FILE_CHANGED_INCACHE);
+     }
+ 
++    public void onLowMemory() {
++        table.onLowMemory(this);
++    }
+ 
++    public ObjectHandle getObject(String id, ObjectHandle.Factory factory) {
+ 
++        return table.getHandle(id, factory, this);
++    }
++
++    public ObjectHandle getObject(String id) {
++        return table.getHandle(id, getSContext());
++    }
+ 
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+-        self.appendStatusText(builder);
++        table.appendStatusText(builder);
+     }
+ 
+ 
+-    
+     @Override
+     public void close() {
+-        self.close();
++        table.logLocked();
++        getContext().unregisterReceiver(onFileProcessed);
++        broadcaster.close();
+     }
+-    
+-    
+-    public static class Self implements Closeable {
+-        @Override
+-        public void close() {}
+ 
+-        public void addToBroadcaster(ObjectBroadcastReceiver b) {}
+-        public void onLowMemory() {}
+ 
+-        public ObjectHandle getObject(String id) {
+-            AppLog.d(this, id);
+-            return ObjectHandle.NULL;
+-        }
+-
+-        public ObjectHandle getObject(String id, Factory factory) {
+-            AppLog.d(this, id);
+-            return ObjectHandle.NULL;
+-        }
+-
+-        public void appendStatusText(StringBuilder builder) {}
++    public void addToBroadcaster(ObjectBroadcastReceiver b) {
++        broadcaster.put(b);
+     }
+ 
+-
+-    public class SelfOn extends Self {
+-        public final ObjectTable table=new ObjectTable();
+-        public final ObjectBroadcaster broadcaster;
+-
+-        public final ServiceContext scontext;
+-
+-        public SelfOn() {
+-            
+-            scontext = getSContext();
+-            broadcaster = new ObjectBroadcaster(getSContext());
+-
+-
+-            AppBroadcaster.register(getContext(), onFileProcessed, AppBroadcaster.FILE_CHANGED_INCACHE);
+-        }
+-
+-        @Override
+-        public void onLowMemory() {
+-            table.onLowMemory(this);
+-        }
+-
+-        @Override
+-        public ObjectHandle getObject(String id, ObjectHandle.Factory factory) {
+-            
+-            return table.getHandle(id, factory, this);
+-        }
+-
+-        @Override
+-        public ObjectHandle getObject(String id) {
+-            return table.getHandle(id, getSContext());
+-        }
+-
++    private final BroadcastReceiver onFileProcessed = new BroadcastReceiver() {
+         @Override
+-        public void appendStatusText(StringBuilder builder) {
+-            super.appendStatusText(builder);
+-            table.appendStatusText(builder);
++        public void onReceive(Context context, Intent intent) {
++            table.onObjectChanged(intent, CacheService.this);
+         }
+-
+-
+-        @Override
+-        public void close() {
+-            table.logLocked();
+-            getContext().unregisterReceiver(onFileProcessed);
+-            broadcaster.close();
+-        }
+-
+-
+-        @Override
+-        public void addToBroadcaster(ObjectBroadcastReceiver b) {
+-            broadcaster.put(b);
+-        }
+-        
+-        private final BroadcastReceiver onFileProcessed = new BroadcastReceiver() {
+-            @Override
+-            public void onReceive(Context context, Intent intent) {
+-                table.onObjectChanged(intent, SelfOn.this);
+-            }
+-        };
+-    }
++    };
+ }
++
+diff --git a/app/src/main/java/ch/bailu/aat/services/cache/ObjectTable.java b/app/src/main/java/ch/bailu/aat/services/cache/ObjectTable.java
+index 81358ecf..71b33483 100644
+--- a/app/src/main/java/ch/bailu/aat/services/cache/ObjectTable.java
++++ b/app/src/main/java/ch/bailu/aat/services/cache/ObjectTable.java
+@@ -6,7 +6,6 @@ import android.util.SparseArray;
+ import ch.bailu.aat.helpers.AppIntent;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.services.ServiceContext;
+-import ch.bailu.aat.services.cache.CacheService.SelfOn;
+ import ch.bailu.aat.services.cache.ObjectHandle.Factory;
+ 
+ 
+@@ -44,7 +43,7 @@ public class ObjectTable {
+     private final SparseArray<Container> table = new SparseArray<>(INITIAL_CAPACITY);
+ 
+ 
+-    public synchronized ObjectHandle getHandle(String id, Factory factory, SelfOn son) {
++    public synchronized ObjectHandle getHandle(String id, Factory factory, CacheService son) {
+         ObjectHandle h=getFromCache(id);
+ 
+         if (h == null) {
+@@ -104,13 +103,13 @@ public class ObjectTable {
+     }
+ 
+ 
+-    public synchronized void onObjectChanged(Intent intent, SelfOn self) {
++    public synchronized void onObjectChanged(Intent intent, CacheService self) {
+         ObjectHandle handle = getHandle(intent);
+         onObjectChanged(handle, self);
+     }
+ 
+ 
+-    public synchronized void onObjectChanged(ObjectHandle handle, SelfOn self) {
++    public synchronized void onObjectChanged(ObjectHandle handle, CacheService self) {
+         updateSize(handle);
+         trim(self);
+     }
+@@ -130,27 +129,27 @@ public class ObjectTable {
+     }
+ 
+ 
+-    public synchronized void onLowMemory(SelfOn self) {
++    public synchronized void onLowMemory(CacheService self) {
+         limit = MIN_SIZE;
+         trim(self);            
+     }
+ 
+ 
+-    private synchronized void trim(SelfOn self) {
++    private synchronized void trim(CacheService self) {
+ 
+         while ((totalMemorySize > limit) && removeOldest(self));
+     }
+ 
+ 
+ 
+-    private boolean removeOldest(SelfOn self) {
++    private boolean removeOldest(CacheService self) {
+         final Container oldest = findOldest();
+         return removeFromTable(oldest, self);
+     }
+ 
+ 
+ 
+-    private boolean removeFromTable(Container remove, SelfOn self) {
++    private boolean removeFromTable(Container remove, CacheService self) {
+         remove = table.get(remove.hashCode());
+ 
+         if (remove !=null) {
+diff --git a/app/src/main/java/ch/bailu/aat/services/dem/ElevationService.java b/app/src/main/java/ch/bailu/aat/services/dem/ElevationService.java
+index 37df5e59..f756801a 100644
+--- a/app/src/main/java/ch/bailu/aat/services/dem/ElevationService.java
++++ b/app/src/main/java/ch/bailu/aat/services/dem/ElevationService.java
+@@ -1,66 +1,33 @@
+ package ch.bailu.aat.services.dem;
+ 
+-import java.io.Closeable;
+-
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+ public class ElevationService extends VirtualService {
+ 
+ 
+-    private final Self self;
+-
+-    public Self getSelf() {
+-        return self;
+-    }
++    private final ElevationUpdater  elevationUpdater;
+ 
+-    
+     public ElevationService(ServiceContext sc) {
+         super(sc);
+-        self = new SelfOn();
++        elevationUpdater = new ElevationUpdater(sc);
+     }
+ 
++    public short getElevation(int laE6, int loE6) {
++        return elevationUpdater.getElevation(laE6, loE6);
++    }
+ 
+ 
+     @Override
+     public void close() {
+-        self.close();
+-    }
+-
+-
+-
+-    public static class Self implements Closeable, ElevationProvider {
+-        public short getElevation(int laE6, int loE6) {
+-            return 0;
+-        }
+-
+-        @Override
+-        public void close() {
+-        }
++        elevationUpdater.close();
+     }
+ 
+-    public class SelfOn extends Self {
+-        private final ElevationUpdater  elevationUpdater;
+-
+-        public SelfOn() {
+-            elevationUpdater = new ElevationUpdater(getSContext());
+-        }
+-        @Override
+-        public short getElevation(int laE6, int loE6) {
+-            return elevationUpdater.getElevation(laE6, loE6);
+-        }
+-
+-
+-        @Override
+-        public void close() {
+-            elevationUpdater.close();
+-        }
+-    }
+ 
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+         // TODO Auto-generated method stub
+-        
++
+     }
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/directory/DirectoryService.java b/app/src/main/java/ch/bailu/aat/services/directory/DirectoryService.java
+index b2451369..b6483c9f 100644
+--- a/app/src/main/java/ch/bailu/aat/services/directory/DirectoryService.java
++++ b/app/src/main/java/ch/bailu/aat/services/directory/DirectoryService.java
+@@ -4,9 +4,7 @@ import android.content.SharedPreferences;
+ import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
+ import android.database.Cursor;
+ import android.database.sqlite.SQLiteCantOpenDatabaseException;
+-import android.database.sqlite.SQLiteReadOnlyDatabaseException;
+ 
+-import java.io.Closeable;
+ import java.io.File;
+ import java.io.IOException;
+ 
+@@ -16,185 +14,143 @@ import ch.bailu.aat.preferences.SolidDirectoryQuery;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+-public class DirectoryService extends VirtualService{
++public class DirectoryService extends VirtualService implements OnSharedPreferenceChangeListener{
+ 
+ 
+-    private final Self self;
++    private AbsDatabase database=AbsDatabase.NULL_DATABASE;
++    private final SolidDirectoryQuery sdirectory;
++    private DirectorySynchronizer synchronizer=null;
+ 
+ 
+-    public Self getSelf() {
+-        return self;
+-    }
+-
++    public DirectoryService(ServiceContext scontext) {
++        super(scontext);
++        sdirectory = new SolidDirectoryQuery(getContext());
++        sdirectory.getStorage().register(this);
+ 
+-
+-    public DirectoryService(ServiceContext sc) {
+-        super(sc);
+-        self = new SelfOn();
++        openDir();
+     }
+ 
+ 
+ 
+     @Override
+-    public void close() {
+-        self.close();
++    public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
++        if (sdirectory.hasKey(key)) {
++            openDir();
++        }
+     }
+ 
+ 
+-    public static class Self implements Closeable{
+-        public void rescan() {}
+-        public void deleteEntry(File file)  {}
+-
+ 
+-        @Override
+-        public void close() {}
+-        public void appendStatusText(StringBuilder builder) {}
+-        
+-        public Cursor query(String selection) {
+-            return null;
++    private void openDir() {
++        if (isDirReadable()) {
++            open();
++            if (isDirWriteable()) {
++                rescan();
++            } else {
++                logReadOnly();
++            }
++        } else {
++            logNoAccess();
+         }
+     }
+ 
+ 
++    private void logReadOnly() {
++        AppLog.e(getContext(), getDir().getAbsolutePath() + " is read only.*");
++    }
+ 
+-    public class SelfOn extends Self implements OnSharedPreferenceChangeListener {
+-        private AbsDatabase database=AbsDatabase.NULL_DATABASE;
+-        private final SolidDirectoryQuery sdirectory;
+-        private DirectorySynchronizer synchronizer=null;
+-
+-
+-        public SelfOn() {
+-            sdirectory = new SolidDirectoryQuery(getContext());
+-            sdirectory.getStorage().register(this);
+-            
+-            openDir();
+-        }
+ 
++    private void logNoAccess() {
++        AppLog.e(getContext(), getDir().getAbsolutePath() + " no access.*");
++    }
+ 
+-        
+-        @Override
+-        public void onSharedPreferenceChanged(SharedPreferences sp, String key) {
+-            if (sdirectory.hasKey(key)) {
+-                openDir();
+-            }
+-        }
+-        
+-        
+-        
+-        private void openDir() {
+-            if (isDirReadable()) {
+-                open();
+-                if (isDirWriteable()) {
+-                    rescan();
+-                } else {
+-                    logReadOnly();
+-                }
+-            } else {
+-                logNoAccess();
+-            }
+-        }
+ 
+ 
+-        private void logReadOnly() {
+-            AppLog.e(getContext(), getDir().getAbsolutePath() + " is read only.*");
+-        }
++    private void open() {
++        final File db = AppDirectory.getCacheDb(getDir());
+ 
++        try {
++            openDataBase(getSContext(), db);
+ 
+-        private void logNoAccess() {
+-            AppLog.e(getContext(), getDir().getAbsolutePath() + " no access.*");
++        } catch (Exception e) {
++            database=AbsDatabase.NULL_DATABASE;
+         }
++    }
+ 
+ 
+-        
+-        private void open() {
+-            final File db = AppDirectory.getCacheDb(getDir());
+-
+-            try {
+-                openDataBase(getSContext(), db);
+ 
+-            } catch (Exception e) {
+-                database=AbsDatabase.NULL_DATABASE;
+-            } 
+-        }
++    private File getDir() {
++        return new File(sdirectory.getValueAsString());
++    }
+ 
+ 
++    private boolean isDirReadable() {
++        return getDir().canRead();
++    }
+ 
+-        private File getDir() {
+-            return new File(sdirectory.getValueAsString());
+-        }
++    private boolean isDirWriteable() {
++        return getDir().canWrite();
++    }
+ 
+ 
+-        private boolean isDirReadable() {
+-            return getDir().canRead();
+-        }
+ 
+-        private boolean isDirWriteable() {
+-            return getDir().canWrite();
+-        }
+ 
++    private void openDataBase(ServiceContext sc, File path) throws IOException, SQLiteCantOpenDatabaseException {
++        database.close();
++        database = new GpxDatabase(
++                sc,
++                path);
++    }
+ 
+ 
+ 
+-        private void openDataBase(ServiceContext sc, File path) throws IOException, SQLiteCantOpenDatabaseException {
+-            database.close();
+-            database = new GpxDatabase(
+-                    sc, 
+-                    path);
+-        }
++    public Cursor query(String sel) {
++        return database.query(sel);
++    }
+ 
+-        
+-        @Override
+-        public Cursor query(String sel) {
+-            return database.query(sel);
+-        }
+-        
+ 
+-        @Override
+-        public void deleteEntry(File file)  {
+-            if (isDirWriteable()) {
+-                database.deleteEntry(file);
+-                rescan();
+-            } else {
+-                logReadOnly();
+-            }
+-        }
+ 
+-        
+-        @Override
+-        public void rescan() {
+-            if (isDirReadable()) {
+-                stopSynchronizer();
+-                synchronizer = new DirectorySynchronizer(getSContext(), new File(sdirectory.getValueAsString()));
+-            }
++    public void deleteEntry(File file)  {
++        if (isDirWriteable()) {
++            database.deleteEntry(file);
++            rescan();
++        } else {
++            logReadOnly();
+         }
++    }
+ 
+ 
+-        private void stopSynchronizer() {
+-            if (synchronizer != null) {
+-                synchronizer.close();
+-                synchronizer=null;
+-            }
+-        }
+ 
+-        @Override
+-        public void close() {
+-            database.close();
+-            sdirectory.getStorage().unregister(this);
++    public void rescan() {
++        if (isDirReadable()) {
+             stopSynchronizer();
++            synchronizer = new DirectorySynchronizer(getSContext(), new File(sdirectory.getValueAsString()));
+         }
++    }
+ 
+ 
+-        @Override
+-        public void appendStatusText(StringBuilder builder) {
+-            builder.append("<p>Directory: ");
+-            builder.append(sdirectory.getValueAsString());
+-            builder.append("</p>");                
++    private void stopSynchronizer() {
++        if (synchronizer != null) {
++            synchronizer.close();
++            synchronizer=null;
+         }
++    }
+ 
++
++    public void close() {
++        database.close();
++        sdirectory.getStorage().unregister(this);
++        stopSynchronizer();
+     }
+ 
++
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+-        self.appendStatusText(builder);
++        builder.append("<p>Directory: ");
++        builder.append(sdirectory.getValueAsString());
++        builder.append("</p>");
+     }
++
++
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/icons/IconMapService.java b/app/src/main/java/ch/bailu/aat/services/icons/IconMapService.java
+index e0590aac..33c5c88c 100644
+--- a/app/src/main/java/ch/bailu/aat/services/icons/IconMapService.java
++++ b/app/src/main/java/ch/bailu/aat/services/icons/IconMapService.java
+@@ -20,144 +20,122 @@ public class IconMapService extends VirtualService {
+     public static final String KEY_ICON_SMALL = "icon:small";
+     public static final String KEY_ICON_BIG = "icon:big";
+ 
+-    private final Self self;
+-    
+-    public Self getSelf() {
+-        return self;
+-    }
+-
+-
+-    
+-    public IconMapService(ServiceContext sc) {
+-        super(sc);
+-        self = new SelfOn();
+-    }
+ 
+-    
+-    public void close() {
+-    }
+-
+-    
+-
+-    public static class Self {
+-        public void iconify(StringBuilder html, String key, String value) {}
+-        public void iconify(GpxList list) {}
+-
+-    }
+ 
+ 
+-    public class SelfOn extends Self{
++    private final static String ICON_SUFFIX_BIG=".n.64.png";
++    private final static String ICON_SUFFIX_SMALL=".n.48.png";
++    private final static String MAP_FILE="iconmap.txt";
+ 
+-        private final static String ICON_SUFFIX_BIG=".n.64.png";
+-        private final static String ICON_SUFFIX_SMALL=".n.48.png";
+-        private final static String MAP_FILE="iconmap.txt";
+-        
+ 
+-        private final IconMap map = new IconMap();
++    private final IconMap map = new IconMap();
+ 
+-        private final File directory;
++    private final File directory;
+ 
+ 
+-        public SelfOn() {
+-            directory = AppDirectory.getDataDirectory(getContext(), AppDirectory.DIR_OSM_FEATURES_ICONS);
++    public IconMapService(ServiceContext sc) {
++        super(sc);
++        directory = AppDirectory.getDataDirectory(getContext(), AppDirectory.DIR_OSM_FEATURES_ICONS);
+ 
+-            final File mapFile = new File(directory, MAP_FILE);
++        final File mapFile = new File(directory, MAP_FILE);
+ 
+-            if (mapFile.exists()) {
+-                try {
+-                    new IconMapParser(new FileAccess(mapFile), map);
+-                } catch (IOException e) {
+-                    AppLog.e(this, e);
+-                }
++        if (mapFile.exists()) {
++            try {
++                new IconMapParser(new FileAccess(mapFile), map);
++            } catch (IOException e) {
++                AppLog.e(this, e);
+             }
+         }
+-        
+-        private String getSmallIconPath(String key, String value) {
+-            String prefix = getIconName(key,value);
++    }
+ 
+-            if (prefix == null) {
+-                return null;
+-            }
+-            return new File(new File(directory,"png"), prefix+ICON_SUFFIX_SMALL).toString();
++    private String getSmallIconPath(String key, String value) {
++        String prefix = getIconName(key,value);
++
++        if (prefix == null) {
++            return null;
+         }
++        return new File(new File(directory,"png"), prefix+ICON_SUFFIX_SMALL).toString();
++    }
+ 
+ 
+-        private String getBigIconPath(String key, String value) {
+-            String prefix = getIconName(key,value);
++    private String getBigIconPath(String key, String value) {
++        String prefix = getIconName(key,value);
+ 
+-            if (prefix == null) {
+-                return null;
+-            }
+-            return new File(new File(directory,"png"), prefix+ICON_SUFFIX_BIG).toString();
++        if (prefix == null) {
++            return null;
+         }
++        return new File(new File(directory,"png"), prefix+ICON_SUFFIX_BIG).toString();
++    }
+ 
+ 
+-        private String getIconName(String key, String value) {
+-            return map.get(key, value);
+-        }
++    private String getIconName(String key, String value) {
++        return map.get(key, value);
++    }
+ 
+ 
+-        @Override
+-        public void iconify(StringBuilder html, String key, String value) {
+-            String icon = getBigIconPath(key, value);
++    public void iconify(StringBuilder html, String key, String value) {
++        String icon = getBigIconPath(key, value);
+ 
+-            if (icon != null) {
+-                html.append("<p><img src=\"");
+-                html.append(icon);
+-                html.append("\"/></p>");
+-            }
++        if (icon != null) {
++            html.append("<p><img src=\"");
++            html.append(icon);
++            html.append("\"/></p>");
+         }
++    }
+ 
+ 
+-        @Override
+-        public void iconify(GpxList list) {
+-            new GpxIconifier().walkTrack(list);
+-        }
++    public void iconify(GpxList list) {
++        new GpxIconifier().walkTrack(list);
++    }
+ 
++    @Override
++    public void close() {
+ 
++    }
+ 
+-        private class GpxIconifier extends GpxListWalker {
+ 
+-            @Override
+-            public boolean doList(GpxList track) {
+-                return track.getDelta().getType()==GpxType.WAY;
+-            }
++    private class GpxIconifier extends GpxListWalker {
+ 
+-            @Override
+-            public boolean doSegment(GpxSegmentNode segment) {
+-                return true;
+-            }
++        @Override
++        public boolean doList(GpxList track) {
++            return track.getDelta().getType()==GpxType.WAY;
++        }
+ 
+-            @Override
+-            public boolean doMarker(GpxSegmentNode marker) {
+-                return true;
+-            }
++        @Override
++        public boolean doSegment(GpxSegmentNode segment) {
++            return true;
++        }
+ 
+-            @Override
+-            public void doPoint(GpxPointNode point) {
+-                GpxAttributes a = point.getAttributes();
++        @Override
++        public boolean doMarker(GpxSegmentNode marker) {
++            return true;
++        }
++
++        @Override
++        public void doPoint(GpxPointNode point) {
++            GpxAttributes a = point.getAttributes();
+ 
+-                for(int i = 0; a != null && i< a.size(); i++) {
+-                    final String key = a.getKey(i);
+-                    final String value = a.getValue(i);
++            for(int i = 0; a != null && i< a.size(); i++) {
++                final String key = a.getKey(i);
++                final String value = a.getValue(i);
+ 
+-                    final String sicon = getSmallIconPath(key,value);
+-                    final String bicon = getBigIconPath(key,value);
++                final String sicon = getSmallIconPath(key,value);
++                final String bicon = getBigIconPath(key,value);
+ 
+-                    if (sicon != null && bicon != null) {
+-                        a.put(KEY_ICON_SMALL, sicon);
+-                        a.put(KEY_ICON_BIG, bicon);
+-                        break;
+-                    }
++                if (sicon != null && bicon != null) {
++                    a.put(KEY_ICON_SMALL, sicon);
++                    a.put(KEY_ICON_BIG, bicon);
++                    break;
+                 }
+             }
+         }
+     }
+ 
+ 
++
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+         // TODO Auto-generated method stub
+-        
++
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
+index 4ba79d3e..d3c32463 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateMachine.java
+@@ -82,12 +82,7 @@ public class StateMachine implements State {
+     }
+ 
+ 
+-    public void freeService() {
+-        scontext.free(TileRemoverService.class.getSimpleName());
+-    }
+ 
+ 
+-    public void lockService() {
+-        scontext.lock(TileRemoverService.class.getSimpleName());
+-    }
++
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
+index 5f7d28bf..c621b405 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateRemoved.java
+@@ -11,7 +11,6 @@ public class StateRemoved implements State {
+         state = s;
+         state.list=null;
+ 
+-        state.freeService();
+         AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_STOPPED);
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
+index 68471a38..d8a04846 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateScan.java
+@@ -19,7 +19,6 @@ public class StateScan implements State, Runnable {
+         state.list = new TilesList();
+         state.summaries.reset(s.context);
+ 
+-        state.lockService();
+         new Thread(this).start();
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java b/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
+index 71fab409..49b87342 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/StateUnscanned.java
+@@ -13,7 +13,6 @@ public class StateUnscanned implements State {
+         state.list = null;
+         state.summaries.reset(s.context);
+ 
+-        state.freeService();
+         AppBroadcaster.broadcast(state.context, AppBroadcaster.TILE_REMOVER_STOPPED);
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java b/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
+index 856e4098..db5797ab 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
++++ b/app/src/main/java/ch/bailu/aat/services/tileremover/TileRemoverService.java
+@@ -1,5 +1,10 @@
+ package ch.bailu.aat.services.tileremover;
+ 
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++
++import ch.bailu.aat.helpers.AppBroadcaster;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+@@ -8,12 +13,48 @@ public class TileRemoverService extends VirtualService {
+ 
+     final private StateMachine state;
+ 
++    private boolean locked=false;
++
+     public TileRemoverService(ServiceContext sc) {
+         super(sc);
+ 
++        AppBroadcaster.register(sc.getContext(), onStop, AppBroadcaster.TILE_REMOVER_STOPPED);
++        AppBroadcaster.register(sc.getContext(), onRemove, AppBroadcaster.TILE_REMOVER_REMOVE);
+         state = new StateMachine(sc);
+     }
+ 
++    private final BroadcastReceiver onRemove = new BroadcastReceiver() {
++
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            lock();
++        }
++    };
++
++
++    private final BroadcastReceiver onStop = new BroadcastReceiver() {
++
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            free();
++        }
++    };
++
++
++    private void lock() {
++        if (!locked) {
++            locked = true;
++            getSContext().lock(TileRemoverService.class.getSimpleName());
++        }
++    }
++
++    private void free() {
++        if (locked) {
++            locked = false;
++            getSContext().free(TileRemoverService.class.getSimpleName());
++        }
++    }
++
+ 
+     @Override
+     public void appendStatusText(StringBuilder builder) {
+@@ -24,6 +65,8 @@ public class TileRemoverService extends VirtualService {
+ 
+     @Override
+     public void close() {
++        getContext().unregisterReceiver(onRemove);
++        getContext().unregisterReceiver(onStop);
+         state.reset();
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/StatusIcon.java b/app/src/main/java/ch/bailu/aat/services/tracker/StatusIcon.java
+index 4fd81ec7..e62a9f4a 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/StatusIcon.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/StatusIcon.java
+@@ -15,29 +15,29 @@ import ch.bailu.aat.activities.TrackerActivity;
+ import ch.bailu.aat.helpers.AppLog;
+ import ch.bailu.aat.helpers.AppTheme;
+ import ch.bailu.aat.services.ServiceContext;
+-import ch.bailu.aat.services.ServiceContext.ServiceNotUpException;
++
+ 
+ public class StatusIcon  {
+     private final static int MY_ID=5;
+-    
++
+     private final ServiceContext scontext;
+     private final Notification pauseNotification;
+     private final Notification onNotification;
+     private final Notification autoPauseNotification;
+-    
+-    
++
++
+     public StatusIcon(ServiceContext s) {
+         PendingIntent intent;
+-        
++
+         scontext=s;
+-      
++
+         intent = createShowActivityIntent();
+         pauseNotification=createNotification(intent, R.string.status_paused);
+         onNotification=createNotification(intent, R.string.on);
+         autoPauseNotification=createNotification(intent, R.string.status_autopaused);
+-        
++
+     }
+-    
++
+     private PendingIntent createShowActivityIntent() {
+         Intent intent = new Intent(scontext.getContext(), TrackerActivity.class);
+         intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+@@ -66,10 +66,10 @@ public class StatusIcon  {
+         String appInfo = scontext.getContext().getString(status_id);
+ 
+         Notification notification=new Notification(R.drawable.status,appInfo, System.currentTimeMillis());
+-        
++
+         setLatestEventInfoSDK1(notification, scontext.getContext(), appName, appInfo, intent);
+         notification.flags |= Notification.FLAG_NO_CLEAR;
+-        
++
+         return notification;
+     }
+ 
+@@ -83,11 +83,11 @@ public class StatusIcon  {
+ 
+         try {
+             Method deprecatedMethod = notification.getClass().getMethod(
+-                            "setLatestEventInfo",
+-                            Context.class,
+-                            CharSequence.class,
+-                            CharSequence.class,
+-                            PendingIntent.class);
++                    "setLatestEventInfo",
++                    Context.class,
++                    CharSequence.class,
++                    CharSequence.class,
++                    PendingIntent.class);
+             deprecatedMethod.invoke(notification, context, appName, appInfo, intent);
+         } catch (NoSuchMethodException |
+                 IllegalAccessException |
+@@ -158,41 +158,21 @@ public class StatusIcon  {
+     }
+ 
+     public void showAutoPause() {
+-        
+-        try {
+-            scontext.getService().startForeground(MY_ID, autoPauseNotification);
+-        } catch (ServiceNotUpException e) {
+-            // TODO Auto-generated catch block
+-            e.printStackTrace();
+-        }
++
++        scontext.startForeground(MY_ID, autoPauseNotification);
+     }
+-    
++
+     public void showPause() {
+-        try {
+-            scontext.getService().startForeground(MY_ID, pauseNotification);
+-        } catch (ServiceNotUpException e) {
+-            // TODO Auto-generated catch block
+-            e.printStackTrace();
+-        }
++        scontext.startForeground(MY_ID, pauseNotification);
+     }
+-    
+-    
++
++
+     public void showOn() {
+-        try {
+-            scontext.getService().startForeground(MY_ID, onNotification);
+-        } catch (ServiceNotUpException e) {
+-            // TODO Auto-generated catch block
+-            e.printStackTrace();
+-        }
++        scontext.startForeground(MY_ID, onNotification);
+     }
+-    
+-    
++
++
+     public void hide() {
+-        try {
+-            scontext.getService().stopForeground(true);
+-        } catch (ServiceNotUpException e) {
+-            // TODO Auto-generated catch block
+-            e.printStackTrace();
+-        }
++        scontext.stopForeground(true);
+     }
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
+index 80e3de93..6e085ed5 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerInternals.java
+@@ -95,7 +95,7 @@ implements OnSharedPreferenceChangeListener, Closeable ,Runnable {
+ 
+         /*try {
+             scontext.getService().stopSelf();
+-        } catch (ServiceNotUpException e) {
++        } catch (ServiceNotUpError e) {
+             // TODO Auto-generated catch block
+             e.printStackTrace();
+         }*/
+diff --git a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
+index a9ba0819..f7ddc263 100644
+--- a/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
++++ b/app/src/main/java/ch/bailu/aat/services/tracker/TrackerService.java
+@@ -1,102 +1,49 @@
+ package ch.bailu.aat.services.tracker;
+ 
+-import java.io.Closeable;
+-
+ import ch.bailu.aat.gpx.GpxInformation;
+ import ch.bailu.aat.services.ServiceContext;
+ import ch.bailu.aat.services.VirtualService;
+ 
+ public class TrackerService extends VirtualService {
+ 
+-    private final Self self;
+-    
+-    public Self getSelf() {
+-        return self;
+-    }
++    private final TrackerInternals internal;
+ 
+-    
+-    
+     public TrackerService(ServiceContext sc) {
+         super(sc);
+-        self = new SelfOn();
++        internal = new TrackerInternals(getSContext());
+     }
+ 
+ 
+-    @Override
+-    public void close() {
+-        self.close();
++    public State getState() {
++        return internal.state;
+     }
+-    
+-    
+-    public static class Self implements Closeable {
+-        @Override
+-        public void close() {}
+-        public void appendStatusText(StringBuilder builder) {}
+-        
+-        public State getState() {
+-            return new NullState();
+-        }
+-
+-        
+-        public GpxInformation getTrackerInformation() {
+-            return GpxInformation.NULL;
+-        }
+-
+-
+-        public GpxInformation getLocation() {
+-            return GpxInformation.NULL;
+-        }
+ 
++
++    public GpxInformation getTrackerInformation() {
++        return internal.logger;
+     }
+ 
+-    
+-    public class SelfOn extends Self {
+-        private final TrackerInternals internal;
+-        
+-        public SelfOn() {
+-            internal = new TrackerInternals(getSContext());
+-        }
+-        
+-        @Override
+-        public State getState() {
+-            return internal.state;
+-        }
+-
+-        @Override
+-        public GpxInformation getTrackerInformation() {
+-            return internal.logger;
+-        }
+-
+-        @Override
+-        public GpxInformation getLocation() {
+-            return internal.location.getLocationInformation();
+-        }
+-
+-        @Override
+-        public void appendStatusText(StringBuilder builder) {
+-            super.appendStatusText(builder);
+-                    
+-            
+-
+-            builder.append("<p>Log to: ");
+-            builder.append(internal.logger.getPath());
+-            builder.append("</p>");
+-            
+-            internal.location.appendStatusText(builder);
+-        }
+-
+-        @Override
+-        public void close() {
+-            internal.close();
+-        }
+ 
++    public GpxInformation getLocation() {
++        return internal.location.getLocationInformation();
+     }
+ 
++    @Override
++    public void appendStatusText(StringBuilder builder) {
++
++
+ 
+ 
++        builder.append("<p>Log to: ");
++        builder.append(internal.logger.getPath());
++        builder.append("</p>");
++
++        internal.location.appendStatusText(builder);
++    }
++
+     @Override
+-    public void appendStatusText(StringBuilder builder) {
+-        self.appendStatusText(builder);
++    public void close() {
++        internal.close();
+     }
+ 
+ }
+diff --git a/app/src/main/java/ch/bailu/aat/views/FeaturesList.java b/app/src/main/java/ch/bailu/aat/views/FeaturesList.java
+index 5a0099e4..35870846 100644
+--- a/app/src/main/java/ch/bailu/aat/views/FeaturesList.java
++++ b/app/src/main/java/ch/bailu/aat/views/FeaturesList.java
+@@ -93,7 +93,7 @@ OnHaveFeature {
+ 
+ 
+ 
+-    public void loadList(FileAccess file, IconMapService.Self map) {
++    public void loadList(FileAccess file, IconMapService map) {
+         try {
+             new MapFeaturesParser(this, file);
+             if (observer != null) observer.onChanged();

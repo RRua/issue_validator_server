@@ -1,0 +1,231 @@
+diff --git a/app/src/main/java/com/intervigil/micdroid/MicActivity.java b/app/src/main/java/com/intervigil/micdroid/MicActivity.java
+index b86f609..0b46939 100644
+--- a/app/src/main/java/com/intervigil/micdroid/MicActivity.java
++++ b/app/src/main/java/com/intervigil/micdroid/MicActivity.java
+@@ -68,7 +68,7 @@ public class MicActivity extends Activity implements OnClickListener {
+ 
+     private WakeLock mWakelock;
+     private Recorder mRecorder;
+-    private Timer mTimer;
++    private TimerDisplay mTimerDisplay;
+     private ToggleButton mRecordButton;
+     private AutotalentTask mAutotalentTask;
+ 
+@@ -92,7 +92,8 @@ public class MicActivity extends Activity implements OnClickListener {
+ 
+         timerDisplay.setTypeface(timerFont);
+ 
+-        mTimer = new Timer(timerDisplay);
++        mTimerDisplay = new TimerDisplay();
++        mTimerDisplay.registerDisplay(timerDisplay);
+ 
+         mAutotalentTask = new AutotalentTask(MicActivity.this, postAutotalentTask);
+ 
+@@ -147,7 +148,7 @@ public class MicActivity extends Activity implements OnClickListener {
+ 
+         boolean isRecording = mRecorder != null && mRecorder.isRunning();
+ 
+-        ((Button) findViewById(R.id.library_button)).setOnClickListener(this);
++        findViewById(R.id.library_button).setOnClickListener(this);
+         ToggleButton micSwitch = (ToggleButton) findViewById(R.id.recording_button);
+         micSwitch.setChecked(isRecording);
+         micSwitch.setOnCheckedChangeListener(recordBtnListener);
+@@ -156,7 +157,7 @@ public class MicActivity extends Activity implements OnClickListener {
+                 "fonts/Clockopia.ttf");
+         TextView timerDisplay = (TextView) findViewById(R.id.recording_timer);
+         timerDisplay.setTypeface(timerFont);
+-        mTimer.registerDisplay(timerDisplay);
++        mTimerDisplay.registerDisplay(timerDisplay);
+     }
+ 
+     @Override
+@@ -262,7 +263,7 @@ public class MicActivity extends Activity implements OnClickListener {
+                                 R.string.no_headset_plugged_in_title,
+                                 R.string.no_headset_plugged_in_warning);
+                     } else {
+-                        mTimer.reset();
++                        mTimerDisplay.reset();
+                         if (isLiveMode) {
+                             updateAutoTalentPreferences();
+                         }
+@@ -270,14 +271,14 @@ public class MicActivity extends Activity implements OnClickListener {
+                             mRecorder = new SipdroidRecorder(MicActivity.this, postRecordTask, isLiveMode);
+                         }
+                         mRecorder.start();
+-                        mTimer.start();
++                        mTimerDisplay.start();
+                     }
+                 } else {
+                     if (mRecorder != null && mRecorder.isRunning()) {
+                         // only do this if it was running, otherwise an error
+                         // message triggered the check state change
+                         mRecorder.stop();
+-                        mTimer.stop();
++                        mTimerDisplay.stop();
+                     }
+                 }
+             }
+diff --git a/app/src/main/java/com/intervigil/micdroid/Timer.java b/app/src/main/java/com/intervigil/micdroid/Timer.java
+deleted file mode 100644
+index 16c6cbd..0000000
+--- a/app/src/main/java/com/intervigil/micdroid/Timer.java
++++ /dev/null
+@@ -1,81 +0,0 @@
+-package com.intervigil.micdroid;
+-
+-import android.os.Handler;
+-import android.os.Message;
+-import android.widget.TextView;
+-
+-public class Timer {
+-    private static final int DEFAULT_TIMER_COUNT = 1000;
+-    private static final int TIMER_START = 8;
+-    private static final int TIMER_STOP = 9;
+-    private static final int TIMER_RESET = 10;
+-    private static final int TIMER_COUNT_UP = 11;
+-
+-    private TimerHandler mHandler;
+-    private TextView mDisplay;
+-    private int mTimeCounter;
+-
+-    public Timer(TextView view) {
+-        mDisplay = view;
+-        mHandler = new TimerHandler();
+-        mTimeCounter = 0;
+-    }
+-
+-    public void registerDisplay(TextView view) {
+-        mDisplay = view;
+-    }
+-
+-    public void start() {
+-        Message startMsg = mHandler.obtainMessage(TIMER_START);
+-        mHandler.sendMessage(startMsg);
+-    }
+-
+-    public void stop() {
+-        Message stopMsg = mHandler.obtainMessage(TIMER_STOP);
+-        mHandler.sendMessage(stopMsg);
+-    }
+-
+-    public void reset() {
+-        Message resetMsg = mHandler.obtainMessage(TIMER_RESET);
+-        mHandler.sendMessage(resetMsg);
+-    }
+-
+-    private String getTime() {
+-        int minutes = mTimeCounter / 60;
+-        int seconds = mTimeCounter % 60;
+-        return String.format("%02d:%02d", minutes, seconds);
+-    }
+-
+-    private class TimerHandler extends Handler {
+-        // handler processes updates to the mTimeCounter
+-        @Override
+-        public void handleMessage(Message msg) {
+-            switch (msg.what) {
+-                case TIMER_START:
+-                    mDisplay.setText(getTime());
+-                    this.sleep(DEFAULT_TIMER_COUNT);
+-                    break;
+-                case TIMER_STOP:
+-                    this.removeMessages(TIMER_COUNT_UP);
+-                    this.removeMessages(TIMER_START);
+-                    this.removeMessages(TIMER_STOP);
+-                    this.removeMessages(TIMER_RESET);
+-                    break;
+-                case TIMER_RESET:
+-                    mTimeCounter = 0;
+-                    mDisplay.setText(getTime());
+-                    break;
+-                case TIMER_COUNT_UP:
+-                    mDisplay.setText(getTime());
+-                    mTimeCounter++;
+-                    sleep(DEFAULT_TIMER_COUNT);
+-                    break;
+-            }
+-        }
+-
+-        public void sleep(long delayMillis) {
+-            this.removeMessages(TIMER_COUNT_UP);
+-            sendMessageDelayed(obtainMessage(TIMER_COUNT_UP), delayMillis);
+-        }
+-    }
+-}
+diff --git a/app/src/main/java/com/intervigil/micdroid/TimerDisplay.java b/app/src/main/java/com/intervigil/micdroid/TimerDisplay.java
+new file mode 100644
+index 0000000..f14e203
+--- /dev/null
++++ b/app/src/main/java/com/intervigil/micdroid/TimerDisplay.java
+@@ -0,0 +1,71 @@
++package com.intervigil.micdroid;
++
++import android.os.Handler;
++import android.os.Message;
++import android.widget.TextView;
++
++import java.util.Timer;
++import java.util.TimerTask;
++
++public class TimerDisplay {
++    private static final String TAG = "TimerDisplay";
++
++    private static final int TIMER_UPDATE = 8;
++
++    private TextView mDisplay;
++    private Timer mTimer;
++    private int mElapsed = 0;
++
++    public TimerDisplay() {
++    }
++
++    public void registerDisplay(TextView view) {
++        mDisplay = view;
++    }
++
++    public void start() {
++        if (mTimer != null) {
++            mTimer.cancel();
++        }
++        mTimer = new Timer("DisplayTimer", true);
++        mTimer.scheduleAtFixedRate(new TimerTask() {
++            @Override
++            public void run() {
++                mElapsed += 1000;
++                mHandler.obtainMessage(TIMER_UPDATE).sendToTarget();
++            }
++        }, 0, 1000);
++    }
++
++    public void stop() {
++        if (mTimer != null) {
++            mTimer.cancel();
++        }
++        mHandler.obtainMessage(TIMER_UPDATE).sendToTarget();
++    }
++
++    public void reset() {
++        if (mTimer != null) {
++            mTimer.cancel();
++        }
++        mElapsed = 0;
++        mHandler.obtainMessage(TIMER_UPDATE).sendToTarget();
++    }
++
++    private String getTime() {
++        int min = (mElapsed / 1000) / 60;
++        int sec = (mElapsed / 1000) % 60;
++        return String.format("%02d:%02d", min, sec);
++    }
++
++    private Handler mHandler = new Handler() {
++        @Override
++        public void handleMessage(Message msg) {
++            switch (msg.what) {
++                case TIMER_UPDATE:
++                    mDisplay.setText(getTime());
++                    break;
++            }
++        }
++    };
++}
