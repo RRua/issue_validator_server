@@ -1,0 +1,325 @@
+diff --git a/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java b/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
+index cf2506c6..a1b7808b 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/AbsOsmApiActivity.java
+@@ -6,6 +6,9 @@ import android.content.Intent;
+ import android.os.Bundle;
+ import android.view.View;
+ import android.view.View.OnClickListener;
++import android.widget.LinearLayout;
++
++import org.mapsforge.map.rendertheme.renderinstruction.Line;
+ 
+ import java.io.IOException;
+ 
+@@ -21,6 +24,7 @@ import ch.bailu.aat.util.TextBackup;
+ import ch.bailu.aat.util.ui.ToolTip;
+ import ch.bailu.aat.views.BusyViewControl;
+ import ch.bailu.aat.views.ContentView;
++import ch.bailu.aat.views.ErrorView;
+ import ch.bailu.aat.views.MyImageButton;
+ import ch.bailu.aat.views.NodeListView;
+ import ch.bailu.aat.views.OsmApiEditorView;
+@@ -39,7 +43,7 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+     private View               fileMenu;
+ 
+     private NodeListView       list;
+-    private OsmApiHelper       osmApi;
++    protected OsmApiHelper       osmApi;
+ 
+     protected OsmApiEditorView   editorView;
+ 
+@@ -63,6 +67,7 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+             e.printStackTrace();
+         }
+ 
++
+         setContentView(createContentView());
+ 
+         addSource(new CustomFileSource(getServiceContext(), osmApi.getResultFile().getPath()));
+@@ -73,12 +78,12 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+     }
+ 
+ 
+-
+     private View createContentView()  {
+         MainControlBar bar = createControlBar();
+ 
+         ContentView contentView = new ContentView(this);
+         contentView.add(bar);
++        contentView.add(errorView());
+         contentView.add(createMainContentView());
+ 
+         addDownloadButton(bar);
+@@ -88,6 +93,15 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+         return contentView;
+     }
+ 
++    private View errorView() {
++        final ErrorView fileError = new ErrorView(this);
++
++        addTarget((iid, info) -> {
++            fileError.displayError(getServiceContext(), info.getFile());
++        }, InfoID.FILEVIEW);
++        return fileError;
++    }
++
+ 
+     private void addDownloadButton(MainControlBar bar) {
+         download = bar.addImageButton(R.drawable.go_bottom_inverse);
+@@ -114,8 +128,8 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+ 
+     protected View createMainContentView() {
+         PercentageLayout percentage = new PercentageLayout(this);
+-        percentage.add(createEditorView(), 30);
+-        percentage.add(createNodeListView(), 70);
++        percentage.add(createEditorView(), 20);
++        percentage.add(createNodeListView(), 80);
+ 
+         return percentage;
+     }
+@@ -140,8 +154,8 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+     }
+ 
+ 
+-    public abstract OsmApiHelper getApiHelper(BoundingBoxE6 boundingBox) throws SecurityException, IOException;
+-    public abstract void addCustomButtons(MainControlBar bar);
++    protected abstract OsmApiHelper getApiHelper(BoundingBoxE6 boundingBox) throws SecurityException, IOException;
++    protected abstract void addCustomButtons(MainControlBar bar);
+ 
+ 
+     @Override
+@@ -150,12 +164,7 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+             download();
+ 
+         } else if (v == fileMenu) {
+-            try {
+-                showFileMenu(v);
+-
+-            } catch (IOException e) {
+-                e.printStackTrace();
+-            }
++             showFileMenu(v);
+         }
+ 
+ 
+@@ -171,17 +180,27 @@ public abstract class AbsOsmApiActivity extends ActivityContext implements OnCli
+     }
+ 
+ 
+-    private void showFileMenu(View parent) throws IOException {
+-        final String query = TextBackup.read(osmApi.getQueryFile());
+-        final String prefix = OsmApiHelper.getFilePrefix(query);
+-        final String extension = osmApi.getFileExtension();
++    private void showFileMenu(View parent) {
++
++        final String targetPrefix = getTargetFilePrefix();
++        final String targetExtension = osmApi.getFileExtension();
+ 
+         new ResultFileMenu(this, osmApi.getResultFile(),
+-                prefix, extension).showAsPopup(this, parent);
++                targetPrefix, targetExtension).showAsPopup(this, parent);
++    }
++
++    private String getTargetFilePrefix() {
++        try {
++            final String query = TextBackup.read(osmApi.getQueryFile());
++            return OsmApiHelper.getFilePrefix(query);
++
++        } catch (Exception e) {
++            return OsmApiHelper.getFilePrefix("");
++        }
+     }
+ 
+ 
+-    public void insertLine(String s) {
++    protected void insertLine(String s) {
+         editorView.insertLine(s);
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/activities/OverpassActivity.java b/app/src/main/java/ch/bailu/aat/activities/OverpassActivity.java
+index ff02bee3..552a7417 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/OverpassActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/OverpassActivity.java
+@@ -13,32 +13,31 @@ import ch.bailu.aat.util.ui.AppTheme;
+ import ch.bailu.aat.views.PercentageLayout;
+ import ch.bailu.aat.views.bar.MainControlBar;
+ import ch.bailu.aat.views.description.MultiView;
+-import ch.bailu.aat.views.osm_features.MapFeaturesListView;
+-import ch.bailu.aat.views.osm_features.MapFeaturesView;
++import ch.bailu.aat.views.osm_features.OsmFeaturesView;
+ import ch.bailu.aat.views.osm_features.OnSelected;
+ 
+ public class OverpassActivity extends AbsOsmApiActivity  {
+ 
+     private final static String KEY = OverpassActivity.class.getSimpleName();
+ 
+-    private MapFeaturesView osmFeatures;
++    private OsmFeaturesView osmFeatures;
+     private MultiView multiView = null;
+ 
+ 
+     @Override
+-    public View createMainContentView() {
++    public View createNodeListView() {
+         if (AppLayout.isTablet(this)) {
+             final PercentageLayout mainView = new PercentageLayout(this);
+             mainView.setOrientation(LinearLayout.HORIZONTAL);
+ 
+-            mainView.add(super.createMainContentView(),50);
++            mainView.add(super.createNodeListView(),50);
+             mainView.add(createOsmFeaturesView(), 50);
+ 
+             return mainView;
+         } else {
+ 
+             multiView = new MultiView(this, KEY);
+-            multiView.add(super.createMainContentView());
++            multiView.add(super.createNodeListView());
+             multiView.add(createOsmFeaturesView());
+             return multiView;
+         }
+@@ -46,7 +45,7 @@ public class OverpassActivity extends AbsOsmApiActivity  {
+     }
+ 
+     private View createOsmFeaturesView() {
+-        osmFeatures = new MapFeaturesView(getServiceContext());
++        osmFeatures = new OsmFeaturesView(getServiceContext());
+         osmFeatures.setOnTextSelected((e, action, variant) -> {
+             if (action == OnSelected.FILTER) {
+                 osmFeatures.setFilterText(e.getSummaryKey());
+@@ -54,7 +53,7 @@ public class OverpassActivity extends AbsOsmApiActivity  {
+             } else if (action == OnSelected.EDIT){
+                 insertLine(variant);
+ 
+-                if (multiView != null) multiView.setNext();
++                //if (multiView != null) multiView.setNext();
+ 
+             } else if (action == OnSelected.SHOW) {
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java b/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
+index 0ef8b3fd..110c1afa 100644
+--- a/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
++++ b/app/src/main/java/ch/bailu/aat/activities/PoiActivity.java
+@@ -17,6 +17,7 @@ import ch.bailu.aat.views.PercentageLayout;
+ import ch.bailu.aat.views.bar.MainControlBar;
+ import ch.bailu.aat.views.description.MultiView;
+ import ch.bailu.aat.views.osm_features.PoiView;
++import ch.bailu.aat.views.preferences.TitleView;
+ 
+ public class PoiActivity extends AbsOsmApiActivity {
+ 
+@@ -35,15 +36,25 @@ public class PoiActivity extends AbsOsmApiActivity {
+     }
+ 
+ 
++    @Override
++    protected View createMainContentView() {
++        LinearLayout linear = new LinearLayout(this);
++
++        linear.setOrientation(LinearLayout.VERTICAL);
++        linear.addView(new TitleView(this, osmApi.getApiName()));
++        linear.addView(createNodeListView());
++
++        return linear;
++    }
+ 
+ 
+     @Override
+-    public View createMainContentView() {
++    protected View createNodeListView() {
+         if (AppLayout.isTablet(this)) {
+             PercentageLayout mainView = new PercentageLayout(this);
+             mainView.setOrientation(LinearLayout.HORIZONTAL);
+ 
+-            mainView.add(super.createMainContentView(),50);
++            mainView.add(super.createNodeListView(),50);
+             mainView.add(createPoiListView(), 50);
+ 
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/gpx/writer/GpxWriter.java b/app/src/main/java/ch/bailu/aat/gpx/writer/GpxWriter.java
+index 0c9306bf..67193509 100644
+--- a/app/src/main/java/ch/bailu/aat/gpx/writer/GpxWriter.java
++++ b/app/src/main/java/ch/bailu/aat/gpx/writer/GpxWriter.java
+@@ -1,5 +1,7 @@
+ package ch.bailu.aat.gpx.writer;
+ 
++import android.text.TextUtils;
++
+ import java.io.BufferedWriter;
+ import java.io.IOException;
+ import java.io.OutputStreamWriter;
+@@ -101,7 +103,7 @@ public abstract class GpxWriter {
+         writeString(" ");
+         writeString(pname);
+         writeString("=\"");
+-        writeString(pvalue);
++        writeString(TextUtils.htmlEncode(pvalue));
+         writeString("\"");
+     }
+ 
+diff --git a/app/src/main/java/ch/bailu/aat/util/PoiApi.java b/app/src/main/java/ch/bailu/aat/util/PoiApi.java
+index a1cb09a7..8ac928f4 100644
+--- a/app/src/main/java/ch/bailu/aat/util/PoiApi.java
++++ b/app/src/main/java/ch/bailu/aat/util/PoiApi.java
+@@ -42,8 +42,7 @@ public abstract class PoiApi extends OsmApiHelper {
+ 
+     public PoiApi(Context context, BoundingBoxE6 box) {
+         bounding = box;
+-        directory = AppDirectory.getDataDirectory(context, AppDirectory.DIR_NOMINATIM);
+-
++        directory = AppDirectory.getDataDirectory(context, AppDirectory.DIR_POI);
+     }
+     @Override
+     public String getApiName() {
+diff --git a/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java b/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
+index 880a8aa5..89347bb9 100644
+--- a/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
++++ b/app/src/main/java/ch/bailu/aat/util/fs/AppDirectory.java
+@@ -31,9 +31,9 @@ public class AppDirectory  {
+     public static final String DIR_OVERLAY = "overlay";
+     public static final String DIR_IMPORT = "import";
+ 
+-    public static final String DIR_NOMINATIM = "nominatim";
+-
+-    public static final String DIR_OVERPASS = "overpass";
++    public static final String DIR_NOMINATIM = "query/nominatim";
++    public static final String DIR_OVERPASS = "query/overpass";
++    public static final String DIR_POI = "query/poi";
+ 
+ 
+     public static final String DIR_TEST = "test";
+diff --git a/app/src/main/java/ch/bailu/aat/views/osm_features/MapFeaturesView.java b/app/src/main/java/ch/bailu/aat/views/osm_features/OsmFeaturesView.java
+similarity index 97%
+rename from app/src/main/java/ch/bailu/aat/views/osm_features/MapFeaturesView.java
+rename to app/src/main/java/ch/bailu/aat/views/osm_features/OsmFeaturesView.java
+index c1f99406..edb13af6 100644
+--- a/app/src/main/java/ch/bailu/aat/views/osm_features/MapFeaturesView.java
++++ b/app/src/main/java/ch/bailu/aat/views/osm_features/OsmFeaturesView.java
+@@ -27,7 +27,7 @@ import ch.bailu.aat.views.EditTextTool;
+ import ch.bailu.aat.views.preferences.SolidCheckBox;
+ import ch.bailu.aat.views.preferences.TitleView;
+ 
+-public class MapFeaturesView extends LinearLayout implements SharedPreferences.OnSharedPreferenceChangeListener {
++public class OsmFeaturesView extends LinearLayout implements SharedPreferences.OnSharedPreferenceChangeListener {
+ 
+     private final static String FILTER_KEY="FilterView";
+ 
+@@ -56,7 +56,7 @@ public class MapFeaturesView extends LinearLayout implements SharedPreferences.O
+ 
+ 
+ 
+-    public MapFeaturesView(ServiceContext sc) {
++    public OsmFeaturesView(ServiceContext sc) {
+         super(sc.getContext());
+         scontext = sc;
+ 
+@@ -64,7 +64,7 @@ public class MapFeaturesView extends LinearLayout implements SharedPreferences.O
+         slist = new SolidOsmFeaturesList(getContext());
+ 
+         setOrientation(VERTICAL);
+-        addView(createHeader());
++        //addView(createHeader());
+         addView(createFilterView());
+         addView(createFeatureList());
+     }

@@ -1,0 +1,320 @@
+diff --git a/src/main/java/eu/siacs/conversations/services/MemorizingTrustManager.java b/src/main/java/eu/siacs/conversations/services/MemorizingTrustManager.java
+index 64283e1a0..d25b07ca7 100644
+--- a/src/main/java/eu/siacs/conversations/services/MemorizingTrustManager.java
++++ b/src/main/java/eu/siacs/conversations/services/MemorizingTrustManager.java
+@@ -40,6 +40,7 @@ import android.util.Log;
+ import android.util.SparseArray;
+ 
+ import androidx.appcompat.app.AppCompatActivity;
++import androidx.core.util.Consumer;
+ 
+ import com.google.common.base.Charsets;
+ import com.google.common.base.Joiner;
+@@ -50,6 +51,8 @@ import org.json.JSONArray;
+ import org.json.JSONException;
+ import org.json.JSONObject;
+ 
++import org.minidns.dane.DaneVerifier;
++
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileOutputStream;
+@@ -123,6 +126,7 @@ public class MemorizingTrustManager {
+     private KeyStore appKeyStore;
+     private final X509TrustManager defaultTrustManager;
+     private X509TrustManager appTrustManager;
++    private final DaneVerifier daneVerifier;
+     private String poshCacheDir;
+ 
+     /**
+@@ -143,6 +147,7 @@ public class MemorizingTrustManager {
+         init(m);
+         this.appTrustManager = getTrustManager(appKeyStore);
+         this.defaultTrustManager = defaultTrustManager;
++        this.daneVerifier = new DaneVerifier();
+     }
+ 
+     /**
+@@ -162,6 +167,7 @@ public class MemorizingTrustManager {
+         init(m);
+         this.appTrustManager = getTrustManager(appKeyStore);
+         this.defaultTrustManager = getTrustManager(null);
++        this.daneVerifier = new DaneVerifier();
+     }
+ 
+     private static boolean isIp(final String server) {
+@@ -362,14 +368,20 @@ public class MemorizingTrustManager {
+     }
+ 
+ 
+-    private void checkCertTrusted(X509Certificate[] chain, String authType, String domain, boolean isServer, boolean interactive)
++    private void checkCertTrusted(X509Certificate[] chain, String authType, String domain, boolean isServer, boolean interactive, String verifiedHostname, int port, Consumer<Boolean> daneCb)
+             throws CertificateException {
+         LOGGER.log(Level.FINE, "checkCertTrusted(" + chain + ", " + authType + ", " + isServer + ")");
+         try {
+             LOGGER.log(Level.FINE, "checkCertTrusted: trying appTrustManager");
+-            if (isServer)
++            if (isServer) {
++                if (verifiedHostname != null) {
++                    if (daneVerifier.verifyCertificateChain(chain, verifiedHostname, port)) {
++                        if (daneCb != null) daneCb.accept(true);
++                        return;
++                    }
++                }
+                 appTrustManager.checkServerTrusted(chain, authType);
+-            else
++            } else
+                 appTrustManager.checkClientTrusted(chain, authType);
+         } catch (final CertificateException ae) {
+             LOGGER.log(Level.FINER, "checkCertTrusted: appTrustManager failed", ae);
+@@ -636,39 +648,45 @@ public class MemorizingTrustManager {
+         }
+     }
+ 
+-    public X509TrustManager getNonInteractive(String domain) {
+-        return new NonInteractiveMemorizingTrustManager(domain);
++    public X509TrustManager getNonInteractive(String domain, String verifiedHostname, int port, Consumer<Boolean> daneCb) {
++        return new NonInteractiveMemorizingTrustManager(domain, verifiedHostname, port, daneCb);
+     }
+ 
+-    public X509TrustManager getInteractive(String domain) {
+-        return new InteractiveMemorizingTrustManager(domain);
++    public X509TrustManager getInteractive(String domain, String verifiedHostname, int port, Consumer<Boolean> daneCb) {
++        return new InteractiveMemorizingTrustManager(domain, verifiedHostname, port, daneCb);
+     }
+ 
+     public X509TrustManager getNonInteractive() {
+-        return new NonInteractiveMemorizingTrustManager(null);
++        return new NonInteractiveMemorizingTrustManager(null, null, 0, null);
+     }
+ 
+     public X509TrustManager getInteractive() {
+-        return new InteractiveMemorizingTrustManager(null);
++        return new InteractiveMemorizingTrustManager(null, null, 0, null);
+     }
+ 
+     private class NonInteractiveMemorizingTrustManager implements X509TrustManager {
+ 
+         private final String domain;
++        private final String verifiedHostname;
++        private final int port;
++        private final Consumer<Boolean> daneCb;
+ 
+-        public NonInteractiveMemorizingTrustManager(String domain) {
++        public NonInteractiveMemorizingTrustManager(String domain, String verifiedHostname, int port, Consumer<Boolean> daneCb) {
+             this.domain = domain;
++            this.verifiedHostname = verifiedHostname;
++            this.port = port;
++            this.daneCb = daneCb;
+         }
+ 
+         @Override
+         public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+-            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, false, false);
++            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, false, false, verifiedHostname, port, daneCb);
+         }
+ 
+         @Override
+         public void checkServerTrusted(X509Certificate[] chain, String authType)
+                 throws CertificateException {
+-            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, true, false);
++            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, true, false, verifiedHostname, port, daneCb);
+         }
+ 
+         @Override
+@@ -680,20 +698,26 @@ public class MemorizingTrustManager {
+ 
+     private class InteractiveMemorizingTrustManager implements X509TrustManager {
+         private final String domain;
++        private final String verifiedHostname;
++        private final int port;
++        private final Consumer<Boolean> daneCb;
+ 
+-        public InteractiveMemorizingTrustManager(String domain) {
++        public InteractiveMemorizingTrustManager(String domain, String verifiedHostname, int port, Consumer<Boolean> daneCb) {
+             this.domain = domain;
++            this.verifiedHostname = verifiedHostname;
++            this.port = port;
++            this.daneCb = daneCb;
+         }
+ 
+         @Override
+         public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+-            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, false, true);
++            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, false, true, verifiedHostname, port, daneCb);
+         }
+ 
+         @Override
+         public void checkServerTrusted(X509Certificate[] chain, String authType)
+                 throws CertificateException {
+-            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, true, true);
++            MemorizingTrustManager.this.checkCertTrusted(chain, authType, domain, true, true, verifiedHostname, port, daneCb);
+         }
+ 
+         @Override
+diff --git a/src/main/java/eu/siacs/conversations/services/XmppConnectionService.java b/src/main/java/eu/siacs/conversations/services/XmppConnectionService.java
+index ff8d8ec12..2a1149cbc 100644
+--- a/src/main/java/eu/siacs/conversations/services/XmppConnectionService.java
++++ b/src/main/java/eu/siacs/conversations/services/XmppConnectionService.java
+@@ -2825,7 +2825,7 @@ public class XmppConnectionService extends Service {
+                     callback.onAccountCreated(account);
+                     if (Config.X509_VERIFICATION) {
+                         try {
+-                            getMemorizingTrustManager().getNonInteractive(account.getServer()).checkClientTrusted(chain, "RSA");
++                            getMemorizingTrustManager().getNonInteractive(account.getServer(), null, 0, null).checkClientTrusted(chain, "RSA");
+                         } catch (CertificateException e) {
+                             callback.informUser(R.string.certificate_chain_is_not_trusted);
+                         }
+diff --git a/src/main/java/eu/siacs/conversations/ui/EditAccountActivity.java b/src/main/java/eu/siacs/conversations/ui/EditAccountActivity.java
+index 99054c2fd..2568d37cb 100644
+--- a/src/main/java/eu/siacs/conversations/ui/EditAccountActivity.java
++++ b/src/main/java/eu/siacs/conversations/ui/EditAccountActivity.java
+@@ -1267,8 +1267,13 @@ public class EditAccountActivity extends OmemoActivity implements OnAccountUpdat
+             }
+             this.binding.verificationBox.setVisibility(View.VISIBLE);
+             if (mAccount.getXmppConnection() != null && mAccount.getXmppConnection().resolverAuthenticated()) {
+-                this.binding.verificationMessage.setText("DNSSEC Verified");
+-                this.binding.verificationIndicator.setImageResource(R.drawable.shield);
++                if (mAccount.getXmppConnection().daneVerified()) {
++                    this.binding.verificationMessage.setText("DNSSEC + DANE Verified");
++                    this.binding.verificationIndicator.setImageResource(R.drawable.shield_verified);
++                } else {
++                    this.binding.verificationMessage.setText("DNSSEC Verified");
++                    this.binding.verificationIndicator.setImageResource(R.drawable.shield);
++                }
+             } else {
+                 this.binding.verificationMessage.setText("Not DNSSEC Verified");
+                 this.binding.verificationIndicator.setImageResource(R.drawable.shield_question);
+diff --git a/src/main/java/eu/siacs/conversations/ui/adapter/AccountAdapter.java b/src/main/java/eu/siacs/conversations/ui/adapter/AccountAdapter.java
+index fe16d7aba..fceb0bbf0 100644
+--- a/src/main/java/eu/siacs/conversations/ui/adapter/AccountAdapter.java
++++ b/src/main/java/eu/siacs/conversations/ui/adapter/AccountAdapter.java
+@@ -69,10 +69,19 @@ public class AccountAdapter extends ArrayAdapter<Account> {
+                 viewHolder.binding.accountStatus.setTextColor(StyledAttributes.getColor(activity, R.attr.TextColorError));
+                 break;
+         }
+-        if (account.getXmppConnection() != null && account.getXmppConnection().resolverAuthenticated()) {
+-            viewHolder.binding.verificationIndicator.setImageResource(R.drawable.shield);
++        if (account.isOnlineAndConnected()) {
++            viewHolder.binding.verificationIndicator.setVisibility(View.VISIBLE);
++            if (account.getXmppConnection() != null && account.getXmppConnection().resolverAuthenticated()) {
++                if (account.getXmppConnection().daneVerified()) {
++                    viewHolder.binding.verificationIndicator.setImageResource(R.drawable.shield_verified);
++                } else {
++                    viewHolder.binding.verificationIndicator.setImageResource(R.drawable.shield);
++                }
++            } else {
++                viewHolder.binding.verificationIndicator.setImageResource(R.drawable.shield_question);
++            }
+         } else {
+-            viewHolder.binding.verificationIndicator.setImageResource(R.drawable.shield_question);
++            viewHolder.binding.verificationIndicator.setVisibility(View.GONE);
+         }
+         final boolean isDisabled = (account.getStatus() == Account.State.DISABLED);
+         viewHolder.binding.tglAccountStatus.setOnCheckedChangeListener(null);
+diff --git a/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java b/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
+index 4b8cec64c..609e2627c 100644
+--- a/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
++++ b/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
+@@ -15,6 +15,7 @@ import android.util.SparseArray;
+ 
+ import androidx.annotation.NonNull;
+ import androidx.annotation.Nullable;
++import androidx.core.util.Consumer;
+ 
+ import com.google.common.base.Optional;
+ import com.google.common.base.Strings;
+@@ -34,6 +35,7 @@ import java.security.KeyManagementException;
+ import java.security.NoSuchAlgorithmException;
+ import java.security.Principal;
+ import java.security.PrivateKey;
++import java.security.cert.Certificate;
+ import java.security.cert.X509Certificate;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+@@ -58,6 +60,7 @@ import java.util.regex.Matcher;
+ import javax.net.ssl.KeyManager;
+ import javax.net.ssl.SSLContext;
+ import javax.net.ssl.SSLPeerUnverifiedException;
++import javax.net.ssl.SSLSession;
+ import javax.net.ssl.SSLSocket;
+ import javax.net.ssl.SSLSocketFactory;
+ import javax.net.ssl.X509KeyManager;
+@@ -198,6 +201,7 @@ public class XmppConnection implements Runnable {
+     private volatile Thread mThread;
+     private CountDownLatch mStreamCountDownLatch;
+     private static ScheduledExecutorService SCHEDULER = Executors.newScheduledThreadPool(1);
++    private boolean dane = false;
+ 
+     public XmppConnection(final Account account, final XmppConnectionService service) {
+         this.account = account;
+@@ -225,6 +229,9 @@ public class XmppConnection implements Runnable {
+         }
+     }
+ 
++    public boolean daneVerified() {
++        return dane;
++    }
+ 
+     public boolean resolverAuthenticated() {
+         if (currentResolverResult == null) return false;
+@@ -296,6 +303,7 @@ public class XmppConnection implements Runnable {
+         this.isBound = false;
+         this.attempt++;
+         this.verifiedHostname = null; // will be set if user entered hostname is being used or hostname was verified
++        this.dane = false;
+         // with dnssec
+         try {
+             Socket localSocket;
+@@ -536,7 +544,7 @@ public class XmppConnection implements Runnable {
+         return success;
+     }
+ 
+-    private SSLSocketFactory getSSLSocketFactory()
++    private SSLSocketFactory getSSLSocketFactory(int port, Consumer<Boolean> daneCb)
+             throws NoSuchAlgorithmException, KeyManagementException {
+         final SSLContext sc = SSLSockets.getSSLContext();
+         final MemorizingTrustManager trustManager =
+@@ -552,8 +560,8 @@ public class XmppConnection implements Runnable {
+                 keyManager,
+                 new X509TrustManager[] {
+                     mInteractive
+-                            ? trustManager.getInteractive(domain)
+-                            : trustManager.getNonInteractive(domain)
++                            ? trustManager.getInteractive(domain, verifiedHostname, port, daneCb)
++                            : trustManager.getNonInteractive(domain, verifiedHostname, port, daneCb)
+                 },
+                 SECURE_RANDOM);
+         return sc.getSocketFactory();
+@@ -1300,10 +1308,21 @@ public class XmppConnection implements Runnable {
+         sslSocket.close();
+     }
+ 
++    private X509Certificate[] certificates(final SSLSession session) throws SSLPeerUnverifiedException {
++        List<X509Certificate> certs = new ArrayList<>();
++        for (Certificate certificate : session.getPeerCertificates()) {
++            if (certificate instanceof X509Certificate) {
++                certs.add((X509Certificate) certificate);
++            }
++        }
++        return certs.toArray(new X509Certificate[certs.size()]);
++    }
++
+     private SSLSocket upgradeSocketToTls(final Socket socket) throws IOException {
++        this.dane = false;
+         final SSLSocketFactory sslSocketFactory;
+         try {
+-            sslSocketFactory = getSSLSocketFactory();
++            sslSocketFactory = getSSLSocketFactory(socket.getPort(), (d) -> this.dane = d);
+         } catch (final NoSuchAlgorithmException | KeyManagementException e) {
+             throw new StateChangingException(Account.State.TLS_ERROR);
+         }
+@@ -1317,7 +1336,7 @@ public class XmppConnection implements Runnable {
+         SSLSockets.setApplicationProtocol(sslSocket, "xmpp-client");
+         final XmppDomainVerifier xmppDomainVerifier = new XmppDomainVerifier();
+         try {
+-            if (!xmppDomainVerifier.verify(
++            if (!dane && !xmppDomainVerifier.verify(
+                     account.getServer(), this.verifiedHostname, sslSocket.getSession())) {
+                 Log.d(
+                         Config.LOGTAG,

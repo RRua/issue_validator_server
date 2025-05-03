@@ -1,0 +1,686 @@
+diff --git a/app/src/main/java/com/example/swob_deku/ArchivedMessagesActivity.java b/app/src/main/java/com/example/swob_deku/ArchivedMessagesActivity.java
+index f825565f..dc551b57 100644
+--- a/app/src/main/java/com/example/swob_deku/ArchivedMessagesActivity.java
++++ b/app/src/main/java/com/example/swob_deku/ArchivedMessagesActivity.java
+@@ -57,7 +57,6 @@ public class ArchivedMessagesActivity extends AppCompatActivity {
+                 LinearLayoutManager.VERTICAL, false);
+         archivedMessagesRecyclerView.setLayoutManager(linearLayoutManager);
+ 
+-        // TODO: search - and goto message in adapter
+         archivedThreadRecyclerAdapter = new MessagesThreadRecyclerAdapter( this,
+                 true, "", this);
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingDataSMSBroadcastReceiver.java b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingDataSMSBroadcastReceiver.java
+index e54a3a30..ed8123d0 100644
+--- a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingDataSMSBroadcastReceiver.java
++++ b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingDataSMSBroadcastReceiver.java
+@@ -46,8 +46,8 @@ public class IncomingDataSMSBroadcastReceiver extends BroadcastReceiver {
+                 for (SmsMessage currentSMS : Telephony.Sms.Intents.getMessagesFromIntent(intent)) {
+                     _address = currentSMS.getDisplayOriginatingAddress();
+ 
+-                    // TODO: fix this
+-//                    subscriptionId = SIMHandler.getOperatorName(context, currentSMS.getServiceCenterAddress());
++                    // The closest thing to subscription id is the serviceCenterAddress
++                    subscriptionId = SIMHandler.getOperatorName(context, currentSMS.getServiceCenterAddress());
+                     try {
+                         messageBuffer.write(currentSMS.getUserData());
+                     } catch (IOException e) {
+diff --git a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSBroadcastReceiver.java b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSBroadcastReceiver.java
+index 418a046a..b93b807c 100644
+--- a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSBroadcastReceiver.java
++++ b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSBroadcastReceiver.java
+@@ -68,16 +68,13 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+ 
+         if (intent.getAction().equals(Telephony.Sms.Intents.SMS_DELIVER_ACTION)) {
+             if (getResultCode() == Activity.RESULT_OK) {
+-                StringBuffer messageBuffer = new StringBuffer();
+-                String address = new String();
+-                String subscriptionId = new String();
++                StringBuilder messageBuffer = new StringBuilder();
++                String address = "";
++                String subscriptionId = "";
+ 
+                 for (SmsMessage currentSMS : Telephony.Sms.Intents.getMessagesFromIntent(intent)) {
+-                    // TODO: Fetch address name from contact list if present
+                     address = currentSMS.getDisplayOriginatingAddress();
+-//                    subscriptionId = SIMHandler.getOperatorName(context, currentSMS.getServiceCenterAddress());
+-//                    subscriptionId = currentSMS.getServiceCenterAddress();
+-                    Log.d(getClass().getName(), "Subscription id of incoming: " + subscriptionId);
++                    subscriptionId = currentSMS.getServiceCenterAddress();
+                     String displayMessage = currentSMS.getDisplayMessageBody();
+                     displayMessage = displayMessage == null ?
+                             new String(currentSMS.getUserData(), StandardCharsets.UTF_8) :
+@@ -187,10 +184,9 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+             Log.d(IncomingTextSMSBroadcastReceiver.class.getName(), sms.getAddress() + " : " + sms.getThreadId());
+ 
+             receivedSmsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+-            // TODO: check request code and make some changes
+             PendingIntent pendingReceivedSmsIntent = PendingIntent.getActivity( context,
+                     Integer.parseInt(sms.getThreadId()),
+-                    receivedSmsIntent, PendingIntent.FLAG_IMMUTABLE);
++                    receivedSmsIntent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+ 
+             Intent replyBroadcastIntent = null;
+             if(PhoneNumberUtils.isWellFormedSmsAddress(sms.getAddress())) {
+@@ -201,18 +197,13 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+             }
+ 
+             NotificationCompat.Builder builder = getNotificationHandler(context, cursor1,
+-                    null, replyBroadcastIntent, Integer.parseInt(sms.getId()), sms.getThreadId())
++                    null, replyBroadcastIntent, sms.getThreadId())
+                     .setContentIntent(pendingReceivedSmsIntent);
+             cursor1.close();
+ 
+             NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
+ 
+-            /**
+-             * TODO: Using the same ID leaves notifications updated (not appended).
+-             * TODO: Recommendation: use groups for notifications to allow for appending them.
+-             */
+             notificationManager.notify(Integer.parseInt(sms.getThreadId()), builder.build());
+-//            notificationManager.notify(Integer.parseInt(sms.id), builder.build());
+         }
+         cursor.close();
+     }
+@@ -222,7 +213,7 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+     public static NotificationCompat.Builder
+     getNotificationHandler(Context context, Cursor cursor,
+                            List<NotificationCompat.MessagingStyle.Message> customMessages,
+-                           Intent replyBroadcastIntent, int smsId, String threadId){
++                           Intent replyBroadcastIntent, String threadId){
+ 
+         NotificationCompat.Builder builder = new NotificationCompat.Builder(
+                 context, context.getString(R.string.incoming_messages_channel_id))
+@@ -242,7 +233,7 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+         markAsReadIntent.setAction(IncomingTextSMSReplyActionBroadcastReceiver.MARK_AS_READ_BROADCAST_INTENT);
+ 
+         PendingIntent markAsReadPendingIntent =
+-                PendingIntent.getBroadcast(context, smsId,
++                PendingIntent.getBroadcast(context, Integer.parseInt(threadId),
+                         markAsReadIntent,
+                         PendingIntent.FLAG_MUTABLE);
+ 
+@@ -253,7 +244,7 @@ public class IncomingTextSMSBroadcastReceiver extends BroadcastReceiver {
+ 
+         if(replyBroadcastIntent != null) {
+             PendingIntent replyPendingIntent =
+-                    PendingIntent.getBroadcast(context, smsId,
++                    PendingIntent.getBroadcast(context, Integer.parseInt(threadId),
+                             replyBroadcastIntent,
+                             PendingIntent.FLAG_MUTABLE);
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSReplyActionBroadcastReceiver.java b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSReplyActionBroadcastReceiver.java
+index cb028cb5..6530e0a0 100644
+--- a/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSReplyActionBroadcastReceiver.java
++++ b/app/src/main/java/com/example/swob_deku/BroadcastReceivers/IncomingTextSMSReplyActionBroadcastReceiver.java
+@@ -20,6 +20,7 @@ import androidx.core.app.RemoteInput;
+ 
+ import com.example.swob_deku.BuildConfig;
+ import com.example.swob_deku.Commons.Helpers;
++import com.example.swob_deku.Models.SIMHandler;
+ import com.example.swob_deku.Models.SMS.SMS;
+ import com.example.swob_deku.Models.SMS.SMSHandler;
+ import com.example.swob_deku.R;
+@@ -37,51 +38,49 @@ public class IncomingTextSMSReplyActionBroadcastReceiver extends BroadcastReceiv
+     public static String MARK_AS_READ_BROADCAST_INTENT = BuildConfig.APPLICATION_ID + ".MARK_AS_READ_BROADCAST_ACTION";
+     @Override
+     public void onReceive(Context context, Intent intent) {
+-        Log.d(getClass().getName(), "Received manifest broadcast now: " + intent.getAction());
+         if(intent.getAction().equals(REPLY_BROADCAST_INTENT)) {
+             Bundle remoteInput = RemoteInput.getResultsFromIntent(intent);
+             if (remoteInput != null) {
+                 CharSequence reply = remoteInput.getCharSequence(KEY_TEXT_REPLY);
++                if(reply.toString().isEmpty())
++                    return;
++
+                 String address = intent.getStringExtra(SMS.SMSMetaEntity.ADDRESS);
+                 String threadId = intent.getStringExtra(SMS.SMSMetaEntity.THREAD_ID);
+ 
+-                Log.d(getClass().getName(), "Yep broadcast is called with reply: " + reply.toString());
+-                Log.d(getClass().getName(), "Yep broadcast is called with address: " + address);
+-
+-                // TODO: fix this
+-//                try {
+-//                    long messageId = Helpers.generateRandomNumber();
+-//                    PendingIntent[] pendingIntents = IncomingTextSMSBroadcastReceiver.getPendingIntents(context, messageId);
+-//                    SMSHandler.sendTextSMS(context, address, reply.toString(),
+-//                            pendingIntents[0], pendingIntents[1], messageId, null);
+-//
+-//                    List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
+-//                    messages.add(new NotificationCompat.MessagingStyle.Message(reply,
+-//                            System.currentTimeMillis(),
+-//                            context.getString(R.string.notification_title_reply_you)));
+-//
+-//                    Cursor cursor = SMSHandler.fetchUnreadSMSMessagesForThreadId(context, threadId);
+-//
+-//                    Intent receivedSmsIntent = new Intent(context, SMSSendActivity.class);
+-//                    receivedSmsIntent.putExtra(SMS.SMSMetaEntity.ADDRESS, address);
+-//                    receivedSmsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+-//
+-//                    PendingIntent pendingReceivedSmsIntent = PendingIntent.getActivity( context,
+-//                            Integer.parseInt(threadId),
+-//                            receivedSmsIntent, PendingIntent.FLAG_IMMUTABLE);
+-//                    NotificationCompat.Builder builder = IncomingTextSMSBroadcastReceiver
+-//                            .getNotificationHandler(context, cursor, messages, intent,
+-//                                    Integer.parseInt(String.valueOf(messageId)), threadId)
+-//                                    .setContentIntent(pendingReceivedSmsIntent);
+-//                    cursor.close();
+-//
+-//                    // Issue the new notification.
+-//                    NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
+-//                    notificationManager.notify(Integer.parseInt(threadId), builder.build());
+-//
+-//                } catch (Exception e) {
+-//                    e.printStackTrace();
+-//                }
++                try {
++                    int subscriptionId = SIMHandler.getDefaultSimSubscription(context);
++                    SMSHandler.registerPendingMessage(context, address, reply.toString(), subscriptionId);
++
++                    List<NotificationCompat.MessagingStyle.Message> messages = new ArrayList<>();
++                    messages.add(new NotificationCompat.MessagingStyle.Message(reply,
++                            System.currentTimeMillis(),
++                            context.getString(R.string.notification_title_reply_you)));
++
++                    SMS.SMSMetaEntity smsMetaEntity = new SMS.SMSMetaEntity();
++                    smsMetaEntity.setThreadId(context, threadId);
++                    Cursor cursor = smsMetaEntity.fetchUnreadMessages(context);
++
++                    Intent receivedSmsIntent = new Intent(context, SMSSendActivity.class);
++                    receivedSmsIntent.putExtra(SMS.SMSMetaEntity.ADDRESS, address);
++                    receivedSmsIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
++
++                    PendingIntent pendingReceivedSmsIntent = PendingIntent.getActivity( context,
++                            Integer.parseInt(threadId),
++                            receivedSmsIntent, PendingIntent.FLAG_IMMUTABLE);
++
++                    NotificationCompat.Builder builder = IncomingTextSMSBroadcastReceiver
++                            .getNotificationHandler(context, cursor, messages, intent, threadId)
++                                    .setContentIntent(pendingReceivedSmsIntent);
++                    cursor.close();
++
++                    // Issue the new notification.
++                    NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
++                    notificationManager.notify(Integer.parseInt(threadId), builder.build());
++
++                } catch (Exception e) {
++                    e.printStackTrace();
++                }
+             }
+         }
+         else if(intent.getAction().equals(MARK_AS_READ_BROADCAST_INTENT)) {
+diff --git a/app/src/main/java/com/example/swob_deku/Commons/Helpers.java b/app/src/main/java/com/example/swob_deku/Commons/Helpers.java
+index 9cc08c95..ebe136a5 100644
+--- a/app/src/main/java/com/example/swob_deku/Commons/Helpers.java
++++ b/app/src/main/java/com/example/swob_deku/Commons/Helpers.java
+@@ -62,20 +62,6 @@ public class Helpers {
+     }
+ 
+     public static String formatDate(Context context, long epochTime) {
+-//        // TODO: if yesterday - should show yesterday instead
+-//        CharSequence formattedDate = new StringBuffer();
+-//
+-//        if (DateUtils.isToday(date)) {
+-//            formattedDate = DateUtils.getRelativeTimeSpanString(date, System.currentTimeMillis(),
+-//                    DateUtils.MINUTE_IN_MILLIS);
+-//        }
+-//        else {
+-//            formattedDate = DateUtils.getRelativeDateTimeString(context, date,
+-//                    DateUtils.MINUTE_IN_MILLIS, DateUtils.DAY_IN_MILLIS,
+-//                    DateUtils.FORMAT_SHOW_TIME | DateUtils.FORMAT_ABBREV_RELATIVE);
+-//        }
+-//
+-//        return formattedDate.toString();
+         long currentTime = System.currentTimeMillis();
+         long diff = currentTime - epochTime;
+ 
+@@ -91,8 +77,6 @@ public class Helpers {
+     }
+ 
+     public static String getUserCountry(Context context) {
+-
+-        // TODO: make this work for double sim phones
+         String countryCode = null;
+ 
+         // Check if network information is available
+@@ -107,7 +91,6 @@ public class Helpers {
+         }
+         return String.valueOf(
+                 PhoneNumberUtil.createInstance(context).getCountryCodeForRegion(countryCode));
+-//        return countryCode;
+     }
+ 
+     public static int generateColor(String input) {
+diff --git a/app/src/main/java/com/example/swob_deku/DefaultCheckActivity.java b/app/src/main/java/com/example/swob_deku/DefaultCheckActivity.java
+index 2fd8cc08..54525752 100644
+--- a/app/src/main/java/com/example/swob_deku/DefaultCheckActivity.java
++++ b/app/src/main/java/com/example/swob_deku/DefaultCheckActivity.java
+@@ -119,7 +119,7 @@ public class DefaultCheckActivity extends AppCompatActivity {
+         notificationsChannelIds.add(getString(R.string.foreground_service_failed_channel_id));
+         notificationsChannelNames.add(getString(R.string.foreground_service_failed_channel_name));
+ 
+-        // TODO: Read more: https://developer.android.com/training/notify-user/channels
++        // Read more: https://developer.android.com/training/notify-user/channels
+         // Create the NotificationChannel, but only on API 26+ because
+         // the NotificationChannel class is new and not in the support library
+         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+diff --git a/app/src/main/java/com/example/swob_deku/GatewayServerAddActivity.java b/app/src/main/java/com/example/swob_deku/GatewayServerAddActivity.java
+index 3045076d..aa041ab0 100644
+--- a/app/src/main/java/com/example/swob_deku/GatewayServerAddActivity.java
++++ b/app/src/main/java/com/example/swob_deku/GatewayServerAddActivity.java
+@@ -81,7 +81,7 @@ public class GatewayServerAddActivity extends AppCompatActivity {
+         if(checkedRadioId == R.id.add_gateway_protocol_GET)
+             protocol = GatewayServer.GET_PROTOCOL;
+ 
+-        // TODO: test if valid url
++        // Important: test if valid url
+         GatewayServer gatewayServer = new GatewayServer(gatewayServerUrl);
+         gatewayServer.setFormat(formats);
+         gatewayServer.setProtocol(protocol);
+diff --git a/app/src/main/java/com/example/swob_deku/ImageViewActivity.java b/app/src/main/java/com/example/swob_deku/ImageViewActivity.java
+index 4e656e6c..161800db 100644
+--- a/app/src/main/java/com/example/swob_deku/ImageViewActivity.java
++++ b/app/src/main/java/com/example/swob_deku/ImageViewActivity.java
+@@ -88,10 +88,6 @@ public class ImageViewActivity extends AppCompatActivity {
+         if(getIntent().hasExtra(IMAGE_INTENT_EXTRA)) {
+             String smsId = getIntent().getStringExtra(IMAGE_INTENT_EXTRA);
+ 
+-            // TODO: Get all messages which have the Ref ID
+-            // TODO: get until the len of messages have been acquired, then fit them together
+-            // TODO: until the len has been acquired.
+-
+             Cursor cursor = SMSHandler.fetchSMSInboxById(getApplicationContext(), smsId);
+             if(cursor.moveToFirst()) {
+                 SMS sms = new SMS(cursor);
+@@ -162,7 +158,6 @@ public class ImageViewActivity extends AppCompatActivity {
+             final int resChangeRatio = Math.round(MIN_RESOLUTION / seekBar.getMax());
+             @Override
+             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+-                // TODO: change the resolution text
+                 double calculatedResolution = progress == 0 ? MAX_RESOLUTION :
+                         MAX_RESOLUTION - (resChangeRatio * progress);
+ //
+@@ -180,12 +175,10 @@ public class ImageViewActivity extends AppCompatActivity {
+ 
+             @Override
+             public void onStartTrackingTouch(SeekBar seekBar) {
+-                // TODO: put loader
+             }
+ 
+             @Override
+             public void onStopTrackingTouch(SeekBar seekBar) {
+-                // TODO: compress the image
+                 try {
+                     buildImage();
+                 } catch (Throwable e) {
+@@ -307,7 +300,6 @@ public class ImageViewActivity extends AppCompatActivity {
+     }
+ 
+     public void sendImage(View view) throws InterruptedException {
+-        // TODO: fix this
+ //        Intent intent = new Intent(this, SMSSendActivity.class);
+ //        intent.putExtra(SMS.SMSMetaEntity.ADDRESS, address);
+ //
+diff --git a/app/src/main/java/com/example/swob_deku/MessagesThreadsActivity.java b/app/src/main/java/com/example/swob_deku/MessagesThreadsActivity.java
+index 9005dcab..40294f22 100644
+--- a/app/src/main/java/com/example/swob_deku/MessagesThreadsActivity.java
++++ b/app/src/main/java/com/example/swob_deku/MessagesThreadsActivity.java
+@@ -1,12 +1,14 @@
+ package com.example.swob_deku;
+ 
+ import androidx.appcompat.app.ActionBar;
++import androidx.appcompat.app.AlertDialog;
+ import androidx.appcompat.app.AppCompatActivity;
+ import androidx.appcompat.widget.Toolbar;
+ import androidx.core.app.NotificationManagerCompat;
+ import androidx.fragment.app.FragmentManager;
+ import androidx.lifecycle.ViewModel;
+ 
++import android.content.DialogInterface;
+ import android.content.Intent;
+ import android.os.Bundle;
+ import android.provider.Telephony;
+@@ -134,6 +136,30 @@ public class MessagesThreadsActivity extends AppCompatActivity implements Messag
+     }
+ 
+ 
++    private void showAlert(Runnable runnable) {
++        AlertDialog.Builder builder = new AlertDialog.Builder(this);
++        builder.setTitle(getString(R.string.messages_thread_delete_confirmation_title));
++        builder.setMessage(getString(R.string.messages_thread_delete_confirmation_text));
++
++        builder.setPositiveButton(getString(R.string.messages_thread_delete_confirmation_yes),
++                new DialogInterface.OnClickListener() {
++            @Override
++            public void onClick(DialogInterface dialog, int which) {
++                runnable.run();
++            }
++        });
++
++        builder.setNegativeButton(getString(R.string.messages_thread_delete_confirmation_cancel),
++                new DialogInterface.OnClickListener() {
++            @Override
++            public void onClick(DialogInterface dialog, int which) {
++            }
++        });
++
++        AlertDialog dialog = builder.create();
++        dialog.show();
++    }
++
+     private void configureToolbarEvents() {
+         toolbar.setOnMenuItemClickListener(new Toolbar.OnMenuItemClickListener() {
+             @Override
+@@ -141,21 +167,25 @@ public class MessagesThreadsActivity extends AppCompatActivity implements Messag
+                 String[] ids = messagesThreadRecyclerAdapterHashMap.get(ITEM_TYPE).selectedItems.getValue()
+                         .keySet().toArray(new String[0]);
+                 if(item.getItemId() == R.id.threads_delete) {
+-                    try {
+-                        // TODO: ask if sure to delete all threads cause dangerous
+-                        SecurityECDH securityECDH = new SecurityECDH(getApplicationContext());
+-                        for(String id : ids) {
+-                            SMS.SMSMetaEntity smsMetaEntity = new SMS.SMSMetaEntity();
+-                            smsMetaEntity.setThreadId(getApplicationContext(), id);
+-                            securityECDH.removeAllKeys(smsMetaEntity.getAddress());
++                    Runnable runnable = new Runnable() {
++                        @Override
++                        public void run() {
++                            try {
++                                SecurityECDH securityECDH = new SecurityECDH(getApplicationContext());
++                                for(String id : ids) {
++                                    SMS.SMSMetaEntity smsMetaEntity = new SMS.SMSMetaEntity();
++                                    smsMetaEntity.setThreadId(getApplicationContext(), id);
++                                    securityECDH.removeAllKeys(smsMetaEntity.getAddress());
++                                }
++                                SMSHandler.deleteThreads(getApplicationContext(), ids);
++                                messagesThreadRecyclerAdapterHashMap.get(ITEM_TYPE).resetAllSelectedItems();
++                                stringMessagesThreadViewModelHashMap.get(ITEM_TYPE).informChanges(getApplicationContext());
++                            } catch(Exception e) {
++                                e.printStackTrace();
++                            }
+                         }
+-                        SMSHandler.deleteThreads(getApplicationContext(), ids);
+-                        messagesThreadRecyclerAdapterHashMap.get(ITEM_TYPE).resetAllSelectedItems();
+-                        stringMessagesThreadViewModelHashMap.get(ITEM_TYPE).informChanges(getApplicationContext());
+-                        return true;
+-                    } catch(Exception e) {
+-                        e.printStackTrace();
+-                    }
++                    };
++                    showAlert(runnable);
+                 }
+                 else if(item.getItemId() == R.id.threads_archive) {
+                     long[] longArr = new long[ids.length];
+diff --git a/app/src/main/java/com/example/swob_deku/Models/Images/ImageHandler.java b/app/src/main/java/com/example/swob_deku/Models/Images/ImageHandler.java
+index b3871aa9..f95995e7 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/Images/ImageHandler.java
++++ b/app/src/main/java/com/example/swob_deku/Models/Images/ImageHandler.java
+@@ -56,7 +56,6 @@ public class ImageHandler {
+     }
+ 
+     public static byte[] buildImage(byte[][] unstructuredImageBytes ) throws IOException {
+-        // TODO: fix this
+ //        return SMSHandler.rebuildStructuredSMSMessage(unstructuredImageBytes);
+         return null;
+     }
+@@ -173,7 +172,6 @@ public class ImageHandler {
+         String appendedBody = IMAGE_HEADER + Base64.encodeToString(imageBytes, Base64.DEFAULT);
+ 
+         SMSHandler.updateMessage(context, headerMessageId, appendedBody);
+-        // TODO: Fix this
+ //        SMSHandler.deleteMultipleMessages(context, ids);
+ 
+         return Long.parseLong(headerMessageId);
+@@ -192,7 +190,6 @@ public class ImageHandler {
+     }
+ 
+     public static Cursor getImagesCursor(Context context, String RIL) {
+-        // TODO: fix this
+ //        RIL = IMAGE_HEADER + RIL;
+ //
+ //        Cursor cursorImageCursor = SMSHandler.fetchSMSForImagesByRIL(context, RIL);
+@@ -208,7 +205,6 @@ public class ImageHandler {
+ //            byte[] data = Base64.decode(body, Base64.DEFAULT);
+ //
+ //            Log.d(ImageHandler.class.getName(), "Data image ref: " + Byte.toUnsignedInt(data[0]));
+-//            // TODO: check if data is image
+ //            int len = Byte.toUnsignedInt(data[2]);
+ //
+ //            StringBuilder query = new StringBuilder();
+diff --git a/app/src/main/java/com/example/swob_deku/Models/Messages/MessagesThreadRecyclerAdapter.java b/app/src/main/java/com/example/swob_deku/Models/Messages/MessagesThreadRecyclerAdapter.java
+index 52d1ac40..49ac6416 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/Messages/MessagesThreadRecyclerAdapter.java
++++ b/app/src/main/java/com/example/swob_deku/Models/Messages/MessagesThreadRecyclerAdapter.java
+@@ -152,7 +152,6 @@ public class MessagesThreadRecyclerAdapter extends RecyclerView.Adapter<Template
+         SMS.SMSMetaEntity smsMetaEntity = new SMS.SMSMetaEntity();
+         smsMetaEntity.setThreadId(context, sms.getThreadId());
+ 
+-        // TODO: migrate to SMSMetaEntity
+         if(SecurityHelpers.containersWaterMark(sms.getBody()) || SecurityHelpers.isKeyExchange(sms.getBody())) {
+             if(smsMetaEntity.hasUnreadMessages(context)) {
+                 if(sms.getType() != MESSAGE_TYPE_INBOX)
+diff --git a/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQConnectionService.java b/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQConnectionService.java
+index d6c34b46..0dbf7e85 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQConnectionService.java
++++ b/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQConnectionService.java
+@@ -23,6 +23,7 @@ import com.example.swob_deku.Commons.Helpers;
+ import com.example.swob_deku.GatewayClientListingActivity;
+ import com.example.swob_deku.Models.GatewayClients.GatewayClient;
+ import com.example.swob_deku.Models.GatewayClients.GatewayClientHandler;
++import com.example.swob_deku.Models.SIMHandler;
+ import com.example.swob_deku.Models.SMS.SMSHandler;
+ import com.example.swob_deku.R;
+ import com.rabbitmq.client.Channel;
+@@ -218,17 +219,8 @@ public class RMQConnectionService extends Service {
+                     String msisdn = jsonObject.getString(RMQConnection.MESSAGE_MSISDN_KEY);
+                     String globalMessageKey = jsonObject.getString(RMQConnection.MESSAGE_GLOBAL_MESSAGE_ID_KEY);
+ 
+-                    long messageId = Helpers.generateRandomNumber();
+-
+-                    // TODO: fix this
+-//                    PendingIntent[] pendingIntents = IncomingTextSMSBroadcastReceiver
+-//                            .getPendingIntentsForServerRequest(getApplicationContext(), messageId,
+-//                                    Long.parseLong(globalMessageKey));
+-//
+-//                    // TODO: fix subscriptionId to actually be the value
+-//                    SMSHandler.sendTextSMS(getApplicationContext(), msisdn, body,
+-//                            pendingIntents[0], pendingIntents[1], messageId, null);
+-
++                    int subscriptionId = SIMHandler.getDefaultSimSubscription(getApplicationContext());
++                    SMSHandler.registerPendingMessage(getApplicationContext(), msisdn, body, subscriptionId);
+                     Map<Long, Channel> deliveryChannelMap = new HashMap<>();
+                     deliveryChannelMap.put(delivery.getEnvelope().getDeliveryTag(), rmqConnection.getChannel1());
+ 
+@@ -271,11 +263,7 @@ public class RMQConnectionService extends Service {
+         factory.setRecoveryDelayHandler(new RecoveryDelayHandler() {
+             @Override
+             public long getDelay(int recoveryAttempts) {
+-                // TODO: send notification informing reconnecting is being attempted
+-                Log.d(getClass().getName(), "Attempting auto recovery...");
+-
+                 connectionList.get(gatewayClient.getId()).setConnected(DELAY_TIMEOUT);
+-                Log.d(getClass().getName(), "Done setting reconnect");
+                 return DELAY_TIMEOUT;
+             }
+         });
+@@ -288,8 +276,6 @@ public class RMQConnectionService extends Service {
+         factory.setConnectionTimeout(15000);
+         factory.setExceptionHandler(new DefaultExceptionHandler());
+ 
+-        // TODO: create a full handler to manage the retry to connection
+-        // TODO: which matches the Android WorkManager methods
+         Thread thread = new Thread(new Runnable() {
+             @Override
+             public void run() {
+diff --git a/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQMonitor.kt b/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQMonitor.kt
+index daff6e3f..5a5b2862 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQMonitor.kt
++++ b/app/src/main/java/com/example/swob_deku/Models/RMQ/RMQMonitor.kt
+@@ -43,7 +43,6 @@ class RMQMonitor(val context: Context, private val gatewayClientId: Int,
+                 .putBoolean(this.gatewayClientId.toString(), (delayTimeout == 0L))
+                 .apply();
+ 
+-        // TODO: use some BackOff technique here
+         if(delayTimeout > 0 && !activeThreads.containsKey(gatewayClientId.toString()) &&
+                 rmqConnection.connection != null)
+             setMonitorTimeout(delayTimeout)
+diff --git a/app/src/main/java/com/example/swob_deku/Models/Router/Router.java b/app/src/main/java/com/example/swob_deku/Models/Router/Router.java
+index 075e627b..59919385 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/Router/Router.java
++++ b/app/src/main/java/com/example/swob_deku/Models/Router/Router.java
+@@ -61,15 +61,8 @@ public class Router extends Worker {
+     private void routeMessagesToGatewayServers(String address, String text,
+                                                String gatewayServerUrl)
+             throws JSONException, ExecutionException, InterruptedException, TimeoutException {
+-        // TODO: Pause to resend if no internet connection
+-        // TODO: Pause till routing can happen, but should probably use a broker for this
+         Context context = getApplicationContext();
+-        // Toast.makeText(context, "Routing messages using workers!", Toast.LENGTH_SHORT).show();
+-        if(BuildConfig.DEBUG)
+-            Log.d("", "Routing: " + address + " - " + text);
+ 
+-        // TODO: make this come from a config file
+-//        String gatewayServerUrl = context.getString(R.string.routing_url);
+         try{
+             JSONObject jsonBody = new JSONObject( "{\"text\": \"" + text + "\", \"MSISDN\": \"" + address + "\"}");
+ 
+@@ -91,7 +84,6 @@ public class Router extends Worker {
+             // Hit the server and came back with error code
+             throw e;
+         } // Because the server could return a string...
+-        // TODO: be sure o fthis cases
+         catch(Exception e ) {
+             // Fuck
+             throw e;
+diff --git a/app/src/main/java/com/example/swob_deku/Models/Router/RouterViewModel.java b/app/src/main/java/com/example/swob_deku/Models/Router/RouterViewModel.java
+index 0506a25e..63740f61 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/Router/RouterViewModel.java
++++ b/app/src/main/java/com/example/swob_deku/Models/Router/RouterViewModel.java
+@@ -98,7 +98,6 @@ public class RouterViewModel extends ViewModel {
+ 
+             String messageId = "";
+             String gatewayServerUrl = "";
+-            // TODO: add multiple urls to an SMS message
+             for(WorkInfo workInfo : workInfoList) {
+                 String[] Alltags = Helpers.convertSetToStringArray(workInfo.getTags());
+                 for(int i = 0; i< Alltags.length; ++i) {
+diff --git a/app/src/main/java/com/example/swob_deku/Models/SIMHandler.java b/app/src/main/java/com/example/swob_deku/Models/SIMHandler.java
+index 7a7ee48f..ba2d4d1d 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/SIMHandler.java
++++ b/app/src/main/java/com/example/swob_deku/Models/SIMHandler.java
+@@ -21,35 +21,11 @@ public class SIMHandler {
+         int simCount = getActiveSimcardCount(context);
+ 
+         return subscriptionManager.getActiveSubscriptionInfoList();
+-//        for (int simSlot = 0; simSlot < simcards.size(); simSlot++) {
+-//            String simOperatorName = subscriptionManager.get
+-//            String simCountryIso = telephonyManager.getSimCountryIso(simSlot);
+-//            String simState = getSimStateString(telephonyManager.getSimState(simSlot));
+-//
+-//            String TAG = SIMHandler.class.getName();
+-//
+-//            Log.d(TAG, "Sim Slot: " + simSlot);
+-//            Log.d(TAG, "Serial Number: " + simSerialNumber);
+-//            Log.d(TAG, "Operator Name: " + simOperatorName);
+-//            Log.d(TAG, "Country ISO: " + simCountryIso);
+-//            Log.d(TAG, "Sim State: " + simState);
+-//        }
+     }
+ 
+     public static int getActiveSimcardCount(Context context) {
+-        SubscriptionManager subscriptionManager = (SubscriptionManager) context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+-        if (ActivityCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+-            // TODO: Consider calling
+-            //    ActivityCompat#requestPermissions
+-            // here to request the missing permissions, and then overriding
+-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+-            //                                          int[] grantResults)
+-            // to handle the case where the user grants the permission. See the documentation
+-            // for ActivityCompat#requestPermissions for more details.
+-            Log.d(SIMHandler.class.getName(), "Sim card not granted!");
+-        }
+-        else
+-            Log.d(SIMHandler.class.getName(), "Sim card granted!");
++        SubscriptionManager subscriptionManager =
++                (SubscriptionManager) context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+         return subscriptionManager.getActiveSubscriptionInfoCount();
+     }
+ 
+@@ -71,9 +47,6 @@ public class SIMHandler {
+         }
+     }
+     public static int getDefaultSimSubscription(Context context) {
+-//        SubscriptionManager subscriptionManager = (SubscriptionManager) context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE);
+-//        TelephonyManager telephonyManager = (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+-
+         int defaultSmsSubscriptionId = SubscriptionManager.getDefaultSmsSubscriptionId();
+         SubscriptionInfo subscriptionInfo = SubscriptionManager.from(context).getActiveSubscriptionInfo(defaultSmsSubscriptionId);
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/Models/SMS/SMS.java b/app/src/main/java/com/example/swob_deku/Models/SMS/SMS.java
+index e428fecc..c697d44f 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/SMS/SMS.java
++++ b/app/src/main/java/com/example/swob_deku/Models/SMS/SMS.java
+@@ -416,7 +416,6 @@ public class SMS {
+             SecurityECDH securityECDH = new SecurityECDH(context);
+             PublicKey publicKey = securityECDH.generateKeyPair(context, getAddress());
+ 
+-            // TODO: refactor txAgreementFormatter -> why is exist?
+             return SecurityHelpers.txAgreementFormatter(publicKey.getEncoded());
+         }
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/Models/SMS/SMSHandler.java b/app/src/main/java/com/example/swob_deku/Models/SMS/SMSHandler.java
+index 5f4888a1..da2084b3 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/SMS/SMSHandler.java
++++ b/app/src/main/java/com/example/swob_deku/Models/SMS/SMSHandler.java
+@@ -164,7 +164,7 @@ public class SMSHandler {
+         contentValues.put(Telephony.Sms._ID, messageId);
+         contentValues.put(Telephony.TextBasedSmsColumns.ADDRESS, address);
+         contentValues.put(Telephony.TextBasedSmsColumns.BODY, body);
+-//        contentValues.put(Telephony.TextBasedSmsColumns.SUBSCRIPTION_ID, subscriptionId);
++        contentValues.put(Telephony.TextBasedSmsColumns.SUBSCRIPTION_ID, subscriptionId);
+         contentValues.put(Telephony.TextBasedSmsColumns.TYPE, Telephony.TextBasedSmsColumns.MESSAGE_TYPE_INBOX);
+ 
+         try {
+diff --git a/app/src/main/java/com/example/swob_deku/Models/Security/SecurityHelpers.java b/app/src/main/java/com/example/swob_deku/Models/Security/SecurityHelpers.java
+index ca41b879..adac46ee 100644
+--- a/app/src/main/java/com/example/swob_deku/Models/Security/SecurityHelpers.java
++++ b/app/src/main/java/com/example/swob_deku/Models/Security/SecurityHelpers.java
+@@ -43,9 +43,12 @@ public class SecurityHelpers {
+ //        return new JcaX509CertificateConverter().setProvider("BC").getCertificate(builder.build(signer));
+ //    }
+ 
++    /**
++     * Includes the headers required to identify that this is an agreement request.
++     * @param agreementKey
++     * @return
++     */
+     public static byte[] txAgreementFormatter(byte[] agreementKey) {
+-        Log.d(SecurityHelpers.class.getName(), "Public key len: " + agreementKey.length);
+-
+         byte[] firstHeader = FIRST_HEADER.getBytes(StandardCharsets.US_ASCII);
+         byte[] endHeader = END_HEADER.getBytes(StandardCharsets.US_ASCII);
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/RouterActivity.java b/app/src/main/java/com/example/swob_deku/RouterActivity.java
+index c371afdc..8dd9e240 100644
+--- a/app/src/main/java/com/example/swob_deku/RouterActivity.java
++++ b/app/src/main/java/com/example/swob_deku/RouterActivity.java
+@@ -66,7 +66,6 @@ public class RouterActivity extends AppCompatActivity {
+                 LinearLayoutManager.VERTICAL, false);
+         routedMessageRecyclerView.setLayoutManager(linearLayoutManager);
+ 
+-        // TODO: search - and goto message in adapter
+         messagesThreadRecyclerAdapter = new MessagesThreadRecyclerAdapter( this,
+                 true, "", this);
+ 
+diff --git a/app/src/main/java/com/example/swob_deku/SearchMessagesThreadsActivity.java b/app/src/main/java/com/example/swob_deku/SearchMessagesThreadsActivity.java
+index d097c6b7..698c81e3 100644
+--- a/app/src/main/java/com/example/swob_deku/SearchMessagesThreadsActivity.java
++++ b/app/src/main/java/com/example/swob_deku/SearchMessagesThreadsActivity.java
+@@ -28,7 +28,6 @@ import java.util.List;
+ 
+ public class SearchMessagesThreadsActivity extends AppCompatActivity {
+ 
+-    // TODO: custom search with startIcon being up button
+     MessagesSearchViewModel messagesSearchViewModel;
+     MutableLiveData<String> searchString = new MutableLiveData<>();
+ 

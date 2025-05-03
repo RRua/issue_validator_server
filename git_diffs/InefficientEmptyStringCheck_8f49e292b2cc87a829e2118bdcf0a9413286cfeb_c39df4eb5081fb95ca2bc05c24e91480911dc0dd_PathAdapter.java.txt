@@ -1,0 +1,552 @@
+diff --git a/app/src/main/java/com/foobnix/android/utils/JsonDB.java b/app/src/main/java/com/foobnix/android/utils/JsonDB.java
+new file mode 100644
+index 000000000..eddf00728
+--- /dev/null
++++ b/app/src/main/java/com/foobnix/android/utils/JsonDB.java
+@@ -0,0 +1,69 @@
++package com.foobnix.android.utils;
++
++import android.text.Spanned;
++
++import com.foobnix.model.MyPath;
++
++import org.json.JSONArray;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++public class JsonDB {
++
++
++    public static Spanned fromHtml(String db) {
++        StringBuilder res = new StringBuilder();
++        for (String item : get(db)) {
++            res.append(item.replace(MyPath.INTERNAL_ROOT, "...") + "<br>");
++        }
++        String text = res.toString();
++        text = TxtUtils.replaceLast(text, "<br>", "");
++        return TxtUtils.fromHtml(text);
++    }
++
++    public static String set(List<String> list) {
++        JSONArray array = new JSONArray();
++        for (String s : list) {
++            array.put(s);
++        }
++        return array.toString();
++    }
++
++    public static boolean contains(String db, String item) {
++        return get(db).contains(item);
++    }
++
++    public static String add(String db, String line) {
++        final List<String> list = get(db);
++        list.add(line);
++        return set(list);
++    }
++
++    public static String remove(String db, String line) {
++        final List<String> list = get(db);
++        list.remove(line);
++        return set(list);
++    }
++
++    public static boolean isEmpty(String db) {
++        return get(db).isEmpty();
++    }
++
++    public static List<String> get(String db) {
++        try {
++            List<String> res = new ArrayList<>();
++            JSONArray array = new JSONArray(db);
++            for (int i = 0; i < array.length(); i++) {
++                res.add(array.getString(i));
++            }
++            Collections.sort(res);
++            return res;
++        } catch (Exception e) {
++            LOG.e(e);
++
++        }
++        return Collections.emptyList();
++    }
++}
+diff --git a/app/src/main/java/com/foobnix/android/utils/TxtUtils.java b/app/src/main/java/com/foobnix/android/utils/TxtUtils.java
+index 1d4c88db5..98b077dfe 100644
+--- a/app/src/main/java/com/foobnix/android/utils/TxtUtils.java
++++ b/app/src/main/java/com/foobnix/android/utils/TxtUtils.java
+@@ -22,6 +22,7 @@ import androidx.core.util.Pair;
+ import com.foobnix.dao2.FileMeta;
+ import com.foobnix.model.AppSP;
+ import com.foobnix.model.AppState;
++import com.foobnix.model.MyPath;
+ import com.foobnix.pdf.info.R;
+ import com.foobnix.pdf.info.model.BookCSS;
+ import com.foobnix.sys.TempHolder;
+@@ -117,6 +118,13 @@ public class TxtUtils {
+         return line.substring(indexOf + 1);
+     }
+ 
++    public static String smallPathFormat(String txt) {
++        if (TxtUtils.isEmpty(txt)) {
++            return "[]";
++        }
++        txt = Uri.decode(txt);
++        return txt.replace(MyPath.INTERNAL_ROOT, "...");
++    }
+     public static String lastTwoPath(String txt) {
+         if (TxtUtils.isEmpty(txt)) {
+             return "[]";
+diff --git a/app/src/main/java/com/foobnix/model/MyPath.java b/app/src/main/java/com/foobnix/model/MyPath.java
+index 5582b0ed7..2af702437 100644
+--- a/app/src/main/java/com/foobnix/model/MyPath.java
++++ b/app/src/main/java/com/foobnix/model/MyPath.java
+@@ -8,8 +8,8 @@ import java.io.File;
+ 
+ public class MyPath {
+ 
+-    final static String INTERNAL_ROOT = Environment.getExternalStorageDirectory().getPath();
+-    final static String INTERNAL_PREFIX = "internal-storage:";
++    final public static String INTERNAL_ROOT = Environment.getExternalStorageDirectory().getPath();
++    final public static String INTERNAL_PREFIX = "internal-storage:";
+ 
+     private String path;
+ 
+diff --git a/app/src/main/java/com/foobnix/pdf/info/IMG.java b/app/src/main/java/com/foobnix/pdf/info/IMG.java
+index 6a1f84883..c61f0ba13 100644
+--- a/app/src/main/java/com/foobnix/pdf/info/IMG.java
++++ b/app/src/main/java/com/foobnix/pdf/info/IMG.java
+@@ -2,6 +2,7 @@ package com.foobnix.pdf.info;
+ 
+ import android.content.Context;
+ import android.database.Cursor;
++import android.graphics.Bitmap;
+ import android.graphics.Bitmap.Config;
+ import android.graphics.Color;
+ import android.graphics.drawable.ColorDrawable;
+@@ -13,8 +14,14 @@ import android.view.ViewGroup;
+ import android.view.ViewGroup.LayoutParams;
+ import android.widget.ImageView;
+ 
++import androidx.annotation.Nullable;
++
+ import com.bumptech.glide.Glide;
++import com.bumptech.glide.load.DataSource;
+ import com.bumptech.glide.load.engine.DiskCacheStrategy;
++import com.bumptech.glide.load.engine.GlideException;
++import com.bumptech.glide.request.RequestListener;
++import com.bumptech.glide.request.target.Target;
+ import com.foobnix.android.utils.Dips;
+ import com.foobnix.android.utils.LOG;
+ import com.foobnix.model.AppState;
+@@ -158,11 +165,26 @@ public class IMG {
+         Glide.with(img).asBitmap().load(url).into(img);
+     }
+ 
+-    public static void getCoverPageWithEffect(ImageView img, String path, int width) {
++    public static void getCoverPageWithEffect(ImageView img, String path, int width, Runnable run) {
+         String url = IMG.toUrl(path, ImageExtractor.COVER_PAGE, width);
+         Glide.with(img)
+                 .asBitmap()
+                 .load(url)
++                .addListener(new RequestListener<Bitmap>() {
++                    @Override
++                    public boolean onLoadFailed(@Nullable GlideException e, Object model, Target<Bitmap> target, boolean isFirstResource) {
++                        return false;
++                    }
++
++                    @Override
++                    public boolean onResourceReady(Bitmap resource, Object model, Target<Bitmap> target, DataSource dataSource, boolean isFirstResource) {
++                        target.onResourceReady(resource,null);
++                        if(run!=null) {
++                            run.run();
++                        }
++                        return true;
++                    }
++                })
+                 .diskCacheStrategy(DiskCacheStrategy.ALL)
+                 .into(img);
+     }
+diff --git a/app/src/main/java/com/foobnix/pdf/info/model/BookCSS.java b/app/src/main/java/com/foobnix/pdf/info/model/BookCSS.java
+index 78c6aaca0..4908e9b3c 100644
+--- a/app/src/main/java/com/foobnix/pdf/info/model/BookCSS.java
++++ b/app/src/main/java/com/foobnix/pdf/info/model/BookCSS.java
+@@ -6,6 +6,7 @@ import android.os.Environment;
+ 
+ import com.foobnix.android.utils.Dips;
+ import com.foobnix.android.utils.IO;
++import com.foobnix.android.utils.JsonDB;
+ import com.foobnix.android.utils.LOG;
+ import com.foobnix.android.utils.Objects;
+ import com.foobnix.android.utils.Objects.IgnoreHashCode;
+@@ -58,7 +59,7 @@ public class BookCSS {
+     public static int STYLES_ONLY_USER = 2;
+     public static List<String> fontExts = Arrays.asList(".ttf", ".otf");
+     private static BookCSS instance = new BookCSS();
+-    public String searchPaths;
++    public String searchPathsJson;
+     public String cachePath = new File(AppProfile.DOWNLOADS_DIR, "Librera/Cache").getPath();
+     public String downlodsPath = new File(AppProfile.SYNC_FOLDER_ROOT, "Downloads").getPath();
+ 
+@@ -216,7 +217,7 @@ public class BookCSS {
+         IO.readObj(AppProfile.syncCSS, instance);
+ 
+         try {
+-            if (TxtUtils.isEmpty(instance.searchPaths)) {
++            if (TxtUtils.isEmpty(instance.searchPathsJson)) {
+                 List<String> extFolders = ExtUtils.getExternalStorageDirectories(c);
+ 
+                 if (!extFolders.contains(Environment.getExternalStorageDirectory().getPath())) {
+@@ -228,9 +229,8 @@ public class BookCSS {
+                         extFolders.add(sdPath);
+                     }
+                 }
+-                instance.searchPaths = TxtUtils.joinList(",", extFolders);
+-                //searchPaths = Environment.getExternalStorageDirectory().getPath();
+-                LOG.d("searchPaths-all", searchPaths, instance.searchPaths);
++                instance.searchPathsJson = JsonDB.set(extFolders);
++                LOG.d("searchPaths-all", instance.searchPathsJson);
+             }
+         } catch (Exception e) {
+             LOG.e(e);
+diff --git a/app/src/main/java/com/foobnix/pdf/info/presentation/BrowserAdapter.java b/app/src/main/java/com/foobnix/pdf/info/presentation/BrowserAdapter.java
+index 5448b28ef..cb2b8b523 100644
+--- a/app/src/main/java/com/foobnix/pdf/info/presentation/BrowserAdapter.java
++++ b/app/src/main/java/com/foobnix/pdf/info/presentation/BrowserAdapter.java
+@@ -179,7 +179,7 @@ public class BrowserAdapter extends BaseAdapter {
+             }
+ 
+ 
+-            IMG.getCoverPageWithEffect(imageView, file.getPath(), IMG.getImageSize());
++            IMG.getCoverPageWithEffect(imageView, file.getPath(), IMG.getImageSize(),null);
+ 
+             textPath.setText(file.getPathTxt());
+             infoLayout.setVisibility(View.VISIBLE);
+diff --git a/app/src/main/java/com/foobnix/pdf/info/presentation/PathAdapter.java b/app/src/main/java/com/foobnix/pdf/info/presentation/PathAdapter.java
+index 5f27e7239..ae996df45 100644
+--- a/app/src/main/java/com/foobnix/pdf/info/presentation/PathAdapter.java
++++ b/app/src/main/java/com/foobnix/pdf/info/presentation/PathAdapter.java
+@@ -37,12 +37,10 @@ public class PathAdapter extends BaseAdapter {
+         return 0;
+     }
+ 
+-    public void setPaths(String paths) {
++    public void setPaths(List<String> paths) {
+         List<Uri> uris = new ArrayList<Uri>();
+-        for (String str : paths.split(",")) {
+-            if (str.trim().length() != 0) {
++        for (String str : paths) {
+                 uris.add(Uri.fromFile(new File(str)));
+-            }
+         }
+         Collections.sort(uris, comparator);
+         this.uris = uris;
+diff --git a/app/src/main/java/com/foobnix/pdf/info/widget/PrefDialogs.java b/app/src/main/java/com/foobnix/pdf/info/widget/PrefDialogs.java
+index e16467df9..84eed1fcb 100644
+--- a/app/src/main/java/com/foobnix/pdf/info/widget/PrefDialogs.java
++++ b/app/src/main/java/com/foobnix/pdf/info/widget/PrefDialogs.java
+@@ -27,6 +27,7 @@ import android.widget.Toast;
+ import androidx.fragment.app.FragmentActivity;
+ 
+ import com.foobnix.android.utils.Dips;
++import com.foobnix.android.utils.JsonDB;
+ import com.foobnix.android.utils.Keyboards;
+ import com.foobnix.android.utils.LOG;
+ import com.foobnix.android.utils.ResultResponse;
+@@ -69,7 +70,7 @@ public class PrefDialogs {
+     public static void chooseFolderDialog(final FragmentActivity a, final Runnable onChanges, final Runnable onScan) {
+ 
+         final PathAdapter recentAdapter = new PathAdapter();
+-        recentAdapter.setPaths(BookCSS.get().searchPaths);
++        recentAdapter.setPaths(JsonDB.get(BookCSS.get().searchPathsJson));
+ 
+         final AlertDialog.Builder builder = new AlertDialog.Builder(a);
+         builder.setTitle(R.string.scan_device_for_new_books);
+@@ -100,7 +101,7 @@ public class PrefDialogs {
+                         }
+                         boolean isExists = false;
+                         String existPath = "";
+-                        for (String str : BookCSS.get().searchPaths.split(",")) {
++                        for (String str : JsonDB.get(BookCSS.get().searchPathsJson)) {
+                             if (str != null && str.trim().length() != 0 && nPath.equals(str)) {
+                                 isExists = true;
+                                 existPath = str;
+@@ -112,11 +113,7 @@ public class PrefDialogs {
+                         } else if (isExists) {
+                             Toast.makeText(a, String.format("[ %s == %s ] %s", nPath, existPath, a.getString(R.string.this_directory_is_already_in_the_list)), Toast.LENGTH_LONG).show();
+                         } else {
+-                            if (BookCSS.get().searchPaths.endsWith(",")) {
+-                                BookCSS.get().searchPaths = BookCSS.get().searchPaths + "" + nPath;
+-                            } else {
+-                                BookCSS.get().searchPaths = BookCSS.get().searchPaths + "," + nPath;
+-                            }
++                            BookCSS.get().searchPathsJson = JsonDB.add(BookCSS.get().searchPathsJson, nPath);
+                         }
+                         dialog.dismiss();
+                         onChanges.run();
+@@ -140,18 +137,10 @@ public class PrefDialogs {
+             @Override
+             public boolean onResultRecive(Uri result) {
+                 String path = result.getPath();
+-                LOG.d("TEST", "Remove " + BookCSS.get().searchPaths);
+                 LOG.d("TEST", "Remove " + path);
+-                StringBuilder builder = new StringBuilder();
+-                for (String str : BookCSS.get().searchPaths.split(",")) {
+-                    if (str != null && str.trim().length() > 0 && !str.equals(path)) {
+-                        builder.append(str);
+-                        builder.append(",");
+-                    }
+-                }
+-                BookCSS.get().searchPaths = builder.toString();
+-                LOG.d("TEST", "Remove " + BookCSS.get().searchPaths);
+-                recentAdapter.setPaths(BookCSS.get().searchPaths);
++                BookCSS.get().searchPathsJson = JsonDB.remove(BookCSS.get().searchPathsJson, path);
++                LOG.d("TEST", "Remove " + BookCSS.get().searchPathsJson );
++                recentAdapter.setPaths(JsonDB.get(BookCSS.get().searchPathsJson));
+                 onChanges.run();
+                 return false;
+             }
+diff --git a/app/src/main/java/com/foobnix/ui2/BooksService.java b/app/src/main/java/com/foobnix/ui2/BooksService.java
+index 7319e87fd..55f3e858e 100644
+--- a/app/src/main/java/com/foobnix/ui2/BooksService.java
++++ b/app/src/main/java/com/foobnix/ui2/BooksService.java
+@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat;
+ import androidx.localbroadcastmanager.content.LocalBroadcastManager;
+ 
+ import com.foobnix.android.utils.Apps;
++import com.foobnix.android.utils.JsonDB;
+ import com.foobnix.android.utils.LOG;
+ import com.foobnix.android.utils.TxtUtils;
+ import com.foobnix.dao2.FileMeta;
+@@ -211,12 +212,12 @@ public class BooksService extends IntentService {
+                 }
+ 
+                 List<FileMeta> localMeta = new LinkedList<FileMeta>();
+-                if(TxtUtils.isEmpty(BookCSS.get().searchPaths)){
++                if(JsonDB.isEmpty(BookCSS.get().searchPathsJson)){
+                     sendFinishMessage();
+                     return;
+                 }
+ 
+-                for (final String path : BookCSS.get().searchPaths.split(",")) {
++                for (final String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
+                     if (path != null && path.trim().length() > 0) {
+                         final File root = new File(path);
+                         if (root.isDirectory()) {
+@@ -268,11 +269,11 @@ public class BooksService extends IntentService {
+                 handler.post(timer);
+ 
+ 
+-                for (final String path : BookCSS.get().searchPaths.split(",")) {
++                for (final String path : JsonDB.get(BookCSS.get().searchPathsJson)) {
+                     if (path != null && path.trim().length() > 0) {
+                         final File root = new File(path);
+                         if (root.isDirectory()) {
+-                            LOG.d("Searcin in " + root.getPath());
++                            LOG.d("Search in: " + root.getPath());
+                             SearchCore.search(itemsMeta, root, ExtUtils.seachExts);
+                         }
+                     }
+diff --git a/app/src/main/java/com/foobnix/ui2/adapter/FileMetaAdapter.java b/app/src/main/java/com/foobnix/ui2/adapter/FileMetaAdapter.java
+index 3ab416177..4642e6027 100644
+--- a/app/src/main/java/com/foobnix/ui2/adapter/FileMetaAdapter.java
++++ b/app/src/main/java/com/foobnix/ui2/adapter/FileMetaAdapter.java
+@@ -213,7 +213,22 @@ public class FileMetaAdapter extends AppRecycleAdapter<FileMeta, RecyclerView.Vi
+             bindFileMetaView(holder, position);
+ 
+ 
+-            IMG.getCoverPageWithEffect(holder.image, fileMeta.getPath(), IMG.getImageSize());
++            IMG.getCoverPageWithEffect(holder.image, fileMeta.getPath(), IMG.getImageSize(), new Runnable(){
++
++
++                @Override
++                public void run() {
++
++                    if (position <= items.size() - 1) {
++                        FileMeta it = AppDB.get().load(fileMeta.getPath());
++                        if (it != null) {
++                            items.set(position, it);
++                            bindFileMetaView(holder, position);
++                        }
++                    }
++
++                }
++            });
+ 
+             holder.imageParent.setVisibility(AppState.get().isShowImages ? View.VISIBLE : View.GONE);
+ 
+diff --git a/app/src/main/java/com/foobnix/ui2/fragment/PrefFragment2.java b/app/src/main/java/com/foobnix/ui2/fragment/PrefFragment2.java
+index 7b099866b..1b6f8cb34 100644
+--- a/app/src/main/java/com/foobnix/ui2/fragment/PrefFragment2.java
++++ b/app/src/main/java/com/foobnix/ui2/fragment/PrefFragment2.java
+@@ -47,6 +47,7 @@ import com.foobnix.android.utils.Apps;
+ import com.foobnix.android.utils.Dips;
+ import com.foobnix.android.utils.IO;
+ import com.foobnix.android.utils.IntegerResponse;
++import com.foobnix.android.utils.JsonDB;
+ import com.foobnix.android.utils.Keyboards;
+ import com.foobnix.android.utils.LOG;
+ import com.foobnix.android.utils.ResultResponse2;
+@@ -1544,9 +1545,7 @@ public class PrefFragment2 extends UIFragment {
+         initKeys();
+ 
+         searchPaths = (TextView) inflate.findViewById(R.id.searchPaths);
+-        BookCSS.get().searchPaths = TxtUtils.replaceFirst(BookCSS.get().searchPaths, ",", "");
+-        BookCSS.get().searchPaths = TxtUtils.replaceLast(BookCSS.get().searchPaths, ",", "");
+-        searchPaths.setText(TxtUtils.fromHtml(BookCSS.get().searchPaths.replace(",", "<br>")));
++        searchPaths.setText(JsonDB.fromHtml(BookCSS.get().searchPathsJson));
+         searchPaths.setOnClickListener(new
+ 
+                                                OnClickListener() {
+@@ -1582,7 +1581,7 @@ public class PrefFragment2 extends UIFragment {
+         // folders
+ 
+         final TextView rootFolder = (TextView) inflate.findViewById(R.id.rootFolder);
+-        TxtUtils.underline(rootFolder, TxtUtils.lastTwoPath(AppSP.get().rootPath));
++        TxtUtils.underline(rootFolder, TxtUtils.smallPathFormat(AppSP.get().rootPath));
+         rootFolder.setOnClickListener(new
+ 
+                                               OnClickListener() {
+@@ -1595,7 +1594,7 @@ public class PrefFragment2 extends UIFragment {
+                                                               if (new File(nPath).canWrite()) {
+                                                                   AppSP.get().rootPath = nPath;
+                                                                   new File(nPath, "Fonts").mkdirs();
+-                                                                  TxtUtils.underline(rootFolder, TxtUtils.lastTwoPath(nPath));
++                                                                  TxtUtils.underline(rootFolder, TxtUtils.smallPathFormat(nPath));
+                                                                   onTheme();
+                                                               } else {
+                                                                   Toast.makeText(getActivity(), R.string.msg_unexpected_error, Toast.LENGTH_LONG).show();
+@@ -1608,7 +1607,7 @@ public class PrefFragment2 extends UIFragment {
+                                               });
+ 
+         final TextView fontFolder = (TextView) inflate.findViewById(R.id.fontFolder);
+-        TxtUtils.underline(fontFolder, TxtUtils.lastTwoPath(BookCSS.get().fontFolder));
++        TxtUtils.underline(fontFolder, TxtUtils.smallPathFormat(BookCSS.get().fontFolder));
+         fontFolder.setOnClickListener(new
+ 
+                                               OnClickListener() {
+@@ -1619,7 +1618,7 @@ public class PrefFragment2 extends UIFragment {
+                                                           @Override
+                                                           public boolean onResultRecive(String nPath, Dialog dialog) {
+                                                               BookCSS.get().fontFolder = nPath;
+-                                                              TxtUtils.underline(fontFolder, TxtUtils.lastTwoPath(BookCSS.get().fontFolder));
++                                                              TxtUtils.underline(fontFolder, TxtUtils.smallPathFormat(BookCSS.get().fontFolder));
+                                                               dialog.dismiss();
+                                                               return false;
+                                                           }
+@@ -1628,7 +1627,7 @@ public class PrefFragment2 extends UIFragment {
+                                               });
+ 
+         final TextView downloadFolder = (TextView) inflate.findViewById(R.id.downloadFolder);
+-        TxtUtils.underline(downloadFolder, TxtUtils.lastTwoPath(BookCSS.get().downlodsPath));
++        TxtUtils.underline(downloadFolder, TxtUtils.smallPathFormat(BookCSS.get().downlodsPath));
+         downloadFolder.setOnClickListener(new
+ 
+                                                   OnClickListener() {
+@@ -1639,7 +1638,7 @@ public class PrefFragment2 extends UIFragment {
+                                                               @Override
+                                                               public boolean onResultRecive(String nPath, Dialog dialog) {
+                                                                   BookCSS.get().downlodsPath = nPath;
+-                                                                  TxtUtils.underline(downloadFolder, TxtUtils.lastTwoPath(BookCSS.get().downlodsPath));
++                                                                  TxtUtils.underline(downloadFolder, TxtUtils.smallPathFormat(BookCSS.get().downlodsPath));
+                                                                   dialog.dismiss();
+                                                                   return false;
+                                                               }
+@@ -1648,7 +1647,7 @@ public class PrefFragment2 extends UIFragment {
+                                                   });
+ 
+         final TextView syncPath = (TextView) inflate.findViewById(R.id.syncPath);
+-        TxtUtils.underline(syncPath, TxtUtils.lastTwoPath(BookCSS.get().syncDropboxPath));
++        TxtUtils.underline(syncPath, TxtUtils.smallPathFormat(BookCSS.get().syncDropboxPath));
+         syncPath.setOnClickListener(new
+ 
+                                             OnClickListener() {
+@@ -1659,7 +1658,7 @@ public class PrefFragment2 extends UIFragment {
+                                                         @Override
+                                                         public boolean onResultRecive(String nPath, Dialog dialog) {
+                                                             BookCSS.get().syncDropboxPath = nPath;
+-                                                            TxtUtils.underline(downloadFolder, TxtUtils.lastTwoPath(BookCSS.get().syncDropboxPath));
++                                                            TxtUtils.underline(downloadFolder, TxtUtils.smallPathFormat(BookCSS.get().syncDropboxPath));
+                                                             dialog.dismiss();
+                                                             return false;
+                                                         }
+@@ -1668,7 +1667,7 @@ public class PrefFragment2 extends UIFragment {
+                                             });
+ 
+         final TextView ttsFolder = (TextView) inflate.findViewById(R.id.ttsFolder);
+-        TxtUtils.underline(ttsFolder, TxtUtils.lastTwoPath(BookCSS.get().ttsSpeakPath));
++        TxtUtils.underline(ttsFolder, TxtUtils.smallPathFormat(BookCSS.get().ttsSpeakPath));
+         ttsFolder.setOnClickListener(new
+ 
+                                              OnClickListener() {
+@@ -1679,7 +1678,7 @@ public class PrefFragment2 extends UIFragment {
+                                                          @Override
+                                                          public boolean onResultRecive(String nPath, Dialog dialog) {
+                                                              BookCSS.get().ttsSpeakPath = nPath;
+-                                                             TxtUtils.underline(ttsFolder, TxtUtils.lastTwoPath(BookCSS.get().ttsSpeakPath));
++                                                             TxtUtils.underline(ttsFolder, TxtUtils.smallPathFormat(BookCSS.get().ttsSpeakPath));
+                                                              dialog.dismiss();
+                                                              return false;
+                                                          }
+@@ -1688,7 +1687,7 @@ public class PrefFragment2 extends UIFragment {
+                                              });
+ 
+         final TextView backupPath = (TextView) inflate.findViewById(R.id.backupFolder);
+-        TxtUtils.underline(backupPath, TxtUtils.lastTwoPath(BookCSS.get().backupPath));
++        TxtUtils.underline(backupPath, TxtUtils.smallPathFormat(BookCSS.get().backupPath));
+         backupPath.setOnClickListener(new
+ 
+                                               OnClickListener() {
+@@ -1699,7 +1698,7 @@ public class PrefFragment2 extends UIFragment {
+                                                           @Override
+                                                           public boolean onResultRecive(String nPath, Dialog dialog) {
+                                                               BookCSS.get().backupPath = nPath;
+-                                                              TxtUtils.underline(backupPath, TxtUtils.lastTwoPath(BookCSS.get().backupPath));
++                                                              TxtUtils.underline(backupPath, TxtUtils.smallPathFormat(BookCSS.get().backupPath));
+                                                               dialog.dismiss();
+                                                               return false;
+                                                           }
+@@ -2423,19 +2422,12 @@ public class PrefFragment2 extends UIFragment {
+     }
+ 
+     public void onFolderConfigDialog() {
+-        BookCSS.get().searchPaths = BookCSS.get().searchPaths.replace("//", "/");
+-        BookCSS.get().searchPaths = TxtUtils.replaceFirst(BookCSS.get().searchPaths, ",", "");
+-        BookCSS.get().searchPaths = TxtUtils.replaceLast(BookCSS.get().searchPaths, ",", "");
+ 
+         PrefDialogs.chooseFolderDialog(getActivity(), new Runnable() {
+ 
+             @Override
+             public void run() {
+-                BookCSS.get().searchPaths = BookCSS.get().searchPaths.replace("//", "/");
+-                BookCSS.get().searchPaths = TxtUtils.replaceFirst(BookCSS.get().searchPaths, ",", "");
+-                BookCSS.get().searchPaths = TxtUtils.replaceLast(BookCSS.get().searchPaths, ",", "");
+-
+-                searchPaths.setText(TxtUtils.fromHtml(BookCSS.get().searchPaths.replace(",", "<br>")));
++                searchPaths.setText(JsonDB.fromHtml(BookCSS.get().searchPathsJson));
+                 saveChanges();
+                 LOG.d("Save Changes", 2);
+             }
+diff --git a/app/src/main/java/com/foobnix/ui2/fragment/SearchFragment2.java b/app/src/main/java/com/foobnix/ui2/fragment/SearchFragment2.java
+index 37e668e9b..931a8997b 100644
+--- a/app/src/main/java/com/foobnix/ui2/fragment/SearchFragment2.java
++++ b/app/src/main/java/com/foobnix/ui2/fragment/SearchFragment2.java
+@@ -49,7 +49,6 @@ import com.foobnix.model.AppState;
+ import com.foobnix.pdf.info.IMG;
+ import com.foobnix.pdf.info.R;
+ import com.foobnix.pdf.info.TintUtil;
+-import com.foobnix.pdf.info.model.BookCSS;
+ import com.foobnix.pdf.info.view.EditTextHelper;
+ import com.foobnix.pdf.info.view.KeyCodeDialog;
+ import com.foobnix.pdf.info.view.MyPopupMenu;
+@@ -363,7 +362,7 @@ public class SearchFragment2 extends UIFragment<FileMeta> {
+ 
+                     @Override
+                     public void run() {
+-                        BookCSS.get().searchPaths = BookCSS.get().searchPaths.replace("//", "/");
++                        //BookCSS.get().searchPaths = BookCSS.get().searchPaths.replace("//", "/");
+                     }
+                 }, new Runnable() {
+ 

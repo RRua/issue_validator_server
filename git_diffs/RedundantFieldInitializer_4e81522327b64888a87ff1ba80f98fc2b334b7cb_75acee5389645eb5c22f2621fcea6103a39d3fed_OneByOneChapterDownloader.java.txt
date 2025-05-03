@@ -1,0 +1,715 @@
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java b/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java
+index 8617ca3..ab5313b 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/DownloaderService.java
+@@ -15,6 +15,7 @@ import android.os.IBinder;
+ import android.support.annotation.Nullable;
+ import android.support.v4.app.NotificationCompat;
+ import android.support.v4.app.NotificationManagerCompat;
++import android.util.Log;
+ 
+ import com.example.halftough.webcomreader.activities.ChapterList.ChapterPreferencesFragment;
+ import com.example.halftough.webcomreader.database.AppDatabase;
+@@ -113,12 +114,13 @@ public class DownloaderService extends Service implements ChapterUpdateBroadcast
+ 
+     private void handleEnqueueChapter(final String wid, final String chapter) {
+         Webcom webcom = UserRepository.getWebcomInstance(wid);
++        webcom.setChaptersDAO(chaptersDAO);
+         final LiveData<String> url = webcom.getChapterUrl(chapter);
+         url.observeForever(new Observer<String>() {
+             @Override
+             public void onChanged(@Nullable String s) {
+                 url.removeObserver(this);
+-                if (!s.isEmpty()) {
++                if (s!=null && !s.isEmpty()) {
+                     downloader.enqueue(s, new Chapter(wid, chapter));
+                     updateNotification();
+                 }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OneByOneChapterDownloader.java b/app/src/main/java/com/example/halftough/webcomreader/OneByOneChapterDownloader.java
+deleted file mode 100644
+index 42f6a99..0000000
+--- a/app/src/main/java/com/example/halftough/webcomreader/OneByOneChapterDownloader.java
++++ /dev/null
+@@ -1,53 +0,0 @@
+-package com.example.halftough.webcomreader;
+-
+-import android.arch.lifecycle.LiveData;
+-import android.arch.lifecycle.Observer;
+-import android.content.ContextWrapper;
+-import android.support.annotation.Nullable;
+-
+-import com.example.halftough.webcomreader.database.Chapter;
+-import com.example.halftough.webcomreader.webcoms.ComicPage;
+-import com.example.halftough.webcomreader.webcoms.Webcom;
+-
+-import java.lang.ref.WeakReference;
+-import java.util.LinkedList;
+-import java.util.Queue;
+-
+-//Class preventing app from asking server for huge number of calls at once
+-public abstract class OneByOneChapterDownloader extends OneByOneDownloader<String, Void> {
+-    private Webcom webcom;
+-    private WeakReference<ChapterUpdateBroadcaster> downloaderService;
+-    private final int refreshRate = 5;
+-    private int refreshCounter = 0;
+-
+-    public OneByOneChapterDownloader(Webcom webcom, ChapterUpdateBroadcaster broadcaster){ this(new LinkedList<String>(), webcom, broadcaster); }
+-
+-    public OneByOneChapterDownloader(Queue<String> chapters, Webcom webcom, ChapterUpdateBroadcaster broadcaster){
+-        this(chapters, webcom, broadcaster, 1);
+-    }
+-
+-    public OneByOneChapterDownloader(Queue<String> chapters, Webcom webcom, ChapterUpdateBroadcaster broadcaster, int slots){
+-        free = capacity = slots;
+-        queue = chapters;
+-        this.webcom = webcom;
+-        downloaderService = new WeakReference<>(broadcaster);
+-    }
+-
+-    public abstract void onResponse(ComicPage page);
+-
+-    protected void downloadElement(final String element, final Void extra){
+-        final LiveData<ComicPage> page = webcom.getChapterMeta(element);
+-        page.observeForever(new Observer<ComicPage>() {
+-            @Override
+-            public void onChanged(@Nullable ComicPage comicPage) {
+-                page.removeObserver(this);
+-                OneByOneChapterDownloader.this.onResponse(comicPage);
+-                elementDownloaded(extra);
+-                refreshCounter++;
+-                if(refreshCounter % refreshRate == 0 || !downloading){
+-                    downloaderService.get().broadcastChapterUpdated(new Chapter(webcom.getId(), element));
+-                }
+-            }
+-        });
+-    }
+-}
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java b/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
+index 62c8aa6..04311b8 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/OneByOneDownloader.java
+@@ -6,8 +6,8 @@ public abstract class OneByOneDownloader<ElementType, Extra> {
+     protected int capacity;
+     protected int free;
+     protected boolean downloading = false;
+-    Queue<ElementType> queue;
+-    Queue<Extra> extras;
++    protected Queue<ElementType> queue;
++    protected Queue<Extra> extras;
+ 
+     public void add(ElementType element, Extra extra){
+         queue.add(element);
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/UserRepository.java b/app/src/main/java/com/example/halftough/webcomreader/UserRepository.java
+index 8832850..2601f43 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/UserRepository.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/UserRepository.java
+@@ -4,6 +4,7 @@ import android.content.Context;
+ 
+ import com.example.halftough.webcomreader.database.Chapter;
+ import com.example.halftough.webcomreader.webcoms.CyanideAndHappinessWebcom;
++import com.example.halftough.webcomreader.webcoms.LunarbaboonWebcom;
+ import com.example.halftough.webcomreader.webcoms.Webcom;
+ import com.example.halftough.webcomreader.webcoms.XkcdWebcom;
+ 
+@@ -11,7 +12,7 @@ import java.io.File;
+ 
+ 
+ public class UserRepository {
+-        public enum FieldType{ ARRAY, STRING, TIME, SWITCH;}
++    public enum FieldType{ ARRAY, STRING, TIME, SWITCH;}
+     public static final String ACTION_CHAPTER_UPDATED = "com.example.halftough.webcomreader.ACTION_CHAPTER_UPDATED";
+ 
+     public static final String GLOBAL_PREFERENCES = "com.example.halftough.webcomreader.GLOBAL_PREFERENCES";
+@@ -25,6 +26,8 @@ public class UserRepository {
+         switch(id){
+             case "cyanideandhappiness":
+                 return new CyanideAndHappinessWebcom();
++            case "lunarbaboon":
++                return new LunarbaboonWebcom();
+             case "xkcd":
+                 return new XkcdWebcom();
+             default:
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/AddWebcomActivity.java b/app/src/main/java/com/example/halftough/webcomreader/activities/AddWebcomActivity.java
+index 75d0e32..5c826f7 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/AddWebcomActivity.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/AddWebcomActivity.java
+@@ -18,6 +18,7 @@ import com.example.halftough.webcomreader.database.AppDatabase;
+ import com.example.halftough.webcomreader.database.ReadWebcom;
+ import com.example.halftough.webcomreader.database.ReadWebcomsDAO;
+ import com.example.halftough.webcomreader.webcoms.CyanideAndHappinessWebcom;
++import com.example.halftough.webcomreader.webcoms.LunarbaboonWebcom;
+ import com.example.halftough.webcomreader.webcoms.Webcom;
+ import com.example.halftough.webcomreader.webcoms.XkcdWebcom;
+ 
+@@ -57,6 +58,7 @@ public class AddWebcomActivity extends AppCompatActivity {
+         list = new ArrayList<Webcom>();
+ 
+         list.add(new CyanideAndHappinessWebcom());
++        list.add(new LunarbaboonWebcom());
+         list.add(new XkcdWebcom());
+         //list.add(new Webcom(3,"Pepper & Carrot"));
+         AddWebcomAdapter adapter = new AddWebcomAdapter(this, list);
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/activities/WebcomInfoActivity.java b/app/src/main/java/com/example/halftough/webcomreader/activities/WebcomInfoActivity.java
+index 98c2ebe..c051131 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/activities/WebcomInfoActivity.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/activities/WebcomInfoActivity.java
+@@ -25,7 +25,6 @@ public class WebcomInfoActivity extends AppCompatActivity {
+     ImageView icon;
+     TextView webpageTextView;
+     TextView formatTextView;
+-    TextView pagesLabelTextView;
+     Button addButton;
+ 
+     @Override
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java b/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
+index 1735b9c..cfbce2a 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/Chapter.java
+@@ -59,7 +59,7 @@ public class Chapter implements Comparable<Chapter> {
+         return extra;
+     }
+     public void setExtra(String extra) {
+-        extra = extra;
++        this.extra = extra;
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
+index 6365ca4..58a825e 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ChaptersDAO.java
+@@ -68,10 +68,12 @@ public interface ChaptersDAO {
+     @Query("SELECT COUNT(*) FROM chapters WHERE wid=:wid")
+     int getChaptersCount(String wid);
+ 
++    @Query("SELECT extra FROM chapters WHERE wid=:wid AND chapter = :chapter")
++    LiveData<String> getExtra(String wid, String chapter);
++
+     @Query("SELECT * FROM chapters WHERE wid=:wid AND status=0 ORDER BY CAST(chapter AS REAL) DESC LIMIT :count")
+     LiveData<List<Chapter>> getNewestUnread(String wid, int count);
+ 
+     @Query("SELECT * FROM chapters WHERE wid=:wid AND status=0 ORDER BY CAST(chapter AS REAL) ASC LIMIT :count")
+     LiveData<List<Chapter>> getOldestUnread(String wid, int count);
+-
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/database/ReadWebcomsDAO.java b/app/src/main/java/com/example/halftough/webcomreader/database/ReadWebcomsDAO.java
+index 5ba578c..5fde1b4 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/database/ReadWebcomsDAO.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/database/ReadWebcomsDAO.java
+@@ -42,4 +42,7 @@ public interface ReadWebcomsDAO {
+ 
+     @Query("UPDATE read_webcoms SET extra = :extra WHERE wid=:wid")
+     void setExtra(String wid, String extra);
++
++    @Query("SELECT extra FROM read_webcoms WHERE wid=:wid")
++    String getExtraAsync(String wid);
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/CyanideAndHappinessWebcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/CyanideAndHappinessWebcom.java
+index 4944b80..5a6ac92 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/CyanideAndHappinessWebcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/CyanideAndHappinessWebcom.java
+@@ -5,16 +5,12 @@ import android.arch.lifecycle.MutableLiveData;
+ import android.arch.lifecycle.Observer;
+ import android.net.Uri;
+ import android.support.annotation.Nullable;
+-import android.util.Log;
+ 
+-import com.example.halftough.webcomreader.ChapterUpdateBroadcaster;
+ import com.example.halftough.webcomreader.R;
+ import com.example.halftough.webcomreader.TaskDelegate;
+ import com.example.halftough.webcomreader.database.Chapter;
+-import com.example.halftough.webcomreader.database.ChaptersDAO;
+ import com.example.halftough.webcomreader.database.ChaptersRepository;
+ import com.example.halftough.webcomreader.database.ReadWebcomRepository;
+-import com.example.halftough.webcomreader.database.ReadWebcomsDAO;
+ 
+ import org.jsoup.Jsoup;
+ import org.jsoup.nodes.Document;
+@@ -207,8 +203,7 @@ public class CyanideAndHappinessWebcom extends Webcom {
+         }
+     }
+ 
+-    @Override
+-    public LiveData<ComicPage> getChapterMeta(String number) {
++    public LiveData<ComicPage> getChapterPage(String number) {
+         initService();
+         final MutableLiveData<ComicPage> page = new MutableLiveData<>();
+         Call<CyanideComicPage> call = service.getChapter(number);
+@@ -232,8 +227,24 @@ public class CyanideAndHappinessWebcom extends Webcom {
+         return source;
+     }
+ 
+-    private boolean a = false, b = false;
++    @Override
++    public LiveData<String> getChapterUrl(String chapter) {
++        final MutableLiveData<String> chapterUrl = new MutableLiveData<>();
++        final LiveData<ComicPage> call = getChapterPage(chapter);
++        call.observeForever(new Observer<ComicPage>() {
++            @Override
++            public void onChanged(@Nullable ComicPage comicPage) {
++                call.removeObserver(this);
++                if(comicPage != null)
++                    chapterUrl.postValue(comicPage.getImage());
++                else
++                    chapterUrl.postValue("");
++            }
++        });
++        return chapterUrl;
++    }
+ 
++    private boolean a = false, b = false;
+     //Downloader Service is here for broadcasting. Might move it somewhere
+     //TODO when there are few new chapters to download it starts downloading them, gets at least one, but not all and something goes wrong, those are lost forever
+     //TODO changing "downloading direction" should fix it
+@@ -274,14 +285,14 @@ public class CyanideAndHappinessWebcom extends Webcom {
+                                 a = true;
+                             }
+                             Chapter firstDb = chapters.get(0);
+-                            final LiveData<ComicPage> oldest = getChapterMeta(firstDb.getChapter());
++                            final LiveData<ComicPage> oldest = getChapterPage(firstDb.getChapter());
+                             oldest.observeForever(new Observer<ComicPage>() {
+                                 @Override
+                                 public void onChanged(@Nullable ComicPage comicPage) {
+                                     oldest.removeObserver(this);
+                                     CyanideComicPage page = (CyanideComicPage)comicPage;
+                                     if(!page.getPrevious().isEmpty()){
+-                                        final LiveData<ComicPage> older = getChapterMeta(page.getPrevious());
++                                        final LiveData<ComicPage> older = getChapterPage(page.getPrevious());
+                                         older.observeForever(new Observer<ComicPage>() {
+                                             @Override
+                                             public void onChanged(@Nullable ComicPage comicPage) {
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/LunarbaboonWebcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/LunarbaboonWebcom.java
+index c102d88..28f709e 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/LunarbaboonWebcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/LunarbaboonWebcom.java
+@@ -5,6 +5,7 @@ import android.arch.lifecycle.MutableLiveData;
+ import android.arch.lifecycle.Observer;
+ import android.net.Uri;
+ import android.support.annotation.Nullable;
++import android.util.Log;
+ 
+ import com.example.halftough.webcomreader.ChapterUpdateBroadcaster;
+ import com.example.halftough.webcomreader.R;
+@@ -15,18 +16,28 @@ import com.example.halftough.webcomreader.database.ChaptersRepository;
+ import com.example.halftough.webcomreader.database.ReadWebcomsDAO;
+ import com.google.gson.annotations.SerializedName;
+ 
++import org.jsoup.Jsoup;
++import org.jsoup.nodes.Document;
++import org.jsoup.nodes.Element;
++import org.jsoup.select.Elements;
++
+ import java.io.IOException;
++import java.lang.annotation.Annotation;
++import java.lang.reflect.Type;
+ import java.util.ArrayList;
+ import java.util.LinkedList;
+ import java.util.List;
+ 
++import okhttp3.ResponseBody;
+ import retrofit2.Call;
+ import retrofit2.Callback;
++import retrofit2.Converter;
+ import retrofit2.Response;
+ import retrofit2.Retrofit;
+ import retrofit2.converter.gson.GsonConverterFactory;
+ import retrofit2.http.GET;
+ import retrofit2.http.Path;
++import retrofit2.http.Query;
+ 
+ public class LunarbaboonWebcom extends Webcom {
+     private LunarbaboonService service;
+@@ -77,23 +88,90 @@ public class LunarbaboonWebcom extends Webcom {
+     }
+ 
+     public interface LunarbaboonService{
+-        @GET("")
++        @GET("/")
+         Call<LunarbaboonListPage> getNewest();
+ 
+-        @GET("comics/?currentPage={page}")
+-        Call<LunarbaboonListPage> getList(int page);
++        @GET("comics")
++        Call<LunarbaboonListPage> getList(@Query("currentPage") int page);
+ 
+-        @GET("{chapter}")
++        @GET("comics/{chapter}.html")
+         Call<LunarbaboonComicPage> getChapter(@Path("chapter") String chapter);
+     }
+ 
++    class LunarbaboonConverterFactory extends Converter.Factory{
++        @Override
++        public Converter<ResponseBody, ?> responseBodyConverter(Type type, Annotation[] annotations, Retrofit retrofit) {
++            if (type == LunarbaboonListPage.class)
++                return new LunarbaboonListConverter();
++            if (type == LunarbaboonComicPage.class)
++                return new LunarbaboonPageConverter();
++            return null;
++        }
++    }
++
++    class LunarbaboonListConverter implements Converter<ResponseBody, LunarbaboonListPage>{
++        @Override
++        public LunarbaboonListPage convert(ResponseBody value) throws IOException {
++            LunarbaboonListPage page = new LunarbaboonListPage();
++            Document doc = Jsoup.parse(value.string());
++            Elements entries = doc.select(".journal-entry");
++            for(Element entry : entries){
++                String id = entry.id();
++                Chapter chapter = new Chapter(getId(), id.substring(4));
++                Element titleA = entry.selectFirst(".title a");
++                String title = titleA.html();
++                String extra = titleA.attr("href");
++                int index = extra.indexOf("comics");
++                extra = extra.substring(index+7, extra.length()-5);
++                chapter.setTitle(title);
++                chapter.setExtra(extra);
++                page.addChapter(chapter);
++            }
++            int pagenumber = Integer.parseInt( doc.selectFirst(".activePage").html() );
++            page.setPageNumber(pagenumber);
++            Elements pagination = doc.getElementsByClass("paginationPageNumber");
++            int lastPage = Integer.parseInt( pagination.last().html() );
++            page.setLast( pagenumber == lastPage );
++            return page;
++        }
++    }
++
++    class LunarbaboonPageConverter implements Converter<ResponseBody, LunarbaboonComicPage>{
++        @Override
++        public LunarbaboonComicPage convert(ResponseBody value) throws IOException {
++            LunarbaboonComicPage page = new LunarbaboonComicPage();
++            Document doc = Jsoup.parse(value.string());
++            Element img = doc.selectFirst(".body img");
++            String src = img.attr("src");
++            src = src.substring(0, src.indexOf("?__"));
++            page.setImage( "http://www.lunarbaboon.com" + src );
++            return page;
++        }
++    }
++
+     //Contains a page of few consecutive comics
+     public class LunarbaboonListPage {
+         private int page;
+         private boolean isLast;
++        List<Chapter> chapters;
++
++        public LunarbaboonListPage(){
++            chapters = new ArrayList<>();
++        }
++
++        public void addChapter(Chapter chapter){
++            chapters.add(chapter);
++        }
++
++        public void setPageNumber(int pageNumber){
++            page = pageNumber;
++        }
++        public void setLast(boolean last){
++            isLast = last;
++        }
+ 
+         public List<Chapter> getChapters(){
+-            return null;
++            return chapters;
+         }
+ 
+         public void insertUntil(Chapter until, TaskDelegate delegate){
+@@ -158,64 +236,55 @@ public class LunarbaboonWebcom extends Webcom {
+     }
+ 
+     //Contains single comic page
+-    public class LunarbaboonComicPage extends ComicPage{
+-        @SerializedName("num")
+-        String num;
+-        @SerializedName("title")
+-        String title;
+-        @SerializedName("img")
+-        String img;
+-        @SerializedName("year")
+-        int year;
+-        @SerializedName("month")
+-        int month;
+-        @SerializedName("day")
+-        int day;
+-
+-        public void setNum(String num){ this.num = num; }
+-        public void setTitle(String title){ this.title = title; }
+-        public void setImg(String img){ this.img = img; }
++    public class LunarbaboonComicPage{
++        String image;
+ 
+-        @Override
+-        public String getChapterNumber() {
+-            return num;
+-        }
+-        @Override
+-        public String getTitle() {
+-            return title;
+-        }
+-        @Override
++        public void setImage(String img){ image = img; }
+         public String getImage() {
+-            return img;
++            return image;
+         }
+-
+-        public String getDate() { return String.format("%d-%02d-%02d 00:00:00", year, month, day); }
+     }
+ 
+     private void initService(){
+         if (service == null){
+-            Retrofit retrofit = new Retrofit.Builder().baseUrl("http://www.lunarbaboon.com/").addConverterFactory(GsonConverterFactory.create()).build();
++            Retrofit retrofit = new Retrofit.Builder().baseUrl("http://www.lunarbaboon.com/")
++                    .addConverterFactory(new LunarbaboonConverterFactory()).build();
+             service = retrofit.create(LunarbaboonService.class);
+         }
+     }
+ 
+-    //TODO this might be impossible with this comic. Think how to change it
+     @Override
+-    public LiveData<ComicPage> getChapterMeta(String number) {
++    public LiveData<String> getChapterUrl(String chapter) {
+         initService();
+-        final MutableLiveData<ComicPage> page = new MutableLiveData<>();
+-        Call<LunarbaboonComicPage> call = service.getChapter(number);
+-        call.enqueue(new Callback<LunarbaboonComicPage>() {
+-            @Override
+-            public void onResponse(Call<LunarbaboonComicPage> call, Response<LunarbaboonComicPage> response) {
+-                page.postValue(response.body());
+-            }
++
++        final MutableLiveData<String> chapterUrl = new MutableLiveData<>();
++
++        final LiveData<String> extraLive = chaptersDAO.getExtra( getId(), chapter);
++        extraLive.observeForever(new Observer<String>() {
+             @Override
+-            public void onFailure(Call<LunarbaboonComicPage> call, Throwable t) {
+-                page.postValue(new LunarbaboonComicPage());
++            public void onChanged(@Nullable String extra) {
++                extraLive.removeObserver(this);
++                Call<LunarbaboonComicPage> call = service.getChapter(extra);
++                call.enqueue(new Callback<LunarbaboonComicPage>() {
++                    @Override
++                    public void onResponse(Call<LunarbaboonComicPage> call, Response<LunarbaboonComicPage> response) {
++                        if(response.isSuccessful()){
++                            chapterUrl.setValue( response.body().getImage() );
++                        }
++                        else{
++                            onFailure(call, new Throwable());
++                        }
++                    }
++
++                    @Override
++                    public void onFailure(Call<LunarbaboonComicPage> call, Throwable t) {
++                        chapterUrl.setValue("");
++                    }
++                });
+             }
+         });
+-        return page;
++
++        return chapterUrl;
+     }
+ 
+     @Override
+@@ -241,17 +310,28 @@ public class LunarbaboonWebcom extends Webcom {
+             newest.body().insertUntil(dbLast, new TaskDelegate() {
+                 @Override
+                 public void onFinish() {
+-
++                    String extra = readWebcomsDAO.getExtraAsync( getId() );
++                    int lastPage;
++                    if(extra == null){
++                        lastPage = 1;
++                    }
++                    else{
++                        lastPage = Integer.parseInt(extra);
++                    }
++                    Call<LunarbaboonListPage> listCall = service.getList(lastPage);
++                    Response<LunarbaboonListPage> listPage;
++                    try {
++                        listPage = listCall.execute();
++                    } catch (IOException e) {
++                        delegate.onFinish();
++                        return;
++                    }
++                    listPage.body().insertUntilEnd( delegate );
+                 }
+             });
+         }
+         else{
+-            newest.body().insertUntilEnd( new TaskDelegate(){
+-                @Override
+-                public void onFinish() {
+-
+-                }
+-            });
++            newest.body().insertUntilEnd( delegate );
+         }
+     }
+ 
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
+index d1c45c9..27c1332 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/Webcom.java
+@@ -41,27 +41,9 @@ public abstract class Webcom {
+         this.chapterUpdateBroadcaster = chapterUpdateBroadcaster;
+     }
+ 
+-    public LiveData<String> getChapterUrl(String chapter){
+-        final MutableLiveData<String> chapterUrl = new MutableLiveData<>();
+-        final LiveData<ComicPage> call = getChapterMeta(chapter);
+-        call.observeForever(new Observer<ComicPage>() {
+-            @Override
+-            public void onChanged(@Nullable ComicPage comicPage) {
+-                call.removeObserver(this);
+-                if(comicPage != null)
+-                    chapterUrl.postValue(comicPage.getImage());
+-                else
+-                    chapterUrl.postValue("");
+-            }
+-        });
+-        return chapterUrl;
+-    }
++    public abstract LiveData<String> getChapterUrl(String chapter);
+ 
+     public abstract void updateChapterList(TaskDelegate delegate);
+-    public abstract LiveData<ComicPage> getChapterMeta(String number);
++    //public abstract LiveData<ComicPage> getChapterPage(String number);
+     public abstract LiveData<Uri> getChapterSource(String chapterNumber);
+-    //public abstract List<String> getChapterList();
+-    //public String getFirstChapterId(){ return getChapterList().get(0); }
+-    //public String getLastChapterId(){ return getChapterList().get(getChapterList().size()-1); }
+-    //public abstract void updateChapters();
+ }
+diff --git a/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java b/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
+index 1688bc7..57c0c1f 100644
+--- a/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
++++ b/app/src/main/java/com/example/halftough/webcomreader/webcoms/XkcdWebcom.java
+@@ -7,17 +7,16 @@ import android.net.Uri;
+ import android.support.annotation.Nullable;
+ 
+ import com.example.halftough.webcomreader.ChapterUpdateBroadcaster;
+-import com.example.halftough.webcomreader.OneByOneChapterDownloader;
++import com.example.halftough.webcomreader.OneByOneDownloader;
+ import com.example.halftough.webcomreader.R;
+ import com.example.halftough.webcomreader.TaskDelegate;
+ import com.example.halftough.webcomreader.database.Chapter;
+-import com.example.halftough.webcomreader.database.ChaptersDAO;
+ import com.example.halftough.webcomreader.database.ChaptersRepository;
+ import com.example.halftough.webcomreader.database.ReadWebcomRepository;
+-import com.example.halftough.webcomreader.database.ReadWebcomsDAO;
+ import com.google.gson.annotations.SerializedName;
+ 
+ import java.io.IOException;
++import java.lang.ref.WeakReference;
+ import java.util.LinkedList;
+ import java.util.List;
+ import java.util.ListIterator;
+@@ -121,8 +120,7 @@ public class XkcdWebcom extends Webcom {
+         }
+     }
+ 
+-    @Override
+-    public LiveData<ComicPage> getChapterMeta(String number) {
++    public LiveData<ComicPage> getChapterPage(String number) {
+         initService();
+         final MutableLiveData<ComicPage> page = new MutableLiveData<>();
+         Call<XkcdComicPage> call = service.getChapter(number);
+@@ -146,6 +144,23 @@ public class XkcdWebcom extends Webcom {
+         return source;
+     }
+ 
++    @Override
++    public LiveData<String> getChapterUrl(String chapter) {
++        final MutableLiveData<String> chapterUrl = new MutableLiveData<>();
++        final LiveData<ComicPage> call = getChapterPage(chapter);
++        call.observeForever(new Observer<ComicPage>() {
++            @Override
++            public void onChanged(@Nullable ComicPage comicPage) {
++                call.removeObserver(this);
++                if(comicPage != null)
++                    chapterUrl.postValue(comicPage.getImage());
++                else
++                    chapterUrl.postValue("");
++            }
++        });
++        return chapterUrl;
++    }
++
+     @Override
+     public void updateChapterList(final TaskDelegate delegate) {
+         initService();
+@@ -194,22 +209,8 @@ public class XkcdWebcom extends Webcom {
+                         ReadWebcomRepository.updateChapterCount(getId(), count, readWebcomsDAO);
+                     }
+ 
+-                    //TODO editable number of slots
+-                    new OneByOneChapterDownloader(chaptersToGet, XkcdWebcom.this, chapterUpdateBroadcaster, 2){
+-                        @Override
+-                        public void onResponse(ComicPage page) {
+-                            if(page != null) {
+-                                Chapter chapter = new Chapter(getId(), page.getChapterNumber());
+-                                chapter.setTitle(page.getTitle());
+-                                ChaptersRepository.insertChapter(chapter, chaptersDAO);
+-                            }
+-                        }
++                    new xkcdDownloader(chaptersToGet, delegate).download();
+ 
+-                        @Override
+-                        protected void onFinished() {
+-                            delegate.onFinish();
+-                        }
+-                    }.download();
+                 }
+             });
+         }
+@@ -218,4 +219,47 @@ public class XkcdWebcom extends Webcom {
+         }
+     }
+ 
++    private class xkcdDownloader extends OneByOneDownloader<String, Void>{
++        private WeakReference<ChapterUpdateBroadcaster> downloaderService = new WeakReference(chapterUpdateBroadcaster);
++        private final int refreshRate = 5;
++        private int refreshCounter = 0;
++        private TaskDelegate delegate;
++
++        public xkcdDownloader(Queue<String> chapterstoGet, TaskDelegate delegate){
++            queue = chapterstoGet;
++            this.delegate = delegate;
++            free = capacity = 2;
++        }
++
++        @Override
++        protected void downloadElement(final String element, final Void extra) {
++            final LiveData<ComicPage> page = getChapterPage(element);
++            page.observeForever(new Observer<ComicPage>() {
++                @Override
++                public void onChanged(@Nullable ComicPage comicPage) {
++                    page.removeObserver(this);
++                    onResponse(comicPage);
++                    elementDownloaded(extra);
++                    refreshCounter++;
++                    if(refreshCounter % refreshRate == 0 || !downloading){
++                        downloaderService.get().broadcastChapterUpdated(new Chapter(getId(), element));
++                    }
++                }
++            });
++        }
++
++        public void onResponse(ComicPage page) {
++            if(page != null) {
++                Chapter chapter = new Chapter(getId(), page.getChapterNumber());
++                chapter.setTitle(page.getTitle());
++                ChaptersRepository.insertChapter(chapter, chaptersDAO);
++            }
++        }
++
++        @Override
++        protected void onFinished() {
++            delegate.onFinish();
++        }
++    }
++
+ }

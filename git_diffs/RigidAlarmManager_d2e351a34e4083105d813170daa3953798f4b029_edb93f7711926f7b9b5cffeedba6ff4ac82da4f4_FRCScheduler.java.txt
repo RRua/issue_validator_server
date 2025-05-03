@@ -1,0 +1,253 @@
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCAppWidgetProvider.java b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCAppWidgetProvider.java
+index ca037a1..aba5d7a 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCAppWidgetProvider.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCAppWidgetProvider.java
+@@ -35,19 +35,23 @@ import ca.rmen.android.frcwidget.Constants.WidgetType;
+ import ca.rmen.android.frcwidget.render.FRCAppWidgetRenderer;
+ import ca.rmen.android.frcwidget.render.FRCAppWidgetRendererFactory;
+ import ca.rmen.android.frenchcalendar.R;
++import ca.rmen.android.frenchcalendar.FrenchCalendarAppWidgetWide;
++import ca.rmen.android.frenchcalendar.FrenchCalendarAppWidgetNarrow;
++import ca.rmen.android.frenchcalendar.FrenchCalendarAppWidgetMinimalist;
+ 
+ /**
+  * Receiver and AppWidgetProvider which updates a list of wide widgets or a list of narrow widgets.
+  * 
+- * At any given point, there will be at most two instances of this class:
++ * At any given point, there will be at most three instances of this class:
+  * <ul>
+- * <li> one {@link FRCAppWidgetWide} which will manage all of the wide widgets, and </li>
+- * <li> one {@link FRCAppWidgetNarrow} which will manage all of the narrow widgets.</li>
++ * <li> one {@link FrenchCalendarAppWidgetWide} which will manage all of the wide widgets, and </li>
++ * <li> one {@link FrenchCalendarAppWidgetNarrow} which will manage all of the narrow widgets.</li>
++ * <li> one {@link FrenchCalendarAppWidgetMinimalist} which will manage all of the minimalist widgets.</li>
+  * </ul>
+  * These receivers are notified by the system when a widget of the given type is added or deleted,
+  * or when widgets of the given type should be updated.
+  * 
+- * These receivers are also notified by the alarm set up by {@link FRCScheduler}, which will
++ * These receivers are also notified by the alarm set up by {@link FRCWidgetScheduler}, which will
+  * go off either once a minute, or once a day, depending on the preferences.
+  */
+ public abstract class FRCAppWidgetProvider extends AppWidgetProvider {
+@@ -60,9 +64,9 @@ public abstract class FRCAppWidgetProvider extends AppWidgetProvider {
+         AppWidgetManager appWidgetManager = AppWidgetManager.getInstance(context);
+         ComponentName provider = intent.getComponent();
+         final int[] appWidgetIds = appWidgetManager.getAppWidgetIds(provider);
+-        if (FRCScheduler.BROADCAST_MESSAGE_UPDATE.equals(intent.getAction())) {
++        if (FRCWidgetScheduler.ACTION_WIDGET_UPDATE.equals(intent.getAction())) {
+             Set<Integer> allAppWidgetIds = FRCAppWidgetManager.getAllAppWidgetIds(context);
+-            if (allAppWidgetIds.size() == 0) FRCScheduler.getInstance(context).cancel();
++            if (allAppWidgetIds.size() == 0) FRCWidgetScheduler.getInstance(context).cancel();
+             else
+                 updateAll(context, appWidgetManager, appWidgetIds);
+         }
+@@ -84,7 +88,7 @@ public abstract class FRCAppWidgetProvider extends AppWidgetProvider {
+     public void onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds) {
+         Log.v(TAG, "onUpdate: appWidgetIds = " + Arrays.toString(appWidgetIds));
+         super.onUpdate(context, appWidgetManager, appWidgetIds);
+-        FRCScheduler.getInstance(context).schedule();
++        FRCWidgetScheduler.getInstance(context).schedule();
+     }
+ 
+     /**
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCBootCompletedBroadcastReceiver.java b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCBootCompletedBroadcastReceiver.java
+index a403980..13e04a2 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCBootCompletedBroadcastReceiver.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCBootCompletedBroadcastReceiver.java
+@@ -28,7 +28,7 @@ import android.util.Log;
+ 
+ import ca.rmen.android.frcwidget.prefs.FRCPreferences;
+ import ca.rmen.android.frcwidget.wear.AndroidWearService;
+-import ca.rmen.android.frcwidget.wear.ScheduleUtil;
++import ca.rmen.android.frcwidget.wear.FRCWearScheduler;
+ 
+ public class FRCBootCompletedBroadcastReceiver extends BroadcastReceiver {
+     private final String TAG = Constants.TAG + getClass().getSimpleName();
+@@ -40,13 +40,13 @@ public class FRCBootCompletedBroadcastReceiver extends BroadcastReceiver {
+         SharedPreferences preferenceManager = PreferenceManager.getDefaultSharedPreferences(context);
+         if (FRCPreferences.getInstance(context).getAndroidWearEnabled()) {
+             // Schedule an alarm
+-            ScheduleUtil.scheduleRepeatingAlarm(context);
++            FRCWearScheduler.scheduleRepeatingAlarm(context);
+ 
+             // Also send the value now
+             AndroidWearService.backgroundRemoveAndUpdateDays(context);
+ 
+             // Also send the value in a minute (this allows the phone to finish booting and the Wear connexion to be up)
+-            ScheduleUtil.scheduleOnceAlarm(context);
++            FRCWearScheduler.scheduleOnceAlarm(context);
+         }
+     }
+ }
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCScheduler.java b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCWidgetScheduler.java
+similarity index 82%
+rename from handheld/src/main/java/ca/rmen/android/frcwidget/FRCScheduler.java
+rename to handheld/src/main/java/ca/rmen/android/frcwidget/FRCWidgetScheduler.java
+index 099e4f5..260c631 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/FRCScheduler.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/FRCWidgetScheduler.java
+@@ -40,26 +40,26 @@ import ca.rmen.android.frcwidget.prefs.FRCPreferences;
+  * @author calvarez
+  * 
+  */
+-public class FRCScheduler {
+-    private static final String TAG = Constants.TAG + FRCScheduler.class.getSimpleName();
+-    static final String BROADCAST_MESSAGE_UPDATE = "ca.rmen.android.frcwidget.UPDATE_WIDGET";
++public class FRCWidgetScheduler {
++    private static final String TAG = Constants.TAG + FRCWidgetScheduler.class.getSimpleName();
++    static final String ACTION_WIDGET_UPDATE = "ca.rmen.android.frcwidget.UPDATE_WIDGET";
+ 
+-    private static FRCScheduler INSTANCE;
++    private static FRCWidgetScheduler INSTANCE;
+     private final Context context;
+-    private final PendingIntent updatePendingIntent;
++    private final PendingIntent updateWidgetPendingIntent;
+ 
+-    private FRCScheduler(Context context) {
++    private FRCWidgetScheduler(Context context) {
+         this.context = context.getApplicationContext();
+-        Intent updateIntent = new Intent(BROADCAST_MESSAGE_UPDATE);
+-        updatePendingIntent = PendingIntent.getBroadcast(context, 0, updateIntent, 0);
++        Intent updateWidgetIntent = new Intent(ACTION_WIDGET_UPDATE);
++        updateWidgetPendingIntent = PendingIntent.getBroadcast(context, 0, updateWidgetIntent, 0);
+         IntentFilter filterOn = new IntentFilter(Intent.ACTION_SCREEN_ON);
+         IntentFilter filterOff = new IntentFilter(Intent.ACTION_SCREEN_OFF);
+         context.getApplicationContext().registerReceiver(screenBroadcastReceiver, filterOn);
+         context.getApplicationContext().registerReceiver(screenBroadcastReceiver, filterOff);
+     }
+ 
+-    public synchronized static FRCScheduler getInstance(Context context) {
+-        if (INSTANCE == null) INSTANCE = new FRCScheduler(context);
++    public synchronized static FRCWidgetScheduler getInstance(Context context) {
++        if (INSTANCE == null) INSTANCE = new FRCWidgetScheduler(context);
+         return INSTANCE;
+     }
+ 
+@@ -85,10 +85,10 @@ public class FRCScheduler {
+         }
+ 
+         // Schedule the periodic updates.
+-        mgr.setRepeating(AlarmManager.RTC, nextAlarmTime, frequency, updatePendingIntent);
++        mgr.setRepeating(AlarmManager.RTC, nextAlarmTime, frequency, updateWidgetPendingIntent);
+ 
+         // Also send a broadcast to force an update now.
+-        Intent updateIntent = new Intent(BROADCAST_MESSAGE_UPDATE);
++        Intent updateIntent = new Intent(ACTION_WIDGET_UPDATE);
+         context.sendBroadcast(updateIntent);
+ 
+         Log.v(TAG, "Started updater");
+@@ -100,7 +100,7 @@ public class FRCScheduler {
+     void cancel() {
+         Log.v(TAG, "cancel");
+         AlarmManager mgr = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        mgr.cancel(updatePendingIntent);
++        mgr.cancel(updateWidgetPendingIntent);
+     }
+ 
+     /**
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/prefs/FRCPreferenceActivity.java b/handheld/src/main/java/ca/rmen/android/frcwidget/prefs/FRCPreferenceActivity.java
+index c153fce..c7575ba 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/prefs/FRCPreferenceActivity.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/prefs/FRCPreferenceActivity.java
+@@ -29,9 +29,9 @@ import android.preference.PreferenceActivity;
+ import android.preference.PreferenceManager;
+ import android.util.Log;
+ 
+-import ca.rmen.android.frcwidget.FRCScheduler;
++import ca.rmen.android.frcwidget.FRCWidgetScheduler;
+ import ca.rmen.android.frcwidget.wear.AndroidWearService;
+-import ca.rmen.android.frcwidget.wear.ScheduleUtil;
++import ca.rmen.android.frcwidget.wear.FRCWearScheduler;
+ import ca.rmen.android.frenchcalendar.R;
+ 
+ /**
+@@ -96,7 +96,7 @@ public class FRCPreferenceActivity extends PreferenceActivity { // NO_UCD (use d
+         Log.v(TAG, "onDestroy");
+         super.onDestroy();
+         // When we leave the preference screen, reupdate all our widgets
+-        FRCScheduler.getInstance(this).schedule();
++        FRCWidgetScheduler.getInstance(this).schedule();
+     }
+ 
+     private final OnSharedPreferenceChangeListener mOnSharedPreferenceChangeListener = new OnSharedPreferenceChangeListener() {
+@@ -116,16 +116,16 @@ public class FRCPreferenceActivity extends PreferenceActivity { // NO_UCD (use d
+                 boolean androidWearEnabled = sharedPreferences.getBoolean(FRCPreferences.PREF_ANDROID_WEAR, false);
+                 if (androidWearEnabled) {
+                     // Schedule an alarm
+-                    ScheduleUtil.scheduleRepeatingAlarm(FRCPreferenceActivity.this);
++                    FRCWearScheduler.scheduleRepeatingAlarm(FRCPreferenceActivity.this);
+ 
+                     // Also send the value now
+                     AndroidWearService.backgroundRemoveAndUpdateDays(FRCPreferenceActivity.this);
+ 
+                     // Also send the value in a minute (this allows the Wearable app to finish installing)
+-                    ScheduleUtil.scheduleOnceAlarm(FRCPreferenceActivity.this);
++                    FRCWearScheduler.scheduleOnceAlarm(FRCPreferenceActivity.this);
+                 } else {
+                     // Unschedule the alarm
+-                    ScheduleUtil.unscheduleRepeatingAlarm(FRCPreferenceActivity.this);
++                    FRCWearScheduler.unscheduleRepeatingAlarm(FRCPreferenceActivity.this);
+                 }
+             }
+         }
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/wear/AndroidWearService.java b/handheld/src/main/java/ca/rmen/android/frcwidget/wear/AndroidWearService.java
+index 8e01ded..dbd380d 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/wear/AndroidWearService.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/wear/AndroidWearService.java
+@@ -32,8 +32,6 @@ import ca.rmen.android.frcwidget.prefs.FRCPreferences;
+ import ca.rmen.lfrc.FrenchRevolutionaryCalendarDate;
+ 
+ public class AndroidWearService extends IntentService {
+-    public static final String ACTION_UPDATE = "ACTION_UPDATE";
+-    public static final String ACTION_REMOVE_AND_UPDATE = "ACTION_REMOVE_AND_UPDATE";
+ 
+     public AndroidWearService() {
+         super("AndroidWearService");
+@@ -54,7 +52,7 @@ public class AndroidWearService extends IntentService {
+         }
+ 
+         WearCommHelper wearCommHelper = WearCommHelper.get();
+-        if (ACTION_REMOVE_AND_UPDATE.equals(intent.getAction())) {
++        if (FRCWearScheduler.ACTION_WEAR_REMOVE_AND_UPDATE.equals(intent.getAction())) {
+             wearCommHelper.removeToday();
+         }
+         FrenchRevolutionaryCalendarDate frenchDate = FRCDateUtils.getToday(this);
+diff --git a/handheld/src/main/java/ca/rmen/android/frcwidget/wear/ScheduleUtil.java b/handheld/src/main/java/ca/rmen/android/frcwidget/wear/FRCWearScheduler.java
+similarity index 88%
+rename from handheld/src/main/java/ca/rmen/android/frcwidget/wear/ScheduleUtil.java
+rename to handheld/src/main/java/ca/rmen/android/frcwidget/wear/FRCWearScheduler.java
+index c2c7fd6..8b5b260 100644
+--- a/handheld/src/main/java/ca/rmen/android/frcwidget/wear/ScheduleUtil.java
++++ b/handheld/src/main/java/ca/rmen/android/frcwidget/wear/FRCWearScheduler.java
+@@ -25,24 +25,26 @@ import android.app.AlarmManager;
+ import android.app.PendingIntent;
+ import android.content.Context;
+ 
+-public class ScheduleUtil {
++public class FRCWearScheduler {
+     private static final long ONE_DAY = 24 * 60 * 60 * 1000;
++    public static final String ACTION_WEAR_UPDATE = "ACTION_WEAR_UPDATE";
++    public static final String ACTION_WEAR_REMOVE_AND_UPDATE = "ACTION_WEAR_REMOVE_AND_UPDATE";
+ 
+     public static void scheduleRepeatingAlarm(Context context) {
+         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, AndroidWearService.ACTION_UPDATE);
++        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, ACTION_WEAR_UPDATE);
+         alarmManager.setInexactRepeating(AlarmManager.RTC, getTomorrowAtEight(), ONE_DAY, pendingIntent);
+     }
+ 
+     public static void unscheduleRepeatingAlarm(Context context) {
+         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, AndroidWearService.ACTION_UPDATE);
++        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, ACTION_WEAR_UPDATE);
+         alarmManager.cancel(pendingIntent);
+     }
+ 
+     public static void scheduleOnceAlarm(Context context) {
+         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, AndroidWearService.ACTION_REMOVE_AND_UPDATE);
++        PendingIntent pendingIntent = AndroidWearService.getPendingIntent(context, ACTION_WEAR_REMOVE_AND_UPDATE);
+         alarmManager.set(AlarmManager.RTC, getInXSeconds(15), pendingIntent);
+     }
+ 

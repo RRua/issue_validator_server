@@ -1,0 +1,762 @@
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/Main.java b/app/src/main/java/com/bytehamster/flowitgame/Main.java
+index dfd7758..f17e242 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/Main.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/Main.java
+@@ -13,6 +13,7 @@ import android.view.MotionEvent;
+ import android.view.Window;
+ import android.view.WindowManager;
+ 
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.state.ExitState;
+ import com.bytehamster.flowitgame.state.GameState;
+ import com.bytehamster.flowitgame.state.LevelPackSelectState;
+@@ -45,6 +46,7 @@ public class Main extends Activity {
+         getSharedPreferences("preferences", Context.MODE_PRIVATE).edit()
+                 .putInt("lastAppVersion", BuildConfig.VERSION_CODE).apply();
+ 
++        LevelPack.parsePacks(this);
+         createViews();
+ 
+         if (Build.VERSION.SDK_INT >= 21) {
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/model/Level.java b/app/src/main/java/com/bytehamster/flowitgame/model/Level.java
+index 4b50e57..ba507b8 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/model/Level.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/model/Level.java
+@@ -1,52 +1,16 @@
+ package com.bytehamster.flowitgame.model;
+ 
+-import android.content.Context;
+-import android.widget.Toast;
+-
+-import org.w3c.dom.Document;
+-import org.w3c.dom.Element;
+-import org.w3c.dom.Node;
+-import org.w3c.dom.NodeList;
+-
+-import javax.xml.parsers.DocumentBuilder;
+-import javax.xml.parsers.DocumentBuilderFactory;
+-
+ public class Level {
+     private Field[][] map;
++    private int number;
++    private int indexInPack;
++    private LevelPack pack;
+ 
+-    public Level(int number, Context context) {
+-        try {
+-            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+-            DocumentBuilder db = dbf.newDocumentBuilder();
+-            Document doc = db.parse(context.getAssets().open("levels_compressed.xml"));
+-            doc.getDocumentElement().normalize();
+-
+-            NodeList levelList = doc.getDocumentElement().getChildNodes();
+-            for (int i = 0; i < levelList.getLength(); i++) {
+-                if(levelList.item(i).getNodeType() != Node.ELEMENT_NODE) {
+-                    continue;
+-                }
+-                Element level = (Element) levelList.item(i);
+-                if (level.getAttribute("number").equals("" + number)) {
+-                    loadLevel(level.getAttribute("color"), level.getAttribute("modifier"));
+-                    return;
+-                }
+-            }
+-        } catch (Exception e) {
+-            e.printStackTrace();
+-            Toast.makeText(context, "Error loading level:\n\n" + e.getMessage(), Toast.LENGTH_LONG).show();
+-        }
+-
+-        //Empty level
+-        map = new Field[5][6];
+-        for(int col = 0; col < 5; col++) {
+-            for(int row = 0; row < 6; row++) {
+-                map[col][row] = new Field('0', 'X');
+-            }
+-        }
+-    }
++    public Level(int indexInPack, int number, LevelPack pack, String color, String modifier) {
++        this.number = number;
++        this.indexInPack = indexInPack;
++        this.pack = pack;
+ 
+-    private void loadLevel(String color, String modifier) {
+         color = color.replaceAll("\\s", "");
+         modifier = modifier.replaceAll("\\s", "");
+         int width = 5;
+@@ -85,4 +49,16 @@ public class Level {
+     public int getHeight() {
+         return map[0].length;
+     }
++
++    public int getNumber() {
++        return number;
++    }
++
++    public int getIndexInPack() {
++        return indexInPack;
++    }
++
++    public LevelPack getPack() {
++        return pack;
++    }
+ }
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/model/LevelPack.java b/app/src/main/java/com/bytehamster/flowitgame/model/LevelPack.java
+new file mode 100644
+index 0000000..7ecbf24
+--- /dev/null
++++ b/app/src/main/java/com/bytehamster/flowitgame/model/LevelPack.java
+@@ -0,0 +1,66 @@
++package com.bytehamster.flowitgame.model;
++
++import android.content.Context;
++import org.w3c.dom.Document;
++import org.w3c.dom.Element;
++import org.w3c.dom.Node;
++import org.w3c.dom.NodeList;
++
++import javax.xml.parsers.DocumentBuilder;
++import javax.xml.parsers.DocumentBuilderFactory;
++import java.util.ArrayList;
++
++public class LevelPack {
++    private ArrayList<Level> levels = new ArrayList<>();
++    public static LevelPack EASY;
++    public static LevelPack MEDIUM;
++    public static LevelPack HARD;
++    private int id;
++
++    public static void parsePacks(Context context) {
++        EASY = new LevelPack(1, "levelsEasy.xml", context);
++        MEDIUM = new LevelPack(2, "levelsMedium.xml", context);
++        HARD = new LevelPack(2, "levelsHard.xml", context);
++    }
++
++    private LevelPack(int id, String fileName, Context context) {
++        this.id = id;
++        Document doc;
++
++        try {
++            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
++            DocumentBuilder db = dbf.newDocumentBuilder();
++            doc = db.parse(context.getAssets().open(fileName + ".compressed"));
++            doc.getDocumentElement().normalize();
++        } catch (Exception e) {
++            throw new RuntimeException("Error loading level pack " + fileName, e);
++        }
++
++        NodeList levelList = doc.getDocumentElement().getChildNodes();
++        int indexInPack = 0;
++        for (int i = 0; i < levelList.getLength(); i++) {
++            if(levelList.item(i).getNodeType() != Node.ELEMENT_NODE) {
++                continue;
++            }
++            Element levelEl = (Element) levelList.item(i);
++            int number = Integer.parseInt(levelEl.getAttribute("number"));
++            String colors = levelEl.getAttribute("color");
++            String modifiers = levelEl.getAttribute("modifier");
++
++            levels.add(new Level(indexInPack, number, this, colors, modifiers));
++            indexInPack++;
++        }
++    }
++
++    public Level getLevel(int indexInPack) {
++        return levels.get(indexInPack);
++    }
++
++    public int size() {
++        return levels.size();
++    }
++
++    public int id() {
++        return id;
++    }
++}
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/object/LevelList.java b/app/src/main/java/com/bytehamster/flowitgame/object/LevelList.java
+index 89329bd..909b8f8 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/object/LevelList.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/object/LevelList.java
+@@ -2,6 +2,8 @@ package com.bytehamster.flowitgame.object;
+ 
+ import android.view.MotionEvent;
+ import com.bytehamster.flowitgame.BuildConfig;
++import com.bytehamster.flowitgame.model.Level;
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.state.State;
+ 
+ import javax.microedition.khronos.opengles.GL10;
+@@ -14,7 +16,7 @@ public class LevelList extends Drawable {
+     private final float boxHeight;
+     private final float boxWidth;
+     private final State context;
+-    private int[][] displayRange = new int[0][0];
++    private LevelPack pack;
+ 
+     public LevelList(float boxSize, State context) {
+         boxHeight = boxSize;
+@@ -32,12 +34,7 @@ public class LevelList extends Drawable {
+     }
+ 
+     public float getHeight() {
+-        int num = 0;
+-        for (int[] currentRange : displayRange) {
+-            int from = currentRange[0];
+-            int to = currentRange[1];
+-            num += to - from + 1;
+-        }
++        int num = pack.size();
+         return boxHeight * num/3 * 1.5f + boxHeight;
+     }
+ 
+@@ -55,24 +52,24 @@ public class LevelList extends Drawable {
+         return - (num/3) * boxHeight * 1.5f - boxHeight;
+     }
+ 
+-    private void drawButton(int num, int levelID, GL10 gl) {
++    private void drawButton(int indexInPack, Level level, GL10 gl) {
+         Plane draw;
+-        if (context.isSolved(levelID)) {
++        if (context.isSolved(level.getNumber())) {
+             draw = planeLevelDone;
+-        } else if (!context.isPlayable(levelID)) {
++        } else if (!context.isPlayable(level)) {
+             draw = planeLevelLocked;
+         } else {
+             draw = planeLevel;
+         }
+ 
+-        draw.setX(getXFor(num));
+-        draw.setY(getYFor(num));
++        draw.setX(getXFor(indexInPack));
++        draw.setY(getYFor(indexInPack));
+         draw.draw(gl);
+ 
+         if (BuildConfig.DEBUG_LEVELS) {
+-            number.setValue(levelID);
++            number.setValue(level.getNumber());
+         } else {
+-            number.setValue(num + 1);
++            number.setValue(indexInPack + 1);
+         }
+         number.setX(draw.getX() + boxWidth + boxWidth / 4);
+         number.setY(draw.getY() + boxHeight / 3);
+@@ -90,41 +87,31 @@ public class LevelList extends Drawable {
+         gl.glTranslatef(getX(), getY(), 0);
+         gl.glScalef(getScale(), getScale(), getScale());
+ 
+-        int num = 0;
+-        for (int[] currentRange : displayRange) {
+-            int from = currentRange[0];
+-            int to = currentRange[1];
+-            for (int levelId = from; levelId <= to; levelId++) {
+-                drawButton(num, levelId, gl);
+-                num++;
++        if (pack != null) {
++            for (int i = 0; i < pack.size(); i++) {
++                drawButton(i, pack.getLevel(i), gl);
+             }
+         }
+ 
+         gl.glPopMatrix();
+     }
+ 
+-    public void setDisplayRange(int[][] displayRange) {
+-        this.displayRange = displayRange;
++    public void setPack(LevelPack pack) {
++        this.pack = pack;
+     }
+ 
+     public boolean collides(MotionEvent event, float height) {
+-        return getCollision(event, height) != -1;
++        return getCollision(event, height) != null;
+     }
+ 
+-    public int getCollision(MotionEvent event, float height) {
+-        int num = 0;
+-        for (int[] currentRange : displayRange) {
+-            int from = currentRange[0];
+-            int to = currentRange[1];
+-            for (int levelId = from; levelId <= to; levelId++) {
+-                planeLevel.setX(getXFor(num));
+-                planeLevel.setY(getYFor(num));
+-                if (planeLevel.collides(event.getX(), event.getY() + getY(), height)) {
+-                    return levelId;
+-                }
+-                num++;
++    public Level getCollision(MotionEvent event, float height) {
++        for (int i = 0; i < pack.size(); i++) {
++            planeLevel.setX(getXFor(i));
++            planeLevel.setY(getYFor(i));
++            if (planeLevel.collides(event.getX(), event.getY() + getY(), height)) {
++                return pack.getLevel(i);
+             }
+         }
+-        return -1;
++        return null;
+     }
+ }
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/state/GameState.java b/app/src/main/java/com/bytehamster/flowitgame/state/GameState.java
+index 47cc50a..5530202 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/state/GameState.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/state/GameState.java
+@@ -15,21 +15,20 @@ import com.bytehamster.flowitgame.animation.TranslateAnimation;
+ import com.bytehamster.flowitgame.filler.Filler;
+ import com.bytehamster.flowitgame.model.Field;
+ import com.bytehamster.flowitgame.model.Level;
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.model.Modifier;
+ import com.bytehamster.flowitgame.object.LevelDrawer;
+ import com.bytehamster.flowitgame.object.Number;
+ import com.bytehamster.flowitgame.object.ObjectFactory;
+ import com.bytehamster.flowitgame.object.Plane;
+ import com.bytehamster.flowitgame.object.TextureCoordinates;
+-import com.bytehamster.flowitgame.util.PackRanges;
+ 
+ public class GameState extends State {
+     @SuppressLint("StaticFieldLeak")
+     private static GameState instance;
+     private State nextState = this;
+ 
+-    private int level = 0;
+-    private Level levelData = null;
++    private Level level;
+     private float boardStartY = 0;
+     private final LevelDrawer levelDrawer = LevelDrawer.getInstance();
+     private Plane winMessage;
+@@ -173,15 +172,14 @@ public class GameState extends State {
+         rightButtonGlow.stopWhenFinished();
+         won = false;
+         stepsUsed.setValue(0);
+-        if (loadSteps(level) == STEPS_NOT_SOLVED) {
++        if (loadSteps(level.getNumber()) == STEPS_NOT_SOLVED) {
+             stepsBest.setValue(Number.VALUE_NAN);
+         } else {
+-            stepsBest.setValue(loadSteps(level));
++            stepsBest.setValue(loadSteps(level.getNumber()));
+         }
+         AnimationFactory.startScaleHide(stepsImproved, 0);
+         isFilling = false;
+-        levelData = new Level(level, getActivity());
+-        levelDrawer.setLevel(levelData);
++        levelDrawer.setLevel(level);
+ 
+         float remainingSpace = getScreenHeight() - getAdHeight() - topBarHeight - levelDrawer.getHeight();
+         final float horizontalPaddingDelta = levelDrawer.getBoxSize() / 2;
+@@ -227,7 +225,7 @@ public class GameState extends State {
+             outAnimation.start();
+         }
+ 
+-        if (isSolved(level)) {
++        if (isSolved(level.getNumber())) {
+             if (lastLevelState == LastLevelState.NO_LEVEL) {
+                 solved.setScale(1);
+                 AnimationFactory.startMoveYTo(solved, topButtonY);
+@@ -236,9 +234,9 @@ public class GameState extends State {
+             }
+             lastLevelState = LastLevelState.SOLVED;
+         } else {
+-            if (!isSolved(level) && lastLevelState == LastLevelState.NO_LEVEL) {
++            if (!isSolved(level.getNumber()) && lastLevelState == LastLevelState.NO_LEVEL) {
+                 solved.setVisible(false);
+-            } else if (!isSolved(level) && lastLevelState == LastLevelState.SOLVED) {
++            } else if (!isSolved(level.getNumber()) && lastLevelState == LastLevelState.SOLVED) {
+                 hideSolved();
+             }
+             lastLevelState = LastLevelState.NOT_SOLVED;
+@@ -298,25 +296,25 @@ public class GameState extends State {
+ 
+         if (left.collides(event, getScreenHeight())) {
+             playSound(R.raw.click);
+-            if (PackRanges.isFirstInPack(level)) {
++            if (level.getIndexInPack() == 0) {
+                 nextState = LevelSelectState.getInstance();
+             } else {
+-                level = PackRanges.previousLevel(level);
++                level = level.getPack().getLevel(level.getIndexInPack() - 1);
+                 reloadLevel();
+             }
+         } else if (right.collides(event, getScreenHeight())
+                 || winMessage.collides(event, getScreenHeight())) {
+             playSound(R.raw.click);
+-            if (PackRanges.isLastInPack(level)) {
++            if (level.getPack().size() == level.getIndexInPack() + 1) {
+                 nextState = LevelSelectState.getInstance();
+             } else {
+-                level = PackRanges.nextLevel(level);
++                level = level.getPack().getLevel(level.getIndexInPack() + 1);
+                 reloadLevel();
+             }
+         } else if (restart.collides(event, getScreenHeight())) {
+             playSound(R.raw.click);
+             if (BuildConfig.DEBUG_LEVELS) {
+-                makeUnPlayed(level);
++                makeUnPlayed(level.getNumber());
+             }
+             if (stepsUsed.getValue() != 0) {
+                 wiggle();
+@@ -335,8 +333,8 @@ public class GameState extends State {
+     }
+ 
+     private void checkFieldTouched(MotionEvent event) {
+-        for (int row = 0; row < levelData.getHeight(); row++) {
+-            for (int col = 0; col < levelData.getWidth(); col++) {
++        for (int row = 0; row < level.getHeight(); row++) {
++            for (int col = 0; col < level.getWidth(); col++) {
+                 if (event.getY() > boardStartY + row * levelDrawer.getBoxSize()
+                         && event.getY() < boardStartY + (row + 1) * levelDrawer.getBoxSize()
+                         && event.getX() > levelDrawer.getX() + (col + 0.5) * levelDrawer.getBoxSize()
+@@ -349,14 +347,14 @@ public class GameState extends State {
+     }
+ 
+     private void triggerField(final int col, final int row) {
+-        Filler filler = Filler.get(levelData, col, row, this);
++        Filler filler = Filler.get(level, col, row, this);
+         if (filler != null) {
+             stepsUsed.increment();
+             playSound(R.raw.click);
+             isFilling = true;
+-            if (levelData.fieldAt(col, row).getModifier().isRotating()) {
+-                Modifier rotated = levelData.fieldAt(col, row).getModifier().rotate();
+-                levelData.fieldAt(col, row).setModifier(rotated);
++            if (level.fieldAt(col, row).getModifier().isRotating()) {
++                Modifier rotated = level.fieldAt(col, row).getModifier().rotate();
++                level.fieldAt(col, row).setModifier(rotated);
+             }
+             filler.setOnFinished(new Runnable() {
+                 @Override
+@@ -369,15 +367,15 @@ public class GameState extends State {
+         }
+     }
+ 
+-    public void setLevel(int level) {
++    public void setLevel(Level level) {
+         this.level = level;
+     }
+ 
+     private void checkWon() {
+         won = true;
+-        for (int r = 0; r < levelData.getHeight(); r++) {
+-            for (int c = 0; c < levelData.getWidth(); c++) {
+-                Field f = levelData.fieldAt(c, r);
++        for (int r = 0; r < level.getHeight(); r++) {
++            for (int c = 0; c < level.getWidth(); c++) {
++                Field f = level.fieldAt(c, r);
+                 if (Converter.convertColor(f.getModifier()) != null // Is not a color
+                         && f.getColor() != Converter.convertColor(f.getModifier())) {
+                     won = false;
+@@ -387,8 +385,8 @@ public class GameState extends State {
+ 
+         if (won) {
+             playSound(R.raw.won);
+-            makePlayed(level);
+-            saveSteps(level, stepsUsed.getValue());
++            makePlayed(level.getNumber());
++            saveSteps(level.getNumber(), stepsUsed.getValue());
+             lastLevelState = LastLevelState.SOLVED;
+ 
+             float availableSpace = getScreenHeight() - getAdHeight();
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/state/LevelPackSelectState.java b/app/src/main/java/com/bytehamster/flowitgame/state/LevelPackSelectState.java
+index 74d958c..6cc9429 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/state/LevelPackSelectState.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/state/LevelPackSelectState.java
+@@ -8,6 +8,7 @@ import com.bytehamster.flowitgame.R;
+ import com.bytehamster.flowitgame.animation.Animation;
+ import com.bytehamster.flowitgame.animation.AnimationFactory;
+ import com.bytehamster.flowitgame.animation.TranslateAnimation;
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.object.Container;
+ import com.bytehamster.flowitgame.object.Plane;
+ import com.bytehamster.flowitgame.object.TextureCoordinates;
+@@ -93,19 +94,19 @@ public class LevelPackSelectState extends State {
+         logoAnimation.setHideAfter(true);
+         logoAnimation.start();
+ 
+-        if (LevelSelectState.getInstance().getPack() == 1) {
++        if (LevelSelectState.getInstance().getPack() == LevelPack.EASY) {
+             AnimationFactory.startMenuAnimationOutPressed(pack1);
+         } else {
+             AnimationFactory.startMenuAnimationOut(pack1);
+         }
+ 
+-        if (LevelSelectState.getInstance().getPack() == 2) {
++        if (LevelSelectState.getInstance().getPack() == LevelPack.MEDIUM) {
+             AnimationFactory.startMenuAnimationOutPressed(pack2);
+         } else {
+             AnimationFactory.startMenuAnimationOut(pack2);
+         }
+ 
+-        if (LevelSelectState.getInstance().getPack() == 3) {
++        if (LevelSelectState.getInstance().getPack() == LevelPack.HARD) {
+             AnimationFactory.startMenuAnimationOutPressed(pack3);
+         } else {
+             AnimationFactory.startMenuAnimationOut(pack3);
+@@ -129,11 +130,11 @@ public class LevelPackSelectState extends State {
+             pressed = true;
+         } else if (event.getAction() == MotionEvent.ACTION_UP && !scrollHelper.isScrolling() && pressed) {
+             if (pack1.collides(event.getX(), event.getY() + container.getY(), getScreenHeight())) {
+-                openSelectState(1);
++                openSelectState(LevelPack.EASY);
+             } else if (pack2.collides(event.getX(), event.getY() + container.getY(), getScreenHeight())) {
+-                openSelectState(2);
++                openSelectState(LevelPack.MEDIUM);
+             } else if (pack3.collides(event.getX(), event.getY() + container.getY(), getScreenHeight())) {
+-                openSelectState(3);
++                openSelectState(LevelPack.HARD);
+             }
+         } else if (event.getAction() == MotionEvent.ACTION_UP) {
+             pressed = false;
+@@ -141,7 +142,7 @@ public class LevelPackSelectState extends State {
+         scrollHelper.onTouchEvent(event);
+     }
+ 
+-    private void openSelectState(int pack) {
++    private void openSelectState(LevelPack pack) {
+         nextState = LevelSelectState.getInstance();
+         LevelSelectState.getInstance().setPack(pack);
+         playSound(R.raw.click);
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/state/LevelSelectState.java b/app/src/main/java/com/bytehamster/flowitgame/state/LevelSelectState.java
+index c959625..50c8e34 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/state/LevelSelectState.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/state/LevelSelectState.java
+@@ -7,10 +7,10 @@ import com.bytehamster.flowitgame.GLRenderer;
+ import com.bytehamster.flowitgame.R;
+ import com.bytehamster.flowitgame.animation.Animation;
+ import com.bytehamster.flowitgame.animation.TranslateAnimation;
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.object.LevelList;
+ import com.bytehamster.flowitgame.object.Plane;
+ import com.bytehamster.flowitgame.object.TextureCoordinates;
+-import com.bytehamster.flowitgame.util.PackRanges;
+ import com.bytehamster.flowitgame.util.ScrollHelper;
+ 
+ public class LevelSelectState extends State {
+@@ -18,7 +18,7 @@ public class LevelSelectState extends State {
+     private static LevelSelectState instance;
+     private State nextState = this;
+ 
+-    private int pack = 1;
++    private LevelPack pack;
+     private Plane selectLevelText;
+     private LevelList levelList;
+     private ScrollHelper scrollHelper;
+@@ -61,18 +61,12 @@ public class LevelSelectState extends State {
+         logoAnimation.setTo(0, getScreenHeight() - selectLevelText.getHeight());
+         logoAnimation.start();
+ 
+-        if (pack == 1) {
+-            levelList.setDisplayRange(PackRanges.RANGE_1);
+-        } else if (pack == 2) {
+-            levelList.setDisplayRange(PackRanges.RANGE_2);
+-        } else if (pack == 3) {
+-            levelList.setDisplayRange(PackRanges.RANGE_3);
+-        }
++        levelList.setPack(pack);
+         scrollHelper.setMaxima(0, getScreenHeight() - selectLevelText.getHeight(),
+                 0, getAdHeight() + levelList.getHeight());
+ 
+         float levelListPos = getScreenHeight() - selectLevelText.getHeight();
+-        float lastScrollPos = getPreferences().getFloat("scroll_state_" + pack, levelListPos);
++        float lastScrollPos = getPreferences().getFloat("scroll_state_" + pack.id(), levelListPos);
+         TranslateAnimation listAnimation = new TranslateAnimation(levelList, Animation.DURATION_LONG, Animation.DURATION_SHORT);
+         listAnimation.setTo(0, scrollHelper.clampY(lastScrollPos));
+         listAnimation.start();
+@@ -115,16 +109,16 @@ public class LevelSelectState extends State {
+             }
+         } else if (event.getAction() == MotionEvent.ACTION_UP) {
+             pressed = false;
+-            getPreferences().edit().putFloat("scroll_state_" + pack, levelList.getY()).apply();
++            getPreferences().edit().putFloat("scroll_state_" + pack.id(), levelList.getY()).apply();
+         }
+         scrollHelper.onTouchEvent(event);
+     }
+ 
+-    public int getPack() {
++    public LevelPack getPack() {
+         return pack;
+     }
+ 
+-    public void setPack(int pack) {
++    public void setPack(LevelPack pack) {
+         this.pack = pack;
+     }
+ }
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/state/State.java b/app/src/main/java/com/bytehamster/flowitgame/state/State.java
+index f884f24..d549557 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/state/State.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/state/State.java
+@@ -8,7 +8,7 @@ import android.view.MotionEvent;
+ import com.bytehamster.flowitgame.BuildConfig;
+ import com.bytehamster.flowitgame.GLRenderer;
+ import com.bytehamster.flowitgame.SoundPool;
+-import com.bytehamster.flowitgame.util.PackRanges;
++import com.bytehamster.flowitgame.model.Level;
+ 
+ abstract public class State {
+     static final int STEPS_NOT_SOLVED = 999;
+@@ -79,15 +79,14 @@ abstract public class State {
+         return prefs;
+     }
+ 
+-    public boolean isPlayable(int level) {
+-        if (PackRanges.isFirstInPack(level)) {
+-            return true;
+-        }
++    public boolean isPlayable(Level level) {
+         for (int i = 0; i <= UNLOCK_NEXT_LEVELS; i++) {
+-            if (isSolved(level)) {
++            if (level.getIndexInPack() == 0) {
++                return true;
++            } else if (isSolved(level.getNumber())) {
+                 return true;
+             }
+-            level = PackRanges.previousLevel(level);
++            level = level.getPack().getLevel(level.getIndexInPack() - 1);
+         }
+         return false;
+     }
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/state/TutorialState.java b/app/src/main/java/com/bytehamster/flowitgame/state/TutorialState.java
+index fa0a8db..ad36b46 100644
+--- a/app/src/main/java/com/bytehamster/flowitgame/state/TutorialState.java
++++ b/app/src/main/java/com/bytehamster/flowitgame/state/TutorialState.java
+@@ -8,6 +8,7 @@ import com.bytehamster.flowitgame.R;
+ import com.bytehamster.flowitgame.animation.Animation;
+ import com.bytehamster.flowitgame.animation.AnimationFactory;
+ import com.bytehamster.flowitgame.animation.TranslateAnimation;
++import com.bytehamster.flowitgame.model.LevelPack;
+ import com.bytehamster.flowitgame.object.Plane;
+ import com.bytehamster.flowitgame.object.TextureCoordinates;
+ 
+@@ -119,8 +120,8 @@ public class TutorialState extends State {
+             } else {
+                 screenNumber = 3;
+                 playSound(R.raw.click);
+-                LevelSelectState.getInstance().setPack(1);
+-                GameState.getInstance().setLevel(0);
++                LevelSelectState.getInstance().setPack(LevelPack.EASY);
++                GameState.getInstance().setLevel(LevelPack.EASY.getLevel(0));
+                 nextState = GameState.getInstance();
+             }
+         }
+diff --git a/app/src/main/java/com/bytehamster/flowitgame/util/PackRanges.java b/app/src/main/java/com/bytehamster/flowitgame/util/PackRanges.java
+deleted file mode 100644
+index b71dba1..0000000
+--- a/app/src/main/java/com/bytehamster/flowitgame/util/PackRanges.java
++++ /dev/null
+@@ -1,118 +0,0 @@
+-package com.bytehamster.flowitgame.util;
+-
+-import java.util.ArrayList;
+-
+-/**
+- * RANGE_1: Easy - No need to take away blocks with a modifier that did not create the block
+- * RANGE_2: Medium
+- * RANGE_3: Hard - I found it hard to solve
+- */
+-public class PackRanges {
+-    private PackRanges() {
+-
+-    }
+-
+-    public static final int[][] RANGE_1 = new int[][]{
+-            new int[]{0, 13},
+-            new int[]{15, 16},
+-            new int[]{19, 19},
+-            new int[]{25, 29},
+-            new int[]{31, 31},
+-            new int[]{33, 33},
+-            new int[]{35, 36},
+-            new int[]{50, 53},
+-            new int[]{75, 75},
+-            new int[]{84, 84},
+-            new int[]{100, 100},
+-            new int[]{108, 125},
+-            new int[]{128, 128},
+-    };
+-    public static final int[][] RANGE_2 = new int[][]{
+-            new int[]{76, 76},
+-            new int[]{14, 14},
+-            new int[]{17, 18},
+-            new int[]{20, 24},
+-            new int[]{30, 30},
+-            new int[]{32, 32},
+-            new int[]{34, 34},
+-            new int[]{37, 42},
+-            new int[]{44, 49},
+-            new int[]{54, 54},
+-            new int[]{56, 62},
+-            new int[]{66, 67},
+-            new int[]{77, 82},
+-            new int[]{85, 85},
+-            new int[]{87, 87},
+-            new int[]{89, 89},
+-            new int[]{93, 93},
+-            new int[]{96, 97},
+-            new int[]{103, 107},
+-            new int[]{126, 127},
+-    };
+-    public static final int[][] RANGE_3 = new int[][]{
+-            new int[]{43, 43},
+-            new int[]{55, 55},
+-            new int[]{63, 65},
+-            new int[]{68, 74},
+-            new int[]{83, 83},
+-            new int[]{86, 86},
+-            new int[]{88, 88},
+-            new int[]{90, 92},
+-            new int[]{94, 95},
+-            new int[]{98, 99},
+-            new int[]{101, 102}
+-    };
+-
+-
+-    private static final ArrayList<int[]> ANOMALIES = calculateAnomalies();
+-
+-    private static ArrayList<int[]> calculateAnomalies() {
+-        ArrayList<int[]> result = new ArrayList<>();
+-        result.addAll(calculateAnomalies(RANGE_1));
+-        result.addAll(calculateAnomalies(RANGE_2));
+-        result.addAll(calculateAnomalies(RANGE_3));
+-        return result;
+-    }
+-
+-    private static ArrayList<int[]> calculateAnomalies(int[][] pack) {
+-        ArrayList<int[]> result = new ArrayList<>();
+-        for (int i = 0; i < pack.length - 1; i++) {
+-            result.add(new int[]{pack[i][1], pack[i+1][0]});
+-        }
+-        return result;
+-    }
+-
+-    private static int firstOf(int [][] pack) {
+-        return pack[0][0];
+-    }
+-
+-    public static boolean isFirstInPack(int level) {
+-        return level == firstOf(RANGE_1) || level == firstOf(RANGE_2) || level == firstOf(RANGE_3);
+-    }
+-
+-    private static int lastOf(int [][] pack) {
+-        return pack[pack.length - 1][1];
+-    }
+-
+-    public static boolean isLastInPack(int level) {
+-        return level == lastOf(RANGE_1) || level == lastOf(RANGE_2) || level == lastOf(RANGE_3);
+-    }
+-
+-    public static int previousLevel(int level) {
+-        for (int[] anomaly : ANOMALIES) {
+-            if (anomaly[1] == level) {
+-                return anomaly[0];
+-            }
+-        }
+-        return level - 1;
+-    }
+-
+-    public static int nextLevel(int level) {
+-        for (int[] anomaly : ANOMALIES) {
+-            if (anomaly[0] == level) {
+-                return anomaly[1];
+-            }
+-        }
+-        return level + 1;
+-    }
+-}

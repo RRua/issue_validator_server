@@ -1,0 +1,148 @@
+diff --git a/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmClockService.java b/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmClockService.java
+index a8a7ffc..6517e0b 100644
+--- a/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmClockService.java
++++ b/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmClockService.java
+@@ -18,6 +18,7 @@ public class AlarmClockService extends Service {
+ 
+   private Timer timerThread;
+   private Handler uiHandler;
++  private PowerManager.WakeLock wakeLock;
+ 
+   @Override
+   public void onStart(Intent intent, int startId) {
+@@ -32,8 +33,14 @@ public class AlarmClockService extends Service {
+     // to ensure this?
+     uiHandler = new Handler();
+ 
+-    final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
++    PowerManager powerManager =
++      (PowerManager) getSystemService(Context.POWER_SERVICE);
++    wakeLock = powerManager.newWakeLock(
++        PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
++        "Alarm Notification Wake Lock");
++    wakeLock.setReferenceCounted(false);
+ 
++    final NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+     // TODO(cgallek): add a better notification icon.
+     Notification notification = new Notification(R.drawable.icon, null, 0);
+     notification.flags |= Notification.FLAG_ONGOING_EVENT;
+@@ -110,6 +117,7 @@ public class AlarmClockService extends Service {
+   }
+ 
+   public boolean acknowledgeAlarm(int alarmId) {
++    wakeLock.release();
+     AlarmClockTimerTask task = taskList.remove(alarmId);
+     if (task != null) {
+       task.cancel();
+@@ -132,23 +140,8 @@ public class AlarmClockService extends Service {
+     notifyIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+     notifyIntent.putExtra("task_id", alarmId);
+ 
+-    // TODO(cgallek) Currently, both this service and the Notification
+-    // Activity manage power settings. It might make sense to move all
+-    // power management into the service. This would require a callback
+-    // from the Notification application. I'm not sure how to get a
+-    // response from an activity started from a service...
+-    // I think there also might be a race condition between the
+-    // startActivity call and the wake lock release call below (ie if
+-    // the lock is released before the activity actually starts). Moving
+-    // all locking to this service would also fix that problem.
+-    PowerManager manager = (PowerManager) getSystemService(Context.POWER_SERVICE);
+-    PowerManager.WakeLock wakeLock = manager.newWakeLock(
+-        PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+-        "Alarm Service CPU wake lock");
+     wakeLock.acquire();
+ 
+     startActivity(notifyIntent);
+-
+-    wakeLock.release();
+   }
+ }
+diff --git a/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmNotificationActivity.java b/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmNotificationActivity.java
+index 578a9b6..2f44c67 100644
+--- a/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmNotificationActivity.java
++++ b/android/alarmclock/src/com/angrydoughnuts/android/alarmclock/AlarmNotificationActivity.java
+@@ -5,14 +5,13 @@ import android.app.KeyguardManager;
+ import android.app.KeyguardManager.KeyguardLock;
+ import android.content.Context;
+ import android.os.Bundle;
+-import android.os.PowerManager;
+ import android.view.View;
+ import android.widget.Button;
+ 
+ public class AlarmNotificationActivity extends Activity {
+ 
++  private int alarmId;
+   private AlarmClockServiceBinder service;
+-  private PowerManager.WakeLock wakeLock;
+   private KeyguardLock screenLock;
+ 
+   // TODO(cgallek): This doesn't seem to handle the case when a second alarm
+@@ -21,33 +20,20 @@ public class AlarmNotificationActivity extends Activity {
+   protected void onCreate(Bundle savedInstanceState) {
+     super.onCreate(savedInstanceState);
+     setContentView(R.layout.notification);
++    Bundle extras = getIntent().getExtras();
++    this.alarmId = extras.getInt("task_id");
+ 
+     service = AlarmClockServiceBinder.newBinder(getApplicationContext());
+ 
+-    PowerManager powerManager =
+-      (PowerManager) getSystemService(Context.POWER_SERVICE);
+-    wakeLock = powerManager.newWakeLock(
+-        PowerManager.SCREEN_DIM_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+-        "Alarm Notification Wake Lock");
+-    wakeLock.setReferenceCounted(false);
+-    wakeLock.acquire();
+-
+     KeyguardManager screenLockManager =
+       (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+     screenLock = screenLockManager.newKeyguardLock(
+         "AlarmNotification screen lock");
+-    screenLock.disableKeyguard();
+-    // TODO(cgallek): Probably should move these lock aquirings to OnResume
+-    // or OnStart or something...
+ 
+     Button okButton = (Button) findViewById(R.id.notify_ok);
+-
+     okButton.setOnClickListener(new View.OnClickListener() {
+       @Override
+       public void onClick(View v) {
+-        Bundle extras = getIntent().getExtras();
+-        int id = extras.getInt("task_id");
+-        service.acknowledgeAlarm(id);
+         finish();
+       }
+     });
+@@ -57,25 +43,20 @@ public class AlarmNotificationActivity extends Activity {
+   protected void onResume() {
+     super.onResume();
+     service.bind();
++    screenLock.disableKeyguard();
+   }
+ 
+   @Override
+   protected void onPause() {
+     super.onPause();
++    screenLock.reenableKeyguard();
++    // TODO(cgallek): It's important to acknowledge the alarm in here some way
++    // so that the power locks are released by the service when this dialog
++    // goes away.
++    service.acknowledgeAlarm(alarmId);
+     service.unbind();
+   }
+ 
+   // TODO(cgallek): Clicking the power button twice while this activity is
+   // in the foreground seems to bypass the keyguard...
+-
+-  // TODO(cgallek):  Currently, this activity only releases its locks when
+-  // finish() is called.  The activity can be hidden using the back or home
+-  // (and probably other) buttons, though.  Figure out how to handle this.
+-  @Override
+-  protected void onDestroy() {
+-    super.onDestroy();
+-    screenLock.reenableKeyguard();
+-    wakeLock.release();
+-  }
+-
+ }

@@ -1,0 +1,461 @@
+diff --git a/Android/app/src/main/java/app/intra/net/doh/Probe.java b/Android/app/src/main/java/app/intra/net/doh/Probe.java
+index a9098d3..d225587 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/Probe.java
++++ b/Android/app/src/main/java/app/intra/net/doh/Probe.java
+@@ -15,18 +15,12 @@ limitations under the License.
+ */
+ package app.intra.net.doh;
+ 
+-import androidx.annotation.NonNull;
+-import app.intra.net.dns.DnsUdpQuery;
+-import java.io.IOException;
+-import okhttp3.Call;
+-import okhttp3.Response;
+-
+ /**
+  * Implements an asynchronous check to determine whether a DOH server is working.  Each instance can
+  * only be used once.
+  */
+-class Probe extends Thread {
+-  private static final byte[] QUERY_DATA = {
++public abstract class Probe extends Thread {
++  protected static final byte[] QUERY_DATA = {
+       0, 0,  // [0-1]   query ID
+       1, 0,  // [2-3]   flags, RD=1
+       0, 1,  // [4-5]   QDCOUNT (number of queries) = 1
+@@ -41,64 +35,30 @@ class Probe extends Thread {
+       0, 1   // QCLASS = IN (Internet)
+   };
+ 
+-  private static final DnsUdpQuery QUERY = DnsUdpQuery.fromUdpBody(QUERY_DATA);
+-
+   enum Status { NEW, RUNNING, SUCCEEDED, FAILED }
+-  private Status status = Status.NEW;
++  protected Status status = Status.NEW;
+ 
+-  interface Callback {
++  public interface Callback {
+     void onSuccess();
+     void onFailure();
+   }
++  protected Callback callback;
+ 
+-  private final ServerConnectionFactory factory;
+-  private final String url;
+-  private final Callback callback;
+-
+-  /**
+-   * Creates a Probe.  Call start() to run the probe asynchronously.
+-   * @param factory This factory is used exactly once, to connect to the specified URL.
+-   * @param url The URL of the DOH server.
+-   * @param callback A callback indicating whether the connection succeeded or failed.  Runs on an
+-   *   arbitrary thread.
+-   */
+-  Probe(ServerConnectionFactory factory, String url, Callback callback) {
+-    this.factory = factory;
+-    this.url = url;
+-    this.callback = callback;
+-  }
+-
+-  synchronized Status getStatus() {
++  public synchronized Status getStatus() {
+     return status;
+   }
+ 
+-  private synchronized void setStatus(Status s) {
++  protected synchronized void setStatus(Status s) {
+     status = s;
+   }
+ 
+-  private class QueryCallback implements okhttp3.Callback {
+-    @Override
+-    public void onFailure(@NonNull Call call, @NonNull IOException e) {
+-      setStatus(Status.FAILED);
+-      callback.onFailure();
+-    }
+-
+-    @Override
+-    public void onResponse(@NonNull Call call, @NonNull Response response) {
+-      setStatus(Status.SUCCEEDED);
+-      callback.onSuccess();
+-    }
++  protected void succeed() {
++    setStatus(Status.SUCCEEDED);
++    callback.onSuccess();
+   }
+ 
+-  @Override
+-  public void run() {
+-    setStatus(Status.RUNNING);
+-    ServerConnection conn = factory.get(url);
+-    if (isInterrupted() || conn == null) {
+-      setStatus(Status.FAILED);
+-      callback.onFailure();
+-      return;
+-    }
+-    conn.performDnsRequest(QUERY, QUERY_DATA, new QueryCallback());
++  protected void fail() {
++    setStatus(Status.FAILED);
++    callback.onFailure();
+   }
+ }
+diff --git a/Android/app/src/main/java/app/intra/net/doh/Race.java b/Android/app/src/main/java/app/intra/net/doh/Race.java
+index 8a76cee..dd2359a 100644
+--- a/Android/app/src/main/java/app/intra/net/doh/Race.java
++++ b/Android/app/src/main/java/app/intra/net/doh/Race.java
+@@ -15,7 +15,10 @@ limitations under the License.
+ */
+ package app.intra.net.doh;
+ 
++import android.content.Context;
+ import app.intra.net.doh.Probe.Status;
++import app.intra.net.go.GoProbe;
++import app.intra.sys.firebase.RemoteConfig;
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+@@ -33,7 +36,9 @@ public class Race {
+   }
+ 
+   private final List<Probe> probes;
+-  private final Listener listener;
++  private Race(List<Probe> probes) {
++    this.probes = probes;
++  }
+ 
+   /**
+    * Creates a race between different servers.  To run the race, call start().
+@@ -41,30 +46,59 @@ public class Race {
+    * @param urls The URLs for all the DOH servers to compare.
+    * @param listener Called once on an arbitrary thread with the result of the race.
+    */
+-  public Race(ServerConnectionFactory factory, String[] urls, Listener listener) {
+-    probes = new ArrayList<>(urls.length);
++  static Race serverConnectionRace(ServerConnectionFactory factory,
++      String[] urls, Listener listener) {
++    List<Probe> probes = new ArrayList<>(urls.length);
++    for (int i = 0; i < urls.length; ++i) {
++      probes.add(new ServerConnectionProbe(factory, urls[i], new Callback(i, probes, listener)));
++    }
++    return new Race(probes);
++  }
++
++  /**
++   * Creates a race between different servers using Go.  To run the race, call start().
++   * @param context Used to read the IP addresses of the servers from storage.
++   * @param urls The URLs for all the DOH servers to compare.
++   * @param listener Called once on an arbitrary thread with the result of the race.
++   */
++  private static Race goRace(Context context, String[] urls, Listener listener) {
++    List<Probe> probes = new ArrayList<>(urls.length);
+     for (int i = 0; i < urls.length; ++i) {
+-      probes.add(new Probe(factory, urls[i], new Callback(i)));
++      probes.add(new GoProbe(context, urls[i], new Callback(i, probes, listener)));
+     }
+-    this.listener = listener;
++    return new Race(probes);
+   }
+ 
+-  public synchronized void start() {
+-    for (Probe task : probes) {
+-      task.start();
++  public static Race get(Context context, String[] urls, Listener listener) {
++    if (RemoteConfig.getUseGoDoh()) {
++      return goRace(context, urls, listener);
+     }
++    return serverConnectionRace(new ServerConnectionFactory(context), urls, listener);
+   }
+ 
+-  private class Callback implements Probe.Callback {
++  public void start() {
++    synchronized (probes) {
++      for (Probe task : probes) {
++        task.start();
++      }
++    }
++  }
++
++  private static class Callback implements ServerConnectionProbe.Callback {
+     private final int index;
++    private final List<Probe> probes;
++    private final Listener listener;
++
+ 
+-    private Callback(int index) {
++    private Callback(int index, List<Probe> probes, Listener listener) {
+       this.index = index;
++      this.probes = probes;
++      this.listener = listener;
+     }
+ 
+     @Override
+     public void onFailure() {
+-      synchronized(Race.this) {
++      synchronized(probes) {
+         if (probes.isEmpty()) {
+           return;
+         }
+@@ -81,7 +115,7 @@ public class Race {
+ 
+     @Override
+     public void onSuccess() {
+-      synchronized (Race.this) {
++      synchronized (probes) {
+         if (probes.isEmpty()) {
+           return;
+         }
+diff --git a/Android/app/src/main/java/app/intra/net/doh/ServerConnectionProbe.java b/Android/app/src/main/java/app/intra/net/doh/ServerConnectionProbe.java
+new file mode 100644
+index 0000000..a7357f3
+--- /dev/null
++++ b/Android/app/src/main/java/app/intra/net/doh/ServerConnectionProbe.java
+@@ -0,0 +1,69 @@
++/*
++Copyright 2019 Jigsaw Operations LLC
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++https://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++package app.intra.net.doh;
++
++import androidx.annotation.NonNull;
++import app.intra.net.dns.DnsUdpQuery;
++import java.io.IOException;
++import okhttp3.Call;
++import okhttp3.Response;
++
++/**
++ * Implements a Probe using the OkHttp-based DoH client.
++ */
++class ServerConnectionProbe extends Probe {
++
++  private static final DnsUdpQuery QUERY = DnsUdpQuery.fromUdpBody(QUERY_DATA);
++
++  private final ServerConnectionFactory factory;
++  private final String url;
++
++  /**
++   * Creates a Probe.  Call start() to run the probe asynchronously.
++   * @param factory This factory is used exactly once, to connect to the specified URL.
++   * @param url The URL of the DOH server.
++   * @param callback A callback indicating whether the connection succeeded or failed.  Runs on an
++   *   arbitrary thread.
++   */
++  ServerConnectionProbe(ServerConnectionFactory factory, String url, Callback callback) {
++    this.factory = factory;
++    this.url = url;
++    this.callback = callback;
++  }
++
++  private class QueryCallback implements okhttp3.Callback {
++    @Override
++    public void onFailure(@NonNull Call call, @NonNull IOException e) {
++      fail();
++    }
++
++    @Override
++    public void onResponse(@NonNull Call call, @NonNull Response response) {
++      succeed();
++    }
++  }
++
++  @Override
++  public void run() {
++    setStatus(Status.RUNNING);
++    ServerConnection conn = factory.get(url);
++    if (Thread.interrupted() || conn == null) {
++      fail();
++      return;
++    }
++    conn.performDnsRequest(QUERY, QUERY_DATA, new QueryCallback());
++  }
++}
+diff --git a/Android/app/src/main/java/app/intra/net/go/GoProbe.java b/Android/app/src/main/java/app/intra/net/go/GoProbe.java
+new file mode 100644
+index 0000000..bb7ab39
+--- /dev/null
++++ b/Android/app/src/main/java/app/intra/net/go/GoProbe.java
+@@ -0,0 +1,60 @@
++/*
++Copyright 2019 Jigsaw Operations LLC
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++https://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++package app.intra.net.go;
++
++import android.content.Context;
++import app.intra.net.doh.Probe;
++import app.intra.net.doh.ServerConnectionFactory;
++import doh.Transport;
++import tun2socks.Tun2socks;
++
++/**
++ * Implements a Probe using the Go-based DoH client.
++ */
++public class GoProbe extends Probe {
++  private final Context context;
++  private final String url;
++
++  public GoProbe(Context context, String url, Callback callback) {
++    this.context = context;
++    this.callback = callback;
++    this.url = url;
++  }
++
++  @Override
++  public void run() {
++    String dohIPs = ServerConnectionFactory.getIpString(context, url);
++    if (isInterrupted()) {
++      fail();
++      return;
++    }
++    try {
++      Transport transport = Tun2socks.newDoHTransport(url, dohIPs, null);
++      if (transport == null || isInterrupted()) {
++        fail();
++        return;
++      }
++      byte[] response = transport.query(QUERY_DATA);
++      if (response != null && response.length > 0) {
++        succeed();
++        return;
++      }
++      fail();
++    } catch (Exception e) {
++      fail();
++    }
++  }
++}
+diff --git a/Android/app/src/main/java/app/intra/ui/MainActivity.java b/Android/app/src/main/java/app/intra/ui/MainActivity.java
+index a5e743a..73ff1d0 100644
+--- a/Android/app/src/main/java/app/intra/ui/MainActivity.java
++++ b/Android/app/src/main/java/app/intra/ui/MainActivity.java
+@@ -307,7 +307,7 @@ public class MainActivity extends AppCompatActivity
+       String[] urls = getResources().getStringArray(R.array.urls);
+       AnalyticsWrapper.get(this).logTryAllRequested();
+       // The result needs to be posted to the UI thread before we can make UI changes.
+-      new Race(new ServerConnectionFactory(this), urls, (int index) -> view.post(() -> {
++      Race.get(this, urls, (int index) -> view.post(() -> {
+         if (index >= 0) {
+           // By the time this callback runs, MainActivity may have been stopped.  In this situation
+           // showing a DialogFragment directly causes an IllegalStateException.  Using
+diff --git a/Android/app/src/test/java/app/intra/net/doh/RaceTest.java b/Android/app/src/test/java/app/intra/net/doh/RaceTest.java
+index 093fbbe..24fcebe 100644
+--- a/Android/app/src/test/java/app/intra/net/doh/RaceTest.java
++++ b/Android/app/src/test/java/app/intra/net/doh/RaceTest.java
+@@ -74,7 +74,7 @@ public class RaceTest {
+           callbackCaptor.capture());
+     }
+     Semaphore done = new Semaphore(0);
+-    Race race = new Race(mockFactory, urls, (int index) -> {
++    Race race = Race.serverConnectionRace(mockFactory, urls, (int index) -> {
+       assertTrue(index >= 0);
+       assertTrue(index < N);
+       done.release();
+@@ -97,7 +97,7 @@ public class RaceTest {
+       when(mockFactory.get(urls[i])).thenReturn(null);
+     }
+     Semaphore done = new Semaphore(0);
+-    Race race = new Race(mockFactory, urls, (int index) -> {
++    Race race = Race.serverConnectionRace(mockFactory, urls, (int index) -> {
+       assertEquals(-1, index);
+       done.release();
+     });
+@@ -129,7 +129,7 @@ public class RaceTest {
+       }
+     }
+     Semaphore done = new Semaphore(0);
+-    Race race = new Race(mockFactory, urls, (int index) -> {
++    Race race = Race.serverConnectionRace(mockFactory, urls, (int index) -> {
+       assertTrue(index >= 0);
+       assertTrue(index < N);
+       // Only the even-numbered servers succeeded.
+diff --git a/Android/app/src/test/java/app/intra/net/doh/ProbeTest.java b/Android/app/src/test/java/app/intra/net/doh/ServerConnectionProbeTest.java
+similarity index 89%
+rename from Android/app/src/test/java/app/intra/net/doh/ProbeTest.java
+rename to Android/app/src/test/java/app/intra/net/doh/ServerConnectionProbeTest.java
+index 33cf8d5..66242da 100644
+--- a/Android/app/src/test/java/app/intra/net/doh/ProbeTest.java
++++ b/Android/app/src/test/java/app/intra/net/doh/ServerConnectionProbeTest.java
+@@ -32,7 +32,7 @@ import org.mockito.Captor;
+ import org.mockito.MockitoAnnotations;
+ import org.mockito.invocation.InvocationOnMock;
+ 
+-public class ProbeTest {
++public class ServerConnectionProbeTest {
+   private static final String URL = "foo";
+   private ServerConnectionFactory mockFactory;
+   private Semaphore done = new Semaphore(0);
+@@ -79,7 +79,7 @@ public class ProbeTest {
+         dataCaptor.capture(),
+         callbackCaptor.capture());
+ 
+-    Probe.Callback callback = new Probe.Callback() {
++    ServerConnectionProbe.Callback callback = new ServerConnectionProbe.Callback() {
+       @Override
+       public void onSuccess() {
+         done.release();
+@@ -91,7 +91,7 @@ public class ProbeTest {
+         done.release();
+       }
+     };
+-    Probe probe = new Probe(mockFactory, URL, callback);
++    ServerConnectionProbe probe = new ServerConnectionProbe(mockFactory, URL, callback);
+     assertEquals(Status.NEW, probe.getStatus());
+     probe.start();
+     // Wait for call to ServerConnectionFactory.get()
+@@ -125,7 +125,7 @@ public class ProbeTest {
+         dataCaptor.capture(),
+         callbackCaptor.capture());
+ 
+-    Probe.Callback callback = new Probe.Callback() {
++    ServerConnectionProbe.Callback callback = new ServerConnectionProbe.Callback() {
+       @Override
+       public void onSuccess() {
+         fail();
+@@ -137,7 +137,7 @@ public class ProbeTest {
+         done.release();
+       }
+     };
+-    Probe probe = new Probe(mockFactory, URL, callback);
++    ServerConnectionProbe probe = new ServerConnectionProbe(mockFactory, URL, callback);
+     assertEquals(Status.NEW, probe.getStatus());
+     probe.start();
+     // Wait for call to ServerConnectionFactory.get()
+@@ -161,7 +161,7 @@ public class ProbeTest {
+       return null;  // Indicates bootstrap failure.
+     });
+ 
+-    Probe.Callback callback = new Probe.Callback() {
++    ServerConnectionProbe.Callback callback = new ServerConnectionProbe.Callback() {
+       @Override
+       public void onSuccess() {
+         fail();
+@@ -173,7 +173,7 @@ public class ProbeTest {
+         done.release();
+       }
+     };
+-    Probe probe = new Probe(mockFactory, URL, callback);
++    ServerConnectionProbe probe = new ServerConnectionProbe(mockFactory, URL, callback);
+     assertEquals(Status.NEW, probe.getStatus());
+     probe.start();
+     // Wait for failure callback.

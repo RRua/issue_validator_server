@@ -1,0 +1,317 @@
+diff --git a/src/main/java/com/better/alarm/background/VibrationService.java b/src/main/java/com/better/alarm/background/VibrationService.java
+deleted file mode 100644
+index 394cdc50..00000000
+--- a/src/main/java/com/better/alarm/background/VibrationService.java
++++ /dev/null
+@@ -1,168 +0,0 @@
+-package com.better.alarm.background;
+-
+-import android.app.Service;
+-import android.content.BroadcastReceiver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.SharedPreferences;
+-import android.os.IBinder;
+-import android.os.PowerManager;
+-import android.os.PowerManager.WakeLock;
+-import android.os.Vibrator;
+-import android.preference.PreferenceManager;
+-import android.telephony.PhoneStateListener;
+-import android.telephony.TelephonyManager;
+-
+-import com.better.alarm.AlarmApplication;
+-import com.better.alarm.interfaces.Intents;
+-import com.better.alarm.logger.Logger;
+-import com.better.alarm.presenter.SettingsActivity;
+-import com.f2prateek.rx.preferences2.RxSharedPreferences;
+-
+-import java.util.concurrent.TimeUnit;
+-
+-import io.reactivex.Observable;
+-import io.reactivex.android.schedulers.AndroidSchedulers;
+-import io.reactivex.annotations.NonNull;
+-import io.reactivex.disposables.Disposable;
+-import io.reactivex.disposables.Disposables;
+-import io.reactivex.functions.Consumer;
+-import io.reactivex.functions.Function4;
+-import io.reactivex.subjects.BehaviorSubject;
+-
+-public class VibrationService extends Service {
+-    private static final long[] sVibratePattern = new long[]{500, 500};
+-    private Vibrator mVibrator;
+-    private Logger log;
+-    private PowerManager pm;
+-    private WakeLock wakeLock;
+-    private SharedPreferences sp;
+-
+-    //isEnabled && !inCall && !isMuted && isStarted
+-    private final BehaviorSubject<Boolean> inCall = BehaviorSubject.createDefault(false);
+-    private final BehaviorSubject<Boolean> muted = BehaviorSubject.createDefault(false);
+-    private Disposable subscription = Disposables.disposed();
+-
+-    /**
+-     * Dispatches intents to the KlaxonService
+-     */
+-    public static class Receiver extends BroadcastReceiver {
+-        @Override
+-        public void onReceive(final Context context, final Intent intent) {
+-            intent.setClass(context, VibrationService.class);
+-            AlarmApplication.wakeLocks().acquirePartialWakeLock(intent, "ForVibrationService");
+-            context.startService(intent);
+-        }
+-    }
+-
+-    @Override
+-    public void onCreate() {
+-        log = Logger.getDefaultLogger();
+-        pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VibrationService");
+-        wakeLock.acquire();
+-        mVibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+-        sp = PreferenceManager.getDefaultSharedPreferences(this);
+-        ((TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE)).listen(new PhoneStateListener() {
+-            @Override
+-            public void onCallStateChanged(int state, String incomingNumber) {
+-                inCall.onNext(state != TelephonyManager.CALL_STATE_IDLE);
+-            }
+-        }, PhoneStateListener.LISTEN_CALL_STATE);
+-    }
+-
+-    @Override
+-    public void onDestroy() {
+-        subscription.dispose();
+-        log.d("Service destroyed");
+-        wakeLock.release();
+-    }
+-
+-    @Override
+-    public int onStartCommand(Intent intent, int flags, int startId) {
+-        if (intent != null) {
+-            AlarmApplication.wakeLocks().releasePartialWakeLock(intent);
+-        }
+-        try {
+-            String action = intent.getAction();
+-            if (action.equals(Intents.ALARM_ALERT_ACTION)) {
+-                onAlert();
+-                return START_STICKY;
+-
+-            } else if (action.equals(Intents.ALARM_SNOOZE_ACTION)) {
+-                stopAndCleanup();
+-                return START_NOT_STICKY;
+-
+-            } else if (action.equals(Intents.ALARM_DISMISS_ACTION)) {
+-                stopAndCleanup();
+-                return START_NOT_STICKY;
+-
+-            } else if (action.equals(Intents.ACTION_SOUND_EXPIRED)) {
+-                stopAndCleanup();
+-                return START_NOT_STICKY;
+-
+-            } else if (action.equals(Intents.ACTION_MUTE)) {
+-                muted.onNext(true);
+-                return START_STICKY;
+-
+-            } else if (action.equals(Intents.ACTION_DEMUTE)) {
+-                muted.onNext(false);
+-                return START_STICKY;
+-
+-            } else {
+-                log.e("unexpected intent " + intent.getAction());
+-                stopAndCleanup();
+-                return START_NOT_STICKY;
+-            }
+-        } catch (Exception e) {
+-            log.e("Something went wrong" + e.getMessage());
+-            stopAndCleanup();
+-            return START_NOT_STICKY;
+-        }
+-    }
+-
+-    private void onAlert() {
+-        muted.onNext(false);
+-        String asString = sp.getString(SettingsActivity.KEY_FADE_IN_TIME_SEC, "30");
+-        int time = Integer.parseInt(asString);
+-
+-        Observable<Boolean> preference = RxSharedPreferences.create(sp).getBoolean("vibrate").asObservable();
+-        Observable<Boolean> timer = Observable
+-                .just(true)
+-                .delay(time, TimeUnit.SECONDS, AndroidSchedulers.mainThread())
+-                .startWith(false);
+-
+-        subscription = Observable
+-                .combineLatest(preference, inCall, muted, timer, new Function4<Boolean, Boolean, Boolean, Boolean, Boolean>() {
+-                    @Override
+-                    public Boolean apply(Boolean isEnabled, Boolean inCall, Boolean isMuted, Boolean timerStarted) {
+-                        return isEnabled && !inCall && !isMuted && timerStarted;
+-                    }
+-                })
+-                .distinctUntilChanged()
+-                .subscribe(new Consumer<Boolean>() {
+-                    @Override
+-                    public void accept(@NonNull Boolean vibrate) throws Exception {
+-                        if (vibrate) {
+-                            log.d("Starting vibration");
+-                            mVibrator.vibrate(sVibratePattern, 0);
+-                        } else {
+-                            log.d("Canceling vibration");
+-                            mVibrator.cancel();
+-                        }
+-                    }
+-                });
+-    }
+-
+-    private void stopAndCleanup() {
+-        log.d("stopAndCleanup");
+-        mVibrator.cancel();
+-        subscription.dispose();
+-        stopSelf();
+-    }
+-
+-    @Override
+-    public IBinder onBind(Intent intent) {
+-        return null;
+-    }
+-}
+diff --git a/src/main/java/com/better/alarm/background/VibrationService.kt b/src/main/java/com/better/alarm/background/VibrationService.kt
+new file mode 100644
+index 00000000..42971c23
+--- /dev/null
++++ b/src/main/java/com/better/alarm/background/VibrationService.kt
+@@ -0,0 +1,137 @@
++package com.better.alarm.background
++
++import android.app.Service
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import android.content.SharedPreferences
++import android.os.IBinder
++import android.os.PowerManager
++import android.os.PowerManager.WakeLock
++import android.os.Vibrator
++import android.preference.PreferenceManager
++import android.telephony.PhoneStateListener
++import android.telephony.TelephonyManager
++
++import com.better.alarm.AlarmApplication
++import com.better.alarm.interfaces.Intents
++import com.better.alarm.logger.Logger
++import com.better.alarm.presenter.SettingsActivity
++import com.f2prateek.rx.preferences2.RxSharedPreferences
++
++import java.util.concurrent.TimeUnit
++
++import io.reactivex.Observable
++import io.reactivex.android.schedulers.AndroidSchedulers
++import io.reactivex.disposables.Disposables
++import io.reactivex.functions.Function4
++import io.reactivex.subjects.BehaviorSubject
++
++class VibrationService : Service() {
++    private val log: Logger = Logger.getDefaultLogger();
++    private var mVibrator: Vibrator? = null
++    private var sp: SharedPreferences? = null
++    private var wakeLock: WakeLock? = null
++
++    //isEnabled && !inCall && !isMuted && isStarted
++    private val inCall: BehaviorSubject<Boolean> = BehaviorSubject.createDefault(false)
++    private val muted: BehaviorSubject<Boolean> = BehaviorSubject.createDefault(false)
++    private var subscription = Disposables.disposed()
++
++    /**
++     * Dispatches intents to the KlaxonService
++     */
++    class Receiver : BroadcastReceiver() {
++        override fun onReceive(context: Context, intent: Intent) {
++            intent.setClass(context, VibrationService::class.java)
++            AlarmApplication.wakeLocks().acquirePartialWakeLock(intent, "ForVibrationService")
++            context.startService(intent)
++        }
++    }
++
++    override fun onCreate() {
++        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
++        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VibrationService")
++        wakeLock?.acquire()
++        mVibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
++        sp = PreferenceManager.getDefaultSharedPreferences(this)
++
++        val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
++        telephonyManager.listen(object : PhoneStateListener() {
++            override fun onCallStateChanged(state: Int, incomingNumber: String) {
++                inCall.onNext(state != TelephonyManager.CALL_STATE_IDLE)
++            }
++        }, PhoneStateListener.LISTEN_CALL_STATE)
++    }
++
++    override fun onDestroy() {
++        subscription.dispose()
++        log.d("Service destroyed")
++        wakeLock!!.release()
++    }
++
++    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
++        if (intent != null) {
++            AlarmApplication.wakeLocks().releasePartialWakeLock(intent)
++
++            when (intent.action) {
++                Intents.ALARM_ALERT_ACTION -> onAlert()
++                Intents.ACTION_MUTE -> muted.onNext(true)
++                Intents.ACTION_DEMUTE -> muted.onNext(false)
++                else -> stopAndCleanup()
++            }
++
++            when (intent.action) {
++                Intents.ALARM_ALERT_ACTION,
++                Intents.ACTION_MUTE,
++                Intents.ACTION_DEMUTE -> return Service.START_STICKY
++                else -> return Service.START_NOT_STICKY
++            }
++        } else {
++            return Service.START_NOT_STICKY
++        }
++    }
++
++    private fun onAlert() {
++        muted.onNext(false)
++        val asString = sp!!.getString(SettingsActivity.KEY_FADE_IN_TIME_SEC, "30")
++        val time = Integer.parseInt(asString)
++
++        val preference: Observable<Boolean> = RxSharedPreferences.create(sp!!).getBoolean("vibrate").asObservable()
++        val timer: Observable<Boolean> = Observable
++                .just(true)
++                .delay(time.toLong(), TimeUnit.SECONDS, AndroidSchedulers.mainThread())
++                .startWith(false)
++
++        subscription = Observable
++                .combineLatest<Boolean, Boolean, Boolean, Boolean, Boolean>(preference, inCall, muted, timer,
++                        Function4 { isEnabled, isInCall, isMuted, timerStarted ->
++                            isEnabled && !isInCall && !isMuted && timerStarted
++                        })
++                .distinctUntilChanged()
++                .subscribe({ vibrate ->
++                    if (vibrate) {
++                        log.d("Starting vibration")
++                        mVibrator!!.vibrate(sVibratePattern, 0)
++                    } else {
++                        log.d("Canceling vibration")
++                        mVibrator!!.cancel()
++                    }
++                })
++    }
++
++    private fun stopAndCleanup() {
++        log.d("stopAndCleanup")
++        mVibrator!!.cancel()
++        subscription.dispose()
++        stopSelf()
++    }
++
++    override fun onBind(intent: Intent): IBinder? {
++        return null
++    }
++
++    companion object {
++        private val sVibratePattern: LongArray = longArrayOf(500, 500)
++    }
++}

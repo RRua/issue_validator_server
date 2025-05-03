@@ -1,0 +1,401 @@
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/Select.java b/app/src/main/java/com/atelieryl/wonderdroid/Select.java
+index f89a9b7..910007d 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/Select.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/Select.java
+@@ -195,10 +195,14 @@ public class Select extends BaseActivity {
+     }
+ 
+     private void startEmu(int romid) {
+-        Intent intent = new Intent(this, Main.class);
+-        intent.putExtra(Main.ROM, mRAdapter.getItem(romid));
+-        intent.putExtra(Main.ROMHEADER, mRAdapter.getHeader(romid));
+-        startActivity(intent);
++        try {
++            Intent intent = new Intent(this, Main.class);
++            intent.putExtra(Main.ROM, mRAdapter.getItem(romid));
++            intent.putExtra(Main.ROMHEADER, mRAdapter.getHeader(romid));
++            startActivity(intent);
++        } catch (Exception e) {
++            Toast.makeText(this, R.string.cannotloadrom, Toast.LENGTH_SHORT).show();
++        }
+     }
+ 
+     @Override
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+index a57b360..9963ca5 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwan.java
+@@ -68,7 +68,7 @@ public class WonderSwan {
+ 
+     static public native void reset();
+ 
+-    static public void execute_frame(ShortBuffer framebuffer, boolean skipframe) {
++    /*static public void execute_frame(ShortBuffer framebuffer, boolean skipframe) {
+         if (buttonsDirty) {
+             WonderSwan.updatebuttons(WonderSwanButton.Y1.down, WonderSwanButton.Y2.down,
+                     WonderSwanButton.Y3.down, WonderSwanButton.Y4.down, WonderSwanButton.X1.down,
+@@ -96,6 +96,22 @@ public class WonderSwan {
+         synchronized (audiobuffer) {
+             audiobuffer.notify();
+         }
++    }*/
++
++    static public void execute_frame(ShortBuffer framebuffer, boolean skipframe) {
++        if (buttonsDirty) {
++            WonderSwan.updatebuttons(WonderSwanButton.Y1.down, WonderSwanButton.Y2.down,
++                    WonderSwanButton.Y3.down, WonderSwanButton.Y4.down, WonderSwanButton.X1.down,
++                    WonderSwanButton.X2.down, WonderSwanButton.X3.down, WonderSwanButton.X4.down,
++                    WonderSwanButton.A.down, WonderSwanButton.B.down, WonderSwanButton.START.down);
++            buttonsDirty = false;
++        }
++
++        samples = _execute_frame(skipframe, audioEnabled, framebuffer, audioEnabled ? audiobuffer
++                : null);
++        synchronized (audiobuffer) {
++            audiobuffer.notify();
++        }
+     }
+ 
+     static private native int _execute_frame(boolean skipframe, boolean audio,
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java
+index e79637b..393d201 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/WonderSwanRenderer.java
+@@ -14,8 +14,8 @@ import android.media.AudioManager;
+ import android.media.AudioTrack;
+ import android.view.SurfaceHolder;
+ 
++import com.atelieryl.wonderdroid.utils.DrawThread;
+ import com.atelieryl.wonderdroid.utils.EmuThread;
+-import com.atelieryl.wonderdroid.utils.DrawRunnable;
+ import com.atelieryl.wonderdroid.utils.AudioRunnable;
+ 
+ @SuppressLint("NewApi")
+@@ -40,12 +40,14 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+ 
+     private final Paint textPaint = new Paint();
+     
+-    private DrawRunnable drawRunnable;
++    private DrawThread drawThread;
+     
+     private AudioRunnable audioRunnable;
+     
+     private boolean surfaceHolderIsSet = false;
+ 
++    private boolean clearBeforeDraw = true;
++
+     public WonderSwanRenderer() {
+ 
+         textPaint.setColor(0xFFFFFFFF);
+@@ -57,8 +59,11 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+         framebuffer = Bitmap.createBitmap(WonderSwan.SCREEN_WIDTH, WonderSwan.SCREEN_HEIGHT,
+                 Bitmap.Config.RGB_565);
+         
+-        drawRunnable = new DrawRunnable(framebuffer, scale, paint);
++        drawThread = new DrawThread(framebuffer, scale, paint);
++        drawThread.start();
++
+         audioRunnable = new AudioRunnable(audio);
++
+     }
+ 
+     @Override
+@@ -66,10 +71,10 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+     	
+         // c.drawARGB(0xff, 0, 0, 0);
+     	if (!surfaceHolderIsSet) {
+-    		drawRunnable.setSurfaceHolder(surfaceHolder);
++            drawThread.setSurfaceHolder(surfaceHolder);
+     		surfaceHolderIsSet = true;
+     	}
+-    	drawRunnable.run();
++    	drawThread.setDraw();
+         // c.drawBitmap(framebuffer, scale, paint);
+         // c.drawBitmap(framebuffer, 0, 0, null);
+ 
+@@ -101,27 +106,41 @@ public class WonderSwanRenderer implements EmuThread.Renderer {
+     @Override
+     public void update(boolean skip) {
+         WonderSwan.execute_frame(frameone, skip);
++        audioRunnable.run();
+ 
+         if (!skip) {
+             frameone.rewind();
+             framebuffer.copyPixelsFromBuffer(frameone);
+-            audioRunnable.run();
+         }
+     }
+ 
+     @Override
+     public void setButtons(Button[] buttons) {
+         this.buttons = buttons;
+-        drawRunnable.setButtons(buttons);
++        drawThread.setButtons(buttons);
+     }
+ 
+     @Override
+     public void showButtons(boolean show) {
+         this.showButtons = show;
+-        drawRunnable.setShowButtons(show);
++        drawThread.setShowButtons(show);
+     }
+     
+     public void setClearBeforeDraw(boolean clearBeforeDraw) {
+-    	drawRunnable.setClearBeforeDraw(clearBeforeDraw);
++        this.clearBeforeDraw = clearBeforeDraw;
++        drawThread.setClearBeforeDraw(clearBeforeDraw);
++    }
++
++    public void restartDrawThread() {
++        surfaceHolderIsSet = false;
++        drawThread = new DrawThread(framebuffer, scale, paint);
++        drawThread.start();
++        drawThread.setButtons(buttons);
++        drawThread.setShowButtons(showButtons);
++        drawThread.setClearBeforeDraw(clearBeforeDraw);
++    }
++
++    public void stopDrawThread() {
++        drawThread.clearRunning();
+     }
+ }
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java
+index a4a8621..799f2fb 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/AudioRunnable.java
+@@ -4,38 +4,18 @@ package com.atelieryl.wonderdroid.utils;
+ import com.atelieryl.wonderdroid.WonderSwan;
+ 
+ import android.media.AudioTrack;
+-import android.util.Log;
+ 
+-public class AudioThread extends Thread {
++public class AudioRunnable implements Runnable {
+ 
+ 	private AudioTrack audio;
+-	private boolean play = false;
+-	private boolean running = true;
+ 	
+-	public AudioThread(AudioTrack audio) {
++	public AudioRunnable(AudioTrack audio) {
+ 		this.audio = audio;
+ 	}
+ 
+-	public void setPlay() {
+-		play = true;
+-	}
+-
+-	public void clearRunning() {
+-		running = false;
+-	}
+-
+ 	@Override
+ 	public void run() {
+-		android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE);
+-		while (running) {
+-			if (play) {
+-				audio.write(WonderSwan.audiobuffer, 0, WonderSwan.prevSamples * 2 + WonderSwan.samples * 2);
+-			}
+-			play = false;
+-		}
+-		synchronized (this) {
+-			notifyAll();
+-		}
++		audio.write(WonderSwan.audiobuffer, 0, /*WonderSwan.prevSamples * 2 + */WonderSwan.samples * 2);
+ 	}
+ 	
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
+index 33f80c9..290ffc8 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/DrawThread.java
+@@ -10,7 +10,7 @@ import android.util.Log;
+ import android.view.SurfaceHolder;
+ import com.atelieryl.wonderdroid.Button;
+ 
+-public class DrawRunnable extends Thread {
++public class DrawThread extends Thread {
+ 	
+ 	private Canvas c;
+ 	private Bitmap framebuffer;
+@@ -20,8 +20,10 @@ public class DrawRunnable extends Thread {
+ 	private Button[] buttons;
+ 	private boolean showButtons;
+ 	private boolean clearBeforeDraw;
++	private boolean draw = false;
++	private boolean running = true;
+ 	
+-	public DrawRunnable(Bitmap framebuffer, Matrix scale, Paint paint) {
++	public DrawThread(Bitmap framebuffer, Matrix scale, Paint paint) {
+ 		this.framebuffer = framebuffer;
+ 		this.scale = scale;
+ 		this.paint = paint;
+@@ -42,30 +44,46 @@ public class DrawRunnable extends Thread {
+ 	public void setClearBeforeDraw(boolean clearBeforeDraw) {
+ 		this.clearBeforeDraw = clearBeforeDraw;
+ 	}
++
++	public void setDraw() {
++		draw = true;
++	}
++
++	public void clearRunning() {
++		running = false;
++	}
+ 	
+ 	@Override
+     public void run() {
+ 		android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE);
+-		c = null;
+-		try {
+-			while (c == null) {
+-				c = mSurfaceHolder.lockCanvas();
+-			}
+-			//boolean x = c.isHardwareAccelerated();
+-			if (clearBeforeDraw) {
+-				c.drawColor(Color.BLACK); // Make sure out-of-bounds areas remain black
+-			}
+-			c.drawBitmap(framebuffer, scale, paint);
+-			if (showButtons && buttons != null) {
+-	            for (Button button : buttons) {
+-	                c.drawBitmap(button.normal, button.drawrect, button.rect, null);
+-	            }
+-			}
+-		} finally {
+-			if (c != null) {
+-				mSurfaceHolder.unlockCanvasAndPost(c);
++		while (running) {
++			if (draw) {
++				c = null;
++				try {
++					while (c == null) {
++						c = mSurfaceHolder.lockCanvas();
++					}
++					//boolean x = c.isHardwareAccelerated();
++					if (clearBeforeDraw) {
++						c.drawColor(Color.BLACK); // Make sure out-of-bounds areas remain black
++					}
++					c.drawBitmap(framebuffer, scale, paint);
++					if (showButtons && buttons != null) {
++						for (Button button : buttons) {
++							c.drawBitmap(button.normal, button.drawrect, button.rect, null);
++						}
++					}
++				} finally {
++					if (c != null) {
++						mSurfaceHolder.unlockCanvasAndPost(c);
++					}
++				}
++				draw = false;
+ 			}
+ 		}
++		synchronized (this) {
++			notifyAll();
++		}
+ 	}
+ 	
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java b/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
+index 33a0a9c..1564ea5 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/utils/EmuThread.java
+@@ -27,7 +27,8 @@ public class EmuThread extends Thread {
+ 
+     private Renderer renderer;
+ 
+-    private static final long TARGETFRAMETIME = 6;
++    private static final long[] TARGETFRAMETIME = {12, 13};
++    private static int frameTimeIndex = 0;
+ 
+     private boolean mIsRunning = false;
+     private boolean isPaused = false;
+@@ -45,7 +46,7 @@ public class EmuThread extends Thread {
+     boolean skip = false;
+     boolean behind = false;
+ 
+-    private int frameskip = 2;
++    private int frameskip = 0;
+ 
+     public EmuThread (Renderer renderer) {
+         this.renderer = renderer;
+@@ -72,6 +73,8 @@ public class EmuThread extends Thread {
+     @Override
+     public void run () {
+ 
++        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE);
++
+         while (mSurfaceHolder == null) {
+             SystemClock.sleep(20);
+         }
+@@ -80,20 +83,31 @@ public class EmuThread extends Thread {
+ 
+             if (isPaused) {
+                 //Log.d(TAG, "Paused!!!");
+-                SystemClock.sleep(TARGETFRAMETIME);
++                SystemClock.sleep(TARGETFRAMETIME[0]);
+             } else {
+ 
+                 frameStart = System.currentTimeMillis();
+ 
+                 renderer.update(frame % 2 != 0);
+ 
+-                if (frame % frameskip != 0) {
++                if (frameskip == 0 || frame % frameskip != 0) {
+                     renderer.render(mSurfaceHolder);
+                 }
+ 
+                 frameEnd = System.currentTimeMillis();
+                 frametime = (int)(frameEnd - frameStart);
+ 
++                if (frametime < TARGETFRAMETIME[frameTimeIndex]) {
++                    SystemClock.sleep(TARGETFRAMETIME[frameTimeIndex] - frametime);
++                } else if (frametime > TARGETFRAMETIME[frameTimeIndex]) {
++                    Log.d(TAG, "Overtime " + frametime);
++                }
++
++                frameTimeIndex++;
++                if (frameTimeIndex >= TARGETFRAMETIME.length) {
++                    frameTimeIndex = 0;
++                }
++
+                 frame++;
+             }
+ 
+diff --git a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+index 92da290..60aff9a 100644
+--- a/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
++++ b/app/src/main/java/com/atelieryl/wonderdroid/views/EmuView.java
+@@ -99,7 +99,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 		
+ 		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+ 		sharpness = Integer.parseInt(prefs.getString("sharpness", "3"));
+-		mThread.setFrameskip(Integer.parseInt(prefs.getString("frameskip", "2")));
++		mThread.setFrameskip(Integer.parseInt(prefs.getString("frameskip", "0")));
+ 		stretchToFill = prefs.getBoolean("stretchtofill", false);
+ 		renderer.setClearBeforeDraw(!stretchToFill);
+ 		
+@@ -264,12 +264,13 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 
+ 	public void onResume () {
+ 		if (started) {
++			renderer.restartDrawThread();
+ 			mThread = new EmuThread(renderer);
+ 			start();
+ 		}
+ 		mThread.setSurfaceHolder(mHolder);
+ 		SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(mContext);
+-		mThread.setFrameskip(Integer.parseInt(prefs.getString("frameskip", "2")));
++		mThread.setFrameskip(Integer.parseInt(prefs.getString("frameskip", "0")));
+ 		vibratedown = Integer.parseInt(prefs.getString("vibratedown", "5"));
+ 		vibrateup = Integer.parseInt(prefs.getString("vibrateup", "1"));
+ 	}
+@@ -280,6 +281,7 @@ public class EmuView extends SurfaceView implements SurfaceHolder.Callback {
+ 			Log.d(TAG, "shutting down emulation");
+ 
+ 			mThread.clearRunning();
++			renderer.stopDrawThread();
+ 
+ 			synchronized (mThread) {
+ 				try {

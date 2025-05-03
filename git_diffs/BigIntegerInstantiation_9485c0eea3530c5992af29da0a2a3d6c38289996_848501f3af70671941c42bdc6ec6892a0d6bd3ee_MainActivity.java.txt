@@ -1,0 +1,176 @@
+diff --git a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/MainActivity.java b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/MainActivity.java
+index dcca273..1598a4f 100644
+--- a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/MainActivity.java
++++ b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/MainActivity.java
+@@ -39,6 +39,7 @@ import java.util.ArrayList;
+ import java.util.Date;
+ import java.util.Locale;
+ 
++import static com.emmanuelmess.simpleaccounting.Utils.*;
+ import static com.emmanuelmess.simpleaccounting.Utils.equal;
+ 
+ /**
+@@ -234,43 +235,46 @@ public class MainActivity extends AppCompatActivity implements AsyncFinishedList
+ 					if (equal(debit.getText().toString(), "."))
+ 						debit.setText("0");
+ 
+-					BigDecimal balanceNum = new BigDecimal(0)
+-							.add(new BigDecimal(lastBalance != null ?
+-									Utils.parse(lastBalance.getText().toString().substring(1)) : 0))
+-							.add(new BigDecimal(Utils.parse(credit.getText().toString())))
+-							.subtract(new BigDecimal(Utils.parse(debit.getText().toString())));
++					BigDecimal balanceNum = (lastBalance != null?
++							parseString(parseViewToString(lastBalance).substring(2)) : BigDecimal.ZERO)
++							.add(parseView(credit))
++							.subtract(parseView(debit));
+ 
+ 					if (balanceNum.compareTo(BigDecimal.ZERO) == 0)
+ 						balanceNum = balanceNum.setScale(1, BigDecimal.ROUND_UNNECESSARY);
+ 
+ 					String s = "$ " + balanceNum.toPlainString();
++					if(equal(s, "$ "))
++						throw new IllegalStateException();
+ 					balance.setText(s);
+ 
+-					updateBalances(index+1);
++					updateBalances(index+1, balanceNum);
+ 				}
+ 			}
+ 
+-			private void updateBalances(int index) {
++			private void updateBalances(int index, BigDecimal lastBalance) {
+ 				TableRow row = (TableRow) table.getChildAt(index);
++				if(row == null)
++					return;
+ 
+-				TextView lastBalanceText = (TextView) table.getChildAt(index -1).findViewById(R.id.textBalance),
+-						creditText = (TextView) row.findViewById(R.id.textCredit),
++				TextView creditText = (TextView) row.findViewById(R.id.textCredit),
+ 						debitText = (TextView) row.findViewById(R.id.textDebit),
+ 						balanceText = (TextView) row.findViewById(R.id.textBalance);
+ 
+-				BigDecimal balanceNum = new BigDecimal(Utils.parse(lastBalanceText.getText().toString().substring(1)))
+-						.add(new BigDecimal(Utils.parse(creditText.getText().toString())))
+-						.subtract(new BigDecimal(Utils.parse(debitText.getText().toString())));
++				lastBalance = lastBalance
++						.add(parseView(creditText))
++						.subtract(parseView(debitText));
+ 
++				if (lastBalance.compareTo(BigDecimal.ZERO) == 0)
++					lastBalance = lastBalance.setScale(1, BigDecimal.ROUND_UNNECESSARY);
+ 
+-				if (balanceNum.compareTo(BigDecimal.ZERO) == 0)
+-					balanceNum = balanceNum.setScale(1, BigDecimal.ROUND_UNNECESSARY);
+-
+-				String s = "$ " + balanceNum.toPlainString();
++				String s = "$ " + lastBalance.toPlainString();
++				if(equal(s, "$ "))
++					throw new IllegalStateException();
+ 				balanceText.setText(s);
+ 
+ 				if(index+1 < row.getChildCount())
+-					updateBalances(index+1);
++					updateBalances(index+1, lastBalance);
+ 			}
+ 		};
+ 
+diff --git a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/Utils.java b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/Utils.java
+index bf1d03e..51d1ced 100644
+--- a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/Utils.java
++++ b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/Utils.java
+@@ -1,7 +1,9 @@
+ package com.emmanuelmess.simpleaccounting;
+ 
+ import android.os.Build;
++import android.widget.TextView;
+ 
++import java.math.BigDecimal;
+ import java.util.Objects;
+ /**
+  * @author Emmanuel
+@@ -10,17 +12,22 @@ import java.util.Objects;
+ 
+ public class Utils {
+ 
+-	public static double parse(String s) {
+-		try {
+-			return Double.parseDouble(s);
+-		} catch (NumberFormatException e) {
+-			return 0d;
+-		}
++	public static BigDecimal parseView(TextView v) {
++		return parseString(parseViewToString(v));
++	}
++
++	public static String parseViewToString(TextView v) {
++		return v.getText().toString();
++	}
++
++	public static BigDecimal parseString(String s) {
++		if(s.length() == 0)
++			return new BigDecimal("0");
++		else return new BigDecimal(s);
+ 	}
+ 
+ 	public static boolean equal(Object o1, Object o2) {
+ 		return (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && Objects.equals(o1, o2)) || o1.equals(o2);
+ 	}
+ 
+-
+ }
+diff --git a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/dataloading/LoadMonthAsyncTask.java b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/dataloading/LoadMonthAsyncTask.java
+index d909851..6737edb 100644
+--- a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/dataloading/LoadMonthAsyncTask.java
++++ b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/dataloading/LoadMonthAsyncTask.java
+@@ -12,6 +12,7 @@ import com.emmanuelmess.simpleaccounting.Utils;
+ import com.emmanuelmess.simpleaccounting.db.TableGeneral;
+ import com.emmanuelmess.simpleaccounting.db.TableMonthlyBalance;
+ 
++import java.math.BigDecimal;
+ import java.util.ArrayList;
+ 
+ /**
+@@ -70,11 +71,12 @@ public class LoadMonthAsyncTask extends AsyncTask<Void, Void, String[][]> {
+ 
+ 	@Override
+ 	protected void onPostExecute(String[][] dbRows) {
+-		double memBalance = 0;
++		BigDecimal memBalance = BigDecimal.ZERO;
+ 
+ 		if(mainActivity.getFirstRealRow() == 2) {
+-			memBalance += Double.parseDouble(((TextView) table.getChildAt(1)
+-					.findViewById(R.id.textBalance)).getText().toString().substring(1));
++			memBalance = memBalance.add(Utils.parseString(
++					((TextView) table.getChildAt(1).findViewById(R.id.textBalance))
++							.getText().toString().substring(2)));
+ 		}
+ 
+ 		for (String[] dbRow : dbRows) {
+@@ -92,9 +94,9 @@ public class LoadMonthAsyncTask extends AsyncTask<Void, Void, String[][]> {
+ 
+ 			TextView t = (TextView) row.findViewById(R.id.textBalance);
+ 			if (dbRow[2] != null)
+-				memBalance += Utils.parse(dbRow[2]);
++				memBalance = memBalance.add(Utils.parseString(dbRow[2]));
+ 			if (dbRow[3] != null)
+-				memBalance -= Utils.parse(dbRow[3]);
++				memBalance = memBalance.subtract(Utils.parseString(dbRow[3]));
+ 
+ 			String s = "$ " + String.valueOf(memBalance);
+ 			t.setText(s);
+diff --git a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/db/TableGeneral.java b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/db/TableGeneral.java
+index 13ec9a6..4e0d2ce 100644
+--- a/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/db/TableGeneral.java
++++ b/SimpleAccounting/app/src/main/java/com/emmanuelmess/simpleaccounting/db/TableGeneral.java
+@@ -105,9 +105,9 @@ public class TableGeneral extends Database {
+ 
+ 					for (String[] data : all) {
+ 						if (data[2] != null)
+-							currentBalance = currentBalance.add(new BigDecimal(Utils.parse(data[2])));
++							currentBalance = currentBalance.add(Utils.parseString(data[2]));
+ 						if (data[3] != null)
+-							currentBalance = currentBalance.subtract(new BigDecimal(Utils.parse(data[3])));
++							currentBalance = currentBalance.subtract(Utils.parseString(data[3]));
+ 					}
+ 
+ 					try {

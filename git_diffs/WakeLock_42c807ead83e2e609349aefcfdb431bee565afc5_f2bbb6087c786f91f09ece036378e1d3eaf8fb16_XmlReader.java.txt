@@ -1,0 +1,117 @@
+diff --git a/src/main/java/eu/siacs/conversations/xml/XmlReader.java b/src/main/java/eu/siacs/conversations/xml/XmlReader.java
+index 3524e0c41..30f35c494 100644
+--- a/src/main/java/eu/siacs/conversations/xml/XmlReader.java
++++ b/src/main/java/eu/siacs/conversations/xml/XmlReader.java
+@@ -1,7 +1,5 @@
+ package eu.siacs.conversations.xml;
+ 
+-import android.os.PowerManager;
+-import android.os.PowerManager.WakeLock;
+ import android.util.Log;
+ import android.util.Xml;
+ 
+@@ -16,17 +14,15 @@ import eu.siacs.conversations.Config;
+ 
+ public class XmlReader {
+ 	private XmlPullParser parser;
+-	private PowerManager.WakeLock wakeLock;
+ 	private InputStream is;
+ 
+-	public XmlReader(WakeLock wakeLock) {
++	public XmlReader() {
+ 		this.parser = Xml.newPullParser();
+ 		try {
+ 			this.parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true);
+ 		} catch (XmlPullParserException e) {
+ 			Log.d(Config.LOGTAG, "error setting namespace feature on parser");
+ 		}
+-		this.wakeLock = wakeLock;
+ 	}
+ 
+ 	public void setInputStream(InputStream inputStream) throws IOException {
+@@ -53,16 +49,8 @@ public class XmlReader {
+ 	}
+ 
+ 	public Tag readTag() throws XmlPullParserException, IOException {
+-		if (wakeLock.isHeld()) {
+-			try {
+-				wakeLock.release();
+-			} catch (RuntimeException re) {
+-				Log.d(Config.LOGTAG,"runtime exception releasing wakelock before reading tag "+re.getMessage());
+-			}
+-		}
+ 		try {
+ 			while (this.is != null && parser.next() != XmlPullParser.END_DOCUMENT) {
+-				wakeLock.acquire();
+ 				if (parser.getEventType() == XmlPullParser.START_TAG) {
+ 					Tag tag = Tag.start(parser.getName());
+ 					final String xmlns = parser.getNamespace();
+@@ -89,14 +77,6 @@ public class XmlReader {
+ 
+ 		} catch (Throwable throwable) {
+ 			throw new IOException("xml parser mishandled "+throwable.getClass().getSimpleName()+"("+throwable.getMessage()+")", throwable);
+-		} finally {
+-			if (wakeLock.isHeld()) {
+-				try {
+-					wakeLock.release();
+-				} catch (RuntimeException re) {
+-					Log.d(Config.LOGTAG,"runtime exception releasing wakelock after exception "+re.getMessage());
+-				}
+-			}
+ 		}
+ 		return null;
+ 	}
+diff --git a/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java b/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
+index 2307b3a01..52aa00d69 100644
+--- a/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
++++ b/src/main/java/eu/siacs/conversations/xmpp/XmppConnection.java
+@@ -2,8 +2,6 @@ package eu.siacs.conversations.xmpp;
+ 
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapFactory;
+-import android.os.PowerManager;
+-import android.os.PowerManager.WakeLock;
+ import android.os.SystemClock;
+ import android.security.KeyChain;
+ import android.util.Base64;
+@@ -105,7 +103,6 @@ public class XmppConnection implements Runnable {
+ 	private static final int PACKET_MESSAGE = 1;
+ 	private static final int PACKET_PRESENCE = 2;
+ 	protected final Account account;
+-	private final WakeLock wakeLock;
+ 	private Socket socket;
+ 	private XmlReader tagReader;
+ 	private TagWriter tagWriter = new TagWriter();
+@@ -224,7 +221,6 @@ public class XmppConnection implements Runnable {
+ 	public XmppConnection(final Account account, final XmppConnectionService service) {
+ 		this.account = account;
+ 		final String tag = account.getJid().toBareJid().toPreppedString();
+-		this.wakeLock = service.getPowerManager().newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, tag == null ? "[empty bare jid]" : tag);
+ 		mXmppConnectionService = service;
+ 	}
+ 
+@@ -439,14 +435,8 @@ public class XmppConnection implements Runnable {
+ 		} finally {
+ 			if (!Thread.currentThread().isInterrupted()) {
+ 				forceCloseSocket();
+-				if (wakeLock.isHeld()) {
+-					try {
+-						wakeLock.release();
+-					} catch (final RuntimeException ignored) {
+-					}
+-				}
+ 			} else {
+-				Log.d(Config.LOGTAG, account.getJid().toBareJid() + ": not force closing socket and releasing wake lock (is held=" + wakeLock.isHeld() + ") because thread was interrupted");
++				Log.d(Config.LOGTAG, account.getJid().toBareJid() + ": not force closing socket because thread was interrupted");
+ 			}
+ 		}
+ 	}
+@@ -461,7 +451,7 @@ public class XmppConnection implements Runnable {
+ 			throw new InterruptedException();
+ 		}
+ 		this.socket = socket;
+-		tagReader = new XmlReader(wakeLock);
++		tagReader = new XmlReader();
+ 		if (tagWriter != null) {
+ 			tagWriter.forceClose();
+ 		}

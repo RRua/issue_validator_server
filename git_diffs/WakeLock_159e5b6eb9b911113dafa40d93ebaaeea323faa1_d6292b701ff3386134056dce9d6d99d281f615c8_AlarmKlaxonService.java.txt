@@ -1,0 +1,2807 @@
+diff --git a/src/com/better/alarm/AsyncHandler.java b/src/com/better/alarm/AsyncHandler.java
+deleted file mode 100644
+index 07341aba..00000000
+--- a/src/com/better/alarm/AsyncHandler.java
++++ /dev/null
+@@ -1,42 +0,0 @@
+-/*
+- * Copyright (C) 2010 The Android Open Source Project
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package com.better.alarm;
+-
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-
+-/**
+- * Helper class for managing the background thread used to perform io operations
+- * and handle async broadcasts.
+- */
+-public final class AsyncHandler {
+-
+-    private static final HandlerThread sHandlerThread = new HandlerThread("AsyncHandler");
+-    private static final Handler sHandler;
+-
+-    static {
+-        sHandlerThread.start();
+-        sHandler = new Handler(sHandlerThread.getLooper());
+-    }
+-
+-    public static void post(Runnable r) {
+-        sHandler.post(r);
+-    }
+-
+-    private AsyncHandler() {
+-    }
+-}
+diff --git a/src/com/better/alarm/Log.java b/src/com/better/alarm/Log.java
+deleted file mode 100644
+index c913bca9..00000000
+--- a/src/com/better/alarm/Log.java
++++ /dev/null
+@@ -1,56 +0,0 @@
+-/*
+- * Copyright (C) 2008 The Android Open Source Project
+- *
+- * Licensed under the Apache License, Version 2.0 (the "License");
+- * you may not use this file except in compliance with the License.
+- * You may obtain a copy of the License at
+- *
+- *      http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-/**
+- * package-level logging flag
+- */
+-
+-package com.better.alarm;
+-
+-import java.text.SimpleDateFormat;
+-import java.util.Date;
+-
+-import com.better.alarm.presenter.AlarmsListActivity;
+-
+-public class Log {
+-    public final static String LOGTAG = "AlarmClock";
+-
+-    public static final boolean LOGV = AlarmsListActivity.DEBUG ? false : false;
+-
+-    public static void v(String logMe) {
+-        android.util.Log.v(LOGTAG, /* SystemClock.uptimeMillis() + " " + */logMe);
+-    }
+-
+-    public static void i(String logMe) {
+-        android.util.Log.i(LOGTAG, logMe);
+-    }
+-
+-    public static void e(String logMe) {
+-        android.util.Log.e(LOGTAG, logMe);
+-    }
+-
+-    public static void e(String logMe, Exception ex) {
+-        android.util.Log.e(LOGTAG, logMe, ex);
+-    }
+-
+-    public static void wtf(String logMe) {
+-        android.util.Log.wtf(LOGTAG, logMe);
+-    }
+-
+-    public static String formatTime(long millis) {
+-        return new SimpleDateFormat("HH:mm:ss.SSS aaa").format(new Date(millis));
+-    }
+-}
+diff --git a/src/com/better/alarm/model/Alarm.java b/src/com/better/alarm/model/Alarm.java
+index f6e30eb3..a9d76365 100644
+--- a/src/com/better/alarm/model/Alarm.java
++++ b/src/com/better/alarm/model/Alarm.java
+@@ -26,12 +26,13 @@ import android.net.Uri;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.provider.BaseColumns;
++import android.util.Log;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+ 
+ public final class Alarm implements Parcelable {
+-
++    private static final String TAG = "Alarm";
++    private static final boolean DBG = true;
+     // ////////////////////////////
+     // Parcelable apis
+     // ////////////////////////////
+@@ -192,9 +193,7 @@ public final class Alarm implements Parcelable {
+         label = c.getString(Columns.ALARM_MESSAGE_INDEX);
+         String alertString = c.getString(Columns.ALARM_ALERT_INDEX);
+         if (Alarms.ALARM_ALERT_SILENT.equals(alertString)) {
+-            if (Log.LOGV) {
+-                Log.v("Alarm is marked as silent");
+-            }
++            if (DBG) Log.d(TAG, "Alarm is marked as silent");
+             silent = true;
+         } else {
+             if (alertString != null && alertString.length() != 0) {
+@@ -362,4 +361,35 @@ public final class Alarm implements Parcelable {
+             return dayCount;
+         }
+     }
++
++    /**
++     * Given an alarm in hours and minutes, return a time suitable for setting
++     * in AlarmManager.
++     */
++    public Calendar calculateCalendar() {
++
++        // start with now
++        Calendar c = Calendar.getInstance();
++        c.setTimeInMillis(System.currentTimeMillis());
++
++        int nowHour = c.get(Calendar.HOUR_OF_DAY);
++        int nowMinute = c.get(Calendar.MINUTE);
++
++        // if alarm is behind current time, advance one day
++        if (hour < nowHour || hour == nowHour && minutes <= nowMinute) {
++            c.add(Calendar.DAY_OF_YEAR, 1);
++        }
++        c.set(Calendar.HOUR_OF_DAY, hour);
++        c.set(Calendar.MINUTE, minutes);
++        c.set(Calendar.SECOND, 0);
++        c.set(Calendar.MILLISECOND, 0);
++
++        int addDays = daysOfWeek.getNextAlarm(c);
++        if (addDays > 0) c.add(Calendar.DAY_OF_WEEK, addDays);
++        return c;
++    }
++
++    public long getTimeInMillis() {
++        return calculateCalendar().getTimeInMillis();
++    }
+ }
+diff --git a/src/com/better/alarm/model/AlarmApplication.java b/src/com/better/alarm/model/AlarmApplication.java
+new file mode 100644
+index 00000000..dbefb6f1
+--- /dev/null
++++ b/src/com/better/alarm/model/AlarmApplication.java
+@@ -0,0 +1,13 @@
++package com.better.alarm.model;
++
++import android.app.Application;
++
++public class AlarmApplication extends Application {
++
++    @Override
++    public void onCreate() {
++        Alarms.init(getApplicationContext());
++        super.onCreate();
++    }
++
++}
+diff --git a/src/com/better/alarm/model/AlarmDatabaseHelper.java b/src/com/better/alarm/model/AlarmDatabaseHelper.java
+index 956fffb4..88265fb0 100644
+--- a/src/com/better/alarm/model/AlarmDatabaseHelper.java
++++ b/src/com/better/alarm/model/AlarmDatabaseHelper.java
+@@ -23,15 +23,15 @@ import android.database.SQLException;
+ import android.database.sqlite.SQLiteDatabase;
+ import android.database.sqlite.SQLiteOpenHelper;
+ import android.net.Uri;
+-
+-import com.better.alarm.Log;
++import android.util.Log;
+ 
+ /**
+  * Helper class for opening the database from multiple providers. Also provides
+  * some common functionality.
+  */
+ class AlarmDatabaseHelper extends SQLiteOpenHelper {
+-
++    private static final String TAG = "AlarmDatabaseHelper";
++    private static final boolean DBG = true;
+     private static final String DATABASE_NAME = "alarms.db";
+     private static final int DATABASE_VERSION = 5;
+ 
+@@ -63,8 +63,8 @@ class AlarmDatabaseHelper extends SQLiteOpenHelper {
+ 
+     @Override
+     public void onUpgrade(SQLiteDatabase db, int oldVersion, int currentVersion) {
+-        if (Log.LOGV)
+-            Log.v("Upgrading alarms database from version " + oldVersion + " to " + currentVersion
++        if (DBG)
++            Log.d(TAG, "Upgrading alarms database from version " + oldVersion + " to " + currentVersion
+                     + ", which will destroy all old data");
+         db.execSQL("DROP TABLE IF EXISTS alarms");
+         onCreate(db);
+@@ -76,7 +76,7 @@ class AlarmDatabaseHelper extends SQLiteOpenHelper {
+         if (rowId < 0) {
+             throw new SQLException("Failed to insert row");
+         }
+-        if (Log.LOGV) Log.v("Added alarm rowId = " + rowId);
++        if (DBG) Log.d(TAG, "Added alarm rowId = " + rowId);
+ 
+         return ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, rowId);
+     }
+diff --git a/src/com/better/alarm/model/AlarmInitReceiver.java b/src/com/better/alarm/model/AlarmInitReceiver.java
+index 50a4ff6a..1988fa25 100644
+--- a/src/com/better/alarm/model/AlarmInitReceiver.java
++++ b/src/com/better/alarm/model/AlarmInitReceiver.java
+@@ -19,14 +19,11 @@ package com.better.alarm.model;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+-import android.os.PowerManager.WakeLock;
+-
+-import com.better.alarm.AsyncHandler;
+-import com.better.alarm.Log;
+-import com.better.alarm.presenter.AlarmAlertWakeLock;
++import android.util.Log;
+ 
+ public class AlarmInitReceiver extends BroadcastReceiver {
+-
++    private static final String TAG = "AlarmInitReceiver";
++    private static final boolean DBG = true;
+     /**
+      * Sets alarm on ACTION_BOOT_COMPLETED. Resets alarm on TIME_SET,
+      * TIMEZONE_CHANGED
+@@ -34,25 +31,7 @@ public class AlarmInitReceiver extends BroadcastReceiver {
+     @Override
+     public void onReceive(final Context context, Intent intent) {
+         final String action = intent.getAction();
+-        if (Log.LOGV) Log.v("AlarmInitReceiver" + action);
+-
+-        final PendingResult result = goAsync();
+-        final WakeLock wl = AlarmAlertWakeLock.createPartialWakeLock(context);
+-        wl.acquire();
+-        AsyncHandler.post(new Runnable() {
+-            @Override
+-            public void run() {
+-                // Remove the snooze alarm after a boot.
+-                if (action.equals(Intent.ACTION_BOOT_COMPLETED)) {
+-                    Alarms.saveSnoozeAlert(context, Alarms.INVALID_ALARM_ID, -1);
+-                }
+-
+-                Alarms.disableExpiredAlarms(context);
+-                Alarms.setNextAlert(context);
+-                result.finish();
+-                Log.v("AlarmInitReceiver finished");
+-                wl.release();
+-            }
+-        });
++        if (DBG) Log.d(TAG, "AlarmInitReceiver" + action);
++        Alarms.init(context);
+     }
+ }
+diff --git a/src/com/better/alarm/model/AlarmProvider.java b/src/com/better/alarm/model/AlarmProvider.java
+index 0f52a665..4e52d1fa 100644
+--- a/src/com/better/alarm/model/AlarmProvider.java
++++ b/src/com/better/alarm/model/AlarmProvider.java
+@@ -24,10 +24,11 @@ import android.database.sqlite.SQLiteDatabase;
+ import android.database.sqlite.SQLiteQueryBuilder;
+ import android.net.Uri;
+ import android.text.TextUtils;
+-
+-import com.better.alarm.Log;
++import android.util.Log;
+ 
+ public class AlarmProvider extends ContentProvider {
++    private static final String TAG = "AlarmProvider";
++    private static final boolean DBG = true;
+     private AlarmDatabaseHelper mOpenHelper;
+ 
+     private static final int ALARMS = 1;
+@@ -71,7 +72,7 @@ public class AlarmProvider extends ContentProvider {
+         Cursor ret = qb.query(db, projectionIn, selection, selectionArgs, null, null, sort);
+ 
+         if (ret == null) {
+-            if (Log.LOGV) Log.v("Alarms.query: failed");
++            if (DBG) Log.d(TAG, "Alarms.query: failed");
+         } else {
+             ret.setNotificationUri(getContext().getContentResolver(), url);
+         }
+@@ -109,7 +110,7 @@ public class AlarmProvider extends ContentProvider {
+             throw new UnsupportedOperationException("Cannot update URL: " + url);
+         }
+         }
+-        if (Log.LOGV) Log.v("*** notifyChange() rowId: " + rowId + " url " + url);
++        if (DBG) Log.d(TAG, "*** notifyChange() rowId: " + rowId + " url " + url);
+         getContext().getContentResolver().notifyChange(url, null);
+         return count;
+     }
+@@ -128,14 +129,12 @@ public class AlarmProvider extends ContentProvider {
+     public int delete(Uri url, String where, String[] whereArgs) {
+         SQLiteDatabase db = mOpenHelper.getWritableDatabase();
+         int count;
+-        long rowId = 0;
+         switch (sURLMatcher.match(url)) {
+         case ALARMS:
+             count = db.delete("alarms", where, whereArgs);
+             break;
+         case ALARMS_ID:
+             String segment = url.getPathSegments().get(1);
+-            rowId = Long.parseLong(segment);
+             if (TextUtils.isEmpty(where)) {
+                 where = "_id=" + segment;
+             } else {
+diff --git a/src/com/better/alarm/model/AlarmReceiver.java b/src/com/better/alarm/model/AlarmReceiver.java
+new file mode 100644
+index 00000000..7d91f619
+--- /dev/null
++++ b/src/com/better/alarm/model/AlarmReceiver.java
+@@ -0,0 +1,106 @@
++package com.better.alarm.model;
++
++import android.app.AlarmManager;
++import android.app.PendingIntent;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.os.Parcel;
++import android.util.Log;
++
++/**
++ * This receiver is a part of the model, but it has to be a separate class.
++ * Application can be garbage collected, so we need to register a Receiver in
++ * the manifest.
++ * 
++ * @author Yuriy
++ * 
++ */
++public class AlarmReceiver extends BroadcastReceiver {
++    private static final String TAG = "AlarmReceiver";
++    private static final boolean DBG = true;
++    private static final String ACTION_FIRED = "com.better.alarm.ACTION_FIRED";
++    private static final String ACTION_SNOOZED_FIRED = "com.better.alarm.ACTION_SNOOZED_FIRED";
++    private static final String ACTION_SOUND_EXPIRED = "com.better.alarm.ACTION_SOUND_EXPIRED";
++    /**
++     * This extra is the raw Alarm object data. It is used in the
++     * AlarmManagerService to avoid a ClassNotFoundException when filling in the
++     * Intent extras.
++     */
++    private static final String ALARM_RAW_DATA = "intent.extra.alarm_raw";
++
++    @Override
++    public void onReceive(Context context, Intent intent) {
++        Alarm alarm = null;
++        // Grab the alarm from the intent. Since the remote AlarmManagerService
++        // fills in the Intent to add some extra data, it must unparcel the
++        // Alarm object. It throws a ClassNotFoundException when unparcelling.
++        // To avoid this, do the marshalling ourselves.
++        final byte[] data = intent.getByteArrayExtra(ALARM_RAW_DATA);
++        if (data != null) {
++            Parcel in = Parcel.obtain();
++            in.unmarshall(data, 0, data.length);
++            in.setDataPosition(0);
++            alarm = Alarm.CREATOR.createFromParcel(in);
++        }
++
++        if (alarm == null) {
++            Log.wtf(TAG, "Failed to parse the alarm from the intent");
++            return;
++        }
++
++        String action = intent.getAction();
++        if (action.equals(ACTION_FIRED)) {
++            Alarms.getAlarms().onAlarmFired(alarm);
++
++        } else if (action.equals(ACTION_SNOOZED_FIRED)) {
++            Alarms.getAlarms().onAlarmSnoozedFired(alarm);
++
++        } else if (action.equals(ACTION_SOUND_EXPIRED)) {
++            Alarms.getAlarms().onAlarmSoundExpired(alarm);
++
++        }
++    }
++
++    /**
++     * @param context
++     */
++    static void removeRTCAlarm(Context context) {
++        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
++        PendingIntent sender = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_FIRED),
++                PendingIntent.FLAG_CANCEL_CURRENT);
++        am.cancel(sender);
++    }
++
++    /**
++     * @param context
++     * @param alarm
++     * @param atTimeInMillis
++     */
++    static void setUpRTCAlarm(Context context, final Alarm alarm, final long atTimeInMillis) {
++        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
++
++        if (DBG) Log.d(TAG, "** setAlert id " + alarm.id + " atTime " + atTimeInMillis);
++
++        Intent intent = new Intent(ACTION_FIRED);
++
++        // XXX: This is a slight hack to avoid an exception in the remote
++        // AlarmManagerService process. The AlarmManager adds extra data to
++        // this Intent which causes it to inflate. Since the remote process
++        // does not know about the Alarm class, it throws a
++        // ClassNotFoundException.
++        //
++        // To avoid this, we marshall the data ourselves and then parcel a plain
++        // byte[] array. The AlarmReceiver class knows to build the Alarm
++        // object from the byte[] array.
++        Parcel out = Parcel.obtain();
++        alarm.writeToParcel(out, 0);
++        out.setDataPosition(0);
++        intent.putExtra(ALARM_RAW_DATA, out.marshall());
++
++        PendingIntent sender = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
++
++        am.set(AlarmManager.RTC_WAKEUP, atTimeInMillis, sender);
++    }
++
++}
+diff --git a/src/com/better/alarm/model/Alarms.java b/src/com/better/alarm/model/Alarms.java
+index 3ca37499..1f513b43 100644
+--- a/src/com/better/alarm/model/Alarms.java
++++ b/src/com/better/alarm/model/Alarms.java
+@@ -16,13 +16,10 @@
+ 
+ package com.better.alarm.model;
+ 
+-import java.util.Calendar;
+ import java.util.HashSet;
+ import java.util.Set;
+ 
+-import android.app.AlarmManager;
+ import android.app.NotificationManager;
+-import android.app.PendingIntent;
+ import android.content.ContentResolver;
+ import android.content.ContentUris;
+ import android.content.ContentValues;
+@@ -31,89 +28,77 @@ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.database.Cursor;
+ import android.net.Uri;
+-import android.os.Parcel;
+-import android.provider.Settings;
+-import android.text.format.DateFormat;
++import android.preference.PreferenceManager;
++import android.util.Log;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.presenter.AlarmsListActivity;
++import com.better.alarm.presenter.SettingsActivity;
+ 
+ /**
+  * The Alarms provider supplies info about Alarm Clock settings
+  */
+-public class Alarms {
+-
+-    // This action triggers the AlarmReceiver as well as the AlarmKlaxon. It
+-    // is a public action used in the manifest for receiving Alarm broadcasts
+-    // from the alarm manager.
+-    public static final String ALARM_ALERT_ACTION = "com.better.alarm.ALARM_ALERT";
+-
+-    // A public action sent by AlarmKlaxon when the alarm has stopped sounding
+-    // for any reason (e.g. because it has been dismissed from
+-    // AlarmAlertFullScreen,
+-    // or killed due to an incoming phone call, etc).
+-    public static final String ALARM_DONE_ACTION = "com.better.alarm.ALARM_DONE";
+-
+-    // AlarmAlertFullScreen listens for this broadcast intent, so that other
+-    // applications
+-    // can snooze the alarm (after ALARM_ALERT_ACTION and before
+-    // ALARM_DONE_ACTION).
+-    public static final String ALARM_SNOOZE_ACTION = "com.better.alarm.ALARM_SNOOZE";
+-
+-    // AlarmAlertFullScreen listens for this broadcast intent, so that other
+-    // applications
+-    // can dismiss the alarm (after ALARM_ALERT_ACTION and before
+-    // ALARM_DONE_ACTION).
+-    public static final String ALARM_DISMISS_ACTION = "com.better.alarm.ALARM_DISMISS";
+-
+-    // This is a private action used by the AlarmKlaxon to update the UI to
+-    // show the alarm has been killed.
+-    public static final String ALARM_KILLED = "alarm_killed";
+-
+-    // Extra in the ALARM_KILLED intent to indicate to the user how long the
+-    // alarm played before being killed.
+-    public static final String ALARM_KILLED_TIMEOUT = "alarm_killed_timeout";
+-
++public class Alarms implements IAlarmsManager, IAlarmsSetup {
++    private static final String TAG = "Alarms";
++    private static final boolean DBG = true;
++    private static final String DEFAULT_SNOOZE = "10";
+     // This string is used to indicate a silent alarm in the db.
+     public static final String ALARM_ALERT_SILENT = "silent";
+ 
+-    // This intent is sent from the notification when the user cancels the
+-    // snooze alert.
+-    public static final String CANCEL_SNOOZE = "cancel_snooze";
++    private static final String PREF_SNOOZE_IDS = "snooze_ids";
++    private static final String PREF_SNOOZE_TIME = "snooze_time";
+ 
+-    // This string is used when passing an Alarm object through an intent.
+-    public static final String ALARM_INTENT_EXTRA = "intent.extra.alarm";
++    private static final int INVALID_ALARM_ID = -1;
++    private Context mContext;
+ 
+-    // This extra is the raw Alarm object data. It is used in the
+-    // AlarmManagerService to avoid a ClassNotFoundException when filling in
+-    // the Intent extras.
+-    public static final String ALARM_RAW_DATA = "intent.extra.alarm_raw";
++    private static Alarms sModelInstance;
+ 
+-    private static final String PREF_SNOOZE_IDS = "snooze_ids";
+-    private static final String PREF_SNOOZE_TIME = "snooze_time";
++    public static IAlarmsManager getAlarmsManager() {
++        if (sModelInstance == null) {
++            throw new NullPointerException("Alarms not initialized yet");
++        }
++        return sModelInstance;
++    }
+ 
+-    private final static String DM12 = "E h:mm aa";
+-    private final static String DM24 = "E kk:mm";
++    public static IAlarmsSetup getAlarmsSetup() {
++        if (sModelInstance == null) {
++            throw new NullPointerException("Alarms not initialized yet");
++        }
++        return sModelInstance;
++    }
+ 
+-    private final static String M12 = "h:mm aa";
+-    // Shared with DigitalClock
+-    public final static String M24 = "kk:mm";
++    static Alarms getAlarms() {
++        if (sModelInstance == null) {
++            throw new NullPointerException("Alarms not initialized yet");
++        }
++        return sModelInstance;
++    }
+ 
+-    public final static int INVALID_ALARM_ID = -1;
++    static void init(Context context) {
++        if (sModelInstance == null) {
++            sModelInstance = new Alarms(context);
++        }
++        sModelInstance.disableExpiredAlarms();
++        // TODO do init stuff here sModelInstance
++    }
++
++    private Alarms(Context context) {
++        mContext = context;
++    }
+ 
+     /**
+      * Creates a new Alarm and fills in the given alarm's id.
+      */
+-    public static long addAlarm(Context context, Alarm alarm) {
++    @Override
++    public long add(Alarm alarm) {
+         ContentValues values = createContentValues(alarm);
+-        Uri uri = context.getContentResolver().insert(Alarm.Columns.CONTENT_URI, values);
++        Uri uri = mContext.getContentResolver().insert(Alarm.Columns.CONTENT_URI, values);
+         alarm.id = (int) ContentUris.parseId(uri);
+ 
+-        long timeInMillis = calculateAlarm(alarm);
++        long timeInMillis = alarm.getTimeInMillis();
+         if (alarm.enabled) {
+-            clearSnoozeIfNeeded(context, timeInMillis);
++            clearSnoozeIfNeeded(timeInMillis);
+         }
+-        setNextAlert(context);
++        setNextAlert();
+         return timeInMillis;
+     }
+ 
+@@ -121,17 +106,18 @@ public class Alarms {
+      * Removes an existing Alarm. If this alarm is snoozing, disables snooze.
+      * Sets next alert.
+      */
+-    public static void deleteAlarm(Context context, int alarmId) {
++    @Override
++    public void delete(int alarmId) {
+         if (alarmId == INVALID_ALARM_ID) return;
+ 
+-        ContentResolver contentResolver = context.getContentResolver();
++        ContentResolver contentResolver = mContext.getContentResolver();
+         /* If alarm is snoozing, lose it */
+-        disableSnoozeAlert(context, alarmId);
++        disableSnoozeAlert(alarmId);
+ 
+         Uri uri = ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, alarmId);
+         contentResolver.delete(uri, "", null);
+ 
+-        setNextAlert(context);
++        setNextAlert();
+     }
+ 
+     /**
+@@ -139,24 +125,46 @@ public class Alarms {
+      * 
+      * @return cursor over all alarms
+      */
+-    public static Cursor getAlarmsCursor(ContentResolver contentResolver) {
+-        return contentResolver.query(Alarm.Columns.CONTENT_URI, Alarm.Columns.ALARM_QUERY_COLUMNS, null, null,
+-                Alarm.Columns.DEFAULT_SORT_ORDER);
++    @Override
++    public Cursor getCursor() {
++        return mContext.getContentResolver().query(Alarm.Columns.CONTENT_URI, Alarm.Columns.ALARM_QUERY_COLUMNS, null,
++                null, Alarm.Columns.DEFAULT_SORT_ORDER);
+     }
+ 
+     // Private method to get a more limited set of alarms from the database.
+-    private static Cursor getFilteredAlarmsCursor(ContentResolver contentResolver) {
++    private Cursor getFilteredAlarmsCursor(ContentResolver contentResolver) {
+         return contentResolver.query(Alarm.Columns.CONTENT_URI, Alarm.Columns.ALARM_QUERY_COLUMNS,
+                 Alarm.Columns.WHERE_ENABLED, null, null);
+     }
+ 
+-    private static ContentValues createContentValues(Alarm alarm) {
++    void onAlarmFired(Alarm alarm) {
++        broadcastAlarmState(alarm, Intents.ALARM_ALERT_ACTION);
++
++        // Disable the snooze alert if this alarm is the snooze.
++        disableSnoozeAlert(alarm.id);
++        // Disable this alarm if it does not repeat.
++        if (!alarm.daysOfWeek.isRepeatSet()) {
++            enableAlarmInternal(alarm, false);
++        }
++
++        setNextAlert();
++    }
++
++    void onAlarmSnoozedFired(Alarm alarm) {
++        // TODO
++    }
++
++    void onAlarmSoundExpired(Alarm alarm) {
++        // TODO
++    }
++
++    private ContentValues createContentValues(Alarm alarm) {
+         ContentValues values = new ContentValues(8);
+         // Set the alarm_time value if this alarm does not repeat. This will be
+         // used later to disable expire alarms.
+         long time = 0;
+         if (!alarm.daysOfWeek.isRepeatSet()) {
+-            time = calculateAlarm(alarm);
++            time = alarm.getTimeInMillis();
+         }
+ 
+         values.put(Alarm.Columns.ENABLED, alarm.enabled ? 1 : 0);
+@@ -173,10 +181,10 @@ public class Alarms {
+         return values;
+     }
+ 
+-    private static void clearSnoozeIfNeeded(Context context, long alarmTime) {
++    private void clearSnoozeIfNeeded(long alarmTime) {
+         // If this alarm fires before the next snooze, clear the snooze to
+         // enable this alarm.
+-        SharedPreferences prefs = context.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
++        SharedPreferences prefs = mContext.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
+ 
+         // Get the list of snoozed alarms
+         final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, new HashSet<String>());
+@@ -184,7 +192,7 @@ public class Alarms {
+             final long snoozeTime = prefs.getLong(getAlarmPrefSnoozeTimeKey(snoozedAlarm), 0);
+             if (alarmTime < snoozeTime) {
+                 final int alarmId = Integer.parseInt(snoozedAlarm);
+-                clearSnoozePreference(context, prefs, alarmId);
++                clearSnoozePreference(prefs, alarmId);
+             }
+         }
+     }
+@@ -193,9 +201,10 @@ public class Alarms {
+      * Return an Alarm object representing the alarm id in the database. Returns
+      * null if no alarm exists.
+      */
+-    public static Alarm getAlarm(ContentResolver contentResolver, int alarmId) {
+-        Cursor cursor = contentResolver.query(ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, alarmId),
+-                Alarm.Columns.ALARM_QUERY_COLUMNS, null, null, null);
++    private Alarm getAlarm(int alarmId) {
++        Cursor cursor = mContext.getContentResolver().query(
++                ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, alarmId), Alarm.Columns.ALARM_QUERY_COLUMNS,
++                null, null, null);
+         Alarm alarm = null;
+         if (cursor != null) {
+             if (cursor.moveToFirst()) {
+@@ -211,27 +220,28 @@ public class Alarms {
+      * 
+      * @return Time when the alarm will fire.
+      */
+-    public static long setAlarm(Context context, Alarm alarm) {
++    @Override
++    public long set(Alarm alarm) {
+         ContentValues values = createContentValues(alarm);
+-        ContentResolver resolver = context.getContentResolver();
++        ContentResolver resolver = mContext.getContentResolver();
+         resolver.update(ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, alarm.id), values, null, null);
+ 
+-        long timeInMillis = calculateAlarm(alarm);
++        long timeInMillis = alarm.getTimeInMillis();
+ 
+         if (alarm.enabled) {
+             // Disable the snooze if we just changed the snoozed alarm. This
+             // only does work if the snoozed alarm is the same as the given
+             // alarm.
+             // TODO: disableSnoozeAlert should have a better name.
+-            disableSnoozeAlert(context, alarm.id);
++            disableSnoozeAlert(alarm.id);
+ 
+             // Disable the snooze if this alarm fires before the snoozed alarm.
+             // This works on every alarm since the user most likely intends to
+             // have the modified alarm fire next.
+-            clearSnoozeIfNeeded(context, timeInMillis);
++            clearSnoozeIfNeeded(timeInMillis);
+         }
+ 
+-        setNextAlert(context);
++        setNextAlert();
+ 
+         return timeInMillis;
+     }
+@@ -244,21 +254,34 @@ public class Alarms {
+      * @param enabled
+      *            corresponds to the ENABLED column
+      */
++    @Override
++    public void enable(Alarm alarm) {
++        enableAlarmInternal(getAlarm(alarm.id), !alarm.enabled);
++        setNextAlert();
++    }
+ 
+-    public static void enableAlarm(final Context context, final int id, boolean enabled) {
+-        enableAlarmInternal(context, id, enabled);
+-        setNextAlert(context);
++    @Override
++    public void snooze(Alarm alarm) {
++        final String snooze = PreferenceManager.getDefaultSharedPreferences(mContext).getString(
++                SettingsActivity.KEY_ALARM_SNOOZE, DEFAULT_SNOOZE);
++        int snoozeMinutes = Integer.parseInt(snooze);
++
++        final long snoozeTime = System.currentTimeMillis() + (1000 * 60 * snoozeMinutes);
++        saveSnoozeAlert(alarm, snoozeTime);
+     }
+ 
+-    private static void enableAlarmInternal(final Context context, final int id, boolean enabled) {
+-        enableAlarmInternal(context, getAlarm(context.getContentResolver(), id), enabled);
++    @Override
++    public void dismiss(Alarm alarm) {
++        broadcastAlarmState(alarm, Intents.ALARM_DISMISS_ACTION);
++        setNextAlert();
++        // TODO
+     }
+ 
+-    private static void enableAlarmInternal(final Context context, final Alarm alarm, boolean enabled) {
++    private void enableAlarmInternal(final Alarm alarm, boolean enabled) {
+         if (alarm == null) {
+             return;
+         }
+-        ContentResolver resolver = context.getContentResolver();
++        ContentResolver resolver = mContext.getContentResolver();
+ 
+         ContentValues values = new ContentValues(2);
+         values.put(Alarm.Columns.ENABLED, enabled ? 1 : 0);
+@@ -268,21 +291,21 @@ public class Alarms {
+         if (enabled) {
+             long time = 0;
+             if (!alarm.daysOfWeek.isRepeatSet()) {
+-                time = calculateAlarm(alarm);
++                time = alarm.getTimeInMillis();
+             }
+             values.put(Alarm.Columns.ALARM_TIME, time);
+         } else {
+             // Clear the snooze if the id matches.
+-            disableSnoozeAlert(context, alarm.id);
++            disableSnoozeAlert(alarm.id);
+         }
+ 
+         resolver.update(ContentUris.withAppendedId(Alarm.Columns.CONTENT_URI, alarm.id), values, null, null);
+     }
+ 
+-    private static Alarm calculateNextAlert(final Context context) {
++    private Alarm calculateNextAlert() {
+         long minTime = Long.MAX_VALUE;
+         long now = System.currentTimeMillis();
+-        final SharedPreferences prefs = context.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
++        final SharedPreferences prefs = mContext.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
+ 
+         Set<Alarm> alarms = new HashSet<Alarm>();
+ 
+@@ -296,12 +319,12 @@ public class Alarms {
+         final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, new HashSet<String>());
+         for (String snoozedAlarm : snoozedIds) {
+             final int alarmId = Integer.parseInt(snoozedAlarm);
+-            final Alarm a = getAlarm(context.getContentResolver(), alarmId);
++            final Alarm a = getAlarm(alarmId);
+             alarms.add(a);
+         }
+ 
+         // Now add the scheduled alarms
+-        final Cursor cursor = getFilteredAlarmsCursor(context.getContentResolver());
++        final Cursor cursor = getFilteredAlarmsCursor(mContext.getContentResolver());
+         if (cursor != null) {
+             try {
+                 if (cursor.moveToFirst()) {
+@@ -321,16 +344,15 @@ public class Alarms {
+             // A time of 0 indicates this is a repeating alarm, so
+             // calculate the time to get the next alert.
+             if (a.time == 0) {
+-                a.time = calculateAlarm(a);
++                a.time = a.getTimeInMillis();
+             }
+ 
+             // Update the alarm if it has been snoozed
+             updateAlarmTimeForSnooze(prefs, a);
+ 
+             if (a.time < now) {
+-                Log.v("Disabling expired alarm set for " + Log.formatTime(a.time));
+                 // Expired alarm, disable it and move along.
+-                enableAlarmInternal(context, a, false);
++                enableAlarmInternal(a, false);
+                 continue;
+             }
+             if (a.time < minTime) {
+@@ -345,8 +367,8 @@ public class Alarms {
+     /**
+      * Disables non-repeating alarms that have passed. Called at boot.
+      */
+-    public static void disableExpiredAlarms(final Context context) {
+-        Cursor cur = getFilteredAlarmsCursor(context.getContentResolver());
++    private void disableExpiredAlarms() {
++        Cursor cur = getFilteredAlarmsCursor(mContext.getContentResolver());
+         long now = System.currentTimeMillis();
+ 
+         try {
+@@ -356,8 +378,7 @@ public class Alarms {
+                     // A time of 0 means this alarm repeats. If the time is
+                     // non-zero, check if the time is before now.
+                     if (alarm.time != 0 && alarm.time < now) {
+-                        Log.v("Disabling expired alarm set for " + Log.formatTime(alarm.time));
+-                        enableAlarmInternal(context, alarm, false);
++                        enableAlarmInternal(alarm, false);
+                     }
+                 } while (cur.moveToNext());
+             }
+@@ -371,117 +392,60 @@ public class Alarms {
+      * changes alarm settings. Activates snooze if set, otherwise loads all
+      * alarms, activates next alert.
+      */
+-    public static void setNextAlert(final Context context) {
+-        final Alarm alarm = calculateNextAlert(context);
++    private void setNextAlert() {
++        final Alarm alarm = calculateNextAlert();
+         if (alarm != null) {
+-            enableAlert(context, alarm, alarm.time);
++            AlarmReceiver.setUpRTCAlarm(mContext, alarm, alarm.time);
++            broadcastAlarmState(alarm, Intents.ACTION_ALARM_SCHEDULED);
+         } else {
+-            disableAlert(context);
++            AlarmReceiver.removeRTCAlarm(mContext);
++            broadcastAlarmState(alarm, Intents.ACTION_ALARMS_UNSCHEDULED);
+         }
+     }
+ 
+-    /**
+-     * Sets alert in AlarmManger and StatusBar. This is what will actually
+-     * launch the alert when the alarm triggers.
+-     * 
+-     * @param alarm
+-     *            Alarm.
+-     * @param atTimeInMillis
+-     *            milliseconds since epoch
+-     */
+-    private static void enableAlert(Context context, final Alarm alarm, final long atTimeInMillis) {
+-        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-
+-        if (Log.LOGV) {
+-            Log.v("** setAlert id " + alarm.id + " atTime " + atTimeInMillis);
+-        }
+-
+-        Intent intent = new Intent(ALARM_ALERT_ACTION);
+-
+-        // XXX: This is a slight hack to avoid an exception in the remote
+-        // AlarmManagerService process. The AlarmManager adds extra data to
+-        // this Intent which causes it to inflate. Since the remote process
+-        // does not know about the Alarm class, it throws a
+-        // ClassNotFoundException.
+-        //
+-        // To avoid this, we marshall the data ourselves and then parcel a plain
+-        // byte[] array. The AlarmReceiver class knows to build the Alarm
+-        // object from the byte[] array.
+-        Parcel out = Parcel.obtain();
+-        alarm.writeToParcel(out, 0);
+-        out.setDataPosition(0);
+-        intent.putExtra(ALARM_RAW_DATA, out.marshall());
+-
+-        PendingIntent sender = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
+-
+-        am.set(AlarmManager.RTC_WAKEUP, atTimeInMillis, sender);
+-
+-        setStatusBarIcon(context, true);
+-
+-        Calendar c = Calendar.getInstance();
+-        c.setTimeInMillis(atTimeInMillis);
+-        String timeString = formatDayAndTime(context, c);
+-        saveNextAlarm(context, timeString);
+-    }
+-
+-    /**
+-     * Disables alert in AlarmManger and StatusBar.
+-     * 
+-     * @param id
+-     *            Alarm ID.
+-     */
+-    public static void disableAlert(Context context) {
+-        AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
+-        PendingIntent sender = PendingIntent.getBroadcast(context, 0, new Intent(ALARM_ALERT_ACTION),
+-                PendingIntent.FLAG_CANCEL_CURRENT);
+-        am.cancel(sender);
+-        setStatusBarIcon(context, false);
+-        saveNextAlarm(context, "");
+-    }
+-
+-    public static void saveSnoozeAlert(final Context context, final int id, final long time) {
+-        SharedPreferences prefs = context.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
+-        if (id == INVALID_ALARM_ID) {
+-            clearAllSnoozePreferences(context, prefs);
++    private void saveSnoozeAlert(Alarm alarm, long time) {
++        SharedPreferences prefs = mContext.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
++        if (alarm.id == INVALID_ALARM_ID) {
++            clearAllSnoozePreferences(prefs);
+         } else {
+             final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, new HashSet<String>());
+-            snoozedIds.add(Integer.toString(id));
++            snoozedIds.add(Integer.toString(alarm.id));
+             final SharedPreferences.Editor ed = prefs.edit();
+             ed.putStringSet(PREF_SNOOZE_IDS, snoozedIds);
+-            ed.putLong(getAlarmPrefSnoozeTimeKey(id), time);
++            ed.putLong(getAlarmPrefSnoozeTimeKey(alarm.id), time);
+             ed.apply();
+         }
+         // Set the next alert after updating the snooze.
+-        setNextAlert(context);
++        setNextAlert();
+     }
+ 
+-    private static String getAlarmPrefSnoozeTimeKey(int id) {
++    private String getAlarmPrefSnoozeTimeKey(int id) {
+         return getAlarmPrefSnoozeTimeKey(Integer.toString(id));
+     }
+ 
+-    private static String getAlarmPrefSnoozeTimeKey(String id) {
++    private String getAlarmPrefSnoozeTimeKey(String id) {
+         return PREF_SNOOZE_TIME + id;
+     }
+ 
+     /**
+      * Disable the snooze alert if the given id matches the snooze id.
+      */
+-    public static void disableSnoozeAlert(final Context context, final int id) {
+-        SharedPreferences prefs = context.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
++    private void disableSnoozeAlert(final int id) {
++        SharedPreferences prefs = mContext.getSharedPreferences(AlarmsListActivity.PREFERENCES, 0);
+         if (hasAlarmBeenSnoozed(prefs, id)) {
+             // This is the same id so clear the shared prefs.
+-            clearSnoozePreference(context, prefs, id);
++            clearSnoozePreference(prefs, id);
+         }
+     }
+ 
+-    // Helper to remove the snooze preference. Do not use clear because that
++    // XXX Helper to remove the snooze preference. Do not use clear because that
+     // will erase the clock preferences. Also clear the snooze notification in
+     // the window shade.
+-    private static void clearSnoozePreference(final Context context, final SharedPreferences prefs, final int id) {
++    private void clearSnoozePreference(final SharedPreferences prefs, final int id) {
+         final String alarmStr = Integer.toString(id);
+         final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, new HashSet<String>());
+         if (snoozedIds.contains(alarmStr)) {
+-            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
++            NotificationManager nm = (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
+             nm.cancel(id);
+         }
+ 
+@@ -492,8 +456,9 @@ public class Alarms {
+         ed.apply();
+     }
+ 
+-    private static void clearAllSnoozePreferences(final Context context, final SharedPreferences prefs) {
+-        NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
++    // XXX
++    private void clearAllSnoozePreferences(final SharedPreferences prefs) {
++        NotificationManager nm = (NotificationManager) mContext.getSystemService(Context.NOTIFICATION_SERVICE);
+         final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, new HashSet<String>());
+         final SharedPreferences.Editor ed = prefs.edit();
+         for (String snoozeId : snoozedIds) {
+@@ -505,7 +470,7 @@ public class Alarms {
+         ed.apply();
+     }
+ 
+-    private static boolean hasAlarmBeenSnoozed(final SharedPreferences prefs, final int alarmId) {
++    private boolean hasAlarmBeenSnoozed(final SharedPreferences prefs, final int alarmId) {
+         final Set<String> snoozedIds = prefs.getStringSet(PREF_SNOOZE_IDS, null);
+ 
+         // Return true if there a valid snoozed alarmId was saved
+@@ -516,7 +481,7 @@ public class Alarms {
+      * Updates the specified Alarm with the additional snooze time. Returns a
+      * boolean indicating whether the alarm was updated.
+      */
+-    private static boolean updateAlarmTimeForSnooze(final SharedPreferences prefs, final Alarm alarm) {
++    private boolean updateAlarmTimeForSnooze(final SharedPreferences prefs, final Alarm alarm) {
+         if (!hasAlarmBeenSnoozed(prefs, alarm.id)) {
+             // No need to modify the alarm
+             return false;
+@@ -531,77 +496,9 @@ public class Alarms {
+         return true;
+     }
+ 
+-    /**
+-     * Tells the StatusBar whether the alarm is enabled or disabled
+-     */
+-    private static void setStatusBarIcon(Context context, boolean enabled) {
+-        Intent alarmChanged = new Intent("android.intent.action.ALARM_CHANGED");
+-        alarmChanged.putExtra("alarmSet", enabled);
+-        context.sendBroadcast(alarmChanged);
+-    }
+-
+-    private static long calculateAlarm(Alarm alarm) {
+-        return calculateAlarm(alarm.hour, alarm.minutes, alarm.daysOfWeek).getTimeInMillis();
+-    }
+-
+-    /**
+-     * Given an alarm in hours and minutes, return a time suitable for setting
+-     * in AlarmManager.
+-     */
+-    public static Calendar calculateAlarm(int hour, int minute, Alarm.DaysOfWeek daysOfWeek) {
+-
+-        // start with now
+-        Calendar c = Calendar.getInstance();
+-        c.setTimeInMillis(System.currentTimeMillis());
+-
+-        int nowHour = c.get(Calendar.HOUR_OF_DAY);
+-        int nowMinute = c.get(Calendar.MINUTE);
+-
+-        // if alarm is behind current time, advance one day
+-        if (hour < nowHour || hour == nowHour && minute <= nowMinute) {
+-            c.add(Calendar.DAY_OF_YEAR, 1);
+-        }
+-        c.set(Calendar.HOUR_OF_DAY, hour);
+-        c.set(Calendar.MINUTE, minute);
+-        c.set(Calendar.SECOND, 0);
+-        c.set(Calendar.MILLISECOND, 0);
+-
+-        int addDays = daysOfWeek.getNextAlarm(c);
+-        if (addDays > 0) c.add(Calendar.DAY_OF_WEEK, addDays);
+-        return c;
+-    }
+-
+-    public static String formatTime(final Context context, int hour, int minute, Alarm.DaysOfWeek daysOfWeek) {
+-        Calendar c = calculateAlarm(hour, minute, daysOfWeek);
+-        return formatTime(context, c);
+-    }
+-
+-    /* used by AlarmAlert */
+-    public static String formatTime(final Context context, Calendar c) {
+-        String format = get24HourMode(context) ? M24 : M12;
+-        return (c == null) ? "" : (String) DateFormat.format(format, c);
+-    }
+-
+-    /**
+-     * Shows day and time -- used for lock screen
+-     */
+-    private static String formatDayAndTime(final Context context, Calendar c) {
+-        String format = get24HourMode(context) ? DM24 : DM12;
+-        return (c == null) ? "" : (String) DateFormat.format(format, c);
+-    }
+-
+-    /**
+-     * Save time of the next alarm, as a formatted string, into the system
+-     * settings so those who care can make use of it.
+-     */
+-    public static void saveNextAlarm(final Context context, String timeString) {
+-        Settings.System.putString(context.getContentResolver(), Settings.System.NEXT_ALARM_FORMATTED, timeString);
+-    }
+-
+-    /**
+-     * @return true if clock is set to 24-hour mode
+-     */
+-    public static boolean get24HourMode(final Context context) {
+-        return android.text.format.DateFormat.is24HourFormat(context);
++    private void broadcastAlarmState(Alarm alarm, String action) {
++        Intent intent = new Intent(action);
++        intent.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
++        mContext.sendBroadcast(intent);
+     }
+ }
+diff --git a/src/com/better/alarm/model/IAlarmsManager.java b/src/com/better/alarm/model/IAlarmsManager.java
+new file mode 100644
+index 00000000..2354d5da
+--- /dev/null
++++ b/src/com/better/alarm/model/IAlarmsManager.java
+@@ -0,0 +1,29 @@
++package com.better.alarm.model;
++
++/**
++ * An interface for Presenter-Model interaction. Presenters can invoke
++ * {@link #dismiss(Alarm)}, {@link #snooze(Alarm)} as a result of user
++ * interaction. Model broadcasts intents representing lifecycle of the
++ * {@link Alarm}. Each intent contains an {@link Alarm} as a parceable extra
++ * with the key {@link #ALARM_INTENT_EXTRA}
++ * 
++ * @author Yuriy
++ * 
++ */
++public interface IAlarmsManager {
++    /**
++     * Tell the model that a certain alarm has to be snoozed because of the user
++     * interaction
++     * 
++     * @param alarm
++     */
++    public void snooze(Alarm alarm);
++
++    /**
++     * Tell the model that a certain alarm has to be dismissed because of the
++     * user interaction
++     * 
++     * @param alarm
++     */
++    public void dismiss(Alarm alarm);
++}
+diff --git a/src/com/better/alarm/model/IAlarmsSetup.java b/src/com/better/alarm/model/IAlarmsSetup.java
+new file mode 100644
+index 00000000..280dd308
+--- /dev/null
++++ b/src/com/better/alarm/model/IAlarmsSetup.java
+@@ -0,0 +1,15 @@
++package com.better.alarm.model;
++
++import android.database.Cursor;
++
++public interface IAlarmsSetup {
++    public void delete(int id);
++
++    public long add(Alarm alarm);
++
++    public void enable(Alarm alarm);
++
++    public long set(Alarm alarm);
++
++    public Cursor getCursor();
++}
+diff --git a/src/com/better/alarm/model/Intents.java b/src/com/better/alarm/model/Intents.java
+new file mode 100644
+index 00000000..da06f9e6
+--- /dev/null
++++ b/src/com/better/alarm/model/Intents.java
+@@ -0,0 +1,34 @@
++package com.better.alarm.model;
++
++
++public class Intents {
++    /**
++     * Broadcasted when an alarm fires.
++     */
++    public static final String ALARM_ALERT_ACTION = "com.better.alarm.ALARM_ALERT";
++
++    /**
++     * Broadcasted when alarm is snoozed.
++     */
++    public static final String ALARM_SNOOZE_ACTION = "com.better.alarm.ALARM_SNOOZE";
++
++    /**
++     * Broadcasted when alarm is dismissed.
++     */
++    public static final String ALARM_DISMISS_ACTION = "com.better.alarm.ALARM_DISMISS";
++
++    /**
++     * Broadcasted when alarm is scheduled
++     */
++    public static final String  ACTION_ALARM_SCHEDULED = "com.better.alarm.model.Intents.ACTION_ALARM_SCHEDULED";
++
++    /**
++     * Broadcasted when alarm is scheduled
++     */
++    public static final String  ACTION_ALARMS_UNSCHEDULED = "com.better.alarm.model.Intents.ACTION_ALARMS_UNSCHEDULED";
++
++    /**
++     * Key of the Alarm attached as a parceble extra
++     */
++    public static final String ALARM_INTENT_EXTRA = "intent.extra.alarm";
++}
+diff --git a/src/com/better/alarm/model/Temp.java b/src/com/better/alarm/model/Temp.java
+new file mode 100644
+index 00000000..30ee86f4
+--- /dev/null
++++ b/src/com/better/alarm/model/Temp.java
+@@ -0,0 +1,38 @@
++package com.better.alarm.model;
++
++import java.util.Calendar;
++
++import android.app.Notification;
++import android.app.NotificationManager;
++import android.app.PendingIntent;
++import android.content.Intent;
++import android.preference.PreferenceManager;
++import android.widget.Toast;
++
++import com.better.alarm.Log;
++import com.better.alarm.R;
++import com.better.alarm.model.Alarms;
++import com.better.alarm.presenter.AlarmAlertFullScreen;
++import com.better.alarm.presenter.AlarmReceiver;
++import com.better.alarm.presenter.SettingsActivity;
++
++public class Temp {
++    /**
++     * Kills alarm audio after ALARM_TIMEOUT_SECONDS, so the alarm
++     * won't run all day.
++     *
++     * This just cancels the audio, but leaves the notification
++     * popped, so the user will know that the alarm tripped.
++     */
++    private void enableKiller(Alarm alarm) {
++        final String autoSnooze =
++                PreferenceManager.getDefaultSharedPreferences(this)
++                .getString(SettingsActivity.KEY_AUTO_SILENCE,
++                        DEFAULT_ALARM_TIMEOUT);
++        int autoSnoozeMinutes = Integer.parseInt(autoSnooze);
++        if (autoSnoozeMinutes != -1) {
++            mHandler.sendMessageDelayed(mHandler.obtainMessage(KILLER, alarm),
++                    1000 * autoSnoozeMinutes * 60);
++        }
++    }
++}
+diff --git a/src/com/better/alarm/presenter/AlarmAlert.java b/src/com/better/alarm/presenter/AlarmAlert.java
+index 65cdb683..e6abdbd9 100644
+--- a/src/com/better/alarm/presenter/AlarmAlert.java
++++ b/src/com/better/alarm/presenter/AlarmAlert.java
+@@ -24,17 +24,17 @@ import android.content.IntentFilter;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Message;
++import android.util.Log;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+-import com.better.alarm.model.Alarms;
++import com.better.alarm.model.Intents;
+ 
+ /**
+  * Full screen alarm alert: pops visible indicator and plays alarm tone. This
+  * activity shows the alert as a dialog.
+  */
+ public class AlarmAlert extends AlarmAlertFullScreen {
+-
++    private static final String TAG = "AlarmAlert";
+     // If we try to check the keyguard more than 5 times, just launch the full
+     // screen activity.
+     private int mKeyguardRetryCount;
+@@ -84,7 +84,7 @@ public class AlarmAlert extends AlarmAlertFullScreen {
+ 
+     private boolean checkRetryCount() {
+         if (mKeyguardRetryCount++ >= MAX_KEYGUARD_CHECKS) {
+-            Log.e("Tried to read keyguard status too many times, bailing...");
++            Log.e(TAG, "Tried to read keyguard status too many times, bailing...");
+             return false;
+         }
+         return true;
+@@ -98,7 +98,7 @@ public class AlarmAlert extends AlarmAlertFullScreen {
+         } else {
+             // Launch the full screen activity but do not turn the screen on.
+             Intent i = new Intent(this, AlarmAlertFullScreen.class);
+-            i.putExtra(Alarms.ALARM_INTENT_EXTRA, mAlarm);
++            i.putExtra(Intents.ALARM_INTENT_EXTRA, mAlarm);
+             i.putExtra(SCREEN_OFF, true);
+             startActivity(i);
+             finish();
+diff --git a/src/com/better/alarm/presenter/AlarmAlertFullScreen.java b/src/com/better/alarm/presenter/AlarmAlertFullScreen.java
+index 5cf6f3b8..972f33ea 100644
+--- a/src/com/better/alarm/presenter/AlarmAlertFullScreen.java
++++ b/src/com/better/alarm/presenter/AlarmAlertFullScreen.java
+@@ -16,30 +16,26 @@
+ 
+ package com.better.alarm.presenter;
+ 
+-import java.util.Calendar;
+-
+ import android.app.Activity;
+-import android.app.Notification;
+-import android.app.NotificationManager;
+-import android.app.PendingIntent;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+ import android.os.Bundle;
+ import android.preference.PreferenceManager;
++import android.util.Log;
+ import android.view.KeyEvent;
+ import android.view.LayoutInflater;
+ import android.view.View;
+ import android.view.Window;
+ import android.view.WindowManager;
+ import android.widget.Button;
+-import android.widget.Toast;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+ import com.better.alarm.model.Alarms;
++import com.better.alarm.model.IAlarmsManager;
++import com.better.alarm.model.Intents;
+ 
+ /**
+  * Alarm Clock alarm alert: pops visible indicator and plays alarm tone. This
+@@ -47,9 +43,8 @@ import com.better.alarm.model.Alarms;
+  * wallpaper as the background.
+  */
+ public class AlarmAlertFullScreen extends Activity {
+-
+-    // These defaults must match the values in res/xml/settings.xml
+-    private static final String DEFAULT_SNOOZE = "10";
++    private static final String TAG = "AlarmAlertFullScreen";
++    private static final boolean DBG = true;
+     private static final String DEFAULT_VOLUME_BEHAVIOR = "2";
+     protected static final String SCREEN_OFF = "screen_off";
+ 
+@@ -57,21 +52,23 @@ public class AlarmAlertFullScreen extends Activity {
+     private int mVolumeBehavior;
+     boolean mFullscreenStyle;
+ 
+-    // Receives the ALARM_KILLED action from the AlarmKlaxon,
+-    // and also ALARM_SNOOZE_ACTION / ALARM_DISMISS_ACTION from other
+-    // applications
++    private IAlarmsManager alarmsManager;
++
++    /**
++     * Receives Intents from the model
++     */
+     private BroadcastReceiver mReceiver = new BroadcastReceiver() {
+         @Override
+         public void onReceive(Context context, Intent intent) {
+             String action = intent.getAction();
+-            if (action.equals(Alarms.ALARM_SNOOZE_ACTION)) {
+-                snooze();
+-            } else if (action.equals(Alarms.ALARM_DISMISS_ACTION)) {
+-                dismiss(false);
+-            } else {
+-                Alarm alarm = intent.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
+-                if (alarm != null && mAlarm.id == alarm.id) {
+-                    dismiss(true);
++            Alarm alarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++            if (action.equals(Intents.ALARM_SNOOZE_ACTION)) {
++                if (mAlarm.id == alarm.id) {
++                    finish();
++                }
++            } else if (action.equals(Intents.ALARM_DISMISS_ACTION)) {
++                if (mAlarm.id == alarm.id) {
++                    finish();
+                 }
+             }
+         }
+@@ -81,7 +78,9 @@ public class AlarmAlertFullScreen extends Activity {
+     protected void onCreate(Bundle icicle) {
+         super.onCreate(icicle);
+ 
+-        mAlarm = getIntent().getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
++        mAlarm = getIntent().getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++
++        alarmsManager = Alarms.getAlarmsManager();
+ 
+         // Get the volume/camera button behavior setting
+         final String vol = PreferenceManager.getDefaultSharedPreferences(this).getString(
+@@ -102,9 +101,9 @@ public class AlarmAlertFullScreen extends Activity {
+         updateLayout();
+ 
+         // Register to get the alarm killed/snooze/dismiss intent.
+-        IntentFilter filter = new IntentFilter(Alarms.ALARM_KILLED);
+-        filter.addAction(Alarms.ALARM_SNOOZE_ACTION);
+-        filter.addAction(Alarms.ALARM_DISMISS_ACTION);
++        IntentFilter filter = new IntentFilter();
++        filter.addAction(Intents.ALARM_SNOOZE_ACTION);
++        filter.addAction(Intents.ALARM_DISMISS_ACTION);
+         registerReceiver(mReceiver, filter);
+     }
+ 
+@@ -137,7 +136,7 @@ public class AlarmAlertFullScreen extends Activity {
+         /* dismiss button: close notification */
+         findViewById(R.id.dismiss).setOnClickListener(new Button.OnClickListener() {
+             public void onClick(View v) {
+-                dismiss(false);
++                dismiss();
+             }
+         });
+ 
+@@ -147,64 +146,17 @@ public class AlarmAlertFullScreen extends Activity {
+ 
+     // Attempt to snooze this alert.
+     private void snooze() {
++        alarmsManager.snooze(mAlarm);
+         // Do not snooze if the snooze button is disabled.
+         if (!findViewById(R.id.snooze).isEnabled()) {
+-            dismiss(false);
++            dismiss();
+             return;
+         }
+-        final String snooze = PreferenceManager.getDefaultSharedPreferences(this).getString(
+-                SettingsActivity.KEY_ALARM_SNOOZE, DEFAULT_SNOOZE);
+-        int snoozeMinutes = Integer.parseInt(snooze);
+-
+-        final long snoozeTime = System.currentTimeMillis() + (1000 * 60 * snoozeMinutes);
+-        Alarms.saveSnoozeAlert(AlarmAlertFullScreen.this, mAlarm.id, snoozeTime);
+-
+-        // Get the display time for the snooze and update the notification.
+-        final Calendar c = Calendar.getInstance();
+-        c.setTimeInMillis(snoozeTime);
+-
+-        // Append (snoozed) to the label.
+-        String label = mAlarm.getLabelOrDefault(this);
+-        label = getString(R.string.alarm_notify_snooze_label, label);
+-
+-        // Notify the user that the alarm has been snoozed.
+-        Intent cancelSnooze = new Intent(this, AlarmAlertReceiver.class);
+-        cancelSnooze.setAction(Alarms.CANCEL_SNOOZE);
+-        cancelSnooze.putExtra(Alarms.ALARM_INTENT_EXTRA, mAlarm);
+-        PendingIntent broadcast = PendingIntent.getBroadcast(this, mAlarm.id, cancelSnooze, 0);
+-        NotificationManager nm = getNotificationManager();
+-        Notification n = new Notification(R.drawable.stat_notify_alarm, label, 0);
+-        n.setLatestEventInfo(this, label, getString(R.string.alarm_notify_snooze_text, Alarms.formatTime(this, c)),
+-                broadcast);
+-        n.flags |= Notification.FLAG_AUTO_CANCEL | Notification.FLAG_ONGOING_EVENT;
+-        nm.notify(mAlarm.id, n);
+-
+-        String displayTime = getString(R.string.alarm_alert_snooze_set, snoozeMinutes);
+-        // Intentionally log the snooze time for debugging.
+-        Log.v(displayTime);
+-
+-        // Display the snooze minutes in a toast.
+-        Toast.makeText(AlarmAlertFullScreen.this, displayTime, Toast.LENGTH_LONG).show();
+-        stopService(new Intent(Alarms.ALARM_ALERT_ACTION));
+-        finish();
+-    }
+-
+-    private NotificationManager getNotificationManager() {
+-        return (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+     }
+ 
+     // Dismiss the alarm.
+-    private void dismiss(boolean killed) {
+-        Log.i(killed ? "Alarm killed" : "Alarm dismissed by user");
+-        // The service told us that the alarm has been killed, do not modify
+-        // the notification or stop the service.
+-        if (!killed) {
+-            // Cancel the notification and stop playing the alarm
+-            NotificationManager nm = getNotificationManager();
+-            nm.cancel(mAlarm.id);
+-            stopService(new Intent(Alarms.ALARM_ALERT_ACTION));
+-        }
+-        finish();
++    private void dismiss() {
++        alarmsManager.dismiss(mAlarm);
+     }
+ 
+     /**
+@@ -215,9 +167,9 @@ public class AlarmAlertFullScreen extends Activity {
+     protected void onNewIntent(Intent intent) {
+         super.onNewIntent(intent);
+ 
+-        if (Log.LOGV) Log.v("AlarmAlert.OnNewIntent()");
++        if (DBG) Log.d(TAG, "AlarmAlert.OnNewIntent()");
+ 
+-        mAlarm = intent.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
++        mAlarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
+ 
+         setTitle();
+     }
+@@ -225,17 +177,18 @@ public class AlarmAlertFullScreen extends Activity {
+     @Override
+     protected void onResume() {
+         super.onResume();
++        // XXX this is some wierd logic and should not be here
+         // If the alarm was deleted at some point, disable snooze.
+-        if (Alarms.getAlarm(getContentResolver(), mAlarm.id) == null) {
+-            Button snooze = (Button) findViewById(R.id.snooze);
+-            snooze.setEnabled(false);
+-        }
++        // if (Alarms.getAlarm(getContentResolver(), mAlarm.id) == null) {
++        // Button snooze = (Button) findViewById(R.id.snooze);
++        // snooze.setEnabled(false);
++        // }
+     }
+ 
+     @Override
+     public void onDestroy() {
+         super.onDestroy();
+-        if (Log.LOGV) Log.v("AlarmAlert.onDestroy()");
++        if (DBG) Log.d(TAG, "AlarmAlert.onDestroy()");
+         // No longer care about the alarm being killed.
+         unregisterReceiver(mReceiver);
+     }
+@@ -258,7 +211,7 @@ public class AlarmAlertFullScreen extends Activity {
+                     break;
+ 
+                 case 2:
+-                    dismiss(false);
++                    dismiss();
+                     break;
+ 
+                 default:
+diff --git a/src/com/better/alarm/presenter/AlarmAlertReceiver.java b/src/com/better/alarm/presenter/AlarmAlertReceiver.java
+index 15cc923f..3b99eca4 100644
+--- a/src/com/better/alarm/presenter/AlarmAlertReceiver.java
++++ b/src/com/better/alarm/presenter/AlarmAlertReceiver.java
+@@ -23,14 +23,10 @@ import android.app.PendingIntent;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+-import android.os.Parcel;
+-import android.os.PowerManager.WakeLock;
+ 
+-import com.better.alarm.AsyncHandler;
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+-import com.better.alarm.model.Alarms;
++import com.better.alarm.model.Intents;
+ 
+ /**
+  * Glue class: connects AlarmAlert IntentReceiver to AlarmAlert activity. Passes
+@@ -38,177 +34,56 @@ import com.better.alarm.model.Alarms;
+  */
+ public class AlarmAlertReceiver extends BroadcastReceiver {
+ 
+-    /**
+-     * If the alarm is older than STALE_WINDOW, ignore. It is probably the
+-     * result of a time or timezone change
+-     */
+-    private final static int STALE_WINDOW = 30 * 60 * 1000;
+-
+     @Override
+     public void onReceive(final Context context, final Intent intent) {
+-        final PendingResult result = goAsync();
+-        final WakeLock wl = AlarmAlertWakeLock.createPartialWakeLock(context);
+-        wl.acquire();
+-        AsyncHandler.post(new Runnable() {
+-            @Override
+-            public void run() {
+-                handleIntent(context, intent);
+-                result.finish();
+-                wl.release();
+-            }
+-        });
+-    }
+-
+-    private void handleIntent(Context context, Intent intent) {
+-        if (Alarms.ALARM_KILLED.equals(intent.getAction())) {
+-            // The alarm has been killed, update the notification
+-            updateNotification(context, (Alarm) intent.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA),
+-                    intent.getIntExtra(Alarms.ALARM_KILLED_TIMEOUT, -1));
+-            return;
+-        } else if (Alarms.CANCEL_SNOOZE.equals(intent.getAction())) {
+-            Alarm alarm = null;
+-            if (intent.hasExtra(Alarms.ALARM_INTENT_EXTRA)) {
+-                // Get the alarm out of the Intent
+-                alarm = intent.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
++        String action = intent.getAction();
++        Alarm alarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++
++        if (action.equals(Intents.ALARM_ALERT_ACTION)) {
++            /* Close dialogs and window shade */
++            Intent closeDialogs = new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
++            context.sendBroadcast(closeDialogs);
++
++            // Decide which activity to start based on the state of the
++            // keyguard.
++            Class<? extends AlarmAlertFullScreen> c = AlarmAlert.class;
++            KeyguardManager km = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
++            if (km.inKeyguardRestrictedInputMode()) {
++                // Use the full screen activity for security.
++                c = AlarmAlertFullScreen.class;
+             }
+ 
+-            if (alarm != null) {
+-                Alarms.disableSnoozeAlert(context, alarm.id);
+-                Alarms.setNextAlert(context);
+-            } else {
+-                // Don't know what snoozed alarm to cancel, so cancel them all.
+-                // This
+-                // shouldn't happen
+-                Log.wtf("Unable to parse Alarm from intent.");
+-                Alarms.saveSnoozeAlert(context, Alarms.INVALID_ALARM_ID, -1);
+-            }
+-            return;
+-        } else if (!Alarms.ALARM_ALERT_ACTION.equals(intent.getAction())) {
+-            // Unknown intent, bail.
+-            return;
+-        }
+-
+-        Alarm alarm = null;
+-        // Grab the alarm from the intent. Since the remote AlarmManagerService
+-        // fills in the Intent to add some extra data, it must unparcel the
+-        // Alarm object. It throws a ClassNotFoundException when unparcelling.
+-        // To avoid this, do the marshalling ourselves.
+-        final byte[] data = intent.getByteArrayExtra(Alarms.ALARM_RAW_DATA);
+-        if (data != null) {
+-            Parcel in = Parcel.obtain();
+-            in.unmarshall(data, 0, data.length);
+-            in.setDataPosition(0);
+-            alarm = Alarm.CREATOR.createFromParcel(in);
+-        }
+-
+-        if (alarm == null) {
+-            Log.wtf("Failed to parse the alarm from the intent");
+-            // Make sure we set the next alert if needed.
+-            Alarms.setNextAlert(context);
+-            return;
+-        }
+-
+-        // Disable the snooze alert if this alarm is the snooze.
+-        Alarms.disableSnoozeAlert(context, alarm.id);
+-        // Disable this alarm if it does not repeat.
+-        if (!alarm.daysOfWeek.isRepeatSet()) {
+-            Alarms.enableAlarm(context, alarm.id, false);
+-        } else {
+-            // Enable the next alert if there is one. The above call to
+-            // enableAlarm will call setNextAlert so avoid calling it twice.
+-            Alarms.setNextAlert(context);
+-        }
+-
+-        // Intentionally verbose: always log the alarm time to provide useful
+-        // information in bug reports.
+-        long now = System.currentTimeMillis();
+-        Log.v("Recevied alarm set for " + Log.formatTime(alarm.time));
+-
+-        // Always verbose to track down time change problems.
+-        if (now > alarm.time + STALE_WINDOW) {
+-            Log.v("Ignoring stale alarm");
+-            return;
+-        }
+-
+-        // Maintain a cpu wake lock until the AlarmAlert and AlarmKlaxon can
+-        // pick it up.
+-        AlarmAlertWakeLock.acquireCpuWakeLock(context);
+-
+-        /* Close dialogs and window shade */
+-        Intent closeDialogs = new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+-        context.sendBroadcast(closeDialogs);
+-
+-        // Decide which activity to start based on the state of the keyguard.
+-        Class c = AlarmAlert.class;
+-        KeyguardManager km = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+-        if (km.inKeyguardRestrictedInputMode()) {
+-            // Use the full screen activity for security.
+-            c = AlarmAlertFullScreen.class;
+-        }
+-
+-        // Play the alarm alert and vibrate the device.
+-        Intent playAlarm = new Intent(Alarms.ALARM_ALERT_ACTION);
+-        playAlarm.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
+-        context.startService(playAlarm);
+-
+-        // Trigger a notification that, when clicked, will show the alarm alert
+-        // dialog. No need to check for fullscreen since this will always be
+-        // launched from a user action.
+-        Intent notify = new Intent(context, AlarmAlert.class);
+-        notify.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
+-        PendingIntent pendingNotify = PendingIntent.getActivity(context, alarm.id, notify, 0);
+-
+-        // Use the alarm's label or the default label as the ticker text and
+-        // main text of the notification.
+-        String label = alarm.getLabelOrDefault(context);
+-        Notification n = new Notification(R.drawable.stat_notify_alarm, label, alarm.time);
+-        n.setLatestEventInfo(context, label, context.getString(R.string.alarm_notify_text), pendingNotify);
+-        n.flags |= Notification.FLAG_SHOW_LIGHTS | Notification.FLAG_ONGOING_EVENT;
+-        n.defaults |= Notification.DEFAULT_LIGHTS;
+-
+-        // NEW: Embed the full-screen UI here. The notification manager will
+-        // take care of displaying it if it's OK to do so.
+-        Intent alarmAlert = new Intent(context, c);
+-        alarmAlert.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
+-        alarmAlert.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+-        n.fullScreenIntent = PendingIntent.getActivity(context, alarm.id, alarmAlert, 0);
+-
+-        // Send the notification using the alarm id to easily identify the
+-        // correct notification.
+-        NotificationManager nm = getNotificationManager(context);
+-        nm.notify(alarm.id, n);
+-    }
+-
+-    private NotificationManager getNotificationManager(Context context) {
+-        return (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+-    }
+-
+-    private void updateNotification(Context context, Alarm alarm, int timeout) {
+-        NotificationManager nm = getNotificationManager(context);
+-
+-        // If the alarm is null, just cancel the notification.
+-        if (alarm == null) {
+-            if (Log.LOGV) {
+-                Log.v("Cannot update notification for killer callback");
+-            }
+-            return;
++            // Trigger a notification that, when clicked, will show the alarm
++            // alert
++            // dialog. No need to check for fullscreen since this will always be
++            // launched from a user action.
++            Intent notify = new Intent(context, AlarmAlert.class);
++            notify.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
++            PendingIntent pendingNotify = PendingIntent.getActivity(context, alarm.id, notify, 0);
++
++            // Use the alarm's label or the default label as the ticker text and
++            // main text of the notification.
++            String label = alarm.getLabelOrDefault(context);
++            Notification n = new Notification(R.drawable.stat_notify_alarm, label, alarm.time);
++            n.setLatestEventInfo(context, label, context.getString(R.string.alarm_notify_text), pendingNotify);
++            n.flags |= Notification.FLAG_SHOW_LIGHTS | Notification.FLAG_ONGOING_EVENT;
++            n.defaults |= Notification.DEFAULT_LIGHTS;
++
++            // NEW: Embed the full-screen UI here. The notification manager will
++            // take care of displaying it if it's OK to do so.
++            Intent alarmAlert = new Intent(context, c);
++            alarmAlert.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
++            alarmAlert.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
++            n.fullScreenIntent = PendingIntent.getActivity(context, alarm.id, alarmAlert, 0);
++
++            // Send the notification using the alarm id to easily identify the
++            // correct notification.
++            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
++            nm.notify(alarm.id, n);
++
++        } else if (action.equals(Intents.ALARM_DISMISS_ACTION)) {
++            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
++            nm.cancel(alarm.id);
+         }
+-
+-        // Launch SetAlarm when clicked.
+-        Intent viewAlarm = new Intent(context, SetAlarmActivity.class);
+-        viewAlarm.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
+-        PendingIntent intent = PendingIntent.getActivity(context, alarm.id, viewAlarm, 0);
+-
+-        // Update the notification to indicate that the alert has been
+-        // silenced.
+-        String label = alarm.getLabelOrDefault(context);
+-        Notification n = new Notification(R.drawable.stat_notify_alarm, label, alarm.time);
+-        n.setLatestEventInfo(context, label, context.getString(R.string.alarm_alert_alert_silenced, timeout), intent);
+-        n.flags |= Notification.FLAG_AUTO_CANCEL;
+-        // We have to cancel the original notification since it is in the
+-        // ongoing section and we want the "killed" notification to be a plain
+-        // notification.
+-        nm.cancel(alarm.id);
+-        nm.notify(alarm.id, n);
+     }
+ }
+diff --git a/src/com/better/alarm/presenter/AlarmAlertWakeLock.java b/src/com/better/alarm/presenter/AlarmAlertWakeLock.java
+index ad9deea9..d767958e 100644
+--- a/src/com/better/alarm/presenter/AlarmAlertWakeLock.java
++++ b/src/com/better/alarm/presenter/AlarmAlertWakeLock.java
+@@ -18,20 +18,20 @@ package com.better.alarm.presenter;
+ 
+ import android.content.Context;
+ import android.os.PowerManager;
+-
+-import com.better.alarm.Log;
++import android.util.Log;
+ 
+ /**
+  * Hold a wakelock that can be acquired in the AlarmReceiver and released in the
+  * AlarmAlert activity
+  */
+ public class AlarmAlertWakeLock {
+-
++    private static final String TAG = "AlarmAlertWakeLock";
++    private static final boolean DBG = true;
+     private static PowerManager.WakeLock sCpuWakeLock;
+ 
+     public static PowerManager.WakeLock createPartialWakeLock(Context context) {
+         PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+-        return pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, Log.LOGTAG);
++        return pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
+     }
+ 
+     static void acquireCpuWakeLock(Context context) {
+@@ -41,6 +41,7 @@ public class AlarmAlertWakeLock {
+ 
+         sCpuWakeLock = createPartialWakeLock(context);
+         sCpuWakeLock.acquire();
++        if (DBG) Log.d(TAG, "WakeLock acquired");
+     }
+ 
+     static void releaseCpuLock() {
+@@ -48,5 +49,6 @@ public class AlarmAlertWakeLock {
+             sCpuWakeLock.release();
+             sCpuWakeLock = null;
+         }
++        if (DBG) Log.d(TAG, "WakeLock released");
+     }
+ }
+diff --git a/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java b/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java
+new file mode 100644
+index 00000000..a3fa763d
+--- /dev/null
++++ b/src/com/better/alarm/presenter/AlarmKlaxonReceiver.java
+@@ -0,0 +1,44 @@
++/*
++ * Copyright (C) 2007 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.better.alarm.presenter;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++
++import com.better.alarm.model.Alarm;
++import com.better.alarm.model.Intents;
++
++/**
++ * Dispatches intents to the KlaxonService
++ */
++public class AlarmKlaxonReceiver extends BroadcastReceiver {
++
++    @Override
++    public void onReceive(final Context context, final Intent intent) {
++        Alarm alarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++
++        // Maintain a cpu wake lock until the and AlarmKlaxonService can pick it
++        // up.
++        AlarmAlertWakeLock.acquireCpuWakeLock(context);
++
++        // Dispatch intent to the service
++        Intent playAlarm = new Intent(intent.getAction());
++        playAlarm.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
++        context.startService(playAlarm);
++    }
++}
+diff --git a/src/com/better/alarm/presenter/AlarmKlaxonService.java b/src/com/better/alarm/presenter/AlarmKlaxonService.java
+index 02162433..4f096769 100644
+--- a/src/com/better/alarm/presenter/AlarmKlaxonService.java
++++ b/src/com/better/alarm/presenter/AlarmKlaxonService.java
+@@ -26,52 +26,29 @@ import android.media.MediaPlayer;
+ import android.media.MediaPlayer.OnErrorListener;
+ import android.media.RingtoneManager;
+ import android.net.Uri;
+-import android.os.Handler;
+ import android.os.IBinder;
+-import android.os.Message;
+ import android.os.Vibrator;
+-import android.preference.PreferenceManager;
+ import android.telephony.PhoneStateListener;
+ import android.telephony.TelephonyManager;
++import android.util.Log;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+-import com.better.alarm.model.Alarms;
++import com.better.alarm.model.Intents;
+ 
+ /**
+  * Manages alarms and vibe. Runs as a service so that it can continue to play if
+  * another activity overrides the AlarmAlert dialog.
+  */
+ public class AlarmKlaxonService extends Service {
+-    // Default of 10 minutes until alarm is silenced.
+-    private static final String DEFAULT_ALARM_TIMEOUT = "10";
+-
++    private static final String TAG = "AlarmKlaxonService";
++    private static final boolean DBG = true;
+     private static final long[] sVibratePattern = new long[] { 500, 500 };
+ 
+     private boolean mPlaying = false;
+     private Vibrator mVibrator;
+     private MediaPlayer mMediaPlayer;
+-    private Alarm mCurrentAlarm;
+-    private long mStartTime;
+     private TelephonyManager mTelephonyManager;
+-    private int mInitialCallState;
+-
+-    // Internal messages
+-    private static final int KILLER = 1000;
+-    private Handler mHandler = new Handler() {
+-        public void handleMessage(Message msg) {
+-            switch (msg.what) {
+-            case KILLER:
+-                if (Log.LOGV) {
+-                    Log.v("*********** Alarm killer triggered ***********");
+-                }
+-                sendKillBroadcast((Alarm) msg.obj);
+-                stopSelf();
+-                break;
+-            }
+-        }
+-    };
+ 
+     private PhoneStateListener mPhoneStateListener = new PhoneStateListener() {
+         @Override
+@@ -80,10 +57,6 @@ public class AlarmKlaxonService extends Service {
+             // we register onCallStateChanged, we get the initial in-call state
+             // which kills the alarm. Check against the initial call state so
+             // we don't kill the alarm during a call.
+-            if (state != TelephonyManager.CALL_STATE_IDLE && state != mInitialCallState) {
+-                sendKillBroadcast(mCurrentAlarm);
+-                stopSelf();
+-            }
+         }
+     };
+ 
+@@ -93,7 +66,6 @@ public class AlarmKlaxonService extends Service {
+         // Listen for incoming calls to kill the alarm.
+         mTelephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+         mTelephonyManager.listen(mPhoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
+-        AlarmAlertWakeLock.acquireCpuWakeLock(this);
+     }
+ 
+     @Override
+@@ -102,6 +74,7 @@ public class AlarmKlaxonService extends Service {
+         // Stop listening for incoming calls.
+         mTelephonyManager.listen(mPhoneStateListener, 0);
+         AlarmAlertWakeLock.releaseCpuLock();
++        if (DBG) Log.d(TAG, "Service destroyed");
+     }
+ 
+     @Override
+@@ -111,40 +84,25 @@ public class AlarmKlaxonService extends Service {
+ 
+     @Override
+     public int onStartCommand(Intent intent, int flags, int startId) {
+-        // No intent, tell the system not to restart us.
+-        if (intent == null) {
++        Alarm alarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++        String action = intent.getAction();
++
++        if (action.equals(Intents.ALARM_ALERT_ACTION)) {
++            play(alarm);
++            return START_STICKY;
++
++        } else if (action.equals(Intents.ALARM_SNOOZE_ACTION)) {
+             stopSelf();
+             return START_NOT_STICKY;
+-        }
+-
+-        final Alarm alarm = intent.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
+ 
+-        if (alarm == null) {
+-            Log.v("AlarmKlaxon failed to parse the alarm from the intent");
++        } else if (action.equals(Intents.ALARM_DISMISS_ACTION)) {
+             stopSelf();
+             return START_NOT_STICKY;
+-        }
+ 
+-        if (mCurrentAlarm != null) {
+-            sendKillBroadcast(mCurrentAlarm);
++        } else {
++            return START_NOT_STICKY;
+         }
+ 
+-        play(alarm);
+-        mCurrentAlarm = alarm;
+-        // Record the initial call state here so that the new alarm has the
+-        // newest state.
+-        mInitialCallState = mTelephonyManager.getCallState();
+-
+-        return START_STICKY;
+-    }
+-
+-    private void sendKillBroadcast(Alarm alarm) {
+-        long millis = System.currentTimeMillis() - mStartTime;
+-        int minutes = (int) Math.round(millis / 60000.0);
+-        Intent alarmKilled = new Intent(Alarms.ALARM_KILLED);
+-        alarmKilled.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
+-        alarmKilled.putExtra(Alarms.ALARM_KILLED_TIMEOUT, minutes);
+-        sendBroadcast(alarmKilled);
+     }
+ 
+     // Volume suggested by media team for in-call alarms.
+@@ -154,9 +112,7 @@ public class AlarmKlaxonService extends Service {
+         // stop() checks to see if we are already playing.
+         stop();
+ 
+-        if (Log.LOGV) {
+-            Log.v("AlarmKlaxon.play() " + alarm.id + " alert " + alarm.alert);
+-        }
++        if (DBG) Log.d(TAG, "AlarmKlaxon.play() " + alarm.id + " alert " + alarm.alert);
+ 
+         if (!alarm.silent) {
+             Uri alert = alarm.alert;
+@@ -164,9 +120,7 @@ public class AlarmKlaxonService extends Service {
+             // alarm stored.
+             if (alert == null) {
+                 alert = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+-                if (Log.LOGV) {
+-                    Log.v("Using default alarm: " + alert.toString());
+-                }
++                if (DBG) Log.d(TAG, "Using default alarm: " + alert.toString());
+             }
+ 
+             // TODO: Reuse mMediaPlayer instead of creating a new one and/or use
+@@ -174,7 +128,7 @@ public class AlarmKlaxonService extends Service {
+             mMediaPlayer = new MediaPlayer();
+             mMediaPlayer.setOnErrorListener(new OnErrorListener() {
+                 public boolean onError(MediaPlayer mp, int what, int extra) {
+-                    Log.e("Error occurred while playing audio.");
++                    Log.e(TAG, "Error occurred while playing audio.");
+                     mp.stop();
+                     mp.release();
+                     mMediaPlayer = null;
+@@ -186,7 +140,7 @@ public class AlarmKlaxonService extends Service {
+                 // Check if we are in a call. If we are, use the in-call alarm
+                 // resource at a low volume to not disrupt the call.
+                 if (mTelephonyManager.getCallState() != TelephonyManager.CALL_STATE_IDLE) {
+-                    Log.v("Using the in-call alarm");
++                    Log.d(TAG, "Using the in-call alarm");
+                     mMediaPlayer.setVolume(IN_CALL_VOLUME, IN_CALL_VOLUME);
+                     setDataSourceFromResource(getResources(), mMediaPlayer, R.raw.in_call_alarm);
+                 } else {
+@@ -194,7 +148,7 @@ public class AlarmKlaxonService extends Service {
+                 }
+                 startAlarm(mMediaPlayer);
+             } catch (Exception ex) {
+-                Log.v("Using the fallback ringtone");
++                Log.d(TAG, "Using the fallback ringtone");
+                 // The alert may be on the sd card which could be busy right
+                 // now. Use the fallback ringtone.
+                 try {
+@@ -204,7 +158,7 @@ public class AlarmKlaxonService extends Service {
+                     startAlarm(mMediaPlayer);
+                 } catch (Exception ex2) {
+                     // At this point we just don't play anything.
+-                    Log.e("Failed to play fallback ringtone", ex2);
++                    Log.e(TAG, "Failed to play fallback ringtone", ex2);
+                 }
+             }
+         }
+@@ -216,9 +170,7 @@ public class AlarmKlaxonService extends Service {
+             mVibrator.cancel();
+         }
+ 
+-        enableKiller(alarm);
+         mPlaying = true;
+-        mStartTime = System.currentTimeMillis();
+     }
+ 
+     // Do the common stuff when starting the alarm.
+@@ -244,16 +196,13 @@ public class AlarmKlaxonService extends Service {
+     }
+ 
+     /**
+-     * Stops alarm audio and disables alarm if it not snoozed and not repeating
++     * Stops alarm audio
+      */
+     public void stop() {
+-        if (Log.LOGV) Log.v("AlarmKlaxon.stop()");
++        if (DBG) Log.d(TAG, "stop()");
+         if (mPlaying) {
+             mPlaying = false;
+ 
+-            Intent alarmDone = new Intent(Alarms.ALARM_DONE_ACTION);
+-            sendBroadcast(alarmDone);
+-
+             // Stop audio playing
+             if (mMediaPlayer != null) {
+                 mMediaPlayer.stop();
+@@ -264,27 +213,6 @@ public class AlarmKlaxonService extends Service {
+             // Stop vibrator
+             mVibrator.cancel();
+         }
+-        disableKiller();
+-    }
+-
+-    /**
+-     * Kills alarm audio after ALARM_TIMEOUT_SECONDS, so the alarm won't run all
+-     * day.
+-     * 
+-     * This just cancels the audio, but leaves the notification popped, so the
+-     * user will know that the alarm tripped.
+-     */
+-    private void enableKiller(Alarm alarm) {
+-        final String autoSnooze = PreferenceManager.getDefaultSharedPreferences(this).getString(
+-                SettingsActivity.KEY_AUTO_SILENCE, DEFAULT_ALARM_TIMEOUT);
+-        int autoSnoozeMinutes = Integer.parseInt(autoSnooze);
+-        if (autoSnoozeMinutes != -1) {
+-            mHandler.sendMessageDelayed(mHandler.obtainMessage(KILLER, alarm), 1000 * autoSnoozeMinutes * 60);
+-        }
+-    }
+-
+-    private void disableKiller() {
+-        mHandler.removeMessages(KILLER);
+     }
+ 
+ }
+diff --git a/src/com/better/alarm/presenter/AlarmPreference.java b/src/com/better/alarm/presenter/AlarmPreference.java
+index ef938f9e..fab50882 100644
+--- a/src/com/better/alarm/presenter/AlarmPreference.java
++++ b/src/com/better/alarm/presenter/AlarmPreference.java
+@@ -34,7 +34,7 @@ import com.better.alarm.R;
+ public class AlarmPreference extends RingtonePreference {
+     private Uri mAlert;
+     private boolean mChangeDefault;
+-    private AsyncTask mRingtoneTask;
++    private AsyncTask<Uri, Void, String> mRingtoneTask;
+ 
+     public AlarmPreference(Context context, AttributeSet attrs) {
+         super(context, attrs);
+diff --git a/src/com/better/alarm/presenter/AlarmsListActivity.java b/src/com/better/alarm/presenter/AlarmsListActivity.java
+index 9d6ba74e..27026223 100644
+--- a/src/com/better/alarm/presenter/AlarmsListActivity.java
++++ b/src/com/better/alarm/presenter/AlarmsListActivity.java
+@@ -23,9 +23,9 @@ import android.app.AlertDialog;
+ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.Intent;
+-import android.content.SharedPreferences;
+ import android.database.Cursor;
+ import android.os.Bundle;
++import android.text.format.DateFormat;
+ import android.view.ContextMenu;
+ import android.view.ContextMenu.ContextMenuInfo;
+ import android.view.LayoutInflater;
+@@ -45,6 +45,8 @@ import android.widget.TextView;
+ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+ import com.better.alarm.model.Alarms;
++import com.better.alarm.model.IAlarmsSetup;
++import com.better.alarm.model.Intents;
+ import com.better.alarm.view.DigitalClock;
+ 
+ /**
+@@ -60,16 +62,17 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+      */
+     public static final boolean DEBUG = false;
+ 
+-    private SharedPreferences mPrefs;
++    public final static String M12 = "h:mm aa";
++    public final static String M24 = "kk:mm";
++
+     private LayoutInflater mFactory;
+     private ListView mAlarmsList;
+     private Cursor mCursor;
+ 
++    IAlarmsSetup alarms;
++
+     private void updateAlarm(boolean enabled, Alarm alarm) {
+-        Alarms.enableAlarm(this, alarm.id, enabled);
+-        if (enabled) {
+-            SetAlarmActivity.popAlarmSetToast(this, alarm.hour, alarm.minutes, alarm.daysOfWeek);
+-        }
++        alarms.enable(alarm);
+     }
+ 
+     private class AlarmTimeAdapter extends CursorAdapter {
+@@ -148,7 +151,7 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+                     .setMessage(getString(R.string.delete_alarm_confirm))
+                     .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                         public void onClick(DialogInterface d, int w) {
+-                            Alarms.deleteAlarm(AlarmsListActivity.this, id);
++                            alarms.delete(id);
+                         }
+                     }).setNegativeButton(android.R.string.cancel, null).show();
+             return true;
+@@ -157,10 +160,7 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+         case R.id.enable_alarm: {
+             final Cursor c = (Cursor) mAlarmsList.getAdapter().getItem(info.position);
+             final Alarm alarm = new Alarm(c);
+-            Alarms.enableAlarm(this, alarm.id, !alarm.enabled);
+-            if (!alarm.enabled) {
+-                SetAlarmActivity.popAlarmSetToast(this, alarm.hour, alarm.minutes, alarm.daysOfWeek);
+-            }
++            alarms.enable(alarm);
+             return true;
+         }
+ 
+@@ -168,7 +168,7 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+             final Cursor c = (Cursor) mAlarmsList.getAdapter().getItem(info.position);
+             final Alarm alarm = new Alarm(c);
+             Intent intent = new Intent(this, SetAlarmActivity.class);
+-            intent.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
++            intent.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
+             startActivity(intent);
+             return true;
+         }
+@@ -183,9 +183,9 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+     protected void onCreate(Bundle icicle) {
+         super.onCreate(icicle);
+ 
++        alarms = Alarms.getAlarmsSetup();
+         mFactory = LayoutInflater.from(this);
+-        mPrefs = getSharedPreferences(PREFERENCES, 0);
+-        mCursor = Alarms.getAlarmsCursor(getContentResolver());
++        mCursor = alarms.getCursor();
+ 
+         updateLayout();
+     }
+@@ -216,7 +216,6 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+     @Override
+     protected void onDestroy() {
+         super.onDestroy();
+-        ToastMaster.cancelToast();
+         if (mCursor != null) {
+             mCursor.close();
+         }
+@@ -236,7 +235,8 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+         final Calendar cal = Calendar.getInstance();
+         cal.set(Calendar.HOUR_OF_DAY, alarm.hour);
+         cal.set(Calendar.MINUTE, alarm.minutes);
+-        final String time = Alarms.formatTime(this, cal);
++        String format = android.text.format.DateFormat.is24HourFormat(this) ? M24 : M12;
++        final String time = (cal == null) ? "" : (String) DateFormat.format(format, cal);
+ 
+         // Inflate the custom view and set each TextView's text.
+         final View v = mFactory.inflate(R.layout.context_menu_header, null);
+@@ -275,11 +275,11 @@ public class AlarmsListActivity extends Activity implements OnItemClickListener
+     }
+ 
+     @Override
+-    public void onItemClick(AdapterView parent, View v, int pos, long id) {
++    public void onItemClick(@SuppressWarnings("rawtypes") AdapterView parent, View v, int pos, long id) {
+         final Cursor c = (Cursor) mAlarmsList.getAdapter().getItem(pos);
+         final Alarm alarm = new Alarm(c);
+         Intent intent = new Intent(this, SetAlarmActivity.class);
+-        intent.putExtra(Alarms.ALARM_INTENT_EXTRA, alarm);
++        intent.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
+         startActivity(intent);
+     }
+ }
+diff --git a/src/com/better/alarm/presenter/NotificationPresenter.java b/src/com/better/alarm/presenter/NotificationPresenter.java
+new file mode 100644
+index 00000000..6077d2b1
+--- /dev/null
++++ b/src/com/better/alarm/presenter/NotificationPresenter.java
+@@ -0,0 +1,107 @@
++package com.better.alarm.presenter;
++
++import java.util.Calendar;
++
++import com.better.alarm.Log;
++import com.better.alarm.R;
++import com.better.alarm.model.Alarm;
++import com.better.alarm.model.Alarms;
++import com.better.alarm.model.Intents;
++import com.better.alarm.presenter.AlarmAlert;
++import com.better.alarm.presenter.AlarmReceiver;
++import com.better.alarm.presenter.SetAlarm;
++
++import android.app.Notification;
++import android.app.NotificationManager;
++import android.app.PendingIntent;
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++
++public class NotificationManager extends BroadcastReceiver {
++
++    @Override
++    public void onReceive(Context arg0, Intent arg1) {
++        // TODO Auto-generated method stub
++        
++        if (Intents.ALARM_KILLED.equals(intent.getAction())) {
++            // The alarm has been killed, update the notification
++            updateNotification(context, (Alarm)
++                    intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA),
++                    intent.getIntExtra(Intents.ALARM_KILLED_TIMEOUT, -1));
++            return;
++        } else 
++        
++        
++        // here goes!
++        if (!killed) {
++            // Cancel the notification and stop playing the alarm
++            NotificationManager nm = getNotificationManager();
++            nm.cancel(mAlarm.id);
++
++        }
++    }
++
++    snoozed () {
++        // Get the display time for the snooze and update the notification.
++        final Calendar c = Calendar.getInstance();
++        c.setTimeInMillis(snoozeTime);
++
++        // Append (snoozed) to the label.
++        String label = mAlarm.getLabelOrDefault(this);
++        label = getString(R.string.alarm_notify_snooze_label, label);
++
++        // Notify the user that the alarm has been snoozed.
++        Intent cancelSnooze = new Intent(this, AlarmReceiver.class);
++        cancelSnooze.setAction(Alarms.CANCEL_SNOOZE);
++        cancelSnooze.putExtra(Alarms.ALARM_INTENT_EXTRA, mAlarm);
++        PendingIntent broadcast =
++                PendingIntent.getBroadcast(this, mAlarm.id, cancelSnooze, 0);
++        NotificationManager nm = getNotificationManager();
++        Notification n = new Notification(R.drawable.stat_notify_alarm,
++                label, 0);
++        n.setLatestEventInfo(this, label,
++                getString(R.string.alarm_notify_snooze_text,
++                    Alarms.formatTime(this, c)), broadcast);
++        n.flags |= Notification.FLAG_AUTO_CANCEL
++                | Notification.FLAG_ONGOING_EVENT;
++        nm.notify(mAlarm.id, n);
++    }
++    
++    private void updateNotification(Context context, Alarm alarm, int timeout) {
++        NotificationManager nm = getNotificationManager(context);
++
++        // If the alarm is null, just cancel the notification.
++        if (alarm == null) {
++            if (Log.LOGV) {
++                Log.v("Cannot update notification for killer callback");
++            }
++            return;
++        }
++
++        // Launch SetAlarm when clicked.
++        Intent viewAlarm = new Intent(context, SetAlarm.class);
++        viewAlarm.putExtra(Intents.ALARM_INTENT_EXTRA, alarm);
++        PendingIntent intent =
++                PendingIntent.getActivity(context, alarm.id, viewAlarm, 0);
++
++        // Update the notification to indicate that the alert has been
++        // silenced.
++        String label = alarm.getLabelOrDefault(context);
++        Notification n = new Notification(R.drawable.stat_notify_alarm,
++                label, alarm.time);
++        n.setLatestEventInfo(context, label,
++                context.getString(R.string.alarm_alert_alert_silenced, timeout),
++                intent);
++        n.flags |= Notification.FLAG_AUTO_CANCEL;
++        // We have to cancel the original notification since it is in the
++        // ongoing section and we want the "killed" notification to be a plain
++        // notification.
++        nm.cancel(alarm.id);
++        nm.notify(alarm.id, n);
++    }
++    
++    notifyAlarmKickedOff() {
++
++    }
++}
+diff --git a/src/com/better/alarm/presenter/RepeatPreference.java b/src/com/better/alarm/presenter/RepeatPreference.java
+index a1adb485..b561418e 100644
+--- a/src/com/better/alarm/presenter/RepeatPreference.java
++++ b/src/com/better/alarm/presenter/RepeatPreference.java
+@@ -60,8 +60,6 @@ public class RepeatPreference extends ListPreference {
+     @Override
+     protected void onPrepareDialogBuilder(Builder builder) {
+         CharSequence[] entries = getEntries();
+-        CharSequence[] entryValues = getEntryValues();
+-
+         builder.setMultiChoiceItems(entries, mDaysOfWeek.getBooleanArray(),
+                 new DialogInterface.OnMultiChoiceClickListener() {
+                     public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+diff --git a/src/com/better/alarm/presenter/ScheduledReceiver.java b/src/com/better/alarm/presenter/ScheduledReceiver.java
+new file mode 100644
+index 00000000..7ce446b7
+--- /dev/null
++++ b/src/com/better/alarm/presenter/ScheduledReceiver.java
+@@ -0,0 +1,47 @@
++package com.better.alarm.presenter;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.provider.Settings;
++import android.text.format.DateFormat;
++
++import com.better.alarm.model.Alarm;
++import com.better.alarm.model.Intents;
++
++/**
++ * This class reacts on {@link } and {@link } and 
++ * @author Yuriy
++ *
++ */
++public class ScheduledReceiver extends BroadcastReceiver {
++    private static final String DM12 = "E h:mm aa";
++    private static final String DM24 = "E kk:mm";
++
++    @Override
++    public void onReceive(Context context, Intent intent) {
++        
++        if (intent.getAction().equals(Intents.ACTION_ALARM_SCHEDULED)) {
++            Alarm alarm = intent.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
++
++            // Broadcast intent for the notification bar
++            Intent alarmChanged = new Intent("android.intent.action.ALARM_CHANGED");
++            alarmChanged.putExtra("alarmSet", true);
++            context.sendBroadcast(alarmChanged);
++
++            // Update systems settings, so that interested Apps (like KeyGuard) will react accordingly
++            String format = android.text.format.DateFormat.is24HourFormat(context) ? DM24 : DM12;
++            String timeString = (String) DateFormat.format(format, alarm.calculateCalendar());
++            Settings.System.putString(context.getContentResolver(), Settings.System.NEXT_ALARM_FORMATTED, timeString);
++           
++        } else if (intent.getAction().equals(Intents.ACTION_ALARMS_UNSCHEDULED)) {
++            // Broadcast intent for the notification bar
++            Intent alarmChanged = new Intent("android.intent.action.ALARM_CHANGED");
++            alarmChanged.putExtra("alarmSet", false);
++            context.sendBroadcast(alarmChanged);
++            // Update systems settings, so that interested Apps (like KeyGuard) will react accordingly
++            Settings.System.putString(context.getContentResolver(), Settings.System.NEXT_ALARM_FORMATTED, "");
++        }
++    }
++
++}
+diff --git a/src/com/better/alarm/presenter/SetAlarmActivity.java b/src/com/better/alarm/presenter/SetAlarmActivity.java
+index d0d82be5..abf5d396 100644
+--- a/src/com/better/alarm/presenter/SetAlarmActivity.java
++++ b/src/com/better/alarm/presenter/SetAlarmActivity.java
+@@ -16,9 +16,10 @@
+ 
+ package com.better.alarm.presenter;
+ 
++import java.util.Calendar;
++
+ import android.app.AlertDialog;
+ import android.app.TimePickerDialog;
+-import android.content.Context;
+ import android.content.DialogInterface;
+ import android.content.DialogInterface.OnCancelListener;
+ import android.content.Intent;
+@@ -29,25 +30,32 @@ import android.preference.Preference;
+ import android.preference.PreferenceActivity;
+ import android.preference.PreferenceScreen;
+ import android.text.format.DateFormat;
++import android.util.Log;
+ import android.view.View;
+ import android.widget.Button;
+ import android.widget.TimePicker;
+-import android.widget.Toast;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+ import com.better.alarm.model.Alarm;
+ import com.better.alarm.model.Alarms;
++import com.better.alarm.model.IAlarmsSetup;
++import com.better.alarm.model.Intents;
+ 
+ /**
+  * Manages each alarm
+  */
+ public class SetAlarmActivity extends PreferenceActivity implements Preference.OnPreferenceChangeListener,
+         TimePickerDialog.OnTimeSetListener, OnCancelListener {
++    private static final String TAG = "SetAlarmActivity";
+     private static final String KEY_CURRENT_ALARM = "currentAlarm";
+     private static final String KEY_ORIGINAL_ALARM = "originalAlarm";
+     private static final String KEY_TIME_PICKER_BUNDLE = "timePickerBundle";
+ 
++    public final static String M12 = "h:mm aa";
++    public final static String M24 = "kk:mm";
++
++    private IAlarmsSetup alarms;
++
+     private CheckBoxPreference mEnabledPref;
+     private Preference mTimePref;
+     private AlarmPreference mAlarmPref;
+@@ -70,6 +78,8 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         // each change.
+         addPreferencesFromResource(R.xml.alarm_prefs);
+ 
++        alarms = Alarms.getAlarmsSetup();
++
+         // Get each preference so we can retrieve the value later.
+         mEnabledPref = (CheckBoxPreference) findPreference("enabled");
+         mEnabledPref.setOnPreferenceChangeListener(this);
+@@ -82,7 +92,7 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         mRepeatPref.setOnPreferenceChangeListener(this);
+ 
+         Intent i = getIntent();
+-        Alarm alarm = i.getParcelableExtra(Alarms.ALARM_INTENT_EXTRA);
++        Alarm alarm = i.getParcelableExtra(Intents.ALARM_INTENT_EXTRA);
+ 
+         if (alarm == null) {
+             // No alarm means create a new alarm.
+@@ -102,10 +112,7 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         Button b = (Button) findViewById(R.id.alarm_save);
+         b.setOnClickListener(new View.OnClickListener() {
+             public void onClick(View v) {
+-                long time = saveAlarm(null);
+-                if (mEnabledPref.isChecked()) {
+-                    popAlarmSetToast(SetAlarmActivity.this, time);
+-                }
++                saveAlarm(null);
+                 finish();
+             }
+         });
+@@ -191,7 +198,7 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         mRepeatPref.setDaysOfWeek(alarm.daysOfWeek);
+         // Give the alert uri to the preference.
+         mAlarmPref.setAlert(alarm.alert);
+-        updateTime();
++        updateTime(alarm);
+     }
+ 
+     @Override
+@@ -212,10 +219,10 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+     private void showTimePicker() {
+         if (mTimePickerDialog != null) {
+             if (mTimePickerDialog.isShowing()) {
+-                Log.e("mTimePickerDialog is already showing.");
++                Log.e(TAG, "mTimePickerDialog is already showing.");
+                 mTimePickerDialog.dismiss();
+             } else {
+-                Log.e("mTimePickerDialog is not null");
++                Log.e(TAG, "mTimePickerDialog is not null");
+             }
+             mTimePickerDialog.dismiss();
+         }
+@@ -230,7 +237,7 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         mTimePickerDialog = null;
+         mHour = hourOfDay;
+         mMinute = minute;
+-        updateTime();
++        updateTime(buildAlarmFromUi());
+         // If the time has been changed, enable the alarm.
+         mEnabledPref.setChecked(true);
+     }
+@@ -240,8 +247,11 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         mTimePickerDialog = null;
+     }
+ 
+-    private void updateTime() {
+-        mTimePref.setSummary(Alarms.formatTime(this, mHour, mMinute, mRepeatPref.getDaysOfWeek()));
++    private void updateTime(Alarm alarm) {
++        Calendar c = alarm.calculateCalendar();
++        String format = android.text.format.DateFormat.is24HourFormat(this) ? M24 : M12;
++        CharSequence summary = (c == null) ? "" : (String) DateFormat.format(format, c);
++        mTimePref.setSummary(summary);
+     }
+ 
+     private long saveAlarm(Alarm alarm) {
+@@ -251,12 +261,12 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+ 
+         long time;
+         if (alarm.id == -1) {
+-            time = Alarms.addAlarm(this, alarm);
++            time = alarms.add(alarm);
+             // addAlarm populates the alarm with the new id. Update mId so that
+             // changes to other preferences update the new alarm.
+             mId = alarm.id;
+         } else {
+-            time = Alarms.setAlarm(this, alarm);
++            time = alarms.set(alarm);
+         }
+         return time;
+     }
+@@ -280,7 +290,7 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+                 .setMessage(getString(R.string.delete_alarm_confirm))
+                 .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                     public void onClick(DialogInterface d, int w) {
+-                        Alarms.deleteAlarm(SetAlarmActivity.this, mId);
++                        alarms.delete(mId);
+                         finish();
+                     }
+                 }).setNegativeButton(android.R.string.cancel, null).show();
+@@ -290,53 +300,9 @@ public class SetAlarmActivity extends PreferenceActivity implements Preference.O
+         int newId = mId;
+         // "Revert" on a newly created alarm should delete it.
+         if (mOriginalAlarm.id == -1) {
+-            Alarms.deleteAlarm(SetAlarmActivity.this, newId);
++            alarms.delete(newId);
+         } else {
+             saveAlarm(mOriginalAlarm);
+         }
+     }
+-
+-    /**
+-     * Display a toast that tells the user how long until the alarm goes off.
+-     * This helps prevent "am/pm" mistakes.
+-     */
+-    static void popAlarmSetToast(Context context, int hour, int minute, Alarm.DaysOfWeek daysOfWeek) {
+-        popAlarmSetToast(context, Alarms.calculateAlarm(hour, minute, daysOfWeek).getTimeInMillis());
+-    }
+-
+-    static void popAlarmSetToast(Context context, long timeInMillis) {
+-        String toastText = formatToast(context, timeInMillis);
+-        Toast toast = Toast.makeText(context, toastText, Toast.LENGTH_LONG);
+-        ToastMaster.setToast(toast);
+-        toast.show();
+-    }
+-
+-    /**
+-     * format "Alarm set for 2 days 7 hours and 53 minutes from now"
+-     */
+-    static String formatToast(Context context, long timeInMillis) {
+-        long delta = timeInMillis - System.currentTimeMillis();
+-        long hours = delta / (1000 * 60 * 60);
+-        long minutes = delta / (1000 * 60) % 60;
+-        long days = hours / 24;
+-        hours = hours % 24;
+-
+-        String daySeq = (days == 0) ? "" : (days == 1) ? context.getString(R.string.day) : context.getString(
+-                R.string.days, Long.toString(days));
+-
+-        String minSeq = (minutes == 0) ? "" : (minutes == 1) ? context.getString(R.string.minute) : context.getString(
+-                R.string.minutes, Long.toString(minutes));
+-
+-        String hourSeq = (hours == 0) ? "" : (hours == 1) ? context.getString(R.string.hour) : context.getString(
+-                R.string.hours, Long.toString(hours));
+-
+-        boolean dispDays = days > 0;
+-        boolean dispHour = hours > 0;
+-        boolean dispMinute = minutes > 0;
+-
+-        int index = (dispDays ? 1 : 0) | (dispHour ? 2 : 0) | (dispMinute ? 4 : 0);
+-
+-        String[] formats = context.getResources().getStringArray(R.array.alarm_set);
+-        return String.format(formats[index], daySeq, hourSeq, minSeq);
+-    }
+ }
+diff --git a/src/com/better/alarm/presenter/SettingsActivity.java b/src/com/better/alarm/presenter/SettingsActivity.java
+index 5c02ddea..69ce3033 100644
+--- a/src/com/better/alarm/presenter/SettingsActivity.java
++++ b/src/com/better/alarm/presenter/SettingsActivity.java
+@@ -37,7 +37,7 @@ public class SettingsActivity extends PreferenceActivity implements Preference.O
+     private static final int ALARM_STREAM_TYPE_BIT = 1 << AudioManager.STREAM_ALARM;
+ 
+     private static final String KEY_ALARM_IN_SILENT_MODE = "alarm_in_silent_mode";
+-    static final String KEY_ALARM_SNOOZE = "snooze_duration";
++    public static final String KEY_ALARM_SNOOZE = "snooze_duration";
+     static final String KEY_VOLUME_BEHAVIOR = "volume_button_setting";
+     static final String KEY_DEFAULT_RINGTONE = "default_ringtone";
+     static final String KEY_AUTO_SILENCE = "auto_silence";
+diff --git a/src/com/better/alarm/presenter/ToastMaster.java b/src/com/better/alarm/presenter/ToastMaster.java
+index 77016dca..d601cbb3 100644
+--- a/src/com/better/alarm/presenter/ToastMaster.java
++++ b/src/com/better/alarm/presenter/ToastMaster.java
+@@ -16,6 +16,13 @@
+ 
+ package com.better.alarm.presenter;
+ 
++import com.better.alarm.Log;
++import com.better.alarm.R;
++import com.better.alarm.model.Alarm;
++import com.better.alarm.model.Alarms;
++import com.better.alarm.presenter.AlarmAlertFullScreen;
++
++import android.content.Context;
+ import android.widget.Toast;
+ 
+ public class ToastMaster {
+@@ -27,13 +34,77 @@ public class ToastMaster {
+     }
+ 
+     public static void setToast(Toast toast) {
+-        if (sToast != null) sToast.cancel();
++        if (sToast != null)
++            sToast.cancel();
+         sToast = toast;
+     }
+ 
+     public static void cancelToast() {
+-        if (sToast != null) sToast.cancel();
++        if (sToast != null)
++            sToast.cancel();
+         sToast = null;
+     }
+ 
++    static void popAlarmSetToast(Context context, long timeInMillis) {
++        String toastText = formatToast(context, timeInMillis);
++        Toast toast = Toast.makeText(context, toastText, Toast.LENGTH_LONG);
++        ToastMaster.setToast(toast);
++        toast.show();
++    }
++
++    /**
++     * Display a toast that tells the user how long until the alarm
++     * goes off.  This helps prevent "am/pm" mistakes.
++     */
++    static void popAlarmSetToast(Context context, int hour, int minute,
++                                 Alarm.DaysOfWeek daysOfWeek) {
++        popAlarmSetToast(context,
++                Alarms.calculateAlarm(hour, minute, daysOfWeek)
++                .getTimeInMillis());
++    }
++    /**
++     * format "Alarm set for 2 days 7 hours and 53 minutes from
++     * now"
++     */
++    static String formatToast(Context context, long timeInMillis) {
++        long delta = timeInMillis - System.currentTimeMillis();
++        long hours = delta / (1000 * 60 * 60);
++        long minutes = delta / (1000 * 60) % 60;
++        long days = hours / 24;
++        hours = hours % 24;
++
++        String daySeq = (days == 0) ? "" :
++                (days == 1) ? context.getString(R.string.day) :
++                context.getString(R.string.days, Long.toString(days));
++
++        String minSeq = (minutes == 0) ? "" :
++                (minutes == 1) ? context.getString(R.string.minute) :
++                context.getString(R.string.minutes, Long.toString(minutes));
++
++        String hourSeq = (hours == 0) ? "" :
++                (hours == 1) ? context.getString(R.string.hour) :
++                context.getString(R.string.hours, Long.toString(hours));
++
++        boolean dispDays = days > 0;
++        boolean dispHour = hours > 0;
++        boolean dispMinute = minutes > 0;
++
++        int index = (dispDays ? 1 : 0) |
++                    (dispHour ? 2 : 0) |
++                    (dispMinute ? 4 : 0);
++
++        String[] formats = context.getResources().getStringArray(R.array.alarm_set);
++        return String.format(formats[index], daySeq, hourSeq, minSeq);
++    }
++    
++    snooze () {
++        String displayTime = getString(R.string.alarm_alert_snooze_set,
++                snoozeMinutes);
++        // Intentionally log the snooze time for debugging.
++        Log.v(displayTime);
++
++        // Display the snooze minutes in a toast.
++        Toast.makeText(AlarmAlertFullScreen.this, displayTime,
++                Toast.LENGTH_LONG).show();
++    }
+ }
+diff --git a/src/com/better/alarm/view/DigitalClock.java b/src/com/better/alarm/view/DigitalClock.java
+index 9b898923..0d69608c 100644
+--- a/src/com/better/alarm/view/DigitalClock.java
++++ b/src/com/better/alarm/view/DigitalClock.java
+@@ -31,16 +31,14 @@ import android.util.AttributeSet;
+ import android.view.View;
+ import android.widget.RelativeLayout;
+ 
+-import com.better.alarm.Log;
+ import com.better.alarm.R;
+-import com.better.alarm.model.Alarms;
+ 
+ /**
+  * Displays the time
+  */
+ public class DigitalClock extends RelativeLayout {
+-
+-    private final static String M12 = "h:mm";
++    public final static String M12 = "h:mm";
++    public final static String M24 = "kk:mm";
+ 
+     private Calendar mCalendar;
+     private String mFormat;
+@@ -123,8 +121,6 @@ public class DigitalClock extends RelativeLayout {
+     protected void onAttachedToWindow() {
+         super.onAttachedToWindow();
+ 
+-        if (Log.LOGV) Log.v("onAttachedToWindow " + this);
+-
+         if (mAttached) return;
+         mAttached = true;
+ 
+@@ -174,7 +170,8 @@ public class DigitalClock extends RelativeLayout {
+     }
+ 
+     private void setDateFormat() {
+-        mFormat = Alarms.get24HourMode(getContext()) ? Alarms.M24 : M12;
++        // XXX this should not query Alarms for this
++        mFormat = android.text.format.DateFormat.is24HourFormat(getContext()) ? M24 : M12;
+         mAmPm.setShowAmPm(mFormat == M12);
+     }
+ 

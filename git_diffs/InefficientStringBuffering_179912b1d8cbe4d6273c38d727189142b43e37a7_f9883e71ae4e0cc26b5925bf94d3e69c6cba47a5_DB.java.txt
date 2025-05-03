@@ -1,0 +1,330 @@
+diff --git a/AnkiDroid/src/main/java/com/ichi2/anki/CardBrowser.java b/AnkiDroid/src/main/java/com/ichi2/anki/CardBrowser.java
+index ff335c8e20..974245746a 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/anki/CardBrowser.java
++++ b/AnkiDroid/src/main/java/com/ichi2/anki/CardBrowser.java
+@@ -99,7 +99,6 @@ public class CardBrowser extends NavigationDrawerActivity implements
+     private MenuItem mMySearchesItem;
+ 
+     public static Card sCardBrowserCard;
+-    private static int sLastSelectedDeckIndex = -1;
+ 
+     private int mPositionInCardsList;
+ 
+@@ -407,7 +406,7 @@ public class CardBrowser extends NavigationDrawerActivity implements
+         } catch (JSONException e) {
+             throw new RuntimeException(e);
+         }
+-        
++
+         mCards = new ArrayList<>();
+         ListView cardsListView = (ListView) findViewById(R.id.card_browser_list);
+         // Create a spinner for column1
+@@ -521,29 +520,7 @@ public class CardBrowser extends NavigationDrawerActivity implements
+         mSearchTerms = "";
+ 
+         // set the currently selected deck
+-        if (sLastSelectedDeckIndex == -1) {
+-            String currentDeckName;
+-            try {
+-                currentDeckName = getCol().getDecks().current().getString("name");
+-            } catch (JSONException e) {
+-                throw new RuntimeException(e);
+-            }
+-            for (int dropDownDeckIdx = 0; dropDownDeckIdx < mDropDownDecks.size(); dropDownDeckIdx++) {
+-                JSONObject deck = mDropDownDecks.get(dropDownDeckIdx);
+-                String deckName;
+-                try {
+-                    deckName = deck.getString("name");
+-                } catch (JSONException e) {
+-                    throw new RuntimeException();
+-                }
+-                if (deckName.equals(currentDeckName)) {
+-                    selectDropDownItem(dropDownDeckIdx + 1);
+-                    break;
+-                }
+-            }
+-        } else if (sLastSelectedDeckIndex > 0 && sLastSelectedDeckIndex < mDropDownDecks.size()) {
+-            selectDropDownItem(sLastSelectedDeckIndex);
+-        }
++        selectDropDownItem(getDeckPositionFromDeckId(getIntent().getLongExtra("defaultDeckId", -1)));
+     }
+ 
+ 
+@@ -578,9 +555,6 @@ public class CardBrowser extends NavigationDrawerActivity implements
+         } else {
+             Timber.i("Back key pressed");
+             Intent data = new Intent();
+-            if (getIntent().hasExtra("selectedDeck")) {
+-                data.putExtra("originalDeck", getIntent().getLongExtra("selectedDeck", 0L));
+-            }
+             if (mReloadRequired) {
+                 // Add reload flag to result intent so that schedule reset when returning to note editor
+                 data.putExtra("reloadRequired", true);
+@@ -800,7 +774,6 @@ public class CardBrowser extends NavigationDrawerActivity implements
+ 
+     public void selectDropDownItem(int position) {
+         mActionBarSpinner.setSelection(position);
+-        sLastSelectedDeckIndex = position;
+         if (position == 0) {
+             mRestrictOnDeck = "";
+         } else {
+@@ -867,6 +840,30 @@ public class CardBrowser extends NavigationDrawerActivity implements
+     }
+ 
+ 
++    /**
++     * Get the index in the deck spinner for a given deck ID
++     * @param did the id of a deck
++     * @return the corresponding index in the deck spinner, or 0 if not found
++     */
++    private int getDeckPositionFromDeckId(long did) {
++        for (int dropDownDeckIdx = 0; dropDownDeckIdx < mDropDownDecks.size(); dropDownDeckIdx++) {
++            JSONObject deck = mDropDownDecks.get(dropDownDeckIdx);
++            long cdid;
++            try {
++                cdid = deck.getLong("id");
++            } catch (JSONException e) {
++                throw new RuntimeException();
++            }
++            if (cdid == did) {
++                // NOTE: mDropDownDecks.get(0) is the first deck, whereas index 0 in mActionBarSpinner is "All Decks"
++                return dropDownDeckIdx + 1;
++            }
++        }
++        // Fall back on "All Decks" if did wasn't found
++        return 0;
++    }
++
++
+     private void updateCardInList(Card card, String updatedCardTags) {
+         Note note = card.note();
+         int pos;
+@@ -1127,14 +1124,17 @@ public class CardBrowser extends NavigationDrawerActivity implements
+     }
+ 
+     private void closeCardBrowser(int result, Intent data) {
++        // Pass the originally selected deck back so that the calling Activity can switch back to it
++        if (getIntent().hasExtra("selectedDeck")) {
++            data.putExtra("originalDeck", getIntent().getLongExtra("selectedDeck", 0L));
++        }
++        // Pass a flag to say whether "All Decks" was selected so that the calling Activity can remember it
++        data.putExtra("allDecksSelected", mActionBarSpinner.getSelectedItemPosition() == 0);
++        // Set result and finish
+         setResult(result, data);
+         finishWithAnimation(ActivityTransitionAnimation.RIGHT);
+     }
+ 
+-    public static void clearSelectedDeck() {
+-        sLastSelectedDeckIndex = -1;
+-    }
+-
+     /**
+      * Render the second column whenever the user stops scrolling
+      */
+diff --git a/AnkiDroid/src/main/java/com/ichi2/anki/DeckPicker.java b/AnkiDroid/src/main/java/com/ichi2/anki/DeckPicker.java
+index 898858e129..6f0f7f01d7 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/anki/DeckPicker.java
++++ b/AnkiDroid/src/main/java/com/ichi2/anki/DeckPicker.java
+@@ -491,7 +491,6 @@ public class DeckPicker extends NavigationDrawerActivity implements
+                                 String deckName = mDialogEditText.getText().toString();
+                                 Timber.i("DeckPicker:: Creating new deck...");
+                                 getCol().getDecks().id(deckName, true);
+-                                CardBrowser.clearSelectedDeck();
+                                 updateDeckList();
+                             }
+                         })
+@@ -665,7 +664,6 @@ public class DeckPicker extends NavigationDrawerActivity implements
+             } else {
+                 finishWithAnimation();
+             }
+-        } else if (requestCode == REPORT_FEEDBACK && resultCode == RESULT_OK) {
+         } else if (requestCode == LOG_IN_FOR_SYNC && resultCode == RESULT_OK) {
+             mSyncOnResume = true;
+         } else if ((requestCode == REQUEST_REVIEW || requestCode == SHOW_STUDYOPTIONS)
+@@ -677,6 +675,14 @@ public class DeckPicker extends NavigationDrawerActivity implements
+             } else {
+                 showSimpleSnackbar(R.string.studyoptions_no_cards_due, false);
+             }
++        } else if (requestCode == REQUEST_BROWSE_CARDS) {
++            // Store the selected deck after opening browser
++            if (intent != null && intent.getBooleanExtra("allDecksSelected", false)) {
++                AnkiDroidApp.getSharedPrefs(this).edit().putLong("browserDeckIdFromDeckPicker", -1L).apply();
++            } else {
++                long selectedDeck = getCol().getDecks().selected();
++                AnkiDroidApp.getSharedPrefs(this).edit().putLong("browserDeckIdFromDeckPicker", selectedDeck).apply();
++            }
+         } else if (requestCode == REQUEST_PATH_UPDATE) {
+             // The collection path was inaccessible on startup so just close the activity and let user restart
+             finishWithoutAnimation();
+@@ -1694,10 +1700,17 @@ public class DeckPicker extends NavigationDrawerActivity implements
+         }
+     }
+ 
++    @Override
++    protected void openCardBrowser() {
++        Intent cardBrowser = new Intent(this, CardBrowser.class);
++        cardBrowser.putExtra("selectedDeck", getCol().getDecks().selected());
++        long lastDeckId = AnkiDroidApp.getSharedPrefs(this).getLong("browserDeckIdFromDeckPicker", -1L);
++        cardBrowser.putExtra("defaultDeckId", lastDeckId);
++        startActivityForResultWithAnimation(cardBrowser, REQUEST_BROWSE_CARDS, ActivityTransitionAnimation.LEFT);
++    }
++
+ 
+     private void handleDeckSelection(long did, boolean dontSkipStudyOptions) {
+-        // Forget what the last used deck was in the browser
+-        CardBrowser.clearSelectedDeck();
+         // Clear the undo history when selecting a new deck
+         if (getCol().getDecks().selected() != did) {
+             getCol().clearUndo();
+@@ -2012,7 +2025,6 @@ public class DeckPicker extends NavigationDrawerActivity implements
+                         Timber.e(e, "onPostExecute - Exception dismissing dialog");
+                     }
+                 }
+-                CardBrowser.clearSelectedDeck();
+                 // TODO: if we had "undo delete note" like desktop client then we won't need this.
+                 getCol().clearUndo();
+             }
+diff --git a/AnkiDroid/src/main/java/com/ichi2/anki/NavigationDrawerActivity.java b/AnkiDroid/src/main/java/com/ichi2/anki/NavigationDrawerActivity.java
+index 894c4a522b..869f2503ae 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/anki/NavigationDrawerActivity.java
++++ b/AnkiDroid/src/main/java/com/ichi2/anki/NavigationDrawerActivity.java
+@@ -54,9 +54,6 @@ public class NavigationDrawerActivity extends AnkiActivity implements Navigation
+     public static final int REQUEST_PREFERENCES_UPDATE = 100;
+     public static final int REQUEST_BROWSE_CARDS = 101;
+     public static final int REQUEST_STATISTICS = 102;
+-
+-    private long mCurrentCardId = -1L;
+-
+     // Navigation drawer initialisation
+     protected void initNavigationDrawer(View mainView){
+         // Create inherited navigation drawer layout here so that it can be used by parent class
+@@ -119,11 +116,17 @@ public class NavigationDrawerActivity extends AnkiActivity implements Navigation
+             return;
+         }
+         Menu menu = mNavigationView.getMenu();
+-        MenuItem item = menu.findItem(itemId);
+-        if (item != null) {
+-            item.setChecked(true);
++        if (itemId == -1) {
++            for (int i = 0; i < menu.size(); i++) {
++                menu.getItem(i).setChecked(false);
++            }
+         } else {
+-            Timber.e("Could not find item %d", itemId);
++            MenuItem item = menu.findItem(itemId);
++            if (item != null) {
++                item.setChecked(true);
++            } else {
++                Timber.e("Could not find item %d", itemId);
++            }
+         }
+     }
+ 
+@@ -233,10 +236,6 @@ public class NavigationDrawerActivity extends AnkiActivity implements Navigation
+         }
+     }
+ 
+-    protected void setCurrentCardId(long id) {
+-        mCurrentCardId = id;
+-    }
+-
+     @Override
+     public boolean onNavigationItemSelected(MenuItem item) {
+         // Don't do anything if user selects already selected position
+@@ -251,12 +250,7 @@ public class NavigationDrawerActivity extends AnkiActivity implements Navigation
+                 startActivityWithAnimation(deckPicker, ActivityTransitionAnimation.RIGHT);
+                 break;
+             case R.id.nav_browser:
+-                Intent cardBrowser = new Intent(this, CardBrowser.class);
+-                cardBrowser.putExtra("selectedDeck", getCol().getDecks().selected());
+-                if (mCurrentCardId >= 0) {
+-                    cardBrowser.putExtra("currentCard", mCurrentCardId);
+-                }                
+-                startActivityForResultWithAnimation(cardBrowser, REQUEST_BROWSE_CARDS, ActivityTransitionAnimation.LEFT);
++                openCardBrowser();
+                 break;
+             case R.id.nav_stats:
+                 Intent intent = new Intent(this, Statistics.class);
+@@ -285,6 +279,15 @@ public class NavigationDrawerActivity extends AnkiActivity implements Navigation
+         return true;
+     }
+ 
++    /**
++     * Open the card browser. Override this method to pass it custom arguments
++     */
++    protected void openCardBrowser() {
++        Intent cardBrowser = new Intent(this, CardBrowser.class);
++        cardBrowser.putExtra("selectedDeck", getCol().getDecks().selected());
++        startActivityForResultWithAnimation(cardBrowser, REQUEST_BROWSE_CARDS, ActivityTransitionAnimation.LEFT);
++    }
++
+     protected void showBackIcon() {
+         if (mDrawerToggle != null) {
+             mDrawerToggle.setDrawerIndicatorEnabled(false);
+diff --git a/AnkiDroid/src/main/java/com/ichi2/anki/Reviewer.java b/AnkiDroid/src/main/java/com/ichi2/anki/Reviewer.java
+index 7fbbf9f390..eaaaa53506 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/anki/Reviewer.java
++++ b/AnkiDroid/src/main/java/com/ichi2/anki/Reviewer.java
+@@ -53,6 +53,7 @@ public class Reviewer extends AbstractFlashcardViewer {
+     private boolean mShowWhiteboard = true;
+     private boolean mBlackWhiteboard = true;
+     private boolean mPrefFullscreenReview = false;
++    private Long mLastSelectedBrowserDid = null;
+ 
+     @Override
+     protected void setTitle() {
+@@ -432,15 +433,21 @@ public class Reviewer extends AbstractFlashcardViewer {
+         }
+     }
+ 
++
+     @Override
+-    public boolean onNavigationItemSelected(MenuItem item) {
+-        // Tell the browser the current card ID so that it can tell us when we need to reload
+-        if (mCurrentCard != null) {
+-            setCurrentCardId(mCurrentCard.getId());
++    protected void openCardBrowser() {
++        Intent cardBrowser = new Intent(this, CardBrowser.class);
++        cardBrowser.putExtra("selectedDeck", getCol().getDecks().selected());
++        if (mLastSelectedBrowserDid != null) {
++            cardBrowser.putExtra("defaultDeckId", mLastSelectedBrowserDid);
++        } else {
++            cardBrowser.putExtra("defaultDeckId", getCol().getDecks().selected());
+         }
+-        return super.onNavigationItemSelected(item);
++        cardBrowser.putExtra("currentCard", mCurrentCard.getId());
++        startActivityForResultWithAnimation(cardBrowser, REQUEST_BROWSE_CARDS, ActivityTransitionAnimation.LEFT);
+     }
+ 
++
+     @Override
+     public void onWindowFocusChanged(boolean hasFocus) {
+         super.onWindowFocusChanged(hasFocus);
+@@ -455,8 +462,13 @@ public class Reviewer extends AbstractFlashcardViewer {
+     @Override
+     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+         if (requestCode == REQUEST_STATISTICS || requestCode == REQUEST_BROWSE_CARDS) {
+-            // select original deck if the statistics or card browser were opened,
+-            // which can change the selected deck
++            // Store the selected deck
++            if (data != null && data.getBooleanExtra("allDecksSelected", false)) {
++                mLastSelectedBrowserDid = -1L;
++            } else {
++                mLastSelectedBrowserDid = getCol().getDecks().selected();
++            }
++            // select original deck if the statistics or card browser were opened, which can change the selected deck
+             if (data != null && data.hasExtra("originalDeck")) {
+                 getCol().getDecks().select(data.getLongExtra("originalDeck", 0L));
+             }
+diff --git a/AnkiDroid/src/main/java/com/ichi2/compat/CompatV10.java b/AnkiDroid/src/main/java/com/ichi2/compat/CompatV10.java
+index ea93b1f918..a61259ed03 100644
+--- a/AnkiDroid/src/main/java/com/ichi2/compat/CompatV10.java
++++ b/AnkiDroid/src/main/java/com/ichi2/compat/CompatV10.java
+@@ -148,7 +148,6 @@ public class CompatV10 implements Compat {
+                                                 Timber.i("DeckPicker:: Creating new deck...");
+                                                 String deckName = mDialogEditText.getText().toString();
+                                                 activity.getCol().getDecks().id(deckName, true);
+-                                                CardBrowser.clearSelectedDeck();
+                                                 activity.onRequireDeckListUpdate();
+                                             }
+                                         })

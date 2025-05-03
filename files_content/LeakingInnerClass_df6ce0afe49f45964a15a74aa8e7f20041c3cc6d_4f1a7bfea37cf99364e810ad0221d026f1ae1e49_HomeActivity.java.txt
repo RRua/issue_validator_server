@@ -1,0 +1,247 @@
+package at.h4x.awhip;
+
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.media.MediaPlayer;
+import android.os.AsyncTask;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.fragment.app.Fragment;
+import androidx.fragment.app.FragmentManager;
+import androidx.fragment.app.FragmentPagerAdapter;
+import androidx.viewpager.widget.ViewPager;
+
+import android.os.Bundle;
+import android.util.Log;
+import android.view.View;
+
+import com.tbuonomo.viewpagerdotsindicator.WormDotsIndicator;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class HomeActivity extends AppCompatActivity {
+
+    private static final String PERSISTENT_STATE_CURRENT_FRAGMENT = "persistent_state_current_fragment";
+    private WhipsPagerAdapter pagerAdapter;
+
+    /**
+     * The {@link ViewPager} that will host the section contents.
+     */
+    private ViewPager viewPager;
+    private WhipDetector whipDetector;
+    private WhipSoundPlayer whipSoundPlayer;
+    private WormDotsIndicator dotsIndicator;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_home);
+
+        // Set up the ViewPager
+        pagerAdapter = new WhipsPagerAdapter(getSupportFragmentManager());
+        viewPager = (ViewPager) findViewById(R.id.container);
+        viewPager.setAdapter(pagerAdapter);
+        dotsIndicator = (WormDotsIndicator) findViewById(R.id.dots_indicator);
+        dotsIndicator.setViewPager(viewPager);
+
+        whipSoundPlayer = new WhipSoundPlayer(this);
+
+        findViewById(R.id.fab).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                WhipDetailsDialogFragment.newInstance(WhipDef.list[viewPager.getCurrentItem()]).show(getSupportFragmentManager(), "dialog");
+            }
+        });
+
+        whipDetector = new WhipDetector(this, new WhipDetector.Callback() {
+            @Override
+            public void whipNao() {
+                whipSoundPlayer.gogogo(viewPager.getCurrentItem());
+            }
+        });
+    }
+
+    @Override
+    protected void onStart() {
+        Log.v("###", "HomeActivity.onResume()");
+        super.onStart();
+        whipDetector.on();
+
+        // restore last viewed whip
+        new AsyncTask<Void, Void, Integer>(){
+            @Override
+            protected Integer doInBackground(Void... voids) {
+                SharedPreferences preferences = getSharedPreferences("my.prefs", MODE_PRIVATE);
+                return preferences.getInt("abc", 0);
+            }
+            @Override
+            protected void onPostExecute(Integer integer) {
+                if (integer < viewPager.getChildCount()) {
+                    viewPager.setCurrentItem(integer);
+                }
+            }
+        }.execute();
+
+        WaringPopUp.go(this);
+    }
+
+    @Override
+    protected void onStop() {
+        Log.v("###", "HomeActivity.onPause()");
+        super.onStop();
+        whipDetector.off();
+
+        // store last viewed whip
+        new AsyncTask<Integer, Void, Void>() {
+            @Override
+            protected Void doInBackground(Integer... integers) {
+                SharedPreferences p = getSharedPreferences("my.prefs", MODE_PRIVATE);
+                p.edit().putInt("abc", viewPager.getCurrentItem()).commit();
+                return null;
+            }
+        }.execute(viewPager.getCurrentItem());
+
+    }
+
+    private String getPreferencesPath() {
+        String x = getNoBackupFilesDir().getAbsolutePath() + File.separator + "home_activity_state";
+        Log.d("###", "path: " + x);
+        return x;
+    }
+
+    public void playWhipSound() {
+        whipSoundPlayer.gogogo(viewPager.getCurrentItem());
+    }
+
+    /**
+     * A {@link FragmentPagerAdapter} that returns a fragment corresponding to
+     * one of the sections/tabs/pages.
+     */
+    public class WhipsPagerAdapter extends FragmentPagerAdapter {
+
+        public WhipsPagerAdapter(FragmentManager fm) {
+            super(fm);
+        }
+
+        @Override
+        public Fragment getItem(int position) {
+            // getItem is called to instantiate the fragment for the given page.
+            // Return a PlaceholderFragment (defined as a static inner class below).
+
+            return WhipFragment.newInstance(WhipDef.list[position]);
+        }
+
+        @Override
+        public int getCount() {
+            return WhipDef.list.length;
+        }
+    }
+
+    static class WhipDetector implements SensorEventListener{
+
+        //private final Context context;
+        private final Callback callback;
+        private final SensorManager sensorManager;
+
+        public WhipDetector (Context context, final Callback callback) {
+            //this.context = context;
+            this.callback = callback;
+            this.sensorManager = (SensorManager) context.getSystemService(SENSOR_SERVICE);
+        }
+
+        public void on() {
+            sensorManager.registerListener(this, sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER), SensorManager.SENSOR_DELAY_GAME);
+        }
+
+        public void off(){
+            sensorManager.unregisterListener(this);
+        }
+
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            //Log.d("###", String.format("sensor value %03.3f %03.3f %03.3f", event.values[0], event.values[1], event.values[2]));
+
+            float x = event.values[0];
+            float y = event.values[1];
+            float z = event.values[2];
+
+            double radius = Math.sqrt(x * x + y * y + z * z);
+            double lng = Math.acos(x / Math.sqrt(x * x + y * y)) * (y < 0 ? -1 : 1);
+            double lat = Math.acos(z / radius);
+
+            if (radius > 30) {
+                callback.whipNao();
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+
+        }
+
+        interface Callback {
+            void whipNao();
+        }
+    }
+
+    class WhipSoundPlayer {
+
+        public static final long COOL_DOWN = 500;
+
+        private final Context context;
+        private final List<MediaPlayer> mediaPlayers;
+        private long lastLash = 0;
+
+
+        public WhipSoundPlayer(Context context) {
+            //mediaPlayers = new MediaPlayer[]{MediaPlayer.create(HomeActivity.this, R.raw.jacksonml_whip_1),};
+            mediaPlayers = Collections.synchronizedList(new ArrayList<MediaPlayer>());
+            this.context = context.getApplicationContext();
+        }
+
+        public void gogogo(int position) {
+
+            if (lastLash + COOL_DOWN > System.currentTimeMillis()) {
+                return;
+            }
+            lastLash = System.currentTimeMillis();
+
+            if (position < 0 || position >= WhipDef.list.length) {
+                Log.e("###", "no whip sound for position " + position);
+                return;
+            }
+            Log.d("###", "play whip sound: " + position);
+
+            if (WhipDef.list[position].getAudioFileId() != 0) {
+                MediaPlayer mediaPlayer = MediaPlayer.create(context, WhipDef.list[position].getAudioFileId());
+                mediaPlayer.start();
+                mediaPlayers.add(mediaPlayer);
+            }
+
+            purgeExpiredPlayers();
+        }
+
+        private void purgeExpiredPlayers() {
+            synchronized (mediaPlayers) {
+                List<MediaPlayer> expiredPlayers = new ArrayList<>();
+                for (MediaPlayer mediaPlayer : mediaPlayers) {
+                    if (!mediaPlayer.isPlaying()) {
+                        expiredPlayers.add(mediaPlayer);
+                    }
+                }
+                for (MediaPlayer mediaPlayer : expiredPlayers) {
+                    mediaPlayer.release();
+                    mediaPlayers.remove(mediaPlayer);
+                }
+            }
+        }
+    }
+
+}

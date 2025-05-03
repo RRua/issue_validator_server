@@ -1,0 +1,266 @@
+diff --git a/gpslogger/src/main/java/com/mendhak/gpslogger/GpsMainActivity.java b/gpslogger/src/main/java/com/mendhak/gpslogger/GpsMainActivity.java
+index 837a42a5..0573e83c 100644
+--- a/gpslogger/src/main/java/com/mendhak/gpslogger/GpsMainActivity.java
++++ b/gpslogger/src/main/java/com/mendhak/gpslogger/GpsMainActivity.java
+@@ -24,7 +24,6 @@ import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.ServiceConnection;
+-import android.content.SharedPreferences;
+ import android.content.res.Configuration;
+ import android.net.Uri;
+ import android.os.Build;
+@@ -32,7 +31,6 @@ import android.os.Bundle;
+ import android.os.Environment;
+ import android.os.Handler;
+ import android.os.IBinder;
+-import android.preference.PreferenceManager;
+ import android.support.v4.widget.DrawerLayout;
+ import android.support.v7.app.ActionBar;
+ import android.support.v7.app.ActionBarActivity;
+@@ -113,17 +111,12 @@ public class GpsMainActivity extends ActionBarActivity
+         StartAndBindService();
+         RegisterEventBus();
+ 
+-        if(shouldStartLoggingOnAppLaunch()){
++        if(AppSettings.shouldStartLoggingOnAppLaunch()){
+             tracer.debug("Start logging on app launch");
+             EventBus.getDefault().postSticky(new CommandEvents.RequestStartStop(true));
+         }
+     }
+ 
+-    private boolean shouldStartLoggingOnAppLaunch(){
+-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+-        return prefs.getBoolean("startonapplaunch", false);
+-    }
+-
+     private void RegisterEventBus() {
+         EventBus.getDefault().register(this);
+     }
+@@ -227,35 +220,7 @@ public class GpsMainActivity extends ActionBarActivity
+             InputStreamReader reader = new InputStreamReader(new FileInputStream(file));
+             props.load(reader);
+ 
+-            for(Object key : props.keySet()){
+-
+-                SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+-                SharedPreferences.Editor editor = prefs.edit();
+-
+-                String value = props.getProperty(key.toString());
+-                tracer.info("Setting preset property: " + key.toString() + " to " + value.toString());
+-
+-                if(value.equalsIgnoreCase("true") || value.equalsIgnoreCase("false")){
+-                    editor.putBoolean(key.toString(), Boolean.parseBoolean(value));
+-                }
+-                else if(key.equals("listeners")){
+-                    List<String> availableListeners = Utilities.GetListeners();
+-                    Set<String> chosenListeners = new HashSet<>();
+-                    String[] csvListeners = value.split(",");
+-                    for(String l : csvListeners){
+-                        if(availableListeners.contains(l)){
+-                            chosenListeners.add(l);
+-                        }
+-                    }
+-                    if(chosenListeners.size() > 0){
+-                        prefs.edit().putStringSet("listeners", chosenListeners).apply();
+-                    }
+-
+-                } else {
+-                    editor.putString(key.toString(), value);
+-                }
+-                editor.apply();
+-            }
++            AppSettings.SetPreferenceFromProperties(props);
+ 
+         } catch (Exception e) {
+             tracer.error("Could not load preset properties", e);
+@@ -497,8 +462,7 @@ public class GpsMainActivity extends ActionBarActivity
+     }
+ 
+     private int GetUserSelectedNavigationItem(){
+-        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+-        return sp.getInt("SPINNER_SELECTED_POSITION", 0);
++        return AppSettings.getUserSelectedNavigationItem();
+     }
+ 
+     private void LoadDefaultFragmentView() {
+@@ -538,11 +502,7 @@ public class GpsMainActivity extends ActionBarActivity
+ 
+     @Override
+     public boolean onNavigationItemSelected(int position, long itemId) {
+-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+-        SharedPreferences.Editor editor = prefs.edit();
+-        editor.putInt("SPINNER_SELECTED_POSITION", position);
+-        editor.apply();
+-
++        AppSettings.setUserSelectedNavigationItem(position);
+         LoadFragmentView(position);
+         return true;
+     }
+diff --git a/gpslogger/src/main/java/com/mendhak/gpslogger/common/AppSettings.java b/gpslogger/src/main/java/com/mendhak/gpslogger/common/AppSettings.java
+index c2a27f45..b75f0df7 100644
+--- a/gpslogger/src/main/java/com/mendhak/gpslogger/common/AppSettings.java
++++ b/gpslogger/src/main/java/com/mendhak/gpslogger/common/AppSettings.java
+@@ -18,16 +18,24 @@
+ package com.mendhak.gpslogger.common;
+ 
+ import android.app.Application;
++import android.content.SharedPreferences;
++import android.preference.PreferenceManager;
+ import com.path.android.jobqueue.JobManager;
+ import com.path.android.jobqueue.config.Configuration;
+ import de.greenrobot.event.EventBus;
++import org.slf4j.LoggerFactory;
+ 
++import java.util.HashSet;
++import java.util.List;
++import java.util.Properties;
+ import java.util.Set;
+ 
+ public class AppSettings extends Application {
+ 
+     private static JobManager jobManager;
+-
++    private static SharedPreferences prefs;
++    private static AppSettings instance;
++    private static org.slf4j.Logger tracer = LoggerFactory.getLogger(AppSettings.class.getSimpleName());
+ 
+     @Override
+     public void onCreate() {
+@@ -40,14 +48,13 @@ public class AppSettings extends Application {
+                 .minConsumerCount(2)
+                 .build();
+         jobManager = new JobManager(this, config);
++        prefs = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+     }
+ 
+     public static JobManager GetJobManager(){
+         return jobManager;
+     }
+ 
+-
+-    private static AppSettings instance;
+     public AppSettings() {
+         instance = this;
+     }
+@@ -56,6 +63,79 @@ public class AppSettings extends Application {
+         return instance;
+     }
+ 
++
++
++    /**
++     * The minimum seconds interval between logging points
++     */
++    public static int getMinimumSeconds() {
++        String minimumSecondsString = prefs.getString("time_before_logging", "60");
++        return (Integer.valueOf(minimumSecondsString));
++    }
++
++    /**
++     * Whether to start logging on application launch
++     */
++    public static boolean shouldStartLoggingOnAppLaunch() {
++        return prefs.getBoolean("startonapplaunch", false);
++    }
++
++
++    /**
++     * Which navigation item the user selected
++     */
++    public static int getUserSelectedNavigationItem() {
++        return prefs.getInt("SPINNER_SELECTED_POSITION", 0);
++    }
++
++    /**
++     * Sets which navigation item the user selected
++     */
++    public static void setUserSelectedNavigationItem(int position) {
++        SharedPreferences.Editor editor = prefs.edit();
++        editor.putInt("SPINNER_SELECTED_POSITION", position);
++        editor.apply();
++    }
++
++
++    /**
++     * Sets preferences in a generic manner from a .properties file
++     */
++    public static void SetPreferenceFromProperties(Properties props){
++        for(Object key : props.keySet()){
++
++            SharedPreferences.Editor editor = prefs.edit();
++            String value = props.getProperty(key.toString());
++            tracer.info("Setting preset property: " + key.toString() + " to " + value.toString());
++
++            if(value.equalsIgnoreCase("true") || value.equalsIgnoreCase("false")){
++                editor.putBoolean(key.toString(), Boolean.parseBoolean(value));
++            }
++            else if(key.equals("listeners")){
++                List<String> availableListeners = Utilities.GetListeners();
++                Set<String> chosenListeners = new HashSet<>();
++                String[] csvListeners = value.split(",");
++                for(String l : csvListeners){
++                    if(availableListeners.contains(l)){
++                        chosenListeners.add(l);
++                    }
++                }
++                if(chosenListeners.size() > 0){
++                    prefs.edit().putStringSet("listeners", chosenListeners).apply();
++                }
++
++            } else {
++                editor.putString(key.toString(), value);
++            }
++            editor.apply();
++        }
++    }
++
++
++
++
++
++
+     // ---------------------------------------------------
+     // User Preferences
+     // ---------------------------------------------------
+@@ -230,20 +310,6 @@ public class AppSettings extends Application {
+     }
+ 
+ 
+-    /**
+-     * @return the minimumSeconds
+-     */
+-    public static int getMinimumSeconds() {
+-        return minimumSeconds;
+-    }
+-
+-    /**
+-     * @param minimumSeconds the minimumSeconds to set
+-     */
+-    static void setMinimumSeconds(int minimumSeconds) {
+-        AppSettings.minimumSeconds = minimumSeconds;
+-    }
+-
+ 
+     /**
+      * @return the keepFix
+diff --git a/gpslogger/src/main/java/com/mendhak/gpslogger/common/Utilities.java b/gpslogger/src/main/java/com/mendhak/gpslogger/common/Utilities.java
+index 9fe352b1..10319d00 100644
+--- a/gpslogger/src/main/java/com/mendhak/gpslogger/common/Utilities.java
++++ b/gpslogger/src/main/java/com/mendhak/gpslogger/common/Utilities.java
+@@ -196,15 +196,7 @@ public class Utilities {
+             AppSettings.setMinimumAccuracyInMeters(0);
+         }
+ 
+-        String minimumSecondsString = prefs.getString("time_before_logging",
+-                "60");
+ 
+-        if (minimumSecondsString != null && minimumSecondsString.length() > 0) {
+-            AppSettings
+-                    .setMinimumSeconds(Integer.valueOf(minimumSecondsString));
+-        } else {
+-            AppSettings.setMinimumSeconds(60);
+-        }
+ 
+         AppSettings.setKeepFix(prefs.getBoolean("keep_fix",
+                 false));

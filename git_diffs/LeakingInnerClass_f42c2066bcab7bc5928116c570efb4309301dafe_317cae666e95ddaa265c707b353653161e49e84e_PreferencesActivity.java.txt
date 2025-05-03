@@ -1,0 +1,941 @@
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/AppPreferences.java b/app/src/main/java/com/github/ympavlov/minidoro/AppPreferences.java
+deleted file mode 100644
+index a36de66..0000000
+--- a/app/src/main/java/com/github/ympavlov/minidoro/AppPreferences.java
++++ /dev/null
+@@ -1,71 +0,0 @@
+-package com.github.ympavlov.minidoro;
+-
+-import android.content.ContentResolver;
+-import android.content.Context;
+-import android.content.SharedPreferences;
+-import com.github.ympavlov.minidoro.nofication.RingtoneProvider;
+-
+-import static com.github.ympavlov.minidoro.Stage.*;
+-
+-/**
+- * Wrapper for SharePreferences. It's needed because SharePreferences stores user-friendly list
+- * Also this class includes calculated prefs getters and default values for stored prefs
+- */
+-public class AppPreferences implements RingtoneProvider
+-{
+-	public static final String PREF_KEY = "_preferences";
+-
+-	public static final String LONG_BREAK_PERIODICITY_KEY = "longBreakPeriodicity";
+-	public static final String DND_MODE_KEY = "dndMode";
+-	public static final String USE_MINIDORO_RINGTONE_KEY = "minidoroRingtone";
+-	public static final String RINGTONE_KEY = "ringtone";
+-	public static final String OVERRIDE_SILENT_MODE_KEY = "overrideSilent";
+-
+-	private final SharedPreferences p;
+-	private final String minidoroRingtone;
+-
+-	public AppPreferences(String packageName, SharedPreferences p)
+-	{
+-		this.p = p;
+-		// The Minidoro sound is quieter than regular sounds
+-		minidoroRingtone = ContentResolver.SCHEME_ANDROID_RESOURCE + "://"+ packageName + "/" + R.raw.darkjazz;
+-	}
+-
+-	private static int parsePositive(String s, int def)
+-	{
+-		try {
+-			int i = Integer.parseInt(s);
+-			return i > 0 ? i : def;
+-		} catch (NumberFormatException e) {
+-			return def;
+-		}
+-	}
+-
+-	public int getDuration(Stage s)
+-	{
+-		return parsePositive(
+-				p.getString(s.durationPref, ""),
+-				s.defaultDuration
+-		);
+-	}
+-
+-	public boolean isLongBreaksOn() { return getDuration(BREAK) != getDuration(LONG_BREAK); }
+-
+-	public int getLongBreaksPeriodicity()
+-	{
+-		return parsePositive(p.getString(LONG_BREAK_PERIODICITY_KEY, "4"), 4);
+-	}
+-
+-	public boolean isDndModeOn() { return p.getBoolean(DND_MODE_KEY, false); }
+-
+-	@Override
+-	public String getRingtone()
+-	{
+-		return p.getBoolean(USE_MINIDORO_RINGTONE_KEY, true) ?
+-		            minidoroRingtone :
+-		            p.getString(RINGTONE_KEY, minidoroRingtone);
+-	}
+-
+-	// [4a]
+-	public boolean overrideSilent() { return p.getBoolean(OVERRIDE_SILENT_MODE_KEY, false); }
+-}
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/BarIconUpdater.java b/app/src/main/java/com/github/ympavlov/minidoro/BarIconUpdater.java
+index 36dc9e9..dfddf62 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/BarIconUpdater.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/BarIconUpdater.java
+@@ -7,8 +7,10 @@ import android.app.PendingIntent;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
++import android.net.Uri;
+ import com.github.ympavlov.minidoro.nofication.NotificationFactory;
+ import com.github.ympavlov.minidoro.nofication.NotificationIcons;
++import com.github.ympavlov.minidoro.nofication.ChannelDescriptor;
+ 
+ /**
+  * [2a] Updates notification icon on status bar and lock screen. Uses alarms to operate in doze mode
+@@ -30,9 +32,9 @@ public class BarIconUpdater extends BroadcastReceiver
+ 	 * @param leftMillis time left in minutes
+ 	 * @return number less than NotificationIcons.NPARTS (might be negative)
+ 	 */
+-	static int getIconsLeft(long leftMillis)
++	static int calcIconsLeft(long leftMillis)
+ 	{
+-		return Math.min((int) Math.ceil((float) leftMillis / periodMillis), NotificationIcons.NPARTS);
++		return Math.min((int) Math.ceil((double) leftMillis / periodMillis), NotificationIcons.NPARTS);
+ 	}
+ 
+ 	static void setupNextAlarm(Context ctx, long untilMillis, int durationMinutes)
+@@ -43,8 +45,8 @@ public class BarIconUpdater extends BroadcastReceiver
+ 		setDuration(durationMinutes);
+ 		until = untilMillis;
+ 		long leftMillis = untilMillis - System.currentTimeMillis();
+-		int n = getIconsLeft(leftMillis)
+-				- 1; // Since last icon update will be made by Bell
++		int n = calcIconsLeft(leftMillis)
++				- 1; // Because last icon update should be made by Bell
+ 
+ 		if (n > 0) {
+ 			AlarmManager alarmManager = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+@@ -59,7 +61,7 @@ public class BarIconUpdater extends BroadcastReceiver
+ 				if (leftMillis > 2 * TimeTicker.MINUTE && n > 1)
+ 					alarmManager.setRepeating(AlarmManager.RTC, untilMillis - periodMillis * n, Math.max(periodMillis, TimeTicker.MINUTE), pIntent);
+ 				else	// We need to make only one alarm. Let's choose proper time
+-					alarmManager.set(AlarmManager.RTC, untilMillis - periodMillis * (int) Math.ceil((float) n/2), pIntent);
++					alarmManager.set(AlarmManager.RTC, untilMillis - periodMillis * (int) Math.ceil((double) n/2), pIntent);
+ 			}
+ 		}
+ 	}
+@@ -77,17 +79,18 @@ public class BarIconUpdater extends BroadcastReceiver
+ 
+ 	private static int millisToMinutes(float millis) { return Math.round(millis / TimeTicker.MINUTE); }
+ 
+-	static Notification createForegroundNotification(Context ctx, NotificationFactory notificationFactory, String ticker, long leftMillis, int icon)
++	static Notification createForegroundNotification(Context ctx, String ticker, long leftMillis, int icon)
+ 	{
+ 		int leftMinutes = millisToMinutes(leftMillis);
+ 		String title = ctx.getResources().getQuantityString(R.plurals.barLeftMinutes, leftMinutes, leftMinutes);
+-		return notificationFactory.createNotification(
+-				ticker != null ? ticker : title,
+-				title,
+-				ctx.getString(R.string.barBreakWish),
+-				NotificationIcons.getBreakIcon(icon),
+-				false
+-		);
++		return NotificationFactory.getFactory(ctx, PomodoroActivity.class, new BarIconChannelDescriptor(ctx))
++                .createNotification(
++                        ticker != null ? ticker : title,
++				        title,
++				        ctx.getString(R.string.barBreakWish),
++				        NotificationIcons.getBreakIcon(icon),
++				        false
++                );
+ 	}
+ 
+ 	@Override
+@@ -97,16 +100,33 @@ public class BarIconUpdater extends BroadcastReceiver
+ 
+ 		long left = until - System.currentTimeMillis();
+ 
+-		int n = getIconsLeft(left);
++		int n = calcIconsLeft(left);
+ 		if (n > 0) {
+ 			NotificationManager notificationManager = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+-			NotificationFactory notificationFactory = NotificationFactory.getFactory(ctx, PomodoroActivity.class, null);
+ 			if (notificationManager != null)
+-				notificationManager.notify(Bell.NOTIFICATION_ID, createForegroundNotification(ctx, notificationFactory, null, left, n));
++				notificationManager.notify(Bell.NOTIFICATION_ID, createForegroundNotification(ctx, null, left, n));
+ 		}
+ 		if (n <= 1) {
+ 			stop(ctx);
+ 			//Log.d("Minidoro", "BarIconUpdater: notification updates ended");
+ 		}
+ 	}
++
++	private static class BarIconChannelDescriptor implements ChannelDescriptor
++    {
++        private final ChannelInfo info;
++
++        private BarIconChannelDescriptor(Context ctx)
++        {
++            info = new ChannelDescriptor.ChannelInfo(
++                    ctx.getResources().getString(R.string.nChannelStatusBarId),
++                    ctx.getResources().getString(R.string.nChannelStatusBarName)
++            );
++        }
++
++        public ChannelInfo getChannelInfo() { return info; }
++
++        @Override
++        public Uri getRingtone() { return null; }
++    }
+ }
+\ No newline at end of file
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/Bell.java b/app/src/main/java/com/github/ympavlov/minidoro/Bell.java
+index 8593ec7..e783e2e 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/Bell.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/Bell.java
+@@ -33,7 +33,7 @@ public class Bell implements Observer
+         handler = new Handler(ctx.getMainLooper());
+ 		this.ringerModeManager = ringerModeManager;
+ 		notificationManager = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+-		notificationFactory = NotificationFactory.getFactory(ctx, PomodoroActivity.class, prefs);
++		notificationFactory = NotificationFactory.getFactory(ctx, PomodoroActivity.class, NotificationFactory.getChannelRingtoneProvider(ctx, prefs.getNotificationPreferences(ctx.getPackageName())));
+ 	}
+ 
+ 	@Override
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/PomodoroActivity.java b/app/src/main/java/com/github/ympavlov/minidoro/PomodoroActivity.java
+index 46091cb..722426f 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/PomodoroActivity.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/PomodoroActivity.java
+@@ -15,20 +15,23 @@ import android.os.IBinder;
+ import android.text.SpannableString;
+ import android.text.style.ForegroundColorSpan;
+ import android.util.DisplayMetrics;
+-////import android.util.Log;
++//import android.util.Log;
+ import android.util.TypedValue;
+ import android.view.*;
+ import android.widget.Button;
+ import android.widget.TextView;
+ import com.github.ympavlov.minidoro.dnd.DndManager;
+ import com.github.ympavlov.minidoro.dnd.RingerModeManager;
++import com.github.ympavlov.minidoro.prefs.AppPreferences;
++import com.github.ympavlov.minidoro.prefs.PreferencesActivity;
+ 
+ import java.util.Observable;
+ import java.util.Observer;
+ 
+ /*
+  * The main app class
+- * Consists of presentation logic and set all interaction with PomodoroState
++ * Consists of presentation logic, initialization logic (in Initializer subcalss) and all interaction with PomodoroState
++ * (the state and this activity are heavily coupled by initial design)
+  */
+ public class PomodoroActivity extends Activity
+ {
+@@ -78,7 +81,7 @@ public class PomodoroActivity extends Activity
+ 		updateSizesUponScreenMetrics();
+ 		setButtonTheme();
+ 
+-		prefs = new AppPreferences(getPackageName(), getSharedPreferences(getPackageName() + AppPreferences.PREF_KEY, 0));
++		prefs = new AppPreferences(getSharedPreferences(getPackageName() + AppPreferences.PREF_KEY, 0));
+ 
+ 		notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+ 
+@@ -526,7 +529,7 @@ public class PomodoroActivity extends Activity
+ 
+ 		if (pomodoroContext != null) { // ignore events before initialization
+ 			if (!pomodoroState.stage.isWork) {
+-				// TODO: dismissState placed in PomodoroService, I think saveState should be bound with it
++				// TODO: dismissState placed in PomodoroService, I think saveState should be bound to it
+ 				if (pomodoroState.works > 0) // [5]
+ 					StateSaver.saveState(this, pomodoroState);
+ 
+@@ -729,6 +732,7 @@ public class PomodoroActivity extends Activity
+ 		}
+ 		private void initContext()
+ 		{
++            //Log.d("Minidoro", "Building new context");
+ 			pomodoroContext = new PomodoroContext();
+ 
+ 			pomodoroContext.ringerModeManager = new RingerModeManager((AudioManager) getSystemService(Context.AUDIO_SERVICE), getContentResolver());
+@@ -749,6 +753,7 @@ public class PomodoroActivity extends Activity
+ 
+ 			// Trying to restore state from service or from persistent
+ 			if (pomodoroContext == null) {
++                //Log.d("Minidoro", "Searching for context in the service");
+ 				pomodoroContext = service.getPomodoroContext();
+ 				//Log.d("Minidoro", "Restoring context from service");
+ 
+@@ -761,7 +766,7 @@ public class PomodoroActivity extends Activity
+ 
+ 			pomodoroState.refresh();
+ 
+-			// almost always would be NOT initialized (unless onServiceDisconnected happened)
++			// almost always should be NOT initialized here (unless onServiceDisconnected happened)
+ 			if (!isInitialized()) {
+ 				initActivity();
+ 
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/PomodoroService.java b/app/src/main/java/com/github/ympavlov/minidoro/PomodoroService.java
+index 70c90e5..164600d 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/PomodoroService.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/PomodoroService.java
+@@ -8,7 +8,7 @@ import android.os.Binder;
+ import android.os.Build;
+ import android.os.IBinder;
+ //import android.util.Log;
+-import com.github.ympavlov.minidoro.nofication.NotificationFactory;
++import com.github.ympavlov.minidoro.prefs.AppPreferences;
+ 
+ /**
+  * TimerService [1]
+@@ -26,8 +26,6 @@ public class PomodoroService extends Service
+ 	private PendingIntent alarmIntent;
+ 
+ 	private AppPreferences prefs;
+-	private NotificationManager notificationManager;
+-	private NotificationFactory notificationFactory;
+ 	private AlarmManager alarmManager;
+ 
+ 	PomodoroContext getPomodoroContext() { return pomodoroContext; }
+@@ -37,10 +35,6 @@ public class PomodoroService extends Service
+ 		this.pomodoroContext = pomodoroContext;
+ 		this.prefs = prefs;
+ 
+-		if (notificationManager == null) {
+-			notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+-			notificationFactory = NotificationFactory.getFactory(getApplicationContext(), PomodoroActivity.class, null);
+-		}
+ 		if (alarmManager == null)
+ 			alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+ 
+@@ -67,13 +61,12 @@ public class PomodoroService extends Service
+ 	void backgroundTimer()
+ 	{
+ 		if (!startedForeground) {
+-			long left = pomodoroContext.pomodoroState.refresh();
++			long leftMillis = pomodoroContext.pomodoroState.refresh();
+ 			BarIconUpdater.setDuration(prefs.getDuration(pomodoroContext.pomodoroState.stage));
+ 			Notification n = BarIconUpdater.createForegroundNotification(this,
+-					notificationFactory,
+ 					getString(R.string.barMinidoroNotifies),
+-					left,
+-					BarIconUpdater.getIconsLeft(left)
++					leftMillis,
++					BarIconUpdater.calcIconsLeft(leftMillis)
+ 			);
+ 
+ 			startForeground(Bell.NOTIFICATION_ID, n);
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/Stage.java b/app/src/main/java/com/github/ympavlov/minidoro/Stage.java
+index 4730e3c..c551405 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/Stage.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/Stage.java
+@@ -1,8 +1,10 @@
+ package com.github.ympavlov.minidoro;
+ 
++import com.github.ympavlov.minidoro.prefs.AppPreferences;
++
+ public enum Stage
+ {
+-	// The colors are assumed to be colorblind-friendly. Also they are chosen so to be bright on the e-book "paper" screen
++	// The colors are assumed to be colorblindness-friendly. Also they are chosen so to be bright on an e-ink screen
+ 	WORK("workDuration", 25, 0xfff29268, true),
+ 	BREAK("breakDuration", 5, 0xff79f0dc, false),
+ 	LONG_BREAK("longBreakDuration", 15, 0xff79f0dc, false);
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/ChannelDescriptor.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/ChannelDescriptor.java
+new file mode 100644
+index 0000000..e5b4a15
+--- /dev/null
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/ChannelDescriptor.java
+@@ -0,0 +1,21 @@
++package com.github.ympavlov.minidoro.nofication;
++
++import android.net.Uri;
++
++public interface ChannelDescriptor
++{
++	Uri getRingtone();
++
++    ChannelInfo getChannelInfo();
++
++	class ChannelInfo
++    {
++        final String id;
++        final String name;
++
++        public ChannelInfo(String id, String name) {
++            this.id = id;
++            this.name = name;
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactory.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactory.java
+index 6dd4d0b..4755526 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactory.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactory.java
+@@ -7,35 +7,46 @@ import android.app.PendingIntent;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.os.Build;
++import com.github.ympavlov.minidoro.prefs.AppPreferences;
++import com.github.ympavlov.minidoro.prefs.NotificationPreferences;
+ 
+ /**
+- * Custom Notification Compat — includes compatibility for APIs 4–31
++ * Custom Notification Compat — includes compatibility for APIs 4–33
+  */
+ public abstract class NotificationFactory
+ {
+ 	private final PendingIntent pendingIntent;
+ 
+ 	protected final Context context;
+-	protected final RingtoneProvider ringtoneProvider;
++	protected final ChannelDescriptor ringtoneChannel;
+ 
+ 	protected final int defaultFlags = Notification.DEFAULT_VIBRATE | Notification.DEFAULT_LIGHTS; // [4]
+ 
+-	public static NotificationFactory getFactory(Context context, Class<? extends Activity> activity, RingtoneProvider ringtoneProvider)
++    private static final int USE_V16_SINCE = 16;
++    //private static final int USE_V26_SINCE = 26; FIXME test this impl only on latter versions first, use old styled if possible
++    private static final int USE_V26_SINCE = 30;
++
++    public static NotificationPreferences getChannelRingtoneProvider(Context ctx, AppPreferences.RingtoneSharedPreferences p)
++    {
++        return (Build.VERSION.SDK_INT >= USE_V26_SINCE) ? new RingtoneNotificationChannel(ctx, p) : p;
++    }
++
++	public static NotificationFactory getFactory(Context context, Class<? extends Activity> activity, ChannelDescriptor ringtoneChannel)
+ 	{
+-		if (Build.VERSION.SDK_INT >= 26) {
+-			return new NotificationFactoryV26(context, activity, ringtoneProvider);
++		if (Build.VERSION.SDK_INT >= USE_V26_SINCE) {
++			return new NotificationFactoryV26(context, activity, ringtoneChannel);
+ 		}
+-		if (Build.VERSION.SDK_INT >= 16) {
+-			return new NotificationFactoryV16(context, activity, ringtoneProvider);
++		if (Build.VERSION.SDK_INT >= USE_V16_SINCE) {
++			return new NotificationFactoryV16(context, activity, ringtoneChannel);
+ 		}
+-		return new NotificationFactoryV4(context, activity, ringtoneProvider);
++		return new NotificationFactoryV4(context, activity, ringtoneChannel);
+ 	}
+ 
+ 	@SuppressLint("InlinedApi")
+-	protected NotificationFactory(Context ctx, Class<? extends Activity> activity, RingtoneProvider ringtoneProvider)
++	protected NotificationFactory(Context ctx, Class<? extends Activity> activity, ChannelDescriptor ringtoneChannel)
+ 	{
+ 		context = ctx;
+-		this.ringtoneProvider = ringtoneProvider;
++		this.ringtoneChannel = ringtoneChannel;
+ 
+ 		Intent i = new Intent(ctx, activity);
+ 		pendingIntent = PendingIntent.getActivity(ctx, 1, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV16.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV16.java
+index 81a7cd8..7840eac 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV16.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV16.java
+@@ -9,10 +9,10 @@ import android.os.Build;
+ import com.github.ympavlov.minidoro.R;
+ 
+ @SuppressWarnings("deprecation")
+-@TargetApi(16)
++@TargetApi(16) // till 29
+ public class NotificationFactoryV16 extends NotificationFactory
+ {
+-	protected NotificationFactoryV16(Context ctx, Class<? extends Activity> activityClass, RingtoneProvider ringtoneProvider)
++	protected NotificationFactoryV16(Context ctx, Class<? extends Activity> activityClass, ChannelDescriptor ringtoneProvider)
+ 	{
+ 		super(ctx, activityClass, ringtoneProvider);
+ 	}
+@@ -25,9 +25,10 @@ public class NotificationFactoryV16 extends NotificationFactory
+ 		b.setTicker(tickerText);
+ 		b.setContentTitle(title);
+ 		b.setContentText(text);
+-		if (ringtoneProvider != null) {
++        Uri ringtone = ringtoneChannel.getRingtone();
++		if (ringtone != null) {
+ 			b.setDefaults(defaultFlags);
+-			b.setSound(Uri.parse(ringtoneProvider.getRingtone()));
++			b.setSound(ringtone);
+ 		}
+ 		b.setAutoCancel(true);
+ 		b.setContentIntent(getPendingIntent());
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV26.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV26.java
+index f244e67..9cd3f46 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV26.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV26.java
+@@ -3,22 +3,64 @@ package com.github.ympavlov.minidoro.nofication;
+ import android.annotation.TargetApi;
+ import android.app.Activity;
+ import android.app.Notification;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
+ import android.content.Context;
++import android.media.AudioAttributes;
+ import com.github.ympavlov.minidoro.PomodoroActivity;
++import com.github.ympavlov.minidoro.R;
+ 
+ @TargetApi(26)
+-public class NotificationFactoryV26 extends NotificationFactoryV16
++public class NotificationFactoryV26 extends NotificationFactory
+ {
+-	protected NotificationFactoryV26(Context ctx, Class<? extends Activity> activity, RingtoneProvider ringtoneProvider)
++    private boolean isChannelCreated;
++
++	protected NotificationFactoryV26(Context ctx, Class<? extends Activity> activity, ChannelDescriptor ringtoneChannel)
+ 	{
+-		super(ctx, activity, ringtoneProvider);
++		super(ctx, activity, ringtoneChannel);
++	}
++
++	private void updateChannel()
++	{
++	    if (!isChannelCreated) {
++            NotificationChannel channel = new NotificationChannel(
++                    ringtoneChannel.getChannelInfo().id,
++                    ringtoneChannel.getChannelInfo().name,
++                    (ringtoneChannel.getRingtone() == null) ? NotificationManager.IMPORTANCE_LOW : NotificationManager.IMPORTANCE_HIGH);
++
++            if (ringtoneChannel.getRingtone() != null) {
++                channel.setSound(ringtoneChannel.getRingtone(),
++                        new AudioAttributes.Builder()
++                                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
++                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
++                                .build());
++            }
++
++            ((NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE)).createNotificationChannel(channel);
++
++            isChannelCreated = true;
++        }
+ 	}
+ 
+ 	@Override
+ 	public Notification createNotification(String tickerText, String title, String text, int icon, boolean highPriority)
+ 	{
+-		// TODO new separate implementation with channels
+-		Notification.Builder b = createNotificationBuilder(tickerText, title, text, icon, highPriority);
++        updateChannel();
++
++		Notification.Builder b = new Notification.Builder(context, ringtoneChannel.getChannelInfo().id);
++
++		b.setSmallIcon(icon);
++		b.setTicker(tickerText);
++		b.setContentTitle(title);
++		b.setContentText(text);
++		b.setColor(context.getResources().getColor(R.color.accent, null));
++
++		b.setAutoCancel(true);
++		b.setContentIntent(getPendingIntent());
++
++		if (highPriority) {
++			b.setCategory(Notification.CATEGORY_ALARM);
++		}
+ 
+ 		b.setColorized(true);
+ 		b.setTimeoutAfter(PomodoroActivity.MAX_WAIT_USER_RETURN);
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV4.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV4.java
+index a1584e1..476399e 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV4.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/NotificationFactoryV4.java
+@@ -16,7 +16,7 @@ import java.lang.reflect.Method;
+ @TargetApi(4) // till 15
+ public class NotificationFactoryV4 extends NotificationFactory
+ {
+-	protected NotificationFactoryV4(Context ctx, Class<? extends Activity> activityClass, RingtoneProvider ringtoneProvider)
++	protected NotificationFactoryV4(Context ctx, Class<? extends Activity> activityClass, ChannelDescriptor ringtoneProvider)
+ 	{
+ 		super(ctx, activityClass, ringtoneProvider);
+ 	}
+@@ -29,7 +29,7 @@ public class NotificationFactoryV4 extends NotificationFactory
+ 		try { // we need setLatestEventInfo in elder APIs
+ 			@SuppressWarnings("JavaReflectionMemberAccess")
+ 			Method setInfoMethod = Notification.class.getMethod("setLatestEventInfo", Context.class, CharSequence.class, CharSequence.class, PendingIntent.class);
+-			//n.setLatestEventInfo(context, title, text, pendingIntent);
++			//n.setLatestEventInfo(context, title, text, pendingIntent);o
+ 			setInfoMethod.invoke(n, context, title, text, getPendingIntent());
+ 		} catch (NoSuchMethodException e) {
+ 			Log.e("Minidoro", "NotificationFactoryV4: no setLatestEventInfo in SDK " + Build.VERSION.SDK_INT);
+@@ -40,9 +40,10 @@ public class NotificationFactoryV4 extends NotificationFactory
+ 		}
+ 
+ 		n.flags |= Notification.FLAG_AUTO_CANCEL;
+-		if (ringtoneProvider != null) {
++		Uri ringtone = ringtoneChannel.getRingtone();
++		if (ringtone != null) {
+ 			n.defaults = defaultFlags;
+-			n.sound = Uri.parse(ringtoneProvider.getRingtone());
++			n.sound = ringtone;
+ 		}
+ 		return n;
+ 	}
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneNotificationChannel.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneNotificationChannel.java
+new file mode 100644
+index 0000000..012edd3
+--- /dev/null
++++ b/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneNotificationChannel.java
+@@ -0,0 +1,55 @@
++package com.github.ympavlov.minidoro.nofication;
++
++import android.annotation.TargetApi;
++import android.app.NotificationChannel;
++import android.app.NotificationManager;
++import android.content.Context;
++import android.net.Uri;
++import com.github.ympavlov.minidoro.R;
++import com.github.ympavlov.minidoro.prefs.AppPreferences;
++import com.github.ympavlov.minidoro.prefs.NotificationPreferences;
++
++/*
++ * Proxy decorator for default notification preference strategy
++ */
++@TargetApi(26)
++public class RingtoneNotificationChannel implements NotificationPreferences
++{
++    private final ChannelInfo info;
++    private final NotificationManager notificationManager;
++    private final AppPreferences.RingtoneSharedPreferences nonChannelImpl;
++
++    public RingtoneNotificationChannel(Context ctx, AppPreferences.RingtoneSharedPreferences p)
++    {
++        nonChannelImpl = p;
++        notificationManager = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
++        info = new ChannelDescriptor.ChannelInfo(
++               ctx.getResources().getString(R.string.nChannelBellId),
++               ctx.getResources().getString(R.string.nChannelBellName)
++        );
++    }
++
++    private NotificationChannel getChannel()
++    {
++        return notificationManager.getNotificationChannel(info.id);
++    }
++
++    @Override
++    public ChannelInfo getChannelInfo() { return info; }
++
++    @Override
++    public Uri getRingtone() { return nonChannelImpl.getRingtone(); }
++
++    @Override
++    public boolean isRingtoneDefault()
++    {
++        NotificationChannel c = getChannel();
++        if (c != null) {
++            return c.getSound().equals(nonChannelImpl.minidoroRingtone);
++        }
++        return nonChannelImpl.isRingtoneDefault();
++    }
++
++    @Override
++    public boolean isDirectChangeAvailable() { return getChannel() == null; }
++}
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneProvider.java b/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneProvider.java
+deleted file mode 100644
+index 893b8d5..0000000
+--- a/app/src/main/java/com/github/ympavlov/minidoro/nofication/RingtoneProvider.java
++++ /dev/null
+@@ -1,6 +0,0 @@
+-package com.github.ympavlov.minidoro.nofication;
+-
+-public interface RingtoneProvider
+-{
+-	String getRingtone();
+-}
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/prefs/AppPreferences.java b/app/src/main/java/com/github/ympavlov/minidoro/prefs/AppPreferences.java
+new file mode 100644
+index 0000000..9e66354
+--- /dev/null
++++ b/app/src/main/java/com/github/ympavlov/minidoro/prefs/AppPreferences.java
+@@ -0,0 +1,101 @@
++package com.github.ympavlov.minidoro.prefs;
++
++import android.content.ContentResolver;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import com.github.ympavlov.minidoro.R;
++import com.github.ympavlov.minidoro.Stage;
++
++import static com.github.ympavlov.minidoro.Stage.BREAK;
++import static com.github.ympavlov.minidoro.Stage.LONG_BREAK;
++
++/**
++ * Wrapper for SharePreferences. It's needed because SharePreferences stores user-friendly list
++ * Also this class includes calculated prefs getters and default values for stored prefs
++ */
++public class AppPreferences
++{
++	public static final String PREF_KEY = "_preferences";
++
++	static final String LONG_BREAK_PERIODICITY_KEY = "longBreakPeriodicity";
++	static final String DND_MODE_KEY = "dndMode";
++	static final String USE_MINIDORO_RINGTONE_KEY = "minidoroRingtone";
++	static final String RINGTONE_KEY = "ringtone";
++    static final String CHANNEL_KEY = "chanelPreferences";
++	static final String OVERRIDE_SILENT_MODE_KEY = "overrideSilent";
++
++	private final SharedPreferences sharedPreferences;
++
++	public AppPreferences(SharedPreferences p)
++	{
++		this.sharedPreferences = p;
++	}
++
++	private static int parsePositive(String s, int def)
++	{
++		try {
++			int i = Integer.parseInt(s);
++			return i > 0 ? i : def;
++		} catch (NumberFormatException e) {
++			return def;
++		}
++	}
++
++	public int getDuration(Stage s)
++	{
++		return parsePositive(
++				sharedPreferences.getString(s.durationPref, ""),
++				s.defaultDuration
++		);
++	}
++
++	public boolean isLongBreaksOn() { return getDuration(BREAK) != getDuration(LONG_BREAK); }
++
++	public int getLongBreaksPeriodicity()
++	{
++		return parsePositive(sharedPreferences.getString(LONG_BREAK_PERIODICITY_KEY, "4"), 4);
++	}
++
++	public boolean isDndModeOn() { return sharedPreferences.getBoolean(DND_MODE_KEY, false); }
++
++	// [4a]
++	public boolean overrideSilent() { return sharedPreferences.getBoolean(OVERRIDE_SILENT_MODE_KEY, false); }
++
++	public RingtoneSharedPreferences getNotificationPreferences(String packageName)
++    {
++        return new RingtoneSharedPreferences(packageName);
++    }
++
++	/*
++	 * Plain old mutable ringtone preferences before notification channels
++	 */
++    public class RingtoneSharedPreferences implements NotificationPreferences
++    {
++        public final String minidoroRingtoneStr;
++        public final Uri minidoroRingtone;
++
++        private RingtoneSharedPreferences(String packageName)
++        {
++            // The Minidoro sound is quieter than regular sounds
++            minidoroRingtoneStr = ContentResolver.SCHEME_ANDROID_RESOURCE + "://" + packageName + "/" + R.raw.darkjazz;
++            minidoroRingtone = Uri.parse(minidoroRingtoneStr);
++        }
++
++        @Override
++        public ChannelInfo getChannelInfo() { return null; }
++
++        @Override
++        public Uri getRingtone()
++        {
++            return isRingtoneDefault() ?
++                   minidoroRingtone :
++                   Uri.parse(sharedPreferences.getString(AppPreferences.RINGTONE_KEY, minidoroRingtoneStr));
++        }
++
++        @Override
++        public boolean isRingtoneDefault() { return sharedPreferences.getBoolean(AppPreferences.USE_MINIDORO_RINGTONE_KEY, true); }
++
++        @Override
++        public boolean isDirectChangeAvailable() { return true; }
++    }
++}
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/prefs/NotificationPreferences.java b/app/src/main/java/com/github/ympavlov/minidoro/prefs/NotificationPreferences.java
+new file mode 100644
+index 0000000..19833ff
+--- /dev/null
++++ b/app/src/main/java/com/github/ympavlov/minidoro/prefs/NotificationPreferences.java
+@@ -0,0 +1,9 @@
++package com.github.ympavlov.minidoro.prefs;
++
++import com.github.ympavlov.minidoro.nofication.ChannelDescriptor;
++
++public interface NotificationPreferences extends ChannelDescriptor
++{
++    boolean isRingtoneDefault();
++    boolean isDirectChangeAvailable();
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/github/ympavlov/minidoro/PreferencesActivity.java b/app/src/main/java/com/github/ympavlov/minidoro/prefs/PreferencesActivity.java
+similarity index 70%
+rename from app/src/main/java/com/github/ympavlov/minidoro/PreferencesActivity.java
+rename to app/src/main/java/com/github/ympavlov/minidoro/prefs/PreferencesActivity.java
+index e91a06f..eb22d91 100644
+--- a/app/src/main/java/com/github/ympavlov/minidoro/PreferencesActivity.java
++++ b/app/src/main/java/com/github/ympavlov/minidoro/prefs/PreferencesActivity.java
+@@ -1,31 +1,50 @@
+-package com.github.ympavlov.minidoro;
++package com.github.ympavlov.minidoro.prefs;
+ 
+ import android.app.AlertDialog;
+ import android.content.*;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.preference.CheckBoxPreference;
+ import android.preference.EditTextPreference;
+ import android.preference.Preference;
+ import android.preference.PreferenceActivity;
+ import android.text.Editable;
+ import android.text.TextWatcher;
++import com.github.ympavlov.minidoro.R;
++import com.github.ympavlov.minidoro.Stage;
+ import com.github.ympavlov.minidoro.dnd.DndServiceStrategy;
++import com.github.ympavlov.minidoro.nofication.NotificationFactory;
+ 
+ @SuppressWarnings("deprecation") // Using PreferenceActivity for compatibility with APIs 4–11. Not PreferenceFragment. It's too small to Fragment would be useful
+ public class PreferencesActivity extends PreferenceActivity implements SharedPreferences.OnSharedPreferenceChangeListener
+ {
+ 	private SharedPreferences prefs;
+-	private AppPreferences appPrefs;
+-	private DndServiceStrategy dndServiceConnection;
++    private AppPreferences appPrefs;
++    private DndServiceStrategy dndServiceConnection;
+ 	@Override
+ 	protected void onCreate(Bundle savedInstanceState)
+ 	{
+ 		super.onCreate(savedInstanceState);
+ 
+-		addPreferencesFromResource(R.xml.preferences);
++        addPreferencesFromResource(R.xml.timer_preferences);
++        addPreferencesFromResource(R.xml.notification_preferences);
+ 
+ 		prefs = getPreferenceScreen().getSharedPreferences();
+-		appPrefs = new AppPreferences(getPackageName(), prefs);
++		appPrefs = new AppPreferences(prefs);
++        NotificationPreferences notificationPreferences = NotificationFactory.getChannelRingtoneProvider(this, appPrefs.getNotificationPreferences(getPackageName()));
++
++        if (!notificationPreferences.isDirectChangeAvailable()) {
++            CheckBoxPreference minidoroRingtonePref = (CheckBoxPreference) findPreference(appPrefs.USE_MINIDORO_RINGTONE_KEY);
++            minidoroRingtonePref.setEnabled(false);
++            minidoroRingtonePref.setPersistent(false);
++            minidoroRingtonePref.setChecked(notificationPreferences.isRingtoneDefault());
++            findPreference(appPrefs.RINGTONE_KEY).setEnabled(false);
++        } else {
++            Preference chanelPrefs = findPreference(appPrefs.CHANNEL_KEY);
++            if (chanelPrefs != null) {
++                chanelPrefs.setEnabled(false);
++            }
++        }
+ 
+ 		TrimLeadingZerosTextWatcher w = new TrimLeadingZerosTextWatcher();
+ 		w.assignToPreference(Stage.WORK.durationPref);
+@@ -62,15 +81,18 @@ public class PreferencesActivity extends PreferenceActivity implements SharedPre
+ 	@Override
+ 	public void onSharedPreferenceChanged(SharedPreferences prefs, String keys)
+ 	{
+-		if (keys.contains(appPrefs.USE_MINIDORO_RINGTONE_KEY)) {
+-			boolean minidoroRingtone = prefs.getBoolean(appPrefs.USE_MINIDORO_RINGTONE_KEY, true);
+-
+-			findPreference(appPrefs.USE_MINIDORO_RINGTONE_KEY).setSummary(
+-					getString(minidoroRingtone ?
+-					          R.string.prefMinidoroRingtoneOn : R.string.prefMinidoroRingtoneOff));
+-
+-			findPreference(appPrefs.RINGTONE_KEY).setEnabled(!minidoroRingtone);
+-		}
++        if (keys.contains(appPrefs.USE_MINIDORO_RINGTONE_KEY)) {
++            Preference minidoroRingtonePref = findPreference(appPrefs.USE_MINIDORO_RINGTONE_KEY);
++            if (minidoroRingtonePref.isEnabled()) {
++                boolean minidoroRingtone = prefs.getBoolean(appPrefs.USE_MINIDORO_RINGTONE_KEY, true);
++
++                minidoroRingtonePref.setSummary(
++                        getString(minidoroRingtone ?
++                                  R.string.prefMinidoroRingtoneOn : R.string.prefMinidoroRingtoneOff));
++
++                findPreference(appPrefs.RINGTONE_KEY).setEnabled(!minidoroRingtone);
++            }
++        }
+ 
+ 		// [4a]
+ 		if (keys.contains(appPrefs.OVERRIDE_SILENT_MODE_KEY)) {
+diff --git a/app/src/test/java/com/github/ympavlov/minidoro/AppPreferencesTest.java b/app/src/test/java/com/github/ympavlov/minidoro/AppPreferencesTest.java
+deleted file mode 100644
+index 6d37c94..0000000
+--- a/app/src/test/java/com/github/ympavlov/minidoro/AppPreferencesTest.java
++++ /dev/null
+@@ -1,36 +0,0 @@
+-package com.github.ympavlov.minidoro;
+-
+-import android.content.SharedPreferences;
+-import org.junit.Test;
+-import org.mockito.Mockito;
+-
+-import static org.junit.Assert.assertEquals;
+-import static org.mockito.Mockito.when;
+-
+-public class AppPreferencesTest
+-{
+-	private void testRestoreIncorrectValue(String value)
+-	{
+-		Stage s = Stage.WORK;
+-
+-		SharedPreferences p = Mockito.mock(SharedPreferences.class);
+-
+-		when(p.getString(s.durationPref, Integer.toString(s.defaultDuration))).thenReturn(value);
+-
+-		AppPreferences ap = new AppPreferences(AppPreferencesTest.class.getPackage().getName(), p);
+-
+-		assertEquals(ap.getDuration(s), s.defaultDuration);
+-	}
+-
+-	@Test
+-	public void testRestoreZero()
+-	{
+-		testRestoreIncorrectValue("0");
+-	}
+-
+-	@Test
+-	public void testRestoreIncorrectNumberFloat()
+-	{
+-		testRestoreIncorrectValue(".0");
+-	}
+-}
+diff --git a/app/src/test/java/com/github/ympavlov/minidoro/prefs/AppPreferencesTest.java b/app/src/test/java/com/github/ympavlov/minidoro/prefs/AppPreferencesTest.java
+new file mode 100644
+index 0000000..fc19998
+--- /dev/null
++++ b/app/src/test/java/com/github/ympavlov/minidoro/prefs/AppPreferencesTest.java
+@@ -0,0 +1,37 @@
++package com.github.ympavlov.minidoro.prefs;
++
++import android.content.SharedPreferences;
++import com.github.ympavlov.minidoro.Stage;
++import org.junit.Test;
++import org.mockito.Mockito;
++
++import static org.junit.Assert.assertEquals;
++import static org.mockito.Mockito.when;
++
++public class AppPreferencesTest
++{
++    private void testRestoreIncorrectValue(String value)
++    {
++        Stage s = Stage.WORK;
++
++        SharedPreferences p = Mockito.mock(SharedPreferences.class);
++
++        when(p.getString(s.durationPref, Integer.toString(s.defaultDuration))).thenReturn(value);
++
++        AppPreferences ap = new AppPreferences(p);
++
++        assertEquals(ap.getDuration(s), s.defaultDuration);
++    }
++
++    @Test
++    public void testRestoreZero()
++    {
++        testRestoreIncorrectValue("0");
++    }
++
++    @Test
++    public void testRestoreIncorrectNumberFloat()
++    {
++        testRestoreIncorrectValue(".0");
++    }
++}

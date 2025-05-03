@@ -1,0 +1,812 @@
+diff --git a/src/main/java/com/amaze/filemanager/services/CopyService.java b/src/main/java/com/amaze/filemanager/services/CopyService.java
+index cbeb96108..29a8d720f 100644
+--- a/src/main/java/com/amaze/filemanager/services/CopyService.java
++++ b/src/main/java/com/amaze/filemanager/services/CopyService.java
+@@ -45,7 +45,6 @@ import com.stericson.RootTools.RootTools;
+ import java.io.BufferedInputStream;
+ import java.io.File;
+ import java.io.FileInputStream;
+-import java.io.FileOutputStream;
+ import java.io.IOException;
+ import java.io.OutputStream;
+ import java.util.ArrayList;
+diff --git a/src/main/java/com/amaze/filemanager/services/DeleteTask.java b/src/main/java/com/amaze/filemanager/services/DeleteTask.java
+index b9e4c50b3..21cef6426 100644
+--- a/src/main/java/com/amaze/filemanager/services/DeleteTask.java
++++ b/src/main/java/com/amaze/filemanager/services/DeleteTask.java
+@@ -36,7 +36,6 @@ import com.amaze.filemanager.utils.MediaFile;
+ import com.stericson.RootTools.RootTools;
+ 
+ import java.io.File;
+-import java.io.IOException;
+ import java.util.ArrayList;
+ 
+ public class DeleteTask extends AsyncTask<ArrayList<File>, String, Boolean> {
+diff --git a/src/main/java/com/amaze/filemanager/utils/MediaFile.java b/src/main/java/com/amaze/filemanager/utils/MediaFile.java
+deleted file mode 100644
+index 55207c7f4..000000000
+--- a/src/main/java/com/amaze/filemanager/utils/MediaFile.java
++++ /dev/null
+@@ -1,294 +0,0 @@
+-package com.amaze.filemanager.utils;
+-
+-/**
+- * Created by Arpit on 23-10-2014.
+- */
+-import java.io.File;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.OutputStream;
+-import java.lang.reflect.InvocationTargetException;
+-import java.lang.reflect.Method;
+-
+-import android.content.ContentResolver;
+-import android.content.ContentValues;
+-import android.content.Context;
+-import android.database.Cursor;
+-import android.net.Uri;
+-import android.os.ParcelFileDescriptor;
+-import android.provider.BaseColumns;
+-import android.provider.MediaStore;
+-
+-import com.amaze.filemanager.R;
+-
+-/**
+- * Wrapper for manipulating files via the Android Media Content Provider. As of Android 4.4 KitKat, applications can no longer write
+- * to the "secondary storage" of a device. Write operations using the java.io.File API will thus fail. This class restores access to
+- * those write operations by way of the Media Content Provider.
+- *
+- * Note that this class relies on the internal operational characteristics of the media content provider API, and as such is not
+- * guaranteed to be future-proof. Then again, we did all think the java.io.File API was going to be future-proof for media card
+- * access, so all bets are off.
+- *
+- * If you're forced to use this class, it's because Google/AOSP made a very poor API decision in Android 4.4 KitKat.
+- * Read more at https://plus.google.com/+TodLiebeck/posts/gjnmuaDM8sn
+- *
+- * Your application must declare the permission "android.permission.WRITE_EXTERNAL_STORAGE".
+- */
+-public class MediaFile {
+-
+-    private static final String NO_MEDIA = ".nomedia";
+-    private static final String ALBUM_ART_URI = "content://media/external/audio/albumart";
+-    private static final String[] ALBUM_PROJECTION = { BaseColumns._ID, MediaStore.Audio.AlbumColumns.ALBUM_ID, "media_type" };
+-
+-    private static File getExternalFilesDir(Context context) {
+-
+-
+-        try {
+-            Method method = Context.class.getMethod("getExternalFilesDir", String.class);
+-            return (File) method.invoke(context, (String) null);
+-        } catch (SecurityException ex) {
+-         //   Log.d(Maui.LOG_TAG, "Unexpected reflection error.", ex);
+-            return null;
+-        } catch (NoSuchMethodException ex) {
+-       //     Log.d(Maui.LOG_TAG, "Unexpected reflection error.", ex);
+-            return null;
+-        } catch (IllegalArgumentException ex) {
+-           // Log.d(Maui.LOG_TAG, "Unexpected reflection error.", ex);
+-            return null;
+-        } catch (IllegalAccessException ex) {
+-            //Log.d(Maui.LOG_TAG, "Unexpected reflection error.", ex);
+-            return null;
+-        } catch (InvocationTargetException ex) {
+-            //Log.d(Maui.LOG_TAG, "Unexpected reflection error.", ex);
+-            return null;
+-        }
+-    }
+-
+-
+-    private final File file;
+-    private final Context context;
+-    private final ContentResolver contentResolver;
+-    Uri filesUri;
+-    public MediaFile(Context context, File file) {
+-        this.file = file;
+-        this.context = context;
+-        contentResolver = context.getContentResolver();
+-        filesUri = MediaStore.Files.getContentUri("external");
+-    }
+-
+-    /**
+-     * Deletes the file. Returns true if the file has been successfully deleted or otherwise does not exist. This operation is not
+-     * recursive.
+-     */
+-    public boolean delete()
+-            throws IOException {
+-
+-        if (!file.exists()) {
+-            return true;
+-        }
+-
+-        boolean directory = file.isDirectory();
+-        if (directory) {
+-            // Verify directory does not contain any files/directories within it.
+-            String[] files = file.list();
+-            if (files != null && files.length > 0) {
+-                return false;
+-            }
+-        }
+-
+-        String where = MediaStore.MediaColumns.DATA + "=?";
+-        String[] selectionArgs = new String[] { file.getAbsolutePath() };
+-
+-        // Delete the entry from the media database. This will actually delete media files (images, audio, and video).
+-        contentResolver.delete(filesUri, where, selectionArgs);
+-
+-        if (file.exists()) {
+-            // If the file is not a media file, create a new entry suggesting that this location is an image, even
+-            // though it is not.
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-            contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+-
+-            // Delete the created entry, such that content provider will delete the file.
+-            contentResolver.delete(filesUri, where, selectionArgs);
+-        }
+-
+-        return !file.exists();
+-    }
+-
+-    public File getFile() {
+-        return file;
+-    }
+-
+-    private int getTemporaryAlbumId() {
+-        final File temporaryTrack;
+-        try {
+-            temporaryTrack = installTemporaryTrack();
+-        } catch (IOException ex) {
+-            return 0;
+-        }
+-
+-        final String[] selectionArgs = { temporaryTrack.getAbsolutePath() };
+-        Cursor cursor = contentResolver.query(filesUri, ALBUM_PROJECTION, MediaStore.MediaColumns.DATA + "=?",
+-                selectionArgs, null);
+-        if (cursor == null || !cursor.moveToFirst()) {
+-            if (cursor != null) {
+-                cursor.close();
+-                cursor = null;
+-            }
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, temporaryTrack.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, "{MediaWrite Workaround}");
+-            values.put(MediaStore.MediaColumns.SIZE, temporaryTrack.length());
+-            values.put(MediaStore.MediaColumns.MIME_TYPE, "audio/mpeg");
+-            values.put(MediaStore.Audio.AudioColumns.IS_MUSIC, true);
+-            contentResolver.insert(filesUri, values);
+-        }
+-        cursor = contentResolver.query(filesUri, ALBUM_PROJECTION, MediaStore.MediaColumns.DATA + "=?",
+-                selectionArgs, null);
+-        if (cursor == null) {
+-            return 0;
+-        }
+-        if (!cursor.moveToFirst()) {
+-            cursor.close();
+-            return 0;
+-        }
+-        int id = cursor.getInt(0);
+-        int albumId = cursor.getInt(1);
+-        int mediaType = cursor.getInt(2);
+-        cursor.close();
+-
+-        ContentValues values = new ContentValues();
+-        boolean updateRequired = false;
+-        if (albumId == 0) {
+-            values.put(MediaStore.Audio.AlbumColumns.ALBUM_ID, 13371337);
+-            updateRequired = true;
+-        }
+-        if (mediaType != 2) {
+-            values.put("media_type", 2);
+-            updateRequired = true;
+-        }
+-        if (updateRequired) {
+-            contentResolver.update(filesUri, values, BaseColumns._ID + "=" + id, null);
+-        }
+-        cursor = contentResolver.query(filesUri, ALBUM_PROJECTION, MediaStore.MediaColumns.DATA + "=?",
+-                selectionArgs, null);
+-        if (cursor == null) {
+-            return 0;
+-        }
+-
+-        try {
+-            if (!cursor.moveToFirst()) {
+-                return 0;
+-            }
+-            return cursor.getInt(1);
+-        } finally {
+-            cursor.close();
+-        }
+-    }
+-
+-    private File installTemporaryTrack()
+-            throws IOException {
+-        File externalFilesDir = getExternalFilesDir(context);
+-        if (externalFilesDir == null) {
+-            return null;
+-        }
+-        File temporaryTrack = new File(externalFilesDir, "temptrack.mp3");
+-        if (!temporaryTrack.exists()) {
+-            InputStream in = null;
+-            OutputStream out = null;
+-            try {
+-                in = context.getResources().openRawResource(R.raw.temptrack);
+-                out = new FileOutputStream(temporaryTrack);
+-                byte[] buffer = new byte[4096];
+-                int bytesRead;
+-                while ((bytesRead = in.read(buffer)) != -1) {
+-                    out.write(buffer, 0, bytesRead);
+-                }
+-            } finally {
+-                if (in != null) {
+-                    try {
+-                        in.close();
+-                    } catch (IOException ex) {
+-                        return null;
+-                    }
+-                }
+-                if (out != null) {
+-                    try {
+-                        out.close();
+-                    } catch (IOException ex) {
+-                        return null;
+-                    }
+-                }
+-            }
+-        }
+-        return temporaryTrack;
+-    }
+-    public boolean mkdir()
+-            throws IOException {
+-        if (file.exists()) {
+-            return file.isDirectory();
+-        }
+-
+-        File tmpFile = new File(file, ".MediaWriteTemp");
+-        int albumId = getTemporaryAlbumId();
+-
+-        if (albumId == 0) {
+-            throw new IOException("Fail");
+-        }
+-
+-        Uri albumUri = Uri.parse(ALBUM_ART_URI + '/' + albumId);
+-        ContentValues values = new ContentValues();
+-        values.put(MediaStore.MediaColumns.DATA, tmpFile.getAbsolutePath());
+-
+-        if (contentResolver.update(albumUri, values, null, null) == 0) {
+-            values.put(MediaStore.Audio.AlbumColumns.ALBUM_ID, albumId);
+-            contentResolver.insert(Uri.parse(ALBUM_ART_URI), values);
+-        }
+-
+-        try {
+-            ParcelFileDescriptor fd = contentResolver.openFileDescriptor(albumUri, "r");
+-            fd.close();
+-        } finally {
+-            MediaFile tmpMediaFile = new MediaFile(context, tmpFile);
+-            tmpMediaFile.delete();
+-        }
+-
+-        return file.exists();
+-    }
+-
+-    /**
+-     * Returns an OutputStream to write to the file. The file will be truncated immediately.
+-     */
+-    public OutputStream write(long size)
+-            throws IOException {
+-
+-        if (NO_MEDIA.equals(file.getName().trim())) {
+-            throw new IOException("Unable to create .nomedia file via media content provider API.");
+-        }
+-
+-        if (file.exists() && file.isDirectory()) {
+-            throw new IOException("File exists and is a directory.");
+-        }
+-
+-        // Delete any existing entry from the media database.
+-        // This may also delete the file (for media types), but that is irrelevant as it will be truncated momentarily in any case.
+-        String where = MediaStore.MediaColumns.DATA + "=?";
+-        String[] selectionArgs = new String[] { file.getAbsolutePath() };
+-        contentResolver.delete(filesUri, where, selectionArgs);
+-
+-        ContentValues values = new ContentValues();
+-        values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-        values.put(MediaStore.MediaColumns.SIZE, size);
+-        Uri uri = contentResolver.insert(filesUri, values);
+-
+-        if (uri == null) {
+-            // Should not occur.
+-            throw new IOException("Internal error.");
+-        }
+-
+-        return contentResolver.openOutputStream(uri);
+-    }
+-}
+\ No newline at end of file
+diff --git a/src/main/java/com/amaze/filemanager/utils/MediaStoreHack.java b/src/main/java/com/amaze/filemanager/utils/MediaStoreHack.java
+deleted file mode 100644
+index 655bcf0df..000000000
+--- a/src/main/java/com/amaze/filemanager/utils/MediaStoreHack.java
++++ /dev/null
+@@ -1,261 +0,0 @@
+-/*
+- * Copyright (C) 2015 JRummy Apps, Inc. - All Rights Reserved
+- *
+- * Unauthorized copying or redistribution of this file in source and binary forms via any medium
+- * is strictly prohibited.
+- *
+- * Created by Jared Rummler <jared.rummler@gmail.com>, Mar 28, 2015
+- */
+-package com.amaze.filemanager.utils;
+-
+-import java.io.File;
+-import java.io.FileOutputStream;
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.OutputStream;
+-import java.util.Locale;
+-
+-import android.content.ContentResolver;
+-import android.content.ContentValues;
+-import android.content.Context;
+-import android.database.Cursor;
+-import android.net.Uri;
+-import android.os.ParcelFileDescriptor;
+-import android.provider.BaseColumns;
+-import android.provider.MediaStore;
+-import android.util.Log;
+-
+-import com.amaze.filemanager.R;
+-
+-/**
+- * Wrapper for manipulating files via the Android Media Content Provider. As of Android 4.4 KitKat,
+- * applications can no longer write to the "secondary storage" of a device. Write operations using
+- * the java.io.File API will thus fail. This class restores access to those write operations by way
+- * of the Media Content Provider.</p>
+- *
+- * Note that this class relies on the internal operational characteristics of the media content
+- * provider API, and as such is not guaranteed to be future-proof. Then again, we did all think the
+- * java.io.File API was going to be future-proof for media card access, so all bets are off.</p>
+- *
+- * If you're forced to use this class, it's because Google/AOSP made a very poor API decision in
+- * Android 4.4 KitKat. Read more at https://plus.google.com/+TodLiebeck/posts/gjnmuaDM8sn</p>
+- *
+- * Your application must declare the permission "android.permission.WRITE_EXTERNAL_STORAGE".</p>
+- *
+- * Adapted from: http://forum.xda-developers.com/showpost.php?p=52151865&postcount=20</p>
+- *
+- * @author Jared Rummler <jared.rummler@gmail.com>
+- */
+-public class MediaStoreHack {
+-
+-    private static final String ALBUM_ART_URI = "content://media/external/audio/albumart";
+-
+-    private static final String[] ALBUM_PROJECTION = {
+-            BaseColumns._ID, MediaStore.Audio.AlbumColumns.ALBUM_ID, "media_type"
+-    };
+-
+-    /**
+-     * Deletes the file. Returns true if the file has been successfully deleted or otherwise does
+-     * not exist. This operation is not recursive.
+-     */
+-    public static boolean delete(final Context context, final File file) {
+-        final String where = MediaStore.MediaColumns.DATA + "=?";
+-        final String[] selectionArgs = new String[] {
+-            file.getAbsolutePath()
+-        };
+-        final ContentResolver contentResolver = context.getContentResolver();
+-        final Uri filesUri = MediaStore.Files.getContentUri("external");
+-        // Delete the entry from the media database. This will actually delete media files.
+-        contentResolver.delete(filesUri, where, selectionArgs);
+-        // If the file is not a media file, create a new entry.
+-        if (file.exists()) {
+-            final ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-            contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+-            // Delete the created entry, such that content provider will delete the file.
+-            contentResolver.delete(filesUri, where, selectionArgs);
+-        }
+-        return !file.exists();
+-    }
+-
+-    private static File getExternalFilesDir(final Context context) {
+-        return context.getExternalFilesDir(null);
+-    }
+-
+-    public static InputStream
+-            getInputStream(final Context context, final File file, final long size) {
+-        try {
+-            final String where = MediaStore.MediaColumns.DATA + "=?";
+-            final String[] selectionArgs = new String[] {
+-                file.getAbsolutePath()
+-            };
+-            final ContentResolver contentResolver = context.getContentResolver();
+-            final Uri filesUri = MediaStore.Files.getContentUri("external");
+-            contentResolver.delete(filesUri, where, selectionArgs);
+-            final ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.SIZE, size);
+-            final Uri uri = contentResolver.insert(filesUri, values);
+-            return contentResolver.openInputStream(uri);
+-        } catch (final Throwable t) {
+-            return null;
+-        }
+-    }
+-
+-    /**
+-     * Returns an OutputStream to write to the file. The file will be truncated immediately.
+-     */
+-    public static OutputStream getOutputStream(final Context context, final File file,
+-            final long size) {
+-        try {
+-            final String where = MediaStore.MediaColumns.DATA + "=?";
+-            final String[] selectionArgs = new String[] {
+-                file.getAbsolutePath()
+-            };
+-            final ContentResolver contentResolver = context.getContentResolver();
+-            final Uri filesUri = MediaStore.Files.getContentUri("external");
+-            contentResolver.delete(filesUri, where, selectionArgs);
+-            final ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.SIZE, size);
+-            final Uri uri = contentResolver.insert(filesUri, values);
+-            return contentResolver.openOutputStream(uri);
+-        } catch (final Throwable t) {
+-            return null;
+-        }
+-    }
+-
+-    private static int getTemporaryAlbumId(final Context context) {
+-        final File temporaryTrack;
+-        try {
+-            temporaryTrack = installTemporaryTrack(context);
+-        } catch (final IOException ex) {
+-            Log.w("MediaFile", "Error installing tempory track.", ex);
+-            return 0;
+-        }
+-        final Uri filesUri = MediaStore.Files.getContentUri("external");
+-        final String[] selectionArgs = {
+-            temporaryTrack.getAbsolutePath()
+-        };
+-        final ContentResolver contentResolver = context.getContentResolver();
+-        Cursor cursor = contentResolver.query(filesUri, ALBUM_PROJECTION,
+-            MediaStore.MediaColumns.DATA + "=?", selectionArgs, null);
+-        if (cursor == null || !cursor.moveToFirst()) {
+-            if (cursor != null) {
+-                cursor.close();
+-                cursor = null;
+-            }
+-            final ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, temporaryTrack.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, "{MediaWrite Workaround}");
+-            values.put(MediaStore.MediaColumns.SIZE, temporaryTrack.length());
+-            values.put(MediaStore.MediaColumns.MIME_TYPE, "audio/mpeg");
+-            values.put(MediaStore.Audio.AudioColumns.IS_MUSIC, true);
+-            contentResolver.insert(filesUri, values);
+-        }
+-        cursor = contentResolver.query(filesUri, ALBUM_PROJECTION, MediaStore.MediaColumns.DATA
+-                + "=?", selectionArgs, null);
+-        if (cursor == null) {
+-            return 0;
+-        }
+-        if (!cursor.moveToFirst()) {
+-            cursor.close();
+-            return 0;
+-        }
+-        final int id = cursor.getInt(0);
+-        final int albumId = cursor.getInt(1);
+-        final int mediaType = cursor.getInt(2);
+-        cursor.close();
+-        final ContentValues values = new ContentValues();
+-        boolean updateRequired = false;
+-        if (albumId == 0) {
+-            values.put(MediaStore.Audio.AlbumColumns.ALBUM_ID, 13371337);
+-            updateRequired = true;
+-        }
+-        if (mediaType != 2) {
+-            values.put("media_type", 2);
+-            updateRequired = true;
+-        }
+-        if (updateRequired) {
+-            contentResolver.update(filesUri, values, BaseColumns._ID + "=" + id, null);
+-        }
+-        cursor = contentResolver.query(filesUri, ALBUM_PROJECTION, MediaStore.MediaColumns.DATA
+-                + "=?", selectionArgs, null);
+-        if (cursor == null) {
+-            return 0;
+-        }
+-        try {
+-            if (!cursor.moveToFirst()) {
+-                return 0;
+-            }
+-            return cursor.getInt(1);
+-        } finally {
+-            cursor.close();
+-        }
+-    }
+-
+-    private static File installTemporaryTrack(final Context context) throws IOException {
+-        final File externalFilesDir = getExternalFilesDir(context);
+-        if (externalFilesDir == null) {
+-            return null;
+-        }
+-        final File temporaryTrack = new File(externalFilesDir, "temptrack.mp3");
+-        if (!temporaryTrack.exists()) {
+-            InputStream in = null;
+-            OutputStream out = null;
+-            try {
+-                in = context.getResources().openRawResource(R.raw.temptrack);
+-                out = new FileOutputStream(temporaryTrack);
+-                final byte[] buffer = new byte[4096];
+-                int bytesRead;
+-                while ((bytesRead = in.read(buffer)) != -1) {
+-                    out.write(buffer, 0, bytesRead);
+-                }
+-            } finally {
+-                out.close();
+-                in.close();
+-            }
+-        }
+-        return temporaryTrack;
+-    }
+-
+-    public static boolean mkdir(final Context context, final File file) throws IOException {
+-        if (file.exists()) {
+-            return file.isDirectory();
+-        }
+-        final File tmpFile = new File(file, ".MediaWriteTemp");
+-        final int albumId = getTemporaryAlbumId(context);
+-        if (albumId == 0) {
+-            throw new IOException("Failed to create temporary album id.");
+-        }
+-        final Uri albumUri = Uri.parse(String.format(Locale.US, ALBUM_ART_URI + "/%d", albumId));
+-        final ContentValues values = new ContentValues();
+-        values.put(MediaStore.MediaColumns.DATA, tmpFile.getAbsolutePath());
+-        final ContentResolver contentResolver = context.getContentResolver();
+-        if (contentResolver.update(albumUri, values, null, null) == 0) {
+-            values.put(MediaStore.Audio.AlbumColumns.ALBUM_ID, albumId);
+-            contentResolver.insert(Uri.parse(ALBUM_ART_URI), values);
+-        }
+-        try {
+-            final ParcelFileDescriptor fd = contentResolver.openFileDescriptor(albumUri, "r");
+-            fd.close();
+-        } finally {
+-            delete(context, tmpFile);
+-        }
+-        return file.exists();
+-    }
+-
+-    public static boolean mkfile(final Context context, final File file) {
+-        final OutputStream outputStream = getOutputStream(context, file, 0);
+-        if (outputStream == null) {
+-            return false;
+-        }
+-        try {
+-            outputStream.close();
+-            return true;
+-        } catch (final IOException e) {
+-        }
+-        return false;
+-    }
+-
+-}
+diff --git a/src/main/java/com/amaze/filemanager/utils/MediaStoreUtil.java b/src/main/java/com/amaze/filemanager/utils/MediaStoreUtil.java
+index 0ec128f27..51879f007 100644
+--- a/src/main/java/com/amaze/filemanager/utils/MediaStoreUtil.java
++++ b/src/main/java/com/amaze/filemanager/utils/MediaStoreUtil.java
+@@ -20,72 +20,6 @@ import android.provider.MediaStore.MediaColumns;
+  * Utility class for handling the media store.
+  */
+ public abstract class MediaStoreUtil {
+-    /**
+-     * The size of a mini thumbnail.
+-     */
+-    public static final int MINI_THUMB_SIZE = 512;
+-
+-    /**
+-     * Get a real file path from the URI of the media store.
+-     *
+-     * @param contentUri
+-     *            Thr URI of the media store
+-     * @return the file path.
+-     */
+-    @SuppressWarnings("static-access")
+-    public static final String getRealPathFromUri(final Uri contentUri,Context context) {
+-        Cursor cursor = null;
+-        try {
+-            String[] proj = { MediaStore.Images.Media.DATA };
+-            cursor = context.getContentResolver().query(contentUri, proj, null, null, null);
+-            int columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+-            cursor.moveToFirst();
+-            return cursor.getString(columnIndex);
+-        }
+-        catch (Exception e) {
+-            return null;
+-        }
+-        finally {
+-            if (cursor != null) {
+-                cursor.close();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Retrieve a the image id of an image in the Mediastore from the path.
+-     *
+-     * @param path
+-     *            The path of the image
+-     * @return the image id.
+-     */
+-    @SuppressWarnings("static-access")
+-    private static int getImageId(final String path,Context context) throws ImageNotFoundException {
+-        ContentResolver resolver = context.getContentResolver();
+-
+-        Cursor imagecursor = resolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+-                new String[] { MediaStore.Images.Media._ID }, MediaStore.Images.Media.DATA + " = ?",
+-                new String[] { path }, MediaStore.Images.Media.DATE_ADDED + " desc");
+-        imagecursor.moveToFirst();
+-
+-        if (!imagecursor.isAfterLast()) {
+-            int imageId = imagecursor.getInt(imagecursor.getColumnIndex(MediaStore.Images.Media._ID));
+-            imagecursor.close();
+-            return imageId;
+-        }
+-        else {
+-            imagecursor.close();
+-            throw new ImageNotFoundException();
+-        }
+-    }
+-
+-    /**
+-     * Get an Uri from an file path.
+-     *
+-     * @param path
+-     *            The file path.
+-     * @return The Uri.
+-     */
+     public static Uri getUriFromFile(final String path,Context context) {
+         ContentResolver resolver = context.getContentResolver();
+ 
+@@ -109,56 +43,6 @@ public abstract class MediaStoreUtil {
+         }
+     }
+ 
+-    /**
+-     * Get the Album Id from an Audio file.
+-     *
+-     * @param file
+-     *            The audio file.
+-     * @return The Album ID.
+-     */
+-    @SuppressWarnings("resource")
+-    public static int getAlbumIdFromAudioFile(final File file,Context context) {
+-        ContentResolver resolver = context.getContentResolver();
+-        Cursor cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+-                new String[] { MediaStore.Audio.AlbumColumns.ALBUM_ID },
+-                MediaStore.MediaColumns.DATA + "=?",
+-                new String[] { file.getAbsolutePath() }, null);
+-        if (cursor == null || !cursor.moveToFirst()) {
+-            // Entry not available - create entry.
+-            if (cursor != null) {
+-                cursor.close();
+-                cursor = null;
+-            }
+-            ContentValues values = new ContentValues();
+-            values.put(MediaStore.MediaColumns.DATA, file.getAbsolutePath());
+-            values.put(MediaStore.MediaColumns.TITLE, "{MediaWrite Workaround}");
+-            values.put(MediaStore.MediaColumns.SIZE, file.length());
+-            values.put(MediaStore.MediaColumns.MIME_TYPE, "audio/mpeg");
+-            values.put(MediaStore.Audio.AudioColumns.IS_MUSIC, true);
+-            resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values);
+-        }
+-        cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+-                new String[] { MediaStore.Audio.AlbumColumns.ALBUM_ID },
+-                MediaStore.MediaColumns.DATA + "=?",
+-                new String[] { file.getAbsolutePath() }, null);
+-        if (cursor == null) {
+-            return 0;
+-        }
+-        if (!cursor.moveToFirst()) {
+-            cursor.close();
+-            return 0;
+-        }
+-        int albumId = cursor.getInt(0);
+-        cursor.close();
+-        return albumId;
+-    }
+-
+-    /**
+-     * Add a picture to the media store (via scanning).
+-     *
+-     * @param path
+-     *            the path of the image.
+-     */
+     public static final void addFileToMediaStore(final String path,Context context) {
+         Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+         File file = new File(path);
+@@ -176,37 +60,6 @@ public abstract class MediaStoreUtil {
+      *            The maximum size of this bitmap (used for selecting the sample size)
+      * @return the thumbnail.
+      */
+-    public static final Bitmap getThumbnailFromPath(final String path, final int maxSize,Context context) {
+-        ContentResolver resolver = context.getContentResolver();
+-
+-        try {
+-            int imageId = getImageId(path,context);
+-
+-            BitmapFactory.Options options = new BitmapFactory.Options();
+-            options.inSampleSize = MINI_THUMB_SIZE / maxSize;
+-            options.inDither = true;
+-            return MediaStore.Images.Thumbnails.getThumbnail(resolver, imageId, MediaStore.Images.Thumbnails.MINI_KIND,
+-                    options);
+-
+-        }
+-        catch (ImageNotFoundException e) {
+-            return null;
+-        }
+-    }
+-
+-    /**
+-     * Add a picture to the media store (via scanning).
+-     *
+-     * @param path
+-     *            the path of the image.
+-     */
+-    public static final void addPictureToMediaStore(final String path,Context context) {
+-        Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+-        File file = new File(path);
+-        Uri contentUri = Uri.fromFile(file);
+-        mediaScanIntent.setData(contentUri);
+-        context.sendBroadcast(mediaScanIntent);
+-    }
+ 
+     /**
+      * Delete the thumbnail of a bitmap.
+@@ -214,27 +67,5 @@ public abstract class MediaStoreUtil {
+      * @param path
+      *            The path of the image
+      */
+-    public static final void deleteThumbnail(final String path,Context context) {
+-        ContentResolver resolver = context.getContentResolver();
+-
+-        try {
+-            int imageId = getImageId(path,context);
+-            resolver.delete(MediaStore.Images.Thumbnails.EXTERNAL_CONTENT_URI,
+-                    MediaStore.Images.Thumbnails.IMAGE_ID + " = ?", new String[] { "" + imageId });
+-        }
+-        catch (ImageNotFoundException e) {
+-            // ignore
+-        }
+-    }
+-
+-    /**
+-     * Utility exception to be thrown if an image cannot be found.
+-     */
+-    private static class ImageNotFoundException extends Exception {
+-        /**
+-         * The default serial version id.
+-         */
+-        private static final long serialVersionUID = 1L;
+-    }
+ 
+ }
+diff --git a/src/play/java/com/amaze/filemanager/activities/MainActivity.java b/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+index 8f56647d9..dc431f235 100644
+--- a/src/play/java/com/amaze/filemanager/activities/MainActivity.java
++++ b/src/play/java/com/amaze/filemanager/activities/MainActivity.java
+@@ -46,7 +46,6 @@ import android.os.Bundle;
+ import android.os.CountDownTimer;
+ import android.os.Environment;
+ import android.os.Handler;
+-import android.os.Parcelable;
+ import android.preference.PreferenceManager;
+ import android.support.v4.app.Fragment;
+ import android.support.v4.app.FragmentTransaction;
+@@ -69,7 +68,6 @@ import android.view.WindowManager;
+ import android.view.animation.Animation;
+ import android.view.animation.AnimationUtils;
+ import android.view.inputmethod.InputMethodManager;
+-import android.widget.AdapterView;
+ import android.widget.Button;
+ import android.widget.CheckBox;
+ import android.widget.EditText;

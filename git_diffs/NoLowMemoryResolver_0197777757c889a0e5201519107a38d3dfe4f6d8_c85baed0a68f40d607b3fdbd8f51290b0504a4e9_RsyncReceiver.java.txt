@@ -1,0 +1,502 @@
+diff --git a/app/src/main/java/com/github/ktsr42/rsyncserver/MainActivity.java b/app/src/main/java/com/github/ktsr42/rsyncserver/MainActivity.java
+index eda26aa..c468895 100644
+--- a/app/src/main/java/com/github/ktsr42/rsyncserver/MainActivity.java
++++ b/app/src/main/java/com/github/ktsr42/rsyncserver/MainActivity.java
+@@ -3,13 +3,24 @@ package com.github.ktsr42.rsyncserver;
+ import androidx.appcompat.app.AppCompatActivity;
+ import androidx.lifecycle.Observer;
+ 
++import android.content.Context;
+ import android.content.Intent;
++import android.net.ConnectivityManager;
+ import android.os.Bundle;
++import android.os.HandlerThread;
++import android.os.Message;
++import android.os.Process;
+ import android.view.View;
+ import android.widget.TextView;
+ 
+ // FIXME: Terminate service on application shutdown - but not on activity recreation (device flip)
+ 
++// New Design:
++// Create HandlerThread in onCreate
++// implement service as a handler
++// hold handle to
++// Use runOnUIThread or view.post to update activity from hand;er
++
+ 
+ public class MainActivity extends AppCompatActivity {
+ 
+@@ -23,6 +34,8 @@ public class MainActivity extends AppCompatActivity {
+     private String portNum;
+     private String module;
+ 
++    private RsyncServer server;
++
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+@@ -33,12 +46,18 @@ public class MainActivity extends AppCompatActivity {
+         tvwAddress = findViewById(R.id.tvwAddress);
+         tvwRsyncLine = findViewById(R.id.tvwRsyncLine);
+ 
+-        PortModuleSingleton pm = PortModuleSingleton.getInstance();
++        HandlerThread ht = new HandlerThread("Rsync Server Thread", Process.THREAD_PRIORITY_BACKGROUND);
++        ht.start();
++
++        server = new RsyncServer(ht.getLooper(), this.getApplicationContext(), (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE));
++
++
++        RsyncServerAppState pm = RsyncServerAppState.getInstance();
+         final Observer<Integer> portNumObserver = new Observer<Integer>() {
+             @Override
+             public void onChanged(Integer integer) {
+-                portNum = integer.toString();
+-                tvwPortNumber.setText(portNum);
++                if(null == integer) tvwPortNumber.setText("");
++                else                tvwPortNumber.setText(integer.toString());
+                 setRsyncLine();
+             }
+         };
+@@ -66,13 +85,16 @@ public class MainActivity extends AppCompatActivity {
+     }
+ 
+     public void startRsyncServer(View view) {
+-        Intent intent = new Intent(this, RsyncReceiver.class);
+-        intent.putExtra(RsyncReceiver.TGT_MODULE_NAME, "testmod");
+-        intent.putExtra(RsyncReceiver.TGT_PORT, 12345);
+-        startService(intent);
++        Message msg = server.obtainMessage();
++        msg.arg1 = 1;
++        server.sendMessage(msg);
+     }
+ 
+-    public void stopRyncReceiver(View view) { stopService(new Intent(this, RsyncReceiver.class)); }
++    public void stopRyncReceiver(View view) {
++        Message msg = server.obtainMessage();
++        msg.arg1 = 0;
++        server.sendMessage(msg);
++    }
+ 
+     private void setRsyncLine() {
+         if(ipaddress == null || ipaddress == "") { tvwRsyncLine.setText(""); return; }
+diff --git a/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiver.java b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiver.java
+deleted file mode 100644
+index 44ebda4..0000000
+--- a/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiver.java
++++ /dev/null
+@@ -1,175 +0,0 @@
+-package com.github.ktsr42.rsyncserver;
+-
+-import android.app.Service;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.net.ConnectivityManager;
+-import android.net.Network;
+-import android.net.NetworkCapabilities;
+-import android.net.NetworkRequest;
+-import android.net.wifi.WifiInfo;
+-import android.net.wifi.WifiManager;
+-import android.os.Handler;
+-import android.os.HandlerThread;
+-import android.os.IBinder;
+-import android.os.Looper;
+-import android.os.Message;
+-import android.util.Log;
+-import android.widget.Toast;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.Nullable;
+-import androidx.lifecycle.ViewModelProvider;
+-
+-import com.github.ktsr42.yajsynclib.LibServer;
+-
+-import java.io.IOException;
+-import java.net.InetAddress;
+-import java.net.InetSocketAddress;
+-import java.net.UnknownHostException;
+-
+-public class RsyncReceiver extends Service {
+-
+-    // Handler that receives messages from the thread
+-    private final class ServiceHandler extends Handler {
+-        private LibServer srv;
+-
+-        public ServiceHandler(Looper looper) {
+-            super(looper);
+-        }
+-
+-        @Override
+-        public void handleMessage(Message msg) {
+-            Log.d("RsyncReceiver", "handling message" + msg.toString());
+-            if(srv != null) return;
+-
+-            srv = new LibServer((String)msg.obj, msg.arg1);
+-            try {
+-                PortModuleSingleton pms = PortModuleSingleton.getInstance();
+-                InetAddress wifiaddr = getWifiAddress();
+-
+-                wifiaddr = getAnyInetAddress();
+-                if(wifiaddr == null) {
+-                    pms.moduleName.postValue("No Wifi Address");
+-                    return;
+-                }
+-
+-                Object[] mnp = srv.initServer(wifiaddr);
+-                Log.d("RsyncReceiverXX", "initServer() port " + mnp[0].toString() + ", modulename " + mnp[0].toString());
+-                pms.moduleName.postValue((String)mnp[0]);
+-                pms.portNum.postValue((int)mnp[1]);
+-                pms.localAddress.postValue(wifiaddr.getHostAddress());
+-
+-                srv.run();
+-            } catch (IOException e) {
+-                e.printStackTrace();
+-            } catch (InterruptedException e) {
+-                e.printStackTrace();
+-            }
+-        }
+-
+-        private InetAddress getAnyInetAddress() { return new InetSocketAddress(0).getAddress(); }
+-
+-        private InetAddress getWifiAddress() {
+-            WifiManager wifiMgr = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+-            WifiInfo wifiInfo = wifiMgr.getConnectionInfo();
+-            int ip = wifiInfo.getIpAddress();
+-
+-            byte[] addrbytes = new byte[Integer.BYTES];
+-            for(int i = 0; i < Integer.BYTES; i++ ) {
+-                addrbytes[i] = (byte)(ip >>> i * 8);
+-            }
+-
+-            try {
+-                return InetAddress.getByAddress(addrbytes);
+-            } catch (UnknownHostException e) {
+-                e.printStackTrace();
+-                return null;
+-            }
+-        }
+-
+-    }
+-
+-    private class WifiNetworkCallback extends ConnectivityManager.NetworkCallback {
+-        private PortModuleSingleton pms = PortModuleSingleton.getInstance();
+-
+-        @Override
+-        public void onAvailable(@NonNull Network network) {
+-            super.onAvailable(network);
+-            pms.onWifi.postValue(true);
+-            InetAddress a = null;
+-            try {
+-                a = network.getByName(null);
+-            } catch (UnknownHostException e) {
+-            }
+-
+-        }
+-
+-        @Override
+-        public void onLost(@NonNull Network network) {
+-            super.onLost(network);
+-            pms.onWifi.postValue(false);
+-        }
+-
+-    }
+-
+-    public static final String TGT_MODULE_NAME = "targetModuleName";
+-    public static final String TGT_PORT = "targetPort";
+-
+-    private Looper serviceLooper;
+-    private ServiceHandler serviceHandler;
+-
+-    @Override
+-    public void onCreate() {
+-        super.onCreate();
+-
+-        // either fork of new thread here or in onStartCommand()
+-        // need to send the port number back and forth
+-        // Start up the thread running the service. Note that we create a
+-        // separate thread because the service normally runs in the process's
+-        // main thread, which we don't want to block. We also make it
+-        // background priority so CPU-intensive work doesn't disrupt our UI.
+-        HandlerThread thread = new HandlerThread("ServiceStartArguments", android.os.Process.THREAD_PRIORITY_BACKGROUND);
+-        thread.start();
+-
+-        // Get the HandlerThread's Looper and use it for our Handler
+-        serviceLooper = thread.getLooper();
+-        serviceHandler = new ServiceHandler(serviceLooper);
+-
+-        NetworkRequest.Builder nwrb = new NetworkRequest.Builder();
+-        nwrb.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+-        nwrb.addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET);
+-        ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+-        cm.registerNetworkCallback(nwrb.build(), new WifiNetworkCallback());
+-    }
+-
+-    @Override
+-    public int onStartCommand(Intent intent, int flags, int startId) {
+-        Toast.makeText(this, "RsyncReceiver service starting", Toast.LENGTH_SHORT).show();
+-
+-        // For each start request, send a message to start a job and deliver the
+-        // start ID so we know which request we're stopping when we finish the job
+-        Message msg = serviceHandler.obtainMessage();
+-        msg.obj = intent.getStringExtra(TGT_MODULE_NAME);
+-        msg.arg1 = intent.getIntExtra(TGT_PORT, 0);
+-        serviceHandler.sendMessage(msg);
+-
+-        // Do not restart this if we get killed after returning from here
+-        return START_NOT_STICKY;
+-    }
+-
+-    @Nullable
+-    @Override
+-    public IBinder onBind(Intent intent) { return null; }
+-
+-    @Override
+-    public void onDestroy() {
+-        Toast.makeText(this, "RsyncReceiver service stopping.", Toast.LENGTH_SHORT).show();
+-
+-        PortModuleSingleton pms = PortModuleSingleton.getInstance();
+-        pms.localAddress.setValue("");
+-        pms.moduleName.setValue("");
+-        pms.portNum.setValue(null);
+-    }
+-}
+-
+diff --git a/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiverOld.java b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiverOld.java
+new file mode 100644
+index 0000000..4de78ef
+--- /dev/null
++++ b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncReceiverOld.java
+@@ -0,0 +1,74 @@
++package com.github.ktsr42.rsyncserver;
++
++import android.app.Service;
++import android.content.Context;
++import android.content.Intent;
++import android.net.ConnectivityManager;
++import android.os.HandlerThread;
++import android.os.IBinder;
++import android.os.Message;
++import android.widget.Toast;
++
++import androidx.annotation.Nullable;
++
++// Instantiate the service on startup, but do not run it
++// convert service to a foreground service (tray icon)
++// service registers a network callback
++// rsync server is enabled when both the start button and the wifi connection are up
++// rsync server is disabled when either is off
++// take local address from the linkproperties network callback
++//   find first address that is IPv4 and not loopback
++
++public class RsyncReceiverOld extends Service {
++
++    public static final String TGT_MODULE_NAME = "targetModuleName";
++    public static final String TGT_PORT = "targetPort";
++
++    private RsyncServer serviceHandler;
++
++    @Override
++    public void onCreate() {
++        super.onCreate();
++
++        // either fork of new thread here or in onStartCommand()
++        // need to send the port number back and forth
++        // Start up the thread running the service. Note that we create a
++        // separate thread because the service normally runs in the process's
++        // main thread, which we don't want to block. We also make it
++        // background priority so CPU-intensive work doesn't disrupt our UI.
++        HandlerThread thread = new HandlerThread("ServiceStartArguments", android.os.Process.THREAD_PRIORITY_BACKGROUND);
++        thread.start();
++
++        //serviceHandler = new RsyncServer(thread.getLooper(), (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE));
++    }
++
++    @Override
++    public int onStartCommand(Intent intent, int flags, int startId) {
++        Toast.makeText(this, "RsyncReceiverOld service starting", Toast.LENGTH_SHORT).show();
++
++        // For each start request, send a message to start a job and deliver the
++        // start ID so we know which request we're stopping when we finish the job
++        Message msg = serviceHandler.obtainMessage();
++        msg.obj = intent.getStringExtra(TGT_MODULE_NAME);
++        msg.arg1 = intent.getIntExtra(TGT_PORT, 0);
++        serviceHandler.sendMessage(msg);
++
++        // Do not restart this if we get killed after returning from here
++        return START_NOT_STICKY;
++    }
++
++    @Nullable
++    @Override
++    public IBinder onBind(Intent intent) { return null; }
++
++    @Override
++    public void onDestroy() {
++        Toast.makeText(this, "RsyncReceiverOld service stopping.", Toast.LENGTH_SHORT).show();
++
++        RsyncServerAppState pms = RsyncServerAppState.getInstance();
++        pms.localAddress.setValue("");
++        pms.moduleName.setValue("");
++        pms.portNum.setValue(null);
++    }
++}
++
+diff --git a/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServer.java b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServer.java
+new file mode 100644
+index 0000000..f7671f0
+--- /dev/null
++++ b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServer.java
+@@ -0,0 +1,118 @@
++package com.github.ktsr42.rsyncserver;
++
++import android.content.Context;
++import android.net.ConnectivityManager;
++import android.net.LinkAddress;
++import android.net.LinkProperties;
++import android.net.Network;
++import android.net.NetworkCapabilities;
++import android.net.NetworkRequest;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.Message;
++import android.widget.Toast;
++
++import androidx.annotation.NonNull;
++
++import com.github.ktsr42.yajsynclib.LibServer;
++
++import java.io.IOException;
++import java.net.Inet4Address;
++import java.net.InetAddress;
++
++// Handler that receives messages from the thread
++final class RsyncServer extends Handler {
++
++    private class WifiNetworkCallback extends ConnectivityManager.NetworkCallback {
++        private RsyncServerAppState pms = RsyncServerAppState.getInstance();
++
++        @Override
++        public void onLost(@NonNull Network network) {
++            super.onLost(network);
++            localaddr = null;
++            stop();
++        }
++
++        @Override
++        public void onLinkPropertiesChanged(@NonNull Network network, @NonNull LinkProperties linkProperties) {
++            super.onLinkPropertiesChanged(network, linkProperties);
++            // grab the first IPv4 address that is not loopback.
++
++            for(LinkAddress la : linkProperties.getLinkAddresses()) {
++                InetAddress ia = la.getAddress();
++                if(ia.isLoopbackAddress()) continue;
++                if(ia.getClass() != Inet4Address.class) continue;
++                localaddr = ia;
++                start();
++                break;
++            }
++            // send a message to the background task?
++        }
++
++    }
++
++    private LibServer srv;
++    private InetAddress localaddr;
++    private boolean run = false;
++    private RsyncServerAppState appstate = RsyncServerAppState.getInstance();
++    private Context appContext;
++
++    private void start() {
++        if(!run) return;
++        if(localaddr == null) return; // no wifi
++
++        if(srv != null) return;
++
++        Toast.makeText(appContext,"Rsync Service Starting", Toast.LENGTH_LONG).show();
++        srv = new LibServer(null);
++        Object[] mnp = new Object[0];
++        try {
++            mnp = srv.initServer(localaddr);
++        } catch (IOException e) {
++            e.printStackTrace();
++            return;
++        }
++
++        srv.run();
++
++        appstate.localAddress.postValue(localaddr.toString());
++        appstate.moduleName.postValue((String)mnp[0]);
++        appstate.portNum.postValue((Integer) mnp[1]);
++    }
++
++
++    private void stop() {
++        if(srv == null) return;
++
++        appstate.localAddress.postValue(null);
++        appstate.moduleName.postValue(null);
++        appstate.portNum.postValue(null);
++
++        Toast.makeText(appContext,"rsync service stopping", Toast.LENGTH_SHORT).show();
++        srv.stop();
++        srv = null;
++    }
++
++    public RsyncServer(Looper looper, Context appctx, ConnectivityManager cm) {
++        super(looper);
++
++        appContext = appctx;
++
++        NetworkRequest.Builder nwrb = new NetworkRequest.Builder();
++        nwrb.addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
++        nwrb.addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET);
++        cm.registerNetworkCallback(nwrb.build(), new WifiNetworkCallback());
++    }
++
++    @Override
++    public void handleMessage(Message msg) {
++        if(msg.arg1 == 0) {
++            run = false;
++            stop();
++        } else if(msg.arg1 == 1) {
++            run = true;
++            start();
++        }
++    }
++
++}
+diff --git a/app/src/main/java/com/github/ktsr42/rsyncserver/PortModuleSingleton.java b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServerAppState.java
+similarity index 54%
+rename from app/src/main/java/com/github/ktsr42/rsyncserver/PortModuleSingleton.java
+rename to app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServerAppState.java
+index e6655cb..068fda2 100644
+--- a/app/src/main/java/com/github/ktsr42/rsyncserver/PortModuleSingleton.java
++++ b/app/src/main/java/com/github/ktsr42/rsyncserver/RsyncServerAppState.java
+@@ -1,14 +1,15 @@
+ package com.github.ktsr42.rsyncserver;
+ 
+-import androidx.lifecycle.MutableLiveData;
++import android.net.ConnectivityManager;
++import android.os.HandlerThread;
+ 
+-import java.net.InetAddress;
++import androidx.lifecycle.MutableLiveData;
+ 
+-public class PortModuleSingleton {
+-  private static PortModuleSingleton _instance;
+-  public static synchronized PortModuleSingleton getInstance() {
++public class RsyncServerAppState {
++  private static RsyncServerAppState _instance;
++  public static synchronized RsyncServerAppState getInstance() {
+     if(null == _instance) {
+-      _instance = new PortModuleSingleton();
++      _instance = new RsyncServerAppState();
+     }
+     return _instance;
+   }
+@@ -16,5 +17,4 @@ public class PortModuleSingleton {
+   MutableLiveData<Integer> portNum = new MutableLiveData<>();
+   MutableLiveData<String> moduleName = new MutableLiveData<>();
+   MutableLiveData<String> localAddress = new MutableLiveData<>();
+-  MutableLiveData<Boolean> onWifi = new MutableLiveData<>();
+ }
