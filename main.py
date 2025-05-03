@@ -14,6 +14,8 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
+DEFAULT_LLM_VALIDATED_FILE = "reclassified_true_positives.csv"
+
 
 class COMMAND_RESULT(object):
     def __init__(self, res, out, err):
@@ -108,7 +110,7 @@ def load_issue_specification(filename="performance_issues_list.csv"):
     return issues
 
 
-def load_labels(filename="new_classified_regressions.csv"):
+def load_labels(filename=DEFAULT_LLM_VALIDATED_FILE):
     labels = {}
     if not os.path.exists(filename):
         return labels
@@ -127,20 +129,23 @@ def load_labels(filename="new_classified_regressions.csv"):
                 'sub_git_diff': row[6],
                 'sub_file_ctnt': row[7],
                 'pre_label': row[8],
-                'llm_label': row[9]
+                'llm_label': row[9],
+                'llm_label_2': row[9] if len(row) < 11 else row[10]
             }
     return labels
 
 def gen_label_key(repo_dir, prev_commit_hash, commit_hash, issue_name):
     return '-'.join([repo_dir, prev_commit_hash, commit_hash, issue_name])
 
-def load_positive_labels(filename="new_classified_regressions.csv", classified=False):
+def load_positive_labels(filename=DEFAULT_LLM_VALIDATED_FILE, classified=False):
     labels = {}
     if not os.path.exists(filename):
         return labels
     with open(filename, 'r') as file:
         reader = csv.reader(file, delimiter=';')
         for row in reader:
+            if len(row) < 4:
+                continue
             if not row[9].lower().startswith("true"):
                 continue
             # gen_label_key(reg['repo_dir'], reg['prev_commit_hash'], reg['commit_hash'], issue_name)
@@ -156,10 +161,12 @@ def load_positive_labels(filename="new_classified_regressions.csv", classified=F
                 'sub_file_ctnt': row[7],
                 'pre_label': row[8],
                 'llm_label': row[9],
+                'llm_label': row[9],
+                'llm_label_2': row[9] if len(row) < 12 else row[10]
                 
             }
             if classified:
-                v['manual_label'] = row[10]
+                v['manual_label'] = row[10] if len(row) < 12 else row[11]
             labels[key] = v
     return labels
 
